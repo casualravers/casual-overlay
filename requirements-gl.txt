@@ -1,0 +1,5 @@
+moderngl
+glfw
+numpy
+sounddevice
+Pillow
