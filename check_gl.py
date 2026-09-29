@@ -71,6 +71,225 @@ def check_reader() -> None:
     check(reader.take() is None, "pas de nouvelle frame apres consommation")
 
 
+class FakeStream:
+    """Flux rawvideo infini: chaque frame est faite d'un seul octet `value`, livre par blocs de
+    4 Ko (donc une bascule de flux tombe forcement au milieu d'une frame)."""
+
+    def __init__(self, value: int, dead: bool = False, block: int = 4096):
+        self.value, self.dead, self.block = value, dead, block
+        self.closed = False
+
+    def readinto(self, mv) -> int:
+        if self.closed or self.dead:
+            return 0
+        n = min(len(mv), self.block)
+        mv[:n] = bytes([self.value]) * n
+        time.sleep(0.0004)
+        return n
+
+    def close(self):
+        self.closed = True
+
+
+class FakeProc:
+    def __init__(self, value: int, dead: bool = False):
+        self.stdout = FakeStream(value, dead)
+        self.returncode = 1 if dead else None
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = -15
+        self.stdout.closed = True
+
+    def kill(self):
+        self.terminate()
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+class FakeLive:
+    RESTART_GRACE_S = 0.05
+
+    @staticmethod
+    def producer_warmup_seconds(args) -> float:
+        return 0.15
+
+
+def check_manager() -> None:
+    print("Remplacement du producteur a chaud")
+    from types import SimpleNamespace as NS
+
+    frame_size = 10000                       # pas multiple de 4096
+    spawned: list[FakeProc] = []
+
+    def spawn(args):
+        proc = FakeProc(args.value, dead=getattr(args, "dead", False))
+        spawned.append(proc)
+        return proc
+
+    # a) bascule de flux du lecteur: partielle jetee, aucune frame melangee
+    class Once:
+        def __init__(self, n_bytes, value):
+            self.left, self.value = n_bytes, value
+
+        def read(self, n):
+            n = min(n, self.left, 4096)
+            self.left -= n
+            return bytes([self.value]) * n
+
+    a, b = Once(frame_size * 3 + 4500, 1), Once(frame_size * 2, 2)
+    seen: list[bytes] = []
+    reader = gl.FrameReader(a, frame_size, lambda mv: seen.append(bytes(mv)), hold_on_eof=True)
+    reader.switch_stream(b)      # demande posee AVANT: appliquee a la fin du flux a
+    reader.start()
+    deadline = time.time() + 5
+    while len(seen) < 5 and time.time() < deadline:
+        time.sleep(0.01)
+    reader.stop()
+    vals = [f[0] for f in seen]
+    check(vals == [1, 1, 1, 2, 2], "switch_stream: 3 frames du flux A, partielle jetee, 2 du flux B", str(vals))
+    check(all(len(set(f)) == 1 for f in seen), "switch_stream: aucune frame melangee")
+
+    # b) ProducerManager: remplacement, echec, fusion des demandes
+    status: dict = {}
+    args1 = NS(value=1)
+    mgr = gl.ProducerManager(FakeLive, args1, frame_size, status, spawn=spawn)
+    frames: list[int] = []
+    mixed = []
+
+    def on_frame(mv):
+        data = bytes(mv)
+        if len(set(data)) != 1:
+            mixed.append(data[:1])
+        frames.append(data[0])
+
+    mgr.reader.on_frame = on_frame
+    mgr.start()
+    time.sleep(0.3)
+    check(frames and set(frames) == {1}, "flux initial servi", f"{len(frames)} frames")
+
+    mgr.request_restart(NS(value=2))
+    deadline = time.time() + 5
+    while 2 not in frames and time.time() < deadline:
+        time.sleep(0.02)
+    time.sleep(0.2)
+    first2 = frames.index(2) if 2 in frames else -1
+    check(first2 > 0 and set(frames[first2:]) == {2}, "apres le remplacement, plus aucune frame de l'ancien flux")
+    check(not mixed, "aucune frame melangee pendant le remplacement")
+    check(mgr.restarts == 1 and spawned[0].poll() is not None and spawned[1].poll() is None,
+          "ancien producteur termine, nouveau actif", f"restarts={mgr.restarts}")
+
+    before = len(frames)
+    mgr.request_restart(NS(value=9, dead=True))            # reglage refuse par ffmpeg
+    time.sleep(0.8)
+    check(mgr.restarts == 1 and mgr.producer is spawned[1] and "refuse" in status.get("live", ""),
+          "producteur qui meurt pendant la chauffe: ancien conserve + message", status.get("live", ""))
+    check(len(frames) > before and set(frames[before:]) == {2}, "le flux continue pendant l'echec")
+
+    count = len(spawned)
+    for v in (3, 4, 5):
+        mgr.request_restart(NS(value=v))
+    deadline = time.time() + 5
+    while (not frames or frames[-1] != 5) and time.time() < deadline:
+        time.sleep(0.02)
+    check(frames[-1] == 5 and len(spawned) - count <= 2,
+          "demandes rapprochees fusionnees: la derniere l'emporte", f"{len(spawned) - count} lancement(s)")
+    mgr.stop()
+    time.sleep(0.2)
+    check(all(p.poll() is not None for p in spawned), "arret: aucun producteur laisse en vie")
+
+
+def check_gui() -> None:
+    print("GUI (tkinter)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.destroy()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import queue
+    import threading
+    from types import SimpleNamespace as NS
+
+    import gl_gui
+
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    args = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
+    requests: list = []
+    manager = NS(request_restart=requests.append, producer=None, restarts=0, status={})
+    analyzer = NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0})
+    audio = NS(synthetic=True, name="synthetique", analyzer=analyzer)
+    params = gl.load_params()
+    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio,
+           commands=queue.SimpleQueue(), status=manager.status, stop_event=threading.Event(),
+           finished_event=threading.Event())
+    original_gain = args.gain
+    out: dict = {}
+
+    def on_ready(c):
+        root = c["root"]
+        lv = c["live_vars"]
+
+        def step1():
+            for v in (5, 8, 12):                                  # rafale: un seul redemarrage attendu
+                lv["gain"][0].set(v)
+            root.after(900, step2)
+
+        def step2():
+            out["burst"] = len(requests)
+            out["gain"] = requests[-1].gain if requests else None
+            out["copy"] = bool(requests) and requests[-1] is not args and args.gain == original_gain
+            lv["colors"][0].set("")                               # vide: valeur precedente conservee
+            lv["gain"][0].set(30.0)
+            lv["style"][0].set("radio")
+            root.after(900, step3)
+
+        def step3():
+            last = requests[-1] if len(requests) > out["burst"] else None
+            out["style"] = last.style if last else None
+            out["gain_follow"] = last.gain if last else None
+            out["colors"] = last.colors if last else None
+            c["x_var"].set(0.2)
+            c["fx_on_vars"][1].set(0)
+            c["master_var"].set(1.4)
+            c["logo_var"].set("")
+            c["apply_logo_path"]()
+            c["color_var"].set("zz")
+            out["color_bad"] = params["logo_glow_color"]
+            c["color_var"].set("#FF0000")
+            out["color_ok"] = params["logo_glow_color"]
+            out["x"], out["fx1"], out["master"] = params["logo_x"], params["fx_on"][1], params["master"]
+            out["logo"] = params["logo_path"]
+            s.status["live"] = "test"
+            root.after(700, step4)
+
+        def step4():
+            out["status_shown"] = "test" in root.nametowidget(
+                [w for w in root.children if root.children[w].winfo_class() == "Label"
+                 and "fps" in root.children[w].cget("text")][0]).cget("text")
+            c["close"]()
+            s.finished_event.set()
+
+        step1()
+
+    gl_gui.run_gui(s, live, on_ready)
+    check(out.get("burst") == 1, "rafale de reglages live: un seul redemarrage (anti-rebond)", str(out.get("burst")))
+    check(out.get("gain") == 12.0 and out.get("copy"), "le redemarrage porte la derniere valeur, sur une copie")
+    check(out.get("style") == "radio" and out.get("gain_follow") == live.DEFAULT_GAIN_DB["radio"],
+          "style radio: le gain suit son defaut", f"gain {out.get('gain_follow')}")
+    check(out.get("colors") == args.colors, "champ couleurs vide: valeur precedente conservee")
+    check(out.get("x") == 0.2 and out.get("fx1") == 0 and abs(out.get("master", 0) - 1.4) < 1e-9,
+          "reglages logo/effets ecrits tout de suite dans les parametres")
+    check(out.get("logo") == "", "logo vide = aucun logo")
+    check(out.get("color_bad") == gl.DEFAULT_PARAMS["logo_glow_color"] and out.get("color_ok") == "#ff0000",
+          "couleur du contour: invalide ignoree, valide appliquee")
+    check(out.get("status_shown"), "la ligne de statut affiche fps et messages")
+
+
 # --- 2. features audio ---------------------------------------------------------------
 
 def run_signal(signal, rate: int, hop: int = 512, sensitivity: float = 1.0):
@@ -223,8 +442,9 @@ def check_render() -> None:
 
     # Logo.
     if logo is not None:
-        r2 = gl.Renderer(ctx, size, logo, 0.4, (0.5, 0.5))
+        r2 = gl.Renderer(ctx, size, logo, str(logo_path))
         r2.video_tex.write(frame, alignment=1)
+        params = dict(params, logo_scale=0.4, logo_x=0.5, logo_y=0.5)
         r2.draw(fbo, size, idle, params, 1.0)
         out3 = read_target(ctx, fbo, size)
         cx, cy, hw, hh = gl.logo_layout(size[0], size[1], r2.logo_aspect, 0.4, (0.5, 0.5))
@@ -285,6 +505,8 @@ def main() -> None:
     check_reader()
     check_features()
     check_params()
+    check_manager()
+    check_gui()
     check_render()
     print()
     if failures:

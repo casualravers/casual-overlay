@@ -9,7 +9,9 @@ uniform vec2  u_res;            // taille du cadre en pixels
 uniform vec4  u_logo_rect;      // centre x, centre y (origine HAUT gauche, 0..1), demi-largeur, demi-hauteur (uv)
 uniform float u_logo_on;        // 1 si un logo est charge
 uniform float u_bass;           // 0..1
+uniform float u_logo_opacity;   // 0..1
 uniform float u_glow;           // intensite du contour lumineux (0 = coupe)
+uniform float u_glow_radius;    // multiplicateur du rayon du contour
 uniform vec3  u_glow_color;
 
 in vec2 v_uv;
@@ -29,11 +31,11 @@ void main() {
     vec3 col = texture(u_video, p).rgb;
 
     if (u_logo_on > 0.5) {
-        vec4 lg = logo_at(p);
+        vec4 lg = logo_at(p) * u_logo_opacity;   // premultiplie: on pondere les 4 canaux
 
         // Contour lumineux : moyenne de l'alpha sur deux anneaux autour du pixel, gardee hors du logo.
         if (u_glow > 0.001) {
-            float radius = mix(0.006, 0.03, u_bass);
+            float radius = mix(0.006, 0.03, u_bass) * u_glow_radius;
             vec2 asp = vec2(u_res.y / u_res.x, 1.0);
             float acc = 0.0;
             for (int i = 0; i < 12; i++) {

@@ -20,7 +20,9 @@ py -3.12 -m venv .venv
 
 ```bash
 python audio2wave_gl.py --list-devices                    # nom exact de l'entree dshow
-python audio2wave_gl.py -d "Microphone (Realtek(R) Audio)" --live-args "--colors white"
+python audio2wave_gl.py -d "Microphone (Realtek(R) Audio)"
+python audio2wave_gl.py -d "Microphone (Realtek(R) Audio)" --gui   # avec la fenetre de reglages
+python audio2wave_gl.py --gui --no-fullscreen             # GUI seule: choisir l'entree dans la fenetre
 python audio2wave_gl.py --synthetic --no-fullscreen       # essai sans micro ni ffmpeg
 python check_gl.py                                        # verifications hors materiel
 ```
@@ -28,6 +30,20 @@ python check_gl.py                                        # verifications hors m
 La fenetre s'ouvre sur le premier moniteur non principal (`--monitor N` pour choisir).
 Options principales : `--logo`, `--logo-scale`, `--logo-pos x,y`, `--render-size`,
 `--audio-device`, `--live-args "..."`, `--hud`, `--stats`.
+
+## Fenetre de reglages (`--gui`)
+
+Meme theme que `audio2wave_live.py --gui`, trois panneaux :
+
+- **Live - fond** : entree audio ffmpeg, style, forme, couleurs, barres, gain, lissage... Chaque
+  changement remplace le flux ffmpeg a chaud (quelques centaines de ms apres le dernier reglage),
+  sans que la fenetre video ne bouge.
+- **Logo** : fichier, position X/Y, taille, opacite, pulsation au kick, tremblement, contour
+  lumineux (intensite, rayon, couleur). Effet immediat.
+- **Effets** : les 5 effets (interrupteur + intensite), intensite globale, sensibilite du kick,
+  entree d'analyse, boutons plein ecran / barres debug / recharger shaders / sauver reglages.
+
+Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leurs changements.
 
 ## Touches
 

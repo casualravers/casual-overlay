@@ -34,7 +34,8 @@ python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
 python check_gl.py                                     # verifications hors materiel
 ```
 
-Options utiles : `--live-args "--colors white --gain 30"` (transmis a audio2wave_live),
+Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--style radio
+--gain 20"` (transmis a audio2wave_live),
 `--render-size`, `--logo`, `--logo-scale`, `--logo-pos`, `--monitor`, `--hud`, `--stats`,
 `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
@@ -82,6 +83,47 @@ Tout est dans [audio2wave_gl.py](audio2wave_gl.py) ; les GLSL sont dans `gl_shad
 - `spawn_producer()` : meme commande que `live.producer_command()`, mais stdout est un pipe
   Windows a **gros tampon** (16 Mo via `CreatePipe`), voir Pieges.
 
+### GUI (`--gui`, [gl_gui.py](gl_gui.py))
+
+Meme theme et memes helpers qu'`audio2wave_live.py --gui` (`style_gui`, `style_option_menu`,
+`Tooltip` importes du depot audio2wave), trois panneaux : **Live** (fond : entree ffmpeg,
+style, forme, couleurs, barres, gain, lissage, espace, frequence max, echelles, stereo),
+**Logo** (fichier, X/Y, taille, opacite, pulsation, tremblement, contour lumineux, rayon,
+couleur) et **Effets** (5 interrupteurs + intensites, intensite globale, sensibilite du
+kick, entree d'analyse sounddevice, boutons plein ecran / barres debug / recharger shaders /
+sauver, mesures bass/mid/high/beat, ligne de statut). Sans `-d`, la GUI demarre quand meme :
+le fond demarre au premier choix d'entree.
+
+- **Threads** : tkinter garde le fil principal, `gl_main()` (glfw + moderngl) tourne dans un
+  fil, comme `run()` dans les scripts d'audio2wave. **Tous les appels glfw partent du fil
+  qui a fait `glfw.init()`** ; ce que la GUI veut faire executer cote GL (plein ecran,
+  barres, recharger, sauver) passe par `Session.commands` (file lue a chaque image), le
+  reste (`Session.params`, relu a chaque image) est ecrit directement. C'est ce qui leve le
+  "conflit de boucle principale tkinter/glfw" du plan. Fermer l'une des deux fenetres ferme
+  l'autre (`stop_event` / `finished_event`).
+- **Reglages du logo, effets, sensibilite** : `params` (dict), effet immediat, memes cles que
+  `~/.audio2wave/gl_params.json` (touche P / bouton "Sauver"). `--logo`, `--logo-scale`,
+  `--logo-pos`, `--sensitivity` l'emportent sur les valeurs sauvees.
+- **Reglages Live** : chaque variable declenche `schedule_apply()` (anti-rebond 400 ms, comme
+  audio2wave_live : chaque redemarrage rouvre le peripherique dshow). `apply_live()` relit les
+  widgets dans une **copie** des options live et la confie a `ProducerManager.request_restart()`.
+  Le gain par defaut suit le style (30 dB analyzer / -10 dB radio) tant qu'il n'a pas ete
+  regle a la main.
+- **`ProducerManager`** (dans audio2wave_gl.py) possede le producteur et son `FrameReader` et
+  reprend le principe du redemarrage "doux" d'audio2wave_live : nouveau producteur lance a
+  cote, **chauffe** (frames ENTIERES lues et jetees pendant `producer_warmup_seconds`, sinon
+  ffmpeg bloque sur un pipe plein et sa moyenne `--averaging` ne converge pas), puis
+  `FrameReader.switch_stream()` : le lecteur finit l'ancien flux, jette sa frame partielle et
+  repart sur le nouveau ; l'ancien producteur est termine ensuite. Si le nouveau meurt
+  pendant la chauffe, l'ancien reste et le statut l'indique. Les demandes rapprochees sont
+  fusionnees. Mesure avec le vrai ffmpeg/micro : changement de style analyzer -> radio,
+  plus grand trou dans le flux video 63 ms (~2 frames), aucun ffmpeg residuel. La fenetre GL
+  n'est jamais touchee.
+- La resolution du rendu ffmpeg (`--render-size`) n'est pas reglable dans la GUI (la texture
+  video est fixee au lancement).
+- **Non inclus** : presets nommes et automation de courbes d'audio2wave (la GUI ne sauve que
+  les reglages GL, pas les options live).
+
 ### Audio (FeatureExtractor, fonctions pures, testables sans fil ni temps reel)
 
 Fenetre 2048 + Hann, `rfft`, bandes basses 20-150 Hz / mediums 150-2000 / aigus 2000-10000 +
@@ -117,10 +159,14 @@ fragile.
 - Ouvrir le micro deux fois (ffmpeg dshow + sounddevice WASAPI partage) **fonctionne** sans
   degrader le debit video (mesure : 27,8 / 28,5 / 28,5 fps producteur sans / avec WASAPI /
   avec MME). Le repli "un seul flux + PCM par stdin" du plan n'est pas necessaire.
-- `--colors grey`, le defaut d'`audio2wave_live.py`, est refuse par ffmpeg 9.0 (Gyan full
-  build) : `Cannot find color 'grey'`, le producteur meurt tout de suite. Contournement :
-  `--live-args "--colors white"`. C'est un bug d'audio2wave, non corrige ici (aucun fichier
-  du depot dependance n'est modifie).
+- `--colors grey`, le defaut d'`audio2wave_live.py`, n'existe pas pour ffmpeg 9.0 (Gyan full
+  build, la graphie valide est `gray`) : il logue `Cannot find color 'grey'` **mais ne
+  s'arrete pas** et retombe sur du blanc (mesure : 25,7 fps, pixel max 255 ; `gray` donne 128).
+  Une premiere version de ce depot affirmait a tort que le producteur mourait et forcait
+  `--colors white` : c'etait faux (le debit de 4 frames/s observe alors venait du pipe de
+  4 Ko, voir plus haut). Le defaut d'audio2wave est donc laisse tel quel, ce qui garde
+  `--dry-run` strictement identique a celui de live. Consequence pour la GUI : un nom de
+  couleur inconnu n'est PAS refuse par le producteur, il s'affiche en blanc.
 - Le producteur peut mourir en cours de route : message unique sur stderr, derniere image
   conservee (les effets continuent) plutot que fermer la fenetre en soiree.
 
@@ -130,7 +176,11 @@ fragile.
 par blocs de 4 Ko (aucune frame melangee, ordre conserve, partielle jetee, latest-wins) ;
 features sur signaux synthetiques (un beat par salve a 48 et 44,1 kHz, periode 500 ms,
 -30 dB, bruit blanc, sinus continu, silence, isolation des bandes, ring buffer) ; reglages
-(P) ; rendu en contexte standalone (image identique a la video quand l'audio est coupe,
+(P) ; remplacement du producteur a chaud (`switch_stream` sans frame melangee, ancien flux
+conserve si le nouveau meurt, demandes fusionnees, arret propre) avec de faux producteurs ;
+GUI tkinter pilotee par de vrais evenements de variables (rafale de reglages = un seul
+redemarrage, copie des options, gain qui suit le style, couleur invalide ignoree, statut) ;
+rendu en contexte standalone (image identique a la video quand l'audio est coupe,
 chaque effet visible isolement, image ni noire ni saturee, logo incruste et video intacte
 ailleurs, logo jamais hors cadre, shader invalide refuse sans perdre l'ancien).
 Controle visuel : `--screenshot fichier.png --max-seconds N` (avec `--hud`).
@@ -160,6 +210,5 @@ une mesure de l'application.
 
 ## Hors POC
 
-Modes Snap/Ridge en source, GUI de reglages (tkinter entre en conflit avec la boucle
-principale de glfw), MIDI, presets/automation de courbes, sortie Spout/NDI, plusieurs logos
+Modes Snap/Ridge en source, presets/automation dans la GUI, MIDI, presets/automation de courbes, sortie Spout/NDI, plusieurs logos
 ou logo anime. Pas de `.bat` de lancement.

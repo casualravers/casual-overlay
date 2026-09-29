@@ -27,6 +27,7 @@ import ctypes
 import json
 import math
 import os
+import queue
 import shlex
 import shutil
 import subprocess
@@ -73,6 +74,17 @@ DEFAULT_PARAMS = {
     "fx_int": [1.0, 1.0, 1.0, 1.0, 1.0],
     "master": 1.0,
     "sensitivity": 1.0,
+    # Incrustation du logo (pilotee par la GUI ou --logo*, relue a chaque image)
+    "logo_path": str(DEFAULT_LOGO),   # "" = aucun logo
+    "logo_x": 0.5,                    # centre, fraction de la largeur (origine a gauche)
+    "logo_y": 0.5,                    # centre, fraction de la hauteur (origine en haut)
+    "logo_scale": 0.35,               # cote du carre englobant, fraction de la hauteur
+    "logo_opacity": 1.0,
+    "logo_pulse": 0.12,               # zoom au kick (0,12 = +12 %)
+    "logo_jitter": 0.004,             # tremblement sur les aigus, fraction de l'ecran
+    "logo_glow": 1.0,                 # intensite du contour lumineux
+    "logo_glow_radius": 1.0,          # multiplicateur du rayon du contour
+    "logo_glow_color": "#5fd4c8",
 }
 
 # --- Analyse audio -----------------------------------------------------------------
@@ -359,10 +371,10 @@ class AudioAnalyzer:
         self.ring.event.set()
 
     def _run(self):
-        rate = self.extractor.rate
         while not self._stop.is_set():
             if not self.ring.event.wait(0.1):
                 continue
+            rate = self.extractor.rate    # relu: l'entree audio peut changer en cours de route
             self.ring.event.clear()
             total = self.ring.total
             new = total - self._last_total
@@ -402,13 +414,16 @@ class FrameReader:
 
     CHUNK = 1 << 20
 
-    def __init__(self, stream, frame_size: int, on_frame=None):
-        self.stream = stream
+    def __init__(self, stream, frame_size: int, on_frame=None, hold_on_eof: bool = False):
+        self._stream = stream
         self.frame_size = frame_size
         self.on_frame = on_frame          # crochet de test, appele avec la frame complete
+        self.hold_on_eof = hold_on_eof    # fin de flux: attendre un remplacant au lieu de s'arreter
         self._front = bytearray(frame_size)
         self._back = bytearray(frame_size)
         self._lock = threading.Lock()
+        self._pending = None
+        self._stop = threading.Event()
         self._seq = 0
         self._uploaded = 0
         self.frames_read = 0
@@ -418,29 +433,61 @@ class FrameReader:
     def start(self):
         self._thread.start()
 
+    def stop(self):
+        self._stop.set()
+
     def join(self, timeout: float | None = None):
         self._thread.join(timeout)
 
+    def switch_stream(self, stream) -> None:
+        """Passe a un nouveau flux (producteur remplace a chaud). Le lecteur finit le flux
+        courant jusqu'a sa fin (l'appelant termine l'ancien producteur), jette toute frame
+        PARTIELLE de l'ancien flux, puis repart sur le nouveau: aucune frame melangee."""
+        self._pending = stream
+
+    def _take_pending(self) -> bool:
+        if self._pending is None:
+            return False
+        old, self._stream, self._pending = self._stream, self._pending, None
+        try:
+            old.close()
+        except Exception:
+            pass
+        self.ended = False
+        return True
+
     def _run(self):
         size = self.frame_size
-        use_readinto = hasattr(self.stream, "readinto")
-        while True:
+        while not self._stop.is_set():
+            stream = self._stream
+            use_readinto = hasattr(stream, "readinto")
             mv = memoryview(self._back)
             got = 0
+            eof = False
             while got < size:
                 try:
                     if use_readinto:
-                        n = self.stream.readinto(mv[got:])
+                        n = stream.readinto(mv[got:])
                     else:
-                        chunk = self.stream.read(min(size - got, self.CHUNK))
+                        chunk = stream.read(min(size - got, self.CHUNK))
                         n = len(chunk)
                         mv[got:got + n] = chunk
                 except (ValueError, OSError):
                     n = 0
                 if not n:
-                    self.ended = True
-                    return
+                    eof = True
+                    break
                 got += n
+            if eof:
+                mv.release()          # frame partielle: jetee
+                if self._take_pending():
+                    continue
+                self.ended = True
+                if not self.hold_on_eof:
+                    return
+                while not self._stop.is_set() and not self._take_pending():
+                    time.sleep(0.05)
+                continue
             self.frames_read += 1
             if self.on_frame:
                 self.on_frame(mv)
@@ -528,7 +575,7 @@ def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple
     """(cx, cy, demi-largeur, demi-hauteur) en uv (origine haut gauche). Le logo tient dans
     un carre de cote scale*hauteur, ratio conserve ; pulse (0.12 = +12 %) et jitter
     ne le font jamais sortir du cadre."""
-    box = min(scale * height, 0.95 * min(width, height))
+    box = max(min(scale * height, 0.95 * min(width, height)), 2.0)
     w_px, h_px = (box, box / aspect) if aspect >= 1.0 else (box * aspect, box)
     if w_px > 0.95 * width:
         w_px, h_px = 0.95 * width, 0.95 * width / aspect
@@ -546,16 +593,11 @@ def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple
 class Renderer:
     """Deux passes : scene (video + logo) dans un FBO, puis post-traitement vers `target`."""
 
-    def __init__(self, ctx, video_size: tuple[int, int], logo_rgba=None,
-                 logo_scale: float = 0.35, logo_pos: tuple[float, float] = (0.5, 0.5),
-                 glow_color: tuple[float, float, float] = (0.37, 0.83, 0.78),
+    def __init__(self, ctx, video_size: tuple[int, int], logo_rgba=None, logo_path: str = "",
                  shader_dir: Path = SHADER_DIR):
         self.ctx = ctx
         self.shader_dir = shader_dir
         self.video_size = video_size
-        self.logo_scale = logo_scale
-        self.logo_pos = logo_pos
-        self.glow_color = glow_color
         self.hud = False
         self.rng = np.random.default_rng(3)
 
@@ -565,21 +607,36 @@ class Renderer:
 
         self.logo_tex = None
         self.logo_aspect = 1.0
-        if logo_rgba is not None:
-            h, w = logo_rgba.shape[:2]
-            self.logo_aspect = w / h
-            self.logo_tex = ctx.texture((w, h), 4, data=logo_rgba.tobytes())
-            self.logo_tex.build_mipmaps()
-            self.logo_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-            self.logo_tex.anisotropy = 8.0
-            self.logo_tex.repeat_x = self.logo_tex.repeat_y = False
-        else:
-            self.logo_tex = ctx.texture((1, 1), 4, data=bytes(4))
+        self.has_logo = False
+        self.logo_path = ""
+        # Dernier chemin DEMANDE (charge ou non): evite de retenter un fichier invalide a chaque image.
+        self.logo_requested = logo_path
+        self.set_logo(logo_rgba, logo_path)
 
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = None
         self.reload_shaders()
+
+    def set_logo(self, logo_rgba, path: str = "") -> None:
+        """Remplace la texture du logo (None = aucun). A appeler depuis le fil GL."""
+        old = self.logo_tex
+        if logo_rgba is not None:
+            h, w = logo_rgba.shape[:2]
+            tex = self.ctx.texture((w, h), 4, data=logo_rgba.tobytes())
+            tex.build_mipmaps()
+            tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            tex.anisotropy = 8.0
+            self.logo_aspect = w / h
+        else:
+            tex = self.ctx.texture((1, 1), 4, data=bytes(4))
+            self.logo_aspect = 1.0
+        tex.repeat_x = tex.repeat_y = False
+        self.logo_tex = tex
+        self.has_logo = logo_rgba is not None
+        self.logo_path = path if logo_rgba is not None else ""
+        if old is not None:
+            old.release()
 
     def _read(self, name: str) -> str:
         return (self.shader_dir / name).read_text(encoding="utf-8")
@@ -612,27 +669,33 @@ class Renderer:
 
     def draw(self, target, size: tuple[int, int], state: dict, params: dict, t: float) -> None:
         width, height = size
-        fx_on, fx_int, master = params["fx_on"], params["fx_int"], params["master"]
+        p = {**DEFAULT_PARAMS, **params}       # un dict partiel (tests) reste valide
+        fx_on, fx_int, master = p["fx_on"], p["fx_int"], p["master"]
         eff = [float(fx_on[i]) * float(fx_int[i]) * master for i in range(5)]
         bass, high, beat = state["bass"], state["high"], state["beat"]
 
         self._ensure_scene(size)
 
-        # Passe 1 : video + logo (pulse, jitter, contour lumineux).
+        # Passe 1 : video + logo (pulse, jitter, contour lumineux). L'interrupteur/intensite
+        # "logo" (effet 5) module les trois reactions a l'audio; position, taille et
+        # opacite restent celles des reglages meme effet coupe.
         logo_fx = eff[4]
-        pulse = 0.12 * beat * logo_fx
-        jit = 0.004 * high * logo_fx
+        pulse = p["logo_pulse"] * beat * logo_fx
+        jit = p["logo_jitter"] * high * logo_fx
         jitter = (float(self.rng.uniform(-1, 1)) * jit, float(self.rng.uniform(-1, 1)) * jit)
-        rect = logo_layout(width, height, self.logo_aspect, self.logo_scale, self.logo_pos, pulse, jitter)
+        rect = logo_layout(width, height, self.logo_aspect, p["logo_scale"], (p["logo_x"], p["logo_y"]),
+                           pulse, jitter)
         sp = self.scene_prog
         self._set(sp, "u_video", 0)
         self._set(sp, "u_logo", 1)
         self._set(sp, "u_res", (float(width), float(height)))
         self._set(sp, "u_logo_rect", rect)
-        self._set(sp, "u_logo_on", 1.0 if self.logo_aspect and self.logo_tex.size != (1, 1) else 0.0)
+        self._set(sp, "u_logo_on", 1.0 if self.has_logo else 0.0)
+        self._set(sp, "u_logo_opacity", min(max(float(p["logo_opacity"]), 0.0), 1.0))
         self._set(sp, "u_bass", float(bass))
-        self._set(sp, "u_glow", min(logo_fx, 2.0))
-        self._set(sp, "u_glow_color", self.glow_color)
+        self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0))
+        self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
+        self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
         self.video_tex.use(0)
         self.logo_tex.use(1)
         self.scene_fbo.viewport = (0, 0, width, height)
@@ -669,13 +732,28 @@ def load_params() -> dict:
             if isinstance(default, list):
                 if isinstance(value, list) and len(value) == len(default):
                     params[key] = value
-            elif isinstance(value, (int, float)):
+            elif isinstance(default, str):
+                if isinstance(value, str):
+                    params[key] = value
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 params[key] = float(value)
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as exc:
         print(f"Reglages ignores ({PARAMS_PATH}): {exc}", file=sys.stderr)
     return params
+
+
+def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> tuple[float, float, float]:
+    """'#rrggbb' -> (r, g, b) en 0..1 ; valeur invalide -> couleur de repli."""
+    for candidate in (text, fallback):
+        c = candidate.strip().lstrip("#")
+        if len(c) == 6:
+            try:
+                return tuple(int(c[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+            except ValueError:
+                pass
+    return (0.37, 0.83, 0.78)
 
 
 def save_params(params: dict) -> None:
@@ -713,6 +791,7 @@ def format_command(cmd: list[str]) -> str:
 
 
 PIPE_BUFFER = 1 << 24   # 16 Mo: plusieurs frames 1080p
+PRODUCER_WARMUP_CAP_S = 2.0
 
 
 def spawn_producer(live, live_args) -> subprocess.Popen:
@@ -751,6 +830,111 @@ def stop_process(proc: subprocess.Popen | None) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+
+
+class ProducerManager:
+    """Possede le producteur ffmpeg ET son FrameReader, et remplace le producteur a chaud
+    quand un reglage du visuel change (GUI), sans jamais toucher a la fenetre GL.
+
+    Meme principe que le redemarrage "doux" d'audio2wave_live (voir son CLAUDE.md) : le
+    nouveau producteur est lance a cote de l'ancien puis "chauffe" (ses frames ENTIERES sont
+    lues et jetees pendant `producer_warmup_seconds`, sinon ffmpeg bloque sur un pipe plein et
+    sa fenetre --averaging ne converge pas: a-coup visible au basculement), et n'est montre
+    qu'ensuite. S'il meurt pendant la chauffe (reglage invalide, ex. couleur inconnue),
+    l'ancien reste en place et un message est laisse dans `status["live"]`.
+    Les demandes rapprochees sont fusionnees: seule la derniere est jouee.
+    """
+
+    def __init__(self, live, live_args, frame_size: int, status: dict, spawn=None):
+        self.live = live
+        self.args = live_args
+        self.frame_size = frame_size
+        self.status = status
+        self._spawn = spawn or (lambda a: spawn_producer(live, a))
+        self.producer = self._spawn(live_args)
+        self.reader = FrameReader(self.producer.stdout, frame_size, hold_on_eof=True)
+        self.restarts = 0
+        self._request: object | None = None
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self.reader.start()
+        self._thread.start()
+
+    def request_restart(self, new_args) -> None:
+        """Programme le remplacement du producteur par un lance avec `new_args`."""
+        with self._lock:
+            self._request = new_args
+        self._wake.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        self.reader.stop()
+        stop_process(self.producer)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._wake.wait(0.2)
+            if self._stop.is_set():
+                return
+            with self._lock:
+                new_args, self._request = self._request, None
+                self._wake.clear()
+            if new_args is not None:
+                self._replace(new_args)
+
+    def _warmup_seconds(self, args) -> float:
+        try:
+            wanted = self.live.producer_warmup_seconds(args)
+        except Exception:
+            wanted = 0.5
+        return max(getattr(self.live, "RESTART_GRACE_S", 0.3), min(wanted, PRODUCER_WARMUP_CAP_S))
+
+    def _drain(self, proc, seconds: float) -> bool:
+        """Lit et jette des frames ENTIERES pendant `seconds` (au moins une). False si le
+        producteur s'arrete avant."""
+        size = self.frame_size
+        mv = memoryview(bytearray(size))
+        deadline = time.monotonic() + seconds
+        first = True
+        while first or time.monotonic() < deadline:
+            first = False
+            got = 0
+            while got < size:
+                if self._stop.is_set():
+                    return False
+                try:
+                    n = proc.stdout.readinto(mv[got:])
+                except (ValueError, OSError):
+                    n = 0
+                if not n:
+                    return False
+                got += n
+        return True
+
+    def _replace(self, new_args) -> None:
+        self.status["live"] = "Redemarrage du flux..."
+        try:
+            new = self._spawn(new_args)
+        except Exception as exc:
+            self.status["live"] = f"Lancement de ffmpeg impossible: {exc}"
+            return
+        if not self._drain(new, self._warmup_seconds(new_args)):
+            stop_process(new)
+            self.status["live"] = ("Reglage refuse (ffmpeg s'est arrete): ancien flux conserve. "
+                                   "Verifie couleurs / valeurs.")
+            return
+        old = self.producer
+        self.producer = new
+        self.args = new_args
+        self.reader.switch_stream(new.stdout)
+        stop_process(old)          # EOF sur l'ancien flux -> le lecteur bascule sur le nouveau
+        self.restarts += 1
+        self.status["live"] = "Flux a jour"
 
 
 # --- Fenetre glfw ------------------------------------------------------------------
@@ -830,11 +1014,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("-d", "--device", help="Entree DirectShow pour ffmpeg (voir --list-devices)")
     p.add_argument("--audio-device", help="Entree sounddevice pour l'analyse: sous-chaine ou numero "
                    "(voir --list-audio-devices). Defaut: meme nom que --device si trouve, sinon defaut systeme")
-    p.add_argument("--logo", default=str(DEFAULT_LOGO),
-                   help="PNG RGBA a incruster, ou 'none' (defaut: asset/Casual Ravers - Kit_Sigle - Blanc.png)")
-    p.add_argument("--logo-scale", type=float, default=0.35,
+    p.add_argument("--gui", action="store_true",
+                   help="Ouvre la fenetre de reglages (tkinter): visuel live, logo et effets en direct")
+    p.add_argument("--logo", default=None,
+                   help="PNG RGBA a incruster, ou 'none' (defaut: reglage sauve, sinon "
+                        "asset/Casual Ravers - Kit_Sigle - Blanc.png)")
+    p.add_argument("--logo-scale", type=float, default=None,
                    help="Cote du carre englobant le logo, en fraction de la hauteur (defaut: 0.35)")
-    p.add_argument("--logo-pos", default="0.5,0.5",
+    p.add_argument("--logo-pos", default=None,
                    help="Centre du logo x,y en fraction, origine en haut a gauche (defaut: 0.5,0.5)")
     p.add_argument("--size", default=None,
                    help="Taille de la fenetre WxH en mode --no-fullscreen (defaut: 1280x720)")
@@ -884,7 +1071,7 @@ def main() -> None:
 
     render_w, render_h = (int(v) for v in parse_pair(args.render_size, "--render-size", "x"))
     live = None
-    if not args.synthetic or args.list_devices:
+    if not args.synthetic or args.list_devices or args.gui:
         live = load_live(Path(args.a2w_dir))
 
     if args.list_devices:
@@ -900,8 +1087,8 @@ def main() -> None:
 
     live_args = None
     if not args.synthetic:
-        if not args.device:
-            print("Indique une entree avec -d/--device (ou --list-devices, ou --synthetic).", file=sys.stderr)
+        if not args.device and not args.gui:
+            print("Indique une entree avec -d/--device (ou --list-devices, --gui, --synthetic).", file=sys.stderr)
             sys.exit(2)
         live_args = build_live_args(live, args.device, (render_w, render_h), args.fps, args.live_args)
         if live.resolve_size(live_args) != (render_w, render_h):
@@ -911,6 +1098,9 @@ def main() -> None:
     if args.dry_run:
         if live_args is None:
             print("Mode --synthetic: aucune commande ffmpeg, flux video/audio generes en Python.")
+        elif not args.device:
+            print("--dry-run demande une entree (-d).", file=sys.stderr)
+            sys.exit(2)
         else:
             print(format_command(live.producer_command(live_args)))
         return
@@ -919,137 +1109,297 @@ def main() -> None:
     if live_args is not None and shutil.which("ffmpeg") is None:
         print("ffmpeg introuvable dans le PATH (winget install --id Gyan.FFmpeg).", file=sys.stderr)
         sys.exit(1)
+    if args.gui:
+        try:
+            import tkinter  # noqa: F401
+        except ImportError:
+            print("tkinter n'est pas disponible: --gui ne peut pas demarrer.", file=sys.stderr)
+            sys.exit(1)
     run_app(args, live, live_args, (render_w, render_h))
+
+
+class AudioController:
+    """Entree audio d'analyse (sounddevice ou synthetique) + analyseur, avec changement
+    d'entree a chaud (GUI). L'extracteur est recree si la frequence d'echantillonnage change."""
+
+    def __init__(self, ring: RingBuffer, sensitivity: float, synthetic: bool, device=None):
+        self.ring = ring
+        self.synthetic = synthetic
+        if synthetic:
+            self.src = SyntheticAudio(ring)
+            self.rate = 48000
+            self.name = "synthetique (kick 60 Hz, 120 BPM)"
+        else:
+            self.src = SoundDeviceInput(device, ring)
+            self.rate = self.src.rate
+            self.name = self.src.name
+        self.analyzer = AudioAnalyzer(ring, FeatureExtractor(self.rate, sensitivity=sensitivity))
+
+    def start(self) -> None:
+        self.analyzer.start()
+        self.src.start()
+
+    def stop(self) -> None:
+        self.analyzer.stop()
+        try:
+            self.src.stop()
+        except Exception:
+            pass
+
+    def switch(self, device) -> str:
+        """Bascule sur une autre entree sounddevice. Leve une exception si elle est refusee
+        (l'entree precedente reste alors active)."""
+        new = SoundDeviceInput(device, self.ring)
+        new.start()
+        old, self.src = self.src, new
+        try:
+            old.stop()
+        except Exception:
+            pass
+        if new.rate != self.rate:
+            self.rate = new.rate
+            self.analyzer.extractor = FeatureExtractor(
+                new.rate, sensitivity=self.analyzer.extractor.sensitivity)
+        self.name = new.name
+        return new.name
+
+    @staticmethod
+    def input_choices() -> list[tuple[int, str]]:
+        hostapis = sd.query_hostapis()
+        return [(i, f"[{hostapis[d['hostapi']]['name'].replace('Windows ', '')}] {d['name']}")
+                for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+
+
+class Session:
+    """Etat partage entre le fil GL, la GUI (fil principal) et les fils de fond.
+
+    `params` (reglages du rendu) est relu a chaque image par le fil GL et muté librement par la
+    GUI (affectations atomiques). `commands` transporte les actions qui doivent s'executer DANS
+    le fil GL (tous les appels glfw doivent partir du fil qui a initialise glfw)."""
+
+    def __init__(self, args, params, live, live_args, render_size, win_size, audio, manager, reader):
+        self.args, self.params = args, params
+        self.live, self.live_args = live, live_args
+        self.render_size, self.win_size = render_size, win_size
+        self.audio, self.manager, self.reader = audio, manager, reader
+        self.status: dict = manager.status if manager else {}
+        self.status.setdefault("fps", 0.0)
+        self.commands: queue.SimpleQueue = queue.SimpleQueue()
+        self.stop_event = threading.Event()
+        self.finished_event = threading.Event()
+        self.renderer: Renderer | None = None
+        self.window: Window | None = None
 
 
 def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
     params = load_params()
     if args.sensitivity is not None:
         params["sensitivity"] = args.sensitivity
-    logo_pos = parse_pair(args.logo_pos, "--logo-pos", ",")
-    logo = None
-    if args.logo.lower() != "none":
-        if not Path(args.logo).is_file():
+    if args.logo is not None:
+        if args.logo.lower() == "none":
+            params["logo_path"] = ""
+        elif not Path(args.logo).is_file():
             print(f"Logo introuvable: {args.logo} (--logo none pour s'en passer)", file=sys.stderr)
             sys.exit(2)
-        logo = load_logo(Path(args.logo))
-    win_w, win_h = (int(v) for v in parse_pair(args.size or "1280x720", "--size", "x"))
+        else:
+            params["logo_path"] = str(Path(args.logo).resolve())
+    if args.logo_scale is not None:
+        params["logo_scale"] = args.logo_scale
+    if args.logo_pos is not None:
+        params["logo_x"], params["logo_y"] = parse_pair(args.logo_pos, "--logo-pos", ",")
+    win_size = tuple(int(v) for v in parse_pair(args.size or "1280x720", "--size", "x"))
 
-    # Audio: ring + capture + analyse.
     ring = RingBuffer()
-    audio_src = None
-    if args.synthetic:
-        rate = 48000
-        audio_src = SyntheticAudio(ring, rate)
-        print("Audio synthetique: kick 60 Hz a 120 BPM.")
-    else:
-        device = find_input_device(args.audio_device, args.device)
-        audio_src = SoundDeviceInput(device, ring)
-        rate = audio_src.rate
-        print(f"Analyse audio sur '{audio_src.name}' ({rate} Hz, latence capture "
-              f"~{audio_src.latency_ms:.0f} ms).")
-    extractor = FeatureExtractor(rate, sensitivity=params["sensitivity"])
-    analyzer = AudioAnalyzer(ring, extractor)
+    device = None if args.synthetic else find_input_device(args.audio_device, args.device)
+    audio = AudioController(ring, params["sensitivity"], args.synthetic, device)
+    print(f"Analyse audio: {audio.name} ({audio.rate} Hz)"
+          + ("" if args.synthetic else f", latence capture ~{audio.src.latency_ms:.0f} ms") + ".")
 
-    # Video: producteur ffmpeg (ou flux synthetique) -> lecteur de frames.
-    producer = None
     frame_size = render_size[0] * render_size[1] * 3
+    manager = None
     if args.synthetic:
-        stream = SyntheticVideoStream(render_size[0], render_size[1], args.fps)
+        reader = FrameReader(SyntheticVideoStream(render_size[0], render_size[1], args.fps), frame_size)
+    elif live_args.device:
+        manager = ProducerManager(live, live_args, frame_size, {})
+        reader = manager.reader
     else:
-        producer = spawn_producer(live, live_args)
-        stream = producer.stdout
-    reader = FrameReader(stream, frame_size)
+        # --gui sans -d: pas de producteur tant qu'aucune entree n'est choisie dans la fenetre.
+        manager = NoDeviceManager(live, live_args, frame_size)
+        reader = manager.reader
 
-    if not glfw.init():
-        print("Initialisation de glfw impossible.", file=sys.stderr)
-        sys.exit(1)
+    s = Session(args, params, live, live_args, render_size, win_size, audio, manager, reader)
+    thread = None
+    try:
+        audio.start()
+        if manager is not None:
+            manager.start()
+        else:
+            reader.start()
+        if args.gui:
+            import gl_gui
+            thread = threading.Thread(target=gl_main, args=(s,), name="gl", daemon=True)
+            thread.start()
+            gl_gui.run_gui(s, live)
+        else:
+            gl_main(s)
+    finally:
+        s.stop_event.set()
+        if thread is not None:
+            thread.join(5)
+        audio.stop()
+        if manager is not None:
+            manager.stop()
+        else:
+            reader.stop()
+
+
+class NoDeviceManager(ProducerManager):
+    """ProducerManager sans producteur (GUI lancee sans -d): le premier request_restart()
+    avec une entree choisie demarre le flux."""
+
+    def __init__(self, live, live_args, frame_size: int):
+        self.live, self.args, self.frame_size, self.status = live, live_args, frame_size, {}
+        self._spawn = lambda a: spawn_producer(live, a)
+        self.producer = None
+        self.reader = FrameReader(_EmptyStream(), frame_size, hold_on_eof=True)
+        self.restarts = 0
+        self._request = None
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self.status["live"] = "Choisis une entree audio dans la fenetre de reglages"
+
+
+class _EmptyStream:
+    def read(self, n: int) -> bytes:
+        return b""
+
+
+def apply_logo_request(s: Session, renderer: Renderer) -> None:
+    """Charge le logo demande par params["logo_path"] s'il a change (fil GL)."""
+    want = s.params.get("logo_path", "")
+    if want == renderer.logo_requested:
+        return
+    renderer.logo_requested = want
+    if not want or want.lower() == "none":
+        renderer.set_logo(None, "")
+        s.status["logo"] = "Aucun logo"
+        return
+    path = Path(want)
+    if not path.is_file():
+        s.status["logo"] = f"Logo introuvable: {want}"
+        print(s.status["logo"], file=sys.stderr)
+        return
+    try:
+        renderer.set_logo(load_logo(path), want)
+        s.status["logo"] = f"Logo: {path.name}"
+    except Exception as exc:
+        s.status["logo"] = f"Logo illisible ({path.name}): {exc}"
+        print(s.status["logo"], file=sys.stderr)
+
+
+def gl_main(s: Session) -> None:
+    """Fenetre GL + boucle de rendu. Tous les appels glfw partent de CE fil (init, creation,
+    evenements, destruction): avec --gui il tourne a cote de tkinter, qui garde le fil principal."""
+    args = s.args
     window = None
     try:
+        if not glfw.init():
+            print("Initialisation de glfw impossible.", file=sys.stderr)
+            sys.exit(1)
         monitor = pick_monitor(args.monitor)
-        window = Window(monitor, (win_w, win_h), args.fullscreen)
+        window = Window(monitor, s.win_size, args.fullscreen)
         ctx = moderngl.create_context()
         mode = glfw.get_video_mode(monitor)
         wx, wy = glfw.get_window_pos(window.handle)
         ww, wh = glfw.get_window_size(window.handle)
         print(f"OpenGL: {ctx.info['GL_RENDERER']} | moniteur en ({window.mx},{window.my}) "
               f"{window.mw}x{window.mh} @ {mode.refresh_rate} Hz | fenetre en ({wx},{wy}) {ww}x{wh} | "
-              f"rendu ffmpeg {render_size[0]}x{render_size[1]}")
-        renderer = Renderer(ctx, render_size, logo, args.logo_scale, logo_pos)
+              f"rendu ffmpeg {s.render_size[0]}x{s.render_size[1]}")
+        renderer = Renderer(ctx, s.render_size, None, "")
+        renderer.logo_requested = None          # force le chargement du logo demande a la 1re image
         renderer.hud = args.hud
-
-        analyzer.start()
-        audio_src.start()
-        reader.start()
-        loop(args, window, ctx, renderer, reader, analyzer, extractor, params, producer)
+        s.renderer, s.window = renderer, window
+        loop(s, window, ctx, renderer)
     finally:
-        analyzer.stop()
-        if audio_src is not None:
-            try:
-                audio_src.stop()
-            except Exception:
-                pass
-        stop_process(producer)
+        s.renderer = None
         if window is not None:
             glfw.destroy_window(window.handle)
         glfw.terminate()
+        s.finished_event.set()
 
 
-def loop(args, window: Window, ctx, renderer: Renderer, reader: FrameReader, analyzer: AudioAnalyzer,
-         extractor: FeatureExtractor, params: dict, producer) -> None:
+def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
+    args, params, reader = s.args, s.params, s.reader
+    analyzer = s.audio.analyzer
     handle = window.handle
     quit_flag = {"v": False}
 
-    def status() -> str:
+    def status_line() -> str:
         on = "".join(str(int(v)) for v in params["fx_on"])
         return (f"intensite {params['master']:.1f} | sensibilite kick {params['sensitivity']:.2f} | "
                 f"effets {on} ({'/'.join(FX_NAMES)})")
 
-    def on_key(win, key, scancode, action, mods):
-        if action not in (glfw.PRESS, glfw.REPEAT):
-            return
-        press = action == glfw.PRESS
-        digits = {glfw.KEY_1: 0, glfw.KEY_2: 1, glfw.KEY_3: 2, glfw.KEY_4: 3, glfw.KEY_5: 4,
-                  glfw.KEY_KP_1: 0, glfw.KEY_KP_2: 1, glfw.KEY_KP_3: 2, glfw.KEY_KP_4: 3, glfw.KEY_KP_5: 4}
-        if key == glfw.KEY_ESCAPE and press:
+    def act(name: str) -> None:
+        """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""
+        if name == "quit":
             quit_flag["v"] = True
-        elif key == glfw.KEY_F and press:
+        elif name == "fullscreen":
             window.toggle_fullscreen()
-        elif key == glfw.KEY_H and press:
+        elif name == "hud":
             renderer.hud = not renderer.hud
-        elif key == glfw.KEY_R and press:
+        elif name == "reload":
             try:
                 renderer.reload_shaders()
-                params.update({k: v for k, v in load_params().items() if k != "sensitivity"})
+                keep = {"sensitivity", "logo_path"}      # ne pas ecraser ce que la GUI vient de regler
+                params.update({k: v for k, v in load_params().items() if k not in keep})
                 print("Shaders et reglages recharges.")
+                s.status["msg"] = "Shaders recharges"
             except ShaderError as exc:
                 print(f"Erreur de shader (ancien programme conserve):\n{exc}", file=sys.stderr)
-        elif key == glfw.KEY_P and press:
+                s.status["msg"] = "Erreur de shader (voir la console), ancien programme conserve"
+        elif name == "save":
             save_params(params)
             print(f"Reglages sauves dans {PARAMS_PATH}")
-        elif key in digits and press:
-            i = digits[key]
+            s.status["msg"] = f"Reglages sauves ({PARAMS_PATH.name})"
+        elif name.startswith("fx") and name[2:].isdigit():
+            i = int(name[2:])
             params["fx_on"][i] = 0 if params["fx_on"][i] else 1
             print(f"effet {FX_NAMES[i]}: {'on' if params['fx_on'][i] else 'off'}")
-        elif key in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD, glfw.KEY_PAGE_UP):
+        elif name == "master+":
             params["master"] = min(params["master"] + 0.1, 2.0)
-            print(status())
-        elif key in (glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT, glfw.KEY_PAGE_DOWN):
+            print(status_line())
+        elif name == "master-":
             params["master"] = max(params["master"] - 0.1, 0.0)
-            print(status())
-        elif key == glfw.KEY_UP:
+            print(status_line())
+        elif name == "sens+":
             params["sensitivity"] = min(params["sensitivity"] * 1.15, 4.0)
-            extractor.sensitivity = params["sensitivity"]
-            print(status())
-        elif key == glfw.KEY_DOWN:
+            print(status_line())
+        elif name == "sens-":
             params["sensitivity"] = max(params["sensitivity"] / 1.15, 0.25)
-            extractor.sensitivity = params["sensitivity"]
-            print(status())
+            print(status_line())
+
+    key_actions = {glfw.KEY_ESCAPE: "quit", glfw.KEY_F: "fullscreen", glfw.KEY_H: "hud",
+                   glfw.KEY_R: "reload", glfw.KEY_P: "save",
+                   glfw.KEY_EQUAL: "master+", glfw.KEY_KP_ADD: "master+", glfw.KEY_PAGE_UP: "master+",
+                   glfw.KEY_MINUS: "master-", glfw.KEY_KP_SUBTRACT: "master-", glfw.KEY_PAGE_DOWN: "master-",
+                   glfw.KEY_UP: "sens+", glfw.KEY_DOWN: "sens-"}
+    for i, k in enumerate((glfw.KEY_1, glfw.KEY_2, glfw.KEY_3, glfw.KEY_4, glfw.KEY_5)):
+        key_actions[k] = f"fx{i}"
+    for i, k in enumerate((glfw.KEY_KP_1, glfw.KEY_KP_2, glfw.KEY_KP_3, glfw.KEY_KP_4, glfw.KEY_KP_5)):
+        key_actions[k] = f"fx{i}"
+    repeatable = {"master+", "master-", "sens+", "sens-"}
+
+    def on_key(win, key, scancode, action, mods):
+        name = key_actions.get(key)
+        if name and (action == glfw.PRESS or (action == glfw.REPEAT and name in repeatable)):
+            act(name)
 
     glfw.set_key_callback(handle, on_key)
     print("Echap quitte | F plein ecran | H barres debug | 1-5 effets | +/- intensite | "
           "haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
-    print(status())
+    print(status_line())
 
     query = ctx.query(time=True) if args.stats else None
     t0 = time.monotonic()
@@ -1060,6 +1410,7 @@ def loop(args, window: Window, ctx, renderer: Renderer, reader: FrameReader, ana
     up_n = gpu_n = 0
     last_stats = t0
     warned = False
+    last_restarts = 0
     last_beats = 0
     refresh = glfw.get_video_mode(window.monitor).refresh_rate or 60
     cap = refresh * 1.02 if args.fps_cap is None else args.fps_cap
@@ -1072,21 +1423,33 @@ def loop(args, window: Window, ctx, renderer: Renderer, reader: FrameReader, ana
     if args.screenshot and args.max_seconds is None:
         args.max_seconds = 3.0
 
-    while not glfw.window_should_close(handle) and not quit_flag["v"]:
+    while not glfw.window_should_close(handle) and not quit_flag["v"] and not s.stop_event.is_set():
         glfw.poll_events()
+        while True:
+            try:
+                act(s.commands.get_nowait())
+            except queue.Empty:
+                break
         now = time.monotonic()
         max_gap = max(max_gap, now - prev_frame_t)
         prev_frame_t = now
         if args.max_seconds is not None and now - t0 >= args.max_seconds:
             break
 
+        apply_logo_request(s, renderer)
+        analyzer.extractor.sensitivity = params["sensitivity"]
+
         u0 = time.perf_counter()
         if reader.upload_to(renderer.video_tex):
             up_ms += (time.perf_counter() - u0) * 1000.0
             up_n += 1
+        producer = s.manager.producer if s.manager else None
+        if s.manager and s.manager.restarts != last_restarts:
+            last_restarts, warned = s.manager.restarts, False
         if producer is not None and not warned and producer.poll() is not None:
             print(f"Le producteur ffmpeg s'est arrete (code {producer.returncode}): "
                   "derniere image conservee.", file=sys.stderr)
+            s.status["live"] = f"ffmpeg arrete (code {producer.returncode}): derniere image conservee"
             warned = True
 
         state = analyzer.latest()
@@ -1123,6 +1486,7 @@ def loop(args, window: Window, ctx, renderer: Renderer, reader: FrameReader, ana
         now = time.monotonic()
         if now - last_title >= 0.5:
             fps = win_frames / (now - last_title)
+            s.status["fps"] = fps
             glfw.set_window_title(handle, f"casual-overlay GL - {fps:.0f} fps - int {params['master']:.1f}"
                                           f" - sens {params['sensitivity']:.2f}")
             last_title = now
@@ -1137,7 +1501,6 @@ def loop(args, window: Window, ctx, renderer: Renderer, reader: FrameReader, ana
             last_stats, frames, up_ms, up_n, gpu_ms, gpu_n = now, 0, 0.0, 0, 0.0, 0
             last_beats = analyzer.beats
             last_read = reader.frames_read
-
 
 
 if __name__ == "__main__":
