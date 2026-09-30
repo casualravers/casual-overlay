@@ -255,15 +255,37 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    recharger shaders, sauver), mesures bass/mid/high/beat et statut (fps, logo, messages).
    Les cadres sont poses avec un `rowspan` sur toute la hauteur de leur grille : sur une
    grille commune, un bloc haut dans une ligne etirerait leurs panneaux (piege rencontre :
-   fenetre de 1288 px de haut au premier essai). Taille obtenue : 1823 x 911 px.
+   fenetre de 1288 px de haut au premier essai). Taille obtenue : environ 1840 x 850 px (spectre) et
+  940 px (motif affiche) ; un ecran 1080 p laisse ~1000 px utiles, donc **surveiller la hauteur** :
+  les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px
+  par ligne), les deux couleurs du motif sont sur une ligne, les blocs annexes (chrome, effets du logo)
+  sont replies ou masques par defaut.
+- **Structure visible** : deux grandes parties, LIVE (bandeau turquoise, fenetre d'audio2wave) et OVERLAY
+  (bandeau violet), separees par un trait violet de 3 px ; le titre d'audio2wave est retire de la ligne 0
+  pour y poser les bandeaux. Toutes les sections sont des **bandeaux** (`style_band`, fond `GUI_PANEL_BG`, texte
+  gras colore) : ceux d'audio2wave (SOURCE, SPECTRE, COULEURS, SORTIE, PRESETS -> "PRESETS LIVE") sont
+  restyles par `tidy_live_gui`, les notres par `add_section_title`. Le bloc "Motif genere" doit etre pose
+  avec `sticky="new"` + `columnconfigure(2, weight=1)` pour que son bandeau prenne toute la largeur.
 
 - **Case "Plein ecran"** de leur fenetre : `args.fullscreen` change -> commande
   `fullscreen=0|1` envoyee au fil GL (`Session.commands`), sans redemarrer ffmpeg. La
   touche F de la fenetre GL ne remet pas la case a jour (sens unique).
-- **Presets d'audio2wave** : ils sont partages avec le depot audio2wave (memes fichiers,
-  `USER_PRESETS_PATH`) et ne contiennent que les options live + automations. Les reglages de
-  casual-overlay (fond motif, logo, effets) restent dans `~/.audio2wave/gl_params.json`
-  (touche P / bouton "Sauver") : **deux systemes de sauvegarde distincts**.
+- **Presets live (audio2wave)** : deja presents dans la fenetre d'audio2wave integree (section "PRESETS",
+  rebaptisee "PRESETS LIVE"), partages avec le depot audio2wave (memes fichiers, `USER_PRESETS_PATH`) ; ils
+  ne contiennent que les options live + automations des reglages live. Aucun code de notre cote.
+- **Presets overlay** (`OVERLAY_PRESETS`, `OVERLAY_PRESETS_PATH` = `~/.audio2wave/overlay_presets.json`) :
+  **meme classe** `live.PresetStore` et memes gestes que les presets live (menu qui applique, Mettre a jour,
+  Supprimer avec `live.confirm_dialog`, Sauvegarder sous ; `default` = reglages d'origine, non modifiable,
+  integres non supprimables ni ecrasables par une sauvegarde du meme nom). Un preset = `capture_overlay()`
+  (tous les `DEFAULT_PARAMS` + `_automation`, SANS `sensitivity`, qui depend du micro) ; charger =
+  `overlay_preset_values()` (valeurs par defaut + le preset, validees par `coerce_params`, la meme validation
+  que `load_params`) puis `sync_widgets()` (params -> variables Tk via le registre `synced`, +
+  listes des effets, fichiers, texte, automations) : les traces reecrivent `params` avec la meme valeur.
+  Les integres sont partiels (par-dessus les defauts) et **ne touchent pas aux automations** sauf si le preset
+  en contient ; un preset utilisateur les contient toujours. Les tests utilisent un fichier temporaire
+  (`gl.OVERLAY_PRESETS_PATH` remplace le temps de `run_gui`), jamais celui de l'utilisateur.
+- Trois sauvegardes distinctes : presets live, presets overlay, et `gl_params.json` (touche P / bouton
+  "Sauver reglages", reglages courants recharges au lancement).
 - **Threads** : tkinter garde le fil principal, `gl_main()` (glfw + moderngl) tourne dans un
   fil. **Tous les appels glfw partent du fil qui a fait `glfw.init()`** ; ce que la GUI veut
   faire executer cote GL passe par `Session.commands` (file lue a chaque image), le reste
@@ -352,6 +374,9 @@ Gain, radio Style, case Plein ecran) : Snap/Ridge retires, taille figee, presets
 automations presents, rafale de reglages = un seul redemarrage sur une copie, taille du
 rendu toujours remise, plein ecran = commande GL sans redemarrage ffmpeg, statut relaye,
 et nos panneaux (couleur invalide ignoree, logo, effets, fond) ;
+presets overlay (chargement d'un integre, widgets qui suivent, sensibilite exclue, `default`, sauvegarde /
+rechargement d'un preset utilisateur avec texte et curseurs, integre non ecrasable, `default` non modifiable,
+menu, suppression) ;
 halo chrome (par defaut actif et non audioreactif, marge transparente, borne par la marge, insensible au
 kick a chrome_react = 0, anime par le temps, logo video, texture video remise en mipmaps) ;
 effets par couche (intensites effectives lie/separe, delier copie, wobble sur le logo seul = fond strictement
@@ -392,8 +417,13 @@ une mesure de l'application.
 ## Hors POC
 
 Modes Snap/Ridge en source (leurs fenetres existent dans audio2wave, cf. `on_switch_mode` de
-`build_gui`), presets nommes pour les reglages de casual-overlay (les automations sont la, mais pas de
-"scenes" sauvegardables sous un nom ; les presets d'audio2wave ne couvrent que les options
-live), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
+`build_gui`), presets combines live + overlay (les deux se chargent separement), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
 redemarre ffmpeg), MIDI,
-sortie Spout/NDI, plusieurs logos a la fois, synchro de la lecture du logo anime sur le kick. Pas de `.bat` de lancement.
+sortie Spout/NDI, plusieurs logos a la fois, synchro de la lecture du logo anime sur le kick.
+
+Lanceur : [lancer.bat](lancer.bat) (demande explicite, malgre le "pas de .bat" du plan d'origine) : va dans
+son dossier, utilise `.venv\Scripts\python.exe` (message d'installation s'il manque), lance
+`audio2wave_gl.py --gui %*` (arguments transmis, donc `-d`, `--text`, `--synthetic`... marchent) et garde la
+console ouverte (`pause`) si le programme sort avec un code d'erreur. Fichier en ASCII + CRLF (accents
+interdits, comme le reste). Une sortie anormale isolee (code -1073740022) a ete vue une fois au tout premier
+lancement, non reproduite sur 17 lancements suivants.

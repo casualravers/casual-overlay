@@ -1129,22 +1129,78 @@ class Renderer:
 
 # --- Parametres en direct -------------------------------------------------------------
 
+def coerce_params(saved: dict, base: dict | None = None) -> dict:
+    """Reglages valides tires de `saved` (fichier sauve ou preset) par-dessus `base` (defaut: les valeurs
+    par defaut) : cle inconnue, type ou longueur de liste incorrects = ignores. `_automation` est
+    fusionne avec l'ambiance par defaut (merge_automation) s'il est present."""
+    params = json.loads(json.dumps(base if base is not None else DEFAULT_PARAMS))
+    for key, default in DEFAULT_PARAMS.items():
+        if key not in saved:
+            continue
+        value = saved[key]
+        if isinstance(default, list):
+            if isinstance(value, list) and len(value) == len(default) \
+                    and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+                params[key] = [float(v) if isinstance(d, float) else int(v) for v, d in zip(value, default)]
+        elif isinstance(default, str):
+            if isinstance(value, str):
+                params[key] = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            params[key] = float(value)
+    if isinstance(saved.get("_automation"), dict):
+        params["_automation"] = merge_automation(saved["_automation"])
+    return params
+
+
+# Presets propres a l'overlay (fond motif, logo, effets, halo chrome, automations) : memes mecanique et
+# classe (PresetStore d'audio2wave_live) que les presets live, mais dans leur PROPRE fichier. Un preset =
+# des valeurs posees par-dessus les reglages par defaut ; "sensibilite" en est exclue (elle depend du micro
+# et de la salle, pas du look).
+OVERLAY_PRESETS_PATH = Path.home() / ".audio2wave" / "overlay_presets.json"
+OVERLAY_PRESET_EXCLUDED = ("sensitivity",)
+OVERLAY_PRESETS: dict[str, dict] = {
+    "default": {},
+    # logo net, fond qui ondule doucement: le decorrele fond/logo dans son usage le plus simple
+    "sobre": {"fx_link": 0.0, "fxl_on": [0, 0, 0, 0], "fx_on": [1, 1, 0, 0, 1], "fx_int": [0.7, 0.7, 1.0, 1.0, 1.0],
+              "master": 0.8, "logo_pulse": 0.06, "logo_jitter": 0.0, "logo_glow": 0.5, "bg_react": 0.4,
+              "chrome_on": 1.0, "chrome_intensity": 1.0},
+    # fond sombre duo + chrome fort et contour magenta
+    "neon": {"bg_mode": "pattern", "bg_palette": "duo", "bg_color1": "#14003a", "bg_color2": "#00e5ff",
+             "bg_checker": 0.08, "bg_angle": 35.0, "chrome_on": 1.0, "chrome_intensity": 1.8, "chrome_bump": 10.0,
+             "chrome_react": 0.5, "logo_glow": 1.4, "logo_glow_color": "#ff3df2", "fx_link": 0.0,
+             "fxl_on": [0, 0, 1, 1], "fxl_int": [1.0, 1.0, 0.8, 0.6]},
+    # tout a fond, tout reagit
+    "chaos": {"master": 1.3, "fx_int": [1.6, 1.4, 1.5, 1.3, 1.4], "bg_react": 1.6, "bg_speed": 2.2,
+              "bg_flip": 4.0, "logo_pulse": 0.25, "logo_jitter": 0.012, "chrome_react": 1.0, "fx_link": 0.0,
+              "fxl_on": [1, 1, 1, 1], "fxl_int": [1.4, 1.2, 1.4, 1.2]},
+}
+
+
+def capture_overlay(params: dict) -> dict:
+    """Instantane des reglages de l'overlay pour un preset (sans ce qui depend du materiel)."""
+    snap = json.loads(json.dumps({k: v for k, v in params.items()
+                                  if k in DEFAULT_PARAMS or k == "_automation"}))
+    for key in OVERLAY_PRESET_EXCLUDED:
+        snap.pop(key, None)
+    return snap
+
+
+def overlay_preset_values(overrides: dict, current: dict) -> dict:
+    """Reglages a appliquer pour un preset : valeurs par defaut + `overrides` (valides), sauf ce qui est
+    exclu (garde la valeur courante). L'automation n'est touchee que si le preset en contient une."""
+    values = coerce_params(overrides)
+    for key in OVERLAY_PRESET_EXCLUDED:
+        values[key] = current.get(key, DEFAULT_PARAMS[key])
+    if "_automation" not in overrides:
+        values.pop("_automation", None)
+    return values
+
+
 def load_params() -> dict:
     params = json.loads(json.dumps(DEFAULT_PARAMS))
     try:
         saved = json.loads(PARAMS_PATH.read_text(encoding="utf-8"))
-        for key, default in DEFAULT_PARAMS.items():
-            value = saved.get(key, default)
-            if isinstance(default, list):
-                if isinstance(value, list) and len(value) == len(default):
-                    params[key] = value
-            elif isinstance(default, str):
-                if isinstance(value, str):
-                    params[key] = value
-            elif isinstance(value, (int, float)) and not isinstance(value, bool):
-                params[key] = float(value)
-        if isinstance(saved.get("_automation"), dict):
-            params["_automation"] = merge_automation(saved["_automation"])
+        params = coerce_params(saved)
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as exc:

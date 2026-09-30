@@ -288,7 +288,8 @@ def check_gui() -> None:
                                     for w in walk(root))
             out["size_ro"] = all(str(w.cget("state")) == "readonly" for w in walk(root)
                                  if w.winfo_class() == "Entry" and int(w.cget("width")) == 6)
-            out["presets"] = any(w.winfo_class() == "Label" and w.cget("text") == "PRESETS" for w in walk(root))
+            out["presets"] = any(w.winfo_class() == "Label" and w.cget("text").startswith("PRESETS LIVE")
+                                 for w in walk(root))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
                                     and w.cget("text") == "courbe")
             scale = find_scale(root, "Gain (dB)")
@@ -389,7 +390,43 @@ def check_gui() -> None:
             out["reset"] = (data["logo_x"]["enabled"], data["bg_hue"]["enabled"], data["bg_tile"]["period"])
             compact = [w for w in walk(root) if w.winfo_class() == "Button" and w.cget("text") == "∿"]
             out["compact_buttons"] = len(compact)
-            root.after(300, step5)
+            root.after(300, step4e)
+
+        def step4e():
+            # presets overlay: charger un integre, widgets qui suivent, exclusions, sauvegarde, protection
+            params["sensitivity"] = 2.2
+            c["load_overlay_preset"]("neon")
+            out["p_neon"] = (params["bg_mode"], params["bg_palette"], params["chrome_intensity"], params["fx_link"],
+                             params["logo_glow_color"], params["fxl_on"][3])
+            out["p_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["fxl_on_vars"][3].get(),
+                                c["color_var"].get(), c["logo_fx_box"].winfo_manager())
+            out["p_sens"] = params["sensitivity"]
+            c["load_overlay_preset"]("default")
+            out["p_default"] = (params["bg_mode"], params["fx_link"], params["chrome_intensity"], params["fx_on"])
+            out["p_default_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["chrome_var"].get())
+            params["bg_hue"] = 0.42
+            params["text_content"] = "MON TEXTE"
+            c["save_name_var"].set("Mon Look")
+            c["save_overlay_preset"]()
+            saved = json.loads(gl.OVERLAY_PRESETS_PATH.read_text(encoding="utf-8")) if gl.OVERLAY_PRESETS_PATH.exists() else {}
+            out["p_saved"] = "mon look" in saved and "sensitivity" not in saved.get("mon look", {}) \
+                and saved["mon look"].get("bg_hue") == 0.42 and "_automation" in saved["mon look"]
+            params["bg_hue"] = 0.0
+            params["text_content"] = "AUTRE"
+            c["load_overlay_preset"]("mon look")
+            out["p_reload"] = (params["bg_hue"], c["auto_vars"]["bg_hue"].get(), params["text_content"],
+                               c["text_widget"].get("1.0", "end-1c"))
+            c["save_name_var"].set("neon")
+            c["save_overlay_preset"]()
+            out["p_builtin_msg"] = c["preset_msg"].get()
+            out["p_builtin_untouched"] = "neon" not in json.loads(gl.OVERLAY_PRESETS_PATH.read_text(encoding="utf-8"))
+            c["overlay_var"].set("default")
+            c["update_overlay_preset"]()
+            out["p_default_msg"] = c["preset_msg"].get()
+            out["p_menu"] = [c["overlay_menu"]["menu"].entrycget(i, "label")
+                             for i in range(c["overlay_menu"]["menu"].index("end") + 1)]
+            out["p_delete"] = c["overlay_store"].delete_user("mon look")
+            root.after(200, step5)
 
         def step5():
             texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
@@ -400,7 +437,33 @@ def check_gui() -> None:
 
         step1()
 
-    gl_gui.run_gui(s, live, on_ready)
+    import json
+    import tempfile as _tf
+    real_presets_path = gl.OVERLAY_PRESETS_PATH
+    gl.OVERLAY_PRESETS_PATH = Path(_tf.mkdtemp(prefix="casual_overlay_presets_")) / "overlay_presets.json"   # jamais le vrai fichier
+    try:
+        gl_gui.run_gui(s, live, on_ready)
+    finally:
+        gl.OVERLAY_PRESETS_PATH = real_presets_path
+    p = out.get("p_neon", ())
+    check(p == ("pattern", "duo", 1.8, 0.0, "#ff3df2", 1), "preset overlay integre charge dans les parametres", str(p))
+    w = out.get("p_widgets", ())
+    check(w[:4] == ("pattern", 0, 1, "#ff3df2") and w[4] == "grid" if len(w) == 5 else False,
+          "preset overlay: les widgets suivent (fond, lier, effets du logo, couleur) et le bloc logo apparait", str(w))
+    check(out.get("p_sens") == 2.2, "preset overlay: la sensibilite du kick (micro) n'est pas touchee")
+    d = out.get("p_default", ())
+    check(d == ("live", 1.0, 1.2, [1, 1, 1, 1, 1]) and out.get("p_default_widgets") == ("live", 1, int(gl.DEFAULT_PARAMS["chrome_on"] >= 0.5)),
+          "preset 'default': retour aux reglages d'origine, widgets compris", str(d))
+    check(out.get("p_saved"), "sauvegarde sous un nom (minuscules), sans la sensibilite, avec les automations")
+    r = out.get("p_reload", ())
+    check(len(r) == 4 and r[0] == 0.42 and abs(r[1] - 0.42) < 1e-9 and r[2] == "MON TEXTE" and r[3] == "MON TEXTE",
+          "rechargement d'un preset utilisateur: valeurs, curseur et texte retrouves", str(r))
+    check("integre" in out.get("p_builtin_msg", "") and out.get("p_builtin_untouched"),
+          "un preset integre ne peut pas etre ecrase par une sauvegarde du meme nom")
+    check("pas modifiable" in out.get("p_default_msg", ""), "'default' n'est pas modifiable")
+    check(out.get("p_menu", [])[:1] == ["default"] and {"sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
+          "menu des presets: default en tete, integres et utilisateur")
+    check(out.get("p_delete") is True, "suppression d'un preset utilisateur")
     check(out.get("snap_ridge") is False, "boutons Snap/Ridge retires de la fenetre d'audio2wave")
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
     check(out.get("presets") and out.get("automation", 0) >= 1,

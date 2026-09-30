@@ -11,9 +11,10 @@ avec ses presets, ses automations de courbes, ses info-bulles et son theme. Ce m
      a deja mute les options live et positionne l'evenement, on en prend une copie et on
      remplace le producteur ffmpeg a chaud, sans toucher a la fenetre GL (aucun redemarrage
      si la commande ffmpeg est inchangee) ;
-  4. ajoute a droite ses propres panneaux, dans la meme fenetre :
-        FOND (motif genere)  + EFFETS + ANALYSE AUDIO
-        LOGO                 + AFFICHAGE + mesures.
+  4. ajoute a droite ses propres panneaux, dans la meme fenetre (partie OVERLAY, bandeau violet ;
+     la partie LIVE a un bandeau turquoise) :
+        PRESETS OVERLAY + FOND (motif genere) + EFFETS + HALO CHROME
+        LOGO               + ANALYSE AUDIO + AFFICHAGE + mesures.
 
 Sous-ensembles sans aucune modification du depot audio2wave : tout passe par le contrat public
 de `build_gui(args, width, height, status, restart_event, stop_event, finished_event, root)`.
@@ -52,11 +53,32 @@ class Zone:
         return self.row - 1
 
 
+# Couleurs des deux grandes parties de la fenetre (le theme sombre d'audio2wave reste le fond) :
+# LIVE (spectre ffmpeg, fenetre d'audio2wave) en turquoise, OVERLAY (casual-overlay) en violet.
+LIVE_COLOR = "#5fd4c8"
+OVERLAY_COLOR = "#b392ff"
+BANNER_FG = "#0b1018"
+
+# Titres de section d'audio2wave (texte d'origine -> libelle affiche)
+LIVE_SECTIONS = {"SOURCE": "SOURCE", "SPECTRE": "SPECTRE", "COULEURS": "COULEURS", "SORTIE": "SORTIE",
+                 "PRESETS": "PRESETS LIVE  (audio2wave)"}
+
+
+def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> None:
+    """Petit titre de section -> bandeau pleine largeur : fond du theme (plus clair que la fenetre), texte
+    en gras a la couleur de la partie a laquelle il appartient."""
+    label.config(text=text or label.cget("text"), bg=a2w.GUI_PANEL_BG, fg=color,
+                 font=("Segoe UI", 9, "bold"), anchor="w", padx=8, pady=2)
+    label.grid_configure(sticky="ew", pady=(6, 3))
+
+
 def tidy_live_gui(root) -> None:
     """Retire de la fenetre d'audio2wave ce qui n'a pas de sens dans casual-overlay:
     les boutons de bascule Snap/Ridge (ces modes ne sont pas des sources ici) et la taille
     de fenetre, qui devient la taille du rendu ffmpeg, fixe (la texture video est fixee au
     lancement: le pont remet toujours cette taille)."""
+
+    import audio2wave as a2w
 
     def walk(widget) -> None:
         for child in widget.winfo_children():
@@ -64,6 +86,10 @@ def tidy_live_gui(root) -> None:
             if cls == "Button" and child.cget("text") in ("Snap", "Ridge"):
                 child.destroy()
                 continue
+            if cls == "Label" and child.cget("text") in LIVE_SECTIONS:
+                # Les petits titres de section d'audio2wave deviennent des bandeaux pleine largeur,
+                # pour que les parties de la fenetre se distinguent d'un coup d'oeil.
+                style_band(child, a2w, LIVE_SECTIONS[child.cget("text")])
             if cls == "Entry" and int(child.cget("width")) == 6:
                 child.config(state="readonly")
             if cls == "Label" and child.cget("text") == "Taille fenetre":
@@ -119,6 +145,19 @@ def run_gui(s, live, on_ready=None) -> None:
     tidy_live_gui(root)
     root.update_idletasks()
     cols, nrows = root.grid_size()
+
+    # Deux grandes parties, bien distinctes : bandeaux de couleur en haut (a la place du titre
+    # d'audio2wave) et gros trait vertical entre les deux.
+    title = next((w for w in root.grid_slaves(row=0) if w.winfo_class() == "Label"
+                  and w.cget("text") == "Reglages casual-overlay GL"), None)
+    if title is not None:
+        title.grid_remove()
+    tk.Label(root, text="LIVE  -  spectre audio (audio2wave)", bg=LIVE_COLOR, fg=BANNER_FG,
+             font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5).grid(
+        row=0, column=0, columnspan=cols, sticky="ew", padx=(6, 0), pady=(8, 2))
+    tk.Label(root, text="OVERLAY  -  fond, logo, effets (casual-overlay)", bg=OVERLAY_COLOR, fg=BANNER_FG,
+             font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5).grid(
+        row=0, column=cols + 1, columnspan=2, sticky="ew", padx=(0, 10), pady=(8, 2))
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
     # ------------------------------------------------ 2. pont restart_event -> ProducerManager
@@ -163,7 +202,7 @@ def run_gui(s, live, on_ready=None) -> None:
         root.after(BRIDGE_MS, poll_bridge)
 
     # ------------------------------------------------------ 3. nos panneaux, a droite
-    separator = tk.Frame(root, bg=a2w.GUI_PANEL_BG, width=1)
+    separator = tk.Frame(root, bg=OVERLAY_COLOR, width=3)       # frontiere LIVE | OVERLAY
     separator.grid(row=1, column=cols, rowspan=nrows - 1, sticky="ns", padx=ROW_PADX + 4)
     col_a = tk.Frame(root)
     col_a.grid(row=1, column=cols + 1, rowspan=nrows - 1, sticky="nw", padx=(0, 10))
@@ -180,17 +219,24 @@ def run_gui(s, live, on_ready=None) -> None:
         return label
 
     def add_section_title(z: Zone, title: str) -> None:
-        tk.Label(z.parent, text=title.upper(), font=a2w.GUI_FONT_SMALL, fg=a2w.GUI_MUTED_FG).grid(
-            row=z.next_row(), column=z.label_col, columnspan=3, sticky="w", padx=ROW_PADX, pady=(0, 2))
+        """Bandeau de section (meme style que les titres de la partie LIVE, en violet)."""
+        band = tk.Label(z.parent, text=title.upper())
+        band.grid(row=z.next_row(), column=z.label_col, columnspan=3, sticky="ew", padx=ROW_PADX)
+        style_band(band, a2w, color=OVERLAY_COLOR)
 
     def add_separator(z: Zone, title: str | None = None) -> None:
-        tk.Frame(z.parent, bg=a2w.GUI_PANEL_BG, height=1).grid(
-            row=z.next_row(), column=z.label_col, columnspan=3, sticky="ew",
-            padx=ROW_PADX, pady=(SECTION_GAP, SECTION_GAP if title is None else 4))
         if title:
             add_section_title(z, title)
+            return
+        tk.Frame(z.parent, bg=a2w.GUI_PANEL_BG, height=1).grid(
+            row=z.next_row(), column=z.label_col, columnspan=3, sticky="ew",
+            padx=ROW_PADX, pady=(SECTION_GAP, SECTION_GAP))
+
+    synced: dict[str, tk.Variable] = {}         # cle de params -> variable du widget (pour charger un preset)
 
     def bind_param(key: str, var: tk.Variable, conv=float) -> None:
+        synced[key] = var
+
         def on_write(*_a) -> None:
             try:
                 params[key] = conv(var.get())
@@ -217,13 +263,35 @@ def run_gui(s, live, on_ready=None) -> None:
                 widget.config(text="∿", padx=3)          # "courbe" -> compact, l'info-bulle reste
         auto_vars[key] = var
 
+    def compact_scale(parent, lo: float, hi: float, step: float, var: tk.Variable, length: int = 120) -> tk.Frame:
+        """Curseur dont la valeur s'affiche A COTE (et non au-dessus): une ligne fait ~22 px de moins,
+        ce qui garde la fenetre sous la hauteur d'un ecran 1080 p meme avec le bloc motif ouvert."""
+        frame = tk.Frame(parent)
+        decimals = len(f"{step:.6f}".rstrip("0").split(".")[1]) if step < 1 else 0
+        scale = tk.Scale(frame, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var,
+                         length=length, showvalue=False, width=12, sliderlength=16)
+        scale.pack(side="left")
+        value = tk.Label(frame, width=5, anchor="e", fg=a2w.GUI_MUTED_FG)
+        value.pack(side="left", padx=(4, 0))
+
+        def show(*_a) -> None:
+            try:
+                value.config(text=f"{float(var.get()):.{decimals}f}")
+            except (ValueError, tk.TclError):
+                pass
+
+        var.trace_add("write", show)
+        show()
+        frame.scale = scale
+        return frame
+
     def add_slider(z: Zone, label: str, lo: float, hi: float, step: float, var: tk.Variable,
                    tooltip: str | None = None, length: int = 120, auto_key: str | None = None) -> tk.Scale:
         r = z.next_row()
         add_label(z, label, r, tooltip)
-        scale = tk.Scale(z.parent, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var,
-                         length=length, showvalue=True)
-        scale.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        holder = compact_scale(z.parent, lo, hi, step, var, length)
+        scale = holder.scale
+        holder.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         if auto_key:
             add_auto(z, r, auto_key, var)
         return scale
@@ -247,15 +315,22 @@ def run_gui(s, live, on_ready=None) -> None:
             tk.Radiobutton(frame, text=text, variable=var, value=value).pack(side="left")
         return var
 
-    def color_row(z: Zone, label: str, key: str, tooltip: str | None = None) -> tk.StringVar:
-        """Champ hexadecimal + pastille + selecteur de couleur, ecrit params[key]."""
-        r = z.next_row()
-        add_label(z, label, r, tooltip)
-        frame = tk.Frame(z.parent)
-        frame.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    def color_row(z: Zone, label: str, key: str, tooltip: str | None = None,
+                  into: tk.Frame | None = None) -> tk.StringVar:
+        """Champ hexadecimal + pastille + selecteur de couleur, ecrit params[key]. `into`: un cadre deja
+        pose sur une ligne (plusieurs couleurs cote a cote), sinon une ligne a soi avec son libelle."""
+        if into is None:
+            r = z.next_row()
+            add_label(z, label, r, tooltip)
+            frame = tk.Frame(z.parent)
+            frame.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        else:
+            frame = tk.Frame(into)
+            frame.pack(side="left", padx=(0, 10))
         var = tk.StringVar(value=params[key])
+        synced[key] = var
         swatch = tk.Label(frame, width=3, bg=params[key])
-        tk.Entry(frame, textvariable=var, width=8).pack(side="left")
+        tk.Entry(frame, textvariable=var, width=8 if into is None else 7).pack(side="left")
         swatch.pack(side="left", padx=(8, 0))
 
         def on_write(*_a) -> None:
@@ -277,6 +352,102 @@ def run_gui(s, live, on_ready=None) -> None:
         Tooltip(pick_button, "Choisir une couleur")
         return var
 
+    # ---- colonne A : PRESETS OVERLAY (look complet: fond, logo, effets, halo, automations)
+    # Meme classe (PresetStore) et memes gestes que les presets LIVE d'audio2wave, dans un fichier a part.
+    add_section_title(zone_a, "Presets overlay")
+    overlay_store = live.PresetStore(gl.OVERLAY_PRESETS, gl.OVERLAY_PRESETS_PATH)
+    overlay_var = tk.StringVar(value="default")
+    preset_msg = tk.StringVar(value="Un preset = tout le look de l'overlay.")
+
+    load_row = tk.Frame(col_a)
+    load_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    tk.Label(load_row, text="Charger").pack(side="left", padx=(0, 10))
+    overlay_menu = tk.OptionMenu(load_row, overlay_var, "")
+    a2w.style_option_menu(overlay_menu)
+    overlay_menu.pack(side="left")
+
+    def refresh_overlay_menu(select: str | None = None) -> None:
+        names = sorted(overlay_store.all(), key=lambda n: (n != "default", n))
+        menu = overlay_menu["menu"]
+        menu.delete(0, "end")
+        for name in names:
+            menu.add_command(label=name, command=lambda n=name: load_overlay_preset(n))
+        if select is not None:
+            overlay_var.set(select)
+        elif overlay_var.get() not in names:
+            overlay_var.set("default")
+
+    def load_overlay_preset(name: str) -> None:
+        overlay_var.set(name)
+        presets = overlay_store.all()
+        if name not in presets:
+            preset_msg.set(f"preset inconnu: {name}")
+            return
+        values = gl.overlay_preset_values(presets[name], params)
+        automation_state = values.pop("_automation", None)
+        for key, value in values.items():
+            params[key] = value                  # lu a chaque image par le fil GL
+        if automation_state is not None:
+            params["_automation"] = automation_state
+            automation.apply(automation_state)
+        sync_widgets()
+        preset_msg.set(f"preset '{name}' charge")
+
+    def update_overlay_preset() -> None:
+        name = overlay_var.get()
+        if name == "default":
+            preset_msg.set("'default' n'est pas modifiable (reglages d'origine)")
+            return
+        sync_automation_now()
+        overlay_store.save_user(name, gl.capture_overlay(params))
+        preset_msg.set(f"preset '{name}' mis a jour ({gl.OVERLAY_PRESETS_PATH.name})"
+                       + (" - remplace le preset integre du meme nom" if name in gl.OVERLAY_PRESETS else ""))
+
+    def delete_overlay_preset() -> None:
+        name = overlay_var.get()
+        if name not in overlay_store.load_user():
+            preset_msg.set(f"'{name}' est un preset integre, impossible a supprimer")
+            return
+
+        def do_delete() -> None:
+            overlay_store.delete_user(name)
+            refresh_overlay_menu()
+            preset_msg.set(f"preset '{name}' supprime")
+
+        live.confirm_dialog(root, "Supprimer le preset",
+                            f"Supprimer definitivement le preset overlay '{name}' ?\nCette action est irreversible.",
+                            do_delete)
+
+    tk.Button(load_row, text="Mettre a jour", command=update_overlay_preset).pack(side="left", padx=(8, 0))
+    tk.Button(load_row, text="Supprimer", command=delete_overlay_preset).pack(side="left", padx=(6, 0))
+
+    save_row = tk.Frame(col_a)
+    save_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    tk.Label(save_row, text="Sauvegarder sous").pack(side="left", padx=(0, 10))
+    save_name_var = tk.StringVar(value="")
+    save_entry = tk.Entry(save_row, textvariable=save_name_var, width=14)
+    save_entry.pack(side="left")
+
+    def save_overlay_preset(_evt=None) -> None:
+        name = save_name_var.get().strip().lower()
+        if not name:
+            preset_msg.set("nom de preset vide")
+            return
+        if name in gl.OVERLAY_PRESETS:
+            preset_msg.set(f"'{name}' est un preset integre, choisis un autre nom")
+            return
+        sync_automation_now()
+        overlay_store.save_user(name, gl.capture_overlay(params))
+        refresh_overlay_menu(select=name)
+        save_name_var.set("")
+        preset_msg.set(f"preset '{name}' sauvegarde ({gl.OVERLAY_PRESETS_PATH.name})")
+
+    save_entry.bind("<Return>", save_overlay_preset)
+    tk.Button(save_row, text="Sauvegarder", command=save_overlay_preset).pack(side="left", padx=(8, 0))
+    tk.Label(col_a, textvariable=preset_msg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=380).grid(
+        row=zone_a.next_row(), column=0, columnspan=3, sticky="we", padx=ROW_PADX, pady=(0, 2))
+    refresh_overlay_menu()
+
     # ---- colonne A : FOND (motif genere)
     add_section_title(zone_a, "Fond")
     bg_var = tk.StringVar(value=params["bg_mode"])
@@ -290,17 +461,21 @@ def run_gui(s, live, on_ready=None) -> None:
     bind_param("bg_mode", bg_var, str)
 
     pattern_box = tk.Frame(col_a)
-    pattern_box.grid(row=zone_a.next_row(), column=0, columnspan=2, sticky="nw")
+    pattern_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="new")
+    pattern_box.columnconfigure(2, weight=1)         # le bandeau "Motif genere" prend toute la largeur
     pz = Zone(pattern_box)
     add_section_title(pz, "Motif genere")
     param_radio(pz, "Palette", "bg_palette", (("Arc-en-ciel", "classic"), ("Duo", "duo")),
                 tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
                         "Duo: degrade lisse entre deux couleurs.")
-    bg_color1_var = color_row(pz, "Couleur 1", "bg_color1", "Palette Duo uniquement.")
-    bg_color2_var = color_row(pz, "Couleur 2", "bg_color2", "Palette Duo uniquement.")
+    r = pz.next_row()
+    add_label(pz, "Couleurs 1 / 2", r, "Les deux couleurs du degrade de la palette Duo.")
+    pair = tk.Frame(pattern_box)
+    pair.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    bg_color1_var = color_row(pz, "Couleur 1", "bg_color1", into=pair)
+    bg_color2_var = color_row(pz, "Couleur 2", "bg_color2", into=pair)
     param_slider(pz, "Angle du degrade", "bg_angle", 0, 360, 5, "Direction du degrade de la palette Duo, en degres.")
     param_slider(pz, "Teinte", "bg_hue", 0.0, 1.0, 0.01, "Rotation des couleurs (0 = d'origine).")
-    add_separator(pz, "Animation")
     param_slider(pz, "Vitesse", "bg_speed", 0.0, 4.0, 0.05, "Vitesse de defilement des degrades.")
     param_slider(pz, "Taille des carreaux", "bg_tile", 20, 300, 5,
                  "Cote d'un carreau du damier, en pixels pour une image de 720 px de haut.")
@@ -321,6 +496,7 @@ def run_gui(s, live, on_ready=None) -> None:
     # ---- colonne A : EFFETS
     add_separator(zone_a, "Effets")
     fx_on_vars: list[tk.IntVar] = []
+    fx_int_vars: list[tk.DoubleVar] = []
     fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
     fx_tips = ("Ondulation de l'image, amplitude = basses.",
                "Onde de choc depuis le centre a chaque kick.",
@@ -336,9 +512,9 @@ def run_gui(s, live, on_ready=None) -> None:
         cb.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         Tooltip(cb, fx_tips[i])
         int_var = tk.DoubleVar(value=params["fx_int"][i])
+        fx_int_vars.append(int_var)
         int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fx_int"].__setitem__(i, _safe(v, 1.0)))
-        tk.Scale(col_a, from_=0, to=2, resolution=0.05, orient="horizontal", variable=int_var,
-                 length=110, showvalue=True).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        compact_scale(col_a, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         add_auto(zone_a, r, f"fx_int{i}", int_var)
 
     master_var = tk.DoubleVar(value=params["master"])
@@ -373,8 +549,8 @@ def run_gui(s, live, on_ready=None) -> None:
         int_var = tk.DoubleVar(value=params["fxl_int"][i])
         fxl_int_vars.append(int_var)
         int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fxl_int"].__setitem__(i, _safe(v, 1.0)))
-        tk.Scale(logo_fx_box, from_=0, to=2, resolution=0.05, orient="horizontal", variable=int_var,
-                 length=110, showvalue=True).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        compact_scale(logo_fx_box, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX,
+                                                                  pady=ROW_PADY)
         add_auto(lz, r, f"fxl_int{i}", int_var)
 
     def on_link(*_a) -> None:
@@ -690,13 +866,42 @@ def run_gui(s, live, on_ready=None) -> None:
     # ---------------------------------------------------------------- boucle
     automation.apply(params["_automation"])          # charge l'etat (sauve ou par defaut) dans l'editeur
 
-    def sync_automation_state() -> None:
+    def sync_automation_now() -> None:
         """Editeur -> params (le moteur du fil GL lit params["_automation"]). Remplacement
         atomique du dict: le fil GL ne voit jamais un etat a moitie ecrit."""
         merged = dict(params.get("_automation") or {})
         merged.update(automation.capture())
         params["_automation"] = merged
+
+    def sync_automation_state() -> None:
+        sync_automation_now()
         root.after(AUTOMATION_SYNC_MS, sync_automation_state)
+
+    def sync_widgets() -> None:
+        """params -> widgets, apres le chargement d'un preset (les variables ecrivent params par leur
+        trace, avec la meme valeur: aucun effet de bord)."""
+        for key, var in synced.items():
+            value = params.get(key)
+            try:
+                if isinstance(var, tk.StringVar):
+                    var.set(str(value))
+                elif isinstance(var, tk.IntVar):
+                    var.set(int(float(value) >= 0.5))
+                else:
+                    var.set(float(value))
+            except (tk.TclError, ValueError, TypeError):
+                pass
+        for name, variables in (("fx_on", fx_on_vars), ("fx_int", fx_int_vars),
+                                ("fxl_on", fxl_on_vars), ("fxl_int", fxl_int_vars)):
+            for i, var in enumerate(variables):
+                var.set(params[name][i])
+        link_var.set(int(float(params["fx_link"]) >= 0.5))
+        chrome_var.set(int(float(params["chrome_on"]) >= 0.5))
+        logo_var.set(params["logo_path"])
+        video_var.set(params["logo_video"])
+        key_var.set(params["logo_key"])
+        text_widget.delete("1.0", "end")
+        text_widget.insert("1.0", params["text_content"])
 
     def follow_automation() -> None:
         """params -> curseurs: les curseurs automatises suivent la valeur calculee par le moteur."""
@@ -759,7 +964,11 @@ def run_gui(s, live, on_ready=None) -> None:
             "root": root, "restart_event": restart_event, "live_status": live_status, "close": on_close,
             "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "chrome_var": chrome_var, "chrome_box": chrome_box, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "chrome_var": chrome_var, "chrome_box": chrome_box, "overlay_var": overlay_var,
+            "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
+            "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
+            "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
+            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,

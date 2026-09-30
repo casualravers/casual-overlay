@@ -18,6 +18,12 @@ py -3.12 -m venv .venv
 
 ## Lancement
 
+**Double-clic sur [lancer.bat](lancer.bat)** : ouvre la fenetre de reglages et la fenetre video (choisis
+l'entree audio dans la fenetre de reglages). Il accepte les memes options que le script, par exemple
+`lancer.bat -d "Microphone (Realtek(R) Audio)"` ou `lancer.bat --text "CASUAL RAVERS"`.
+
+En ligne de commande :
+
 ```bash
 python audio2wave_gl.py --list-devices                    # nom exact de l'entree dshow
 python audio2wave_gl.py -d "Microphone (Realtek(R) Audio)"
@@ -37,13 +43,23 @@ Options principales : `--logo`, `--logo-video`, `--logo-key`, `--text "LIGNE 1\n
 
 ## Fenetre de reglages (`--gui`)
 
-A gauche, **la fenetre de reglages d'`audio2wave_live.py --gui`, reprise telle quelle** du depot
-audio2wave (meme theme, presets, automations de courbes, info-bulles) pour le visuel de fond
+La fenetre a **deux grandes parties**, separees par un trait violet et chacune coiffee d'un bandeau
+de couleur ; chaque section porte aussi son bandeau.
+
+**LIVE (bandeau turquoise, a gauche)** : **la fenetre de reglages d'`audio2wave_live.py --gui`, reprise telle
+quelle** du depot audio2wave (meme theme, automations de courbes, info-bulles) pour le visuel de fond
 ffmpeg : chaque reglage remplace le flux a chaud (environ 0,4 s apres le dernier), sans que la
 fenetre video ne bouge. Les boutons Snap/Ridge et la taille de fenetre n'y sont pas repris ; la
-case *Plein ecran* commande la fenetre video.
+case *Plein ecran* commande la fenetre video. **Ses presets sont la** (section *PRESETS LIVE*, en bas :
+Charger / Mettre a jour / Supprimer / Sauvegarder sous), partages avec audio2wave (memes fichiers).
 
-A droite, les panneaux propres a casual-overlay :
+**OVERLAY (bandeau violet, a droite)** : les panneaux propres a casual-overlay, en commencant par
+les **presets overlay** (section *PRESETS OVERLAY*, en haut) : un preset = tout le look (fond, logo ou
+texte, effets, halo chrome, automations ; pas la sensibilite du kick, qui depend du micro). Memes gestes
+que les presets live : *Charger* (le menu applique tout de suite), *Mettre a jour*, *Supprimer*,
+*Sauvegarder sous* un nom. Integres : `default` (reglages d'origine, non modifiable), `sobre` (logo net,
+fond qui ondule doucement), `neon` (fond duo sombre, chrome fort, contour magenta), `chaos` (tout reagit).
+Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
 
 - **Fond** : *Spectre audio* (celui de gauche) ou *Motif genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel ou Duo, couleurs, angle, teinte, vitesse, taille des
@@ -69,8 +85,9 @@ ou dessin libre, avec sa propre vitesse). Par defaut, le fond et les effets sont
 differentes, donc jamais deux fois la meme image) et le logo reste fixe ; « Automations actives » (ou la
 touche T, ou `--no-automation`) fige tout, « Ambiance par defaut » remet l'etat d'origine.
 Les automations fonctionnent aussi sans `--gui`.
-Les presets de gauche (options live + automations) sont ceux d'audio2wave ; les reglages de
-droite se sauvent avec le bouton *Sauver reglages* (ou la touche P), a part.
+Trois sauvegardes distinctes : les presets live (audio2wave), les presets overlay (plusieurs, nommes), et
+le bouton *Sauver reglages* (ou la touche P) qui enregistre les reglages courants de l'overlay dans
+`gl_params.json`, rechargee au lancement.
 Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leurs changements.
 ## Touches
 
@@ -98,9 +115,8 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   detecteur de kick, ou un autre micro) en plus des effets separes, pour decorreler vraiment les deux
   couches. Suppose des enveloppes `bass/mid/high/beat` par couche dans le shader et un choix de source
   dans la GUI.
-- **Scenes nommees** : sauvegarder et rappeler sous un nom l'ensemble des reglages casual-overlay (fond
-  motif, logo, effets, automations), comme les presets d'audio2wave le font pour les options live ;
-  aujourd'hui un seul jeu de reglages (`gl_params.json`).
+- **Scenes combinees live + overlay** : un seul preset qui charge a la fois un preset live (spectre ffmpeg)
+  et un preset overlay ; aujourd'hui les deux se chargent separement.
 - **Halo chrome plus riche** : automations de l'intensite et du relief, environnements au choix
   (studio, neon, arc-en-ciel), couleur de teinte reglable, et mode « ombre » (soustractif) pour qu'il
   reste lisible sur un fond clair ou sur le motif.
