@@ -40,7 +40,7 @@ Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--s
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
 Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif, T automations, 1-5 effets
-(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo chrome, +/- ou PageUp/PageDown intensite globale, haut/bas
+(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, +/- ou PageUp/PageDown intensite globale, haut/bas
 sensibilite du kick, R recharge shaders + reglages, P sauve dans
 `~/.audio2wave/gl_params.json` (recharge au lancement).
 
@@ -143,32 +143,44 @@ les basses).
   spectre est instantane) ; la GUI n'affiche alors plus son statut.
 - Le logo et tous les effets post-traitement s'appliquent aussi au motif.
 
-### Halo chrome (`chrome_*`, touche C)
+### Halo holographique (`holo_*`, touche C)
 
-Halo metallique autour du logo (image, texte ou video), calcule dans `scene.frag` pendant la passe
-logo (`chrome_halo()`, d'apres `chrome_halo-1.frag` fourni) : **relief** = alpha du logo flou a 6
-echelles par les mipmaps (`textureLod`), **normale** tiree de ce relief, **chrome** = reflexion d'un faux
-studio (`chrome_env`: bandes nettes claires/sombres, reflet brillant, teinte irisee) ; le halo
-est ajoute en **lumiere** (rgb additif, alpha du logo inchange, comme le contour lumineux) puis le logo
-est pose par-dessus. Reglages : `chrome_on`, `chrome_intensity` 1,2, `chrome_bump` 8 (relief/contraste),
-`chrome_speed` 0,15, `chrome_bands` 5, `chrome_react` **0** (defaut : non audioreactif ; > 0 = intensite
-au kick, reflets acceleres par les basses). La phase est **integree** image par image (`_chrome_t`),
-comme celles du motif.
-- **Marge transparente** : `set_logo` ajoute `LOGO_PAD` (25 % de la largeur/hauteur par cote) a la
-  texture, et le logo video la recoit de ffmpeg (`pad=...:color=0x00000000` apres le detourage,
-  `LogoVideo.content/pad/size`) ; le rectangle dessine est agrandi d'autant (`u_logo_rect`), la mise
-  en page (`logo_layout`) reste celle du logo sans marge. Sans elle le halo serait coupe net.
-- **Largeur du halo proportionnelle a la taille du logo**, pas a la resolution du PNG : les 6 echelles
-  vont de 1/128 a 1/4 du petit cote (`u_chrome_lod0` = log2(petit cote) - 8), bornees par la marge
-  (`u_chrome_maxlod`). Premiere version avec les niveaux 1..6 bruts : un PNG de 2048 px donnait un liseré
-  de 1 px, un de 256 px un halo enorme. Le halo s'eteint aussi vers le bord de la texture (jamais
-  coupe net par son rectangle). Mipmaps + `LINEAR_MIPMAP_LINEAR` ; pour le logo video, `build_mipmaps()`
-  apres chaque image envoyee.
-- Comme il n'ajoute que de la lumiere, **les bandes sombres ne se voient pas sur un fond clair** :
-  le chrome est spectaculaire sur un fond sombre (spectre ffmpeg noir), discret sur le motif.
-- Actif par defaut (`chrome_on` = 1) ; `check_gl.py` le coupe pour les comparaisons de pixels
-  (`DEFAULT_PARAMS["chrome_on"] = 0`) et `check_chrome()` le rallume. GUI : case "Halo chrome" +
-  bloc "Reglages" **replie** par defaut (sinon la fenetre depasse 1100 px en mode motif).
+Lumiere irisee a **grande portee** qui **deforme le fond** autour du logo (image, texte ou video) et y
+traine de la poussiere d'etoiles ; **le logo reste intact**. Il remplace un premier "halo chrome" (relief
+du logo + faux studio reflechi, ajoute en lumiere juste autour des traits) juge "completement flou" : il
+etalait de la lumiere sur un logo a traits fins et n'avait qu'une portee de quelques pixels.
+Trois passes, toutes dans le post-traitement :
+1. **Champ** (`holo.frag`, **basse resolution**, 1/4 de l'ecran, `HOLO_DOWNSCALE`, RGBA16F) : alpha de la
+   couche logo flou a 7 echelles par ses **mipmaps** (la couche logo est a la taille de l'ecran et ses
+   mipmaps sont construites chaque image, filtre `LINEAR_MIPMAP_LINEAR` seulement quand c'est le cas, sinon
+   texture incomplete = noire). Aux gros niveaux, 4 prises decalees cassent la structure en blocs des
+   mipmaps. Sortie : `r` = distance **logarithmique** au logo (0 loin .. 1 contre lui), `gb` = son gradient
+   (vers le logo), `a` = densite locale du logo. Calcule a 1/4 de resolution = ~16 fois moins de lectures
+   que dans le post plein ecran (un premier jet plein ecran etait trop cher pour un GPU integre) et bien
+   plus lisse.
+2. **Portee** (`holo_reach`) : homothetie du champ autour du centre du logo (`u_holo_center`), donc
+   monotone ; la faire varier via l'echelle du flou ne l'etait pas (plus de flou = halo plus *petit*).
+   Fondu radial (0,30 -> 0,75 hauteur d'ecran, avant homothetie) + niveaux de flou bornes : sinon les mipmaps
+   tres grossieres laissaient un **plateau** sur l'ecran entier (logo hors centre) et des bords durs.
+3. **Application** (`post.frag`, `holo()`) : deformation du fond = deplacement le long du gradient modules par
+   une onde `sin(v*24 - phase)` (ondes concentriques qui partent du logo) + dispersion spectrale (rouge
+   pousse plus loin que bleu) dans `layer_fx(..., disp)` ; lumiere = palette irisee (franges sur les courbes
+   de niveau, teinte = distance + direction + temps, **sans `atan`** : sa coupure d'angle faisait une
+   couture de teinte) ; poussiere d'etoiles sur une **grille polaire** centree sur le logo qui derive vers
+   l'exterieur, coeur etire le long du rayon (traine). Le logo est pose par-dessus, jamais deforme par ceci.
+   `field.a` eteint lumiere, deformation et poussiere **dans** le logo : avec le PNG a traits fins du
+   depot, sinon le halo se voyait a travers ses trous et le rendait illisible.
+Reglages : `holo_on`, `holo_intensity` (lumiere) 1, `holo_reach` 1,3 (1 = ~1,5 x la taille du logo),
+`holo_warp` 1, `holo_dust` 1, `holo_speed` 0,15, `holo_react` **0** (defaut : non audioreactif ; > 0 =
+intensite et deformation au kick, animation acceleree par les basses). `u_holo` = interrupteur x reaction,
+`u_holo_light` = intensite : **deformation et poussiere sont independantes de l'intensite** (un test a
+revele qu'a intensite 0 tout s'eteignait). La phase est **integree** (`_holo_t`), comme celle du motif.
+- Additif : la lumiere ne fonce jamais le fond, mais la **deformation** se voit aussi sur un fond sombre.
+- Plus de marge transparente sur les textures du logo (l'ancien `LOGO_PAD`) : elle n'avait de sens que
+  pour le chrome, et le logo retrouve exactement son echantillonnage d'avant.
+- Actif par defaut ; `check_gl.py` le coupe pour les comparaisons de pixels
+  (`DEFAULT_PARAMS["holo_on"] = 0`) et `check_holo()` le rallume. GUI : case "Halo holographique" + bloc
+  "Reglages" **replie** par defaut (sinon la fenetre depasse 1100 px en mode motif).
 
 ### Effets par couche (fond / logo decorreles)
 
@@ -258,7 +270,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    fenetre de 1288 px de haut au premier essai). Taille obtenue : environ 1840 x 850 px (spectre) et
   940 px (motif affiche) ; un ecran 1080 p laisse ~1000 px utiles, donc **surveiller la hauteur** :
   les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px
-  par ligne), les deux couleurs du motif sont sur une ligne, les blocs annexes (chrome, effets du logo)
+  par ligne), les deux couleurs du motif sont sur une ligne, les blocs annexes (halo holographique, effets du logo)
   sont replies ou masques par defaut.
 - **Structure visible** : deux grandes parties, LIVE (bandeau turquoise, fenetre d'audio2wave) et OVERLAY
   (bandeau violet), separees par un trait violet de 3 px ; le titre d'audio2wave est retire de la ligne 0
@@ -377,8 +389,9 @@ et nos panneaux (couleur invalide ignoree, logo, effets, fond) ;
 presets overlay (chargement d'un integre, widgets qui suivent, sensibilite exclue, `default`, sauvegarde /
 rechargement d'un preset utilisateur avec texte et curseurs, integre non ecrasable, `default` non modifiable,
 menu, suppression) ;
-halo chrome (par defaut actif et non audioreactif, marge transparente, borne par la marge, insensible au
-kick a chrome_react = 0, anime par le temps, logo video, texture video remise en mipmaps) ;
+halo holographique (actif par defaut et non audioreactif ; logo strictement intact ; fond modifie loin du logo ;
+portee, deformation / lumiere / poussiere independantes ; holo_reach monotone ; independant de la resolution ;
+suit la position du logo ; texte et video ; couper apres allumer rend l'image d'origine) ;
 effets par couche (intensites effectives lie/separe, delier copie, wobble sur le logo seul = fond strictement
 intact, wobble sur le fond seul = logo strictement intact, lie = les deux deformes, glitch du logo limite a
 ses lignes, pas de frange noire, sans logo = fond seul) ;
@@ -403,6 +416,7 @@ reelle, latence acoustique bout en bout.
 | Producteur ffmpeg (720p et 1080p) | 29-30 frames/s |
 | Upload texture | 0,5 ms (720p), 1,0-1,2 ms (1080p) |
 | Temps GPU par frame (2 passes) | 5-7 ms |
+| Halo holographique (champ a 1/4 de resolution + post), image + relecture | +1,7 ms a 720 p (6,9 -> 8,6), +3,3 ms a 1080 p (10,6 -> 13,9) |
 | Capture sounddevice | latence rapportee ~22 ms (blocs de 512, WASAPI, 48 kHz) |
 | Detection du kick (logicielle) | 25 ms mediane, 29 ms max (hop 10,7 ms + fenetre 2048), sur un vrai kick a attaque instantanee |
 
@@ -421,7 +435,7 @@ Modes Snap/Ridge en source (leurs fenetres existent dans audio2wave, cf. `on_swi
 redemarre ffmpeg), MIDI,
 sortie Spout/NDI, plusieurs logos a la fois, synchro de la lecture du logo anime sur le kick.
 
-Lanceur : [lancer.bat](lancer.bat) (demande explicite, malgre le "pas de .bat" du plan d'origine) : va dans
+Lanceur : [start.bat](start.bat) (demande explicite, malgre le "pas de .bat" du plan d'origine) : va dans
 son dossier, utilise `.venv\Scripts\python.exe` (message d'installation s'il manque), lance
 `audio2wave_gl.py --gui %*` (arguments transmis, donc `-d`, `--text`, `--synthetic`... marchent) et garde la
 console ouverte (`pause`) si le programme sort avec un code d'erreur. Fichier en ASCII + CRLF (accents

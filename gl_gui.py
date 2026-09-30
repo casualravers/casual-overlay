@@ -13,7 +13,7 @@ avec ses presets, ses automations de courbes, ses info-bulles et son theme. Ce m
      si la commande ffmpeg est inchangee) ;
   4. ajoute a droite ses propres panneaux, dans la meme fenetre (partie OVERLAY, bandeau violet ;
      la partie LIVE a un bandeau turquoise) :
-        PRESETS OVERLAY + FOND (motif genere) + EFFETS + HALO CHROME
+        PRESETS OVERLAY + FOND (motif genere) + EFFETS + HALO HOLOGRAPHIQUE
         LOGO               + ANALYSE AUDIO + AFFICHAGE + mesures.
 
 Sous-ensembles sans aucune modification du depot audio2wave : tout passe par le contrat public
@@ -116,7 +116,7 @@ SHORTCUTS_HELP = (
     "    du logo (delie fond et logo)\n"
     "L : lier / separer les effets du fond\n"
     "    et du logo\n"
-    "C : halo chrome du logo on/off\n"
+    "C : halo holographique on/off\n"
     "Haut / Bas : sensibilite du kick\n"
     "R : recharger shaders et reglages\n"
     "P : sauver les reglages"
@@ -565,39 +565,40 @@ def run_gui(s, live, on_ready=None) -> None:
     link_var.trace_add("write", on_link)
     on_link()
 
-    # ---- colonne A : HALO CHROME autour du logo (non audioreactif par defaut)
-    add_separator(zone_a, "Halo chrome (logo)")
-    chrome_var = tk.IntVar(value=int(float(params["chrome_on"]) >= 0.5))
-    bind_param("chrome_on", chrome_var, float)
-    chrome_row = tk.Frame(col_a)
-    chrome_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    chrome_check = tk.Checkbutton(chrome_row, text="Halo chrome", variable=chrome_var)
-    chrome_check.pack(side="left")
-    chrome_box = tk.Frame(col_a)            # reglages repliables: une fenetre trop haute deborde de l'ecran
-    chrome_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="nw")
-    chrome_box.grid_remove()
+    # ---- colonne A : HALO HOLOGRAPHIQUE autour du logo (non audioreactif par defaut)
+    add_separator(zone_a, "Halo holographique (logo)")
+    holo_var = tk.IntVar(value=int(float(params["holo_on"]) >= 0.5))
+    bind_param("holo_on", holo_var, float)
+    holo_row = tk.Frame(col_a)
+    holo_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    holo_check = tk.Checkbutton(holo_row, text="Halo holographique", variable=holo_var)
+    holo_check.pack(side="left")
+    holo_box = tk.Frame(col_a)            # reglages repliables: une fenetre trop haute deborde de l'ecran
+    holo_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="nw")
+    holo_box.grid_remove()
 
-    def toggle_chrome_box() -> None:
-        if chrome_box.winfo_manager():
-            chrome_box.grid_remove()
-            chrome_toggle.config(text="Reglages >")
+    def toggle_holo_box() -> None:
+        if holo_box.winfo_manager():
+            holo_box.grid_remove()
+            holo_toggle.config(text="Reglages >")
         else:
-            chrome_box.grid()
-            chrome_toggle.config(text="Reglages v")
+            holo_box.grid()
+            holo_toggle.config(text="Reglages v")
 
-    chrome_toggle = tk.Button(chrome_row, text="Reglages >", command=toggle_chrome_box, padx=6)
-    chrome_toggle.pack(side="left", padx=(8, 0))
-    cz = Zone(chrome_box)
-    Tooltip(chrome_check, "Halo metallique autour du logo, image, texte ou video: relief tire de l'alpha flou, "
-                          "reflet d'un faux studio (bandes claires/sombres), ajoute en lumiere sur le fond. "
-                          "Anime par le temps seulement (reaction a l'audio = 0 par defaut). Marche sur un fond "
-                          "sombre: il n'ajoute que de la lumiere.")
-    param_slider(cz, "Intensite", "chrome_intensity", 0.0, 3.0, 0.05, "Force du halo.")
-    param_slider(cz, "Relief", "chrome_bump", 0.0, 20.0, 0.5, "Plus haut = chrome plus contraste.")
-    param_slider(cz, "Vitesse", "chrome_speed", 0.0, 1.0, 0.01, "Vitesse de defilement des reflets.")
-    param_slider(cz, "Bandes", "chrome_bands", 1.0, 12.0, 0.5, "Nombre de bandes claires/sombres reflechies.")
-    param_slider(cz, "Reaction audio", "chrome_react", 0.0, 2.0, 0.05,
-                 "0 = aucune (defaut). Sinon: intensite qui monte au kick, reflets acceleres par les basses.")
+    holo_toggle = tk.Button(holo_row, text="Reglages >", command=toggle_holo_box, padx=6)
+    holo_toggle.pack(side="left", padx=(8, 0))
+    cz = Zone(holo_box)
+    Tooltip(holo_check, "Lumiere holographique a grande portee autour du logo (image, texte ou video): elle "
+                        "deforme le FOND (lentille, ondes qui se propagent), l'irise, et y traine de la "
+                        "poussiere d'etoiles. Le logo reste intact. Anime par le temps seulement (reaction a "
+                        "l'audio = 0 par defaut). Touche C.")
+    param_slider(cz, "Intensite", "holo_intensity", 0.0, 3.0, 0.05, "Force de la lumiere irisee.")
+    param_slider(cz, "Portee", "holo_reach", 0.3, 3.0, 0.05, "Etendue du halo autour du logo.")
+    param_slider(cz, "Deformation", "holo_warp", 0.0, 3.0, 0.05, "Deformation du fond (lentille et ondes). 0 = aucune.")
+    param_slider(cz, "Poussiere", "holo_dust", 0.0, 3.0, 0.05, "Quantite de poussiere d'etoiles. 0 = aucune.")
+    param_slider(cz, "Vitesse", "holo_speed", 0.0, 1.0, 0.01, "Vitesse des ondes et de la derive des etoiles.")
+    param_slider(cz, "Reaction audio", "holo_react", 0.0, 2.0, 0.05,
+                 "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
 
     # ---- colonne B : LOGO
     add_section_title(zone_b, "Logo / texte")
@@ -896,7 +897,7 @@ def run_gui(s, live, on_ready=None) -> None:
             for i, var in enumerate(variables):
                 var.set(params[name][i])
         link_var.set(int(float(params["fx_link"]) >= 0.5))
-        chrome_var.set(int(float(params["chrome_on"]) >= 0.5))
+        holo_var.set(int(float(params["holo_on"]) >= 0.5))
         logo_var.set(params["logo_path"])
         video_var.set(params["logo_video"])
         key_var.set(params["logo_key"])
@@ -927,8 +928,8 @@ def run_gui(s, live, on_ready=None) -> None:
                 v.set(float(params["fxl_int"][i]))
         if link_var.get() != int(float(params["fx_link"]) >= 0.5):
             link_var.set(int(float(params["fx_link"]) >= 0.5))
-        if chrome_var.get() != int(float(params["chrome_on"]) >= 0.5):
-            chrome_var.set(int(float(params["chrome_on"]) >= 0.5))
+        if holo_var.get() != int(float(params["holo_on"]) >= 0.5):
+            holo_var.set(int(float(params["holo_on"]) >= 0.5))
         if abs(master_var.get() - params["master"]) > 1e-6:
             master_var.set(params["master"])
         if abs(sens_var.get() - params["sensitivity"]) > 1e-6:
@@ -964,7 +965,7 @@ def run_gui(s, live, on_ready=None) -> None:
             "root": root, "restart_event": restart_event, "live_status": live_status, "close": on_close,
             "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "chrome_var": chrome_var, "chrome_box": chrome_box, "overlay_var": overlay_var,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,

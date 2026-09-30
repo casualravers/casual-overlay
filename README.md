@@ -18,9 +18,9 @@ py -3.12 -m venv .venv
 
 ## Lancement
 
-**Double-clic sur [lancer.bat](lancer.bat)** : ouvre la fenetre de reglages et la fenetre video (choisis
+**Double-clic sur [start.bat](start.bat)** : ouvre la fenetre de reglages et la fenetre video (choisis
 l'entree audio dans la fenetre de reglages). Il accepte les memes options que le script, par exemple
-`lancer.bat -d "Microphone (Realtek(R) Audio)"` ou `lancer.bat --text "CASUAL RAVERS"`.
+`start.bat -d "Microphone (Realtek(R) Audio)"` ou `start.bat --text "CASUAL RAVERS"`.
 
 En ligne de commande :
 
@@ -55,10 +55,10 @@ Charger / Mettre a jour / Supprimer / Sauvegarder sous), partages avec audio2wav
 
 **OVERLAY (bandeau violet, a droite)** : les panneaux propres a casual-overlay, en commencant par
 les **presets overlay** (section *PRESETS OVERLAY*, en haut) : un preset = tout le look (fond, logo ou
-texte, effets, halo chrome, automations ; pas la sensibilite du kick, qui depend du micro). Memes gestes
+texte, effets, halo holographique, automations ; pas la sensibilite du kick, qui depend du micro). Memes gestes
 que les presets live : *Charger* (le menu applique tout de suite), *Mettre a jour*, *Supprimer*,
 *Sauvegarder sous* un nom. Integres : `default` (reglages d'origine, non modifiable), `sobre` (logo net,
-fond qui ondule doucement), `neon` (fond duo sombre, chrome fort, contour magenta), `chaos` (tout reagit).
+fond qui ondule doucement), `neon` (fond duo sombre, halo holographique ample, contour magenta), `chaos` (tout reagit).
 Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
 
 - **Fond** : *Spectre audio* (celui de gauche) ou *Motif genere* (degrades + damier animes par la
@@ -70,10 +70,11 @@ Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
   logo a ses propres interrupteurs et intensites, ses ondes partent de son centre et son glitch tire
   d'autres bandes (ex. un fond qui ondule sur les basses, un logo net qui n'encaisse que le glitch).
   L'effet 5 (pulsation, tremblement, contour du logo) reste a part.
-- **Halo chrome** : halo metallique autour du logo (image, texte ou video) : relief tire du contour, reflet
-  d'un faux studio a bandes claires/sombres, ajoute en lumiere (plus spectaculaire sur fond sombre).
-  Actif par defaut, anime par le temps seulement (reaction a l'audio a 0 ; touche C). Reglages (intensite,
-  relief, vitesse, bandes, reaction audio) dans le bloc repliable « Reglages ».
+- **Halo holographique** : une lumiere irisee a grande portee autour du logo (image, texte ou video) qui
+  **deforme le fond** (lentille, ondes qui partent du logo, franges colorees) et y traine de la poussiere
+  d'etoiles ; le logo reste net. Actif par defaut, anime par le temps seulement (reaction a l'audio a 0 ;
+  touche C). Reglages (intensite, portee, deformation, poussiere, vitesse, reaction audio) dans le bloc
+  repliable « Reglages ».
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
 - **Analyse audio et affichage** : entree d'analyse, plein ecran, barres debug, recharger les
@@ -101,7 +102,7 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 | 1 a 5 | wobble, ripple, aberration chromatique, glitch (fond), effets du logo (pulsation, contour) |
 | Maj + 1 a 4 | le meme effet sur la couche du logo (delie fond et logo) |
 | L | lier / separer les effets du fond et du logo |
-| C | halo chrome du logo : on / off |
+| C | halo holographique : on / off |
 | + / - (ou PageUp / PageDown) | intensite globale |
 | Haut / Bas | sensibilite de la detection du kick |
 | R | recharge les shaders (`gl_shaders/*.glsl`) et les reglages |
@@ -117,9 +118,9 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   dans la GUI.
 - **Scenes combinees live + overlay** : un seul preset qui charge a la fois un preset live (spectre ffmpeg)
   et un preset overlay ; aujourd'hui les deux se chargent separement.
-- **Halo chrome plus riche** : automations de l'intensite et du relief, environnements au choix
-  (studio, neon, arc-en-ciel), couleur de teinte reglable, et mode « ombre » (soustractif) pour qu'il
-  reste lisible sur un fond clair ou sur le motif.
+- **Halo holographique plus riche** : automations de l'intensite et de la portee, teinte reglable, forme de
+  la poussiere (etoiles a branches, comete), trainee directionnelle (vent) plutot que radiale, et mode
+  « ombre » (soustractif) pour assombrir aussi le fond.
 - **Synchro du logo anime sur le kick** : vitesse de lecture ou saut d'image au rythme de la musique
   (le fichier est lu a sa cadence propre).
 - **Detourage plus fin du logo video** : similarite et fondu reglables dans la GUI (valeurs fixes),

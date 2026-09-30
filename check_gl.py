@@ -23,10 +23,10 @@ import audio2wave_gl as gl
 gl.require_deps()
 np = gl.np
 
-# Le halo chrome est actif par defaut (ajoute de la lumiere autour du logo): les verifications de
-# rendu qui comparent des pixels le coupent, et check_chrome() le rallume explicitement.
-CHROME_DEFAULT_ON = gl.DEFAULT_PARAMS["chrome_on"]
-gl.DEFAULT_PARAMS["chrome_on"] = 0.0
+# Le halo holographique est actif par defaut (il deforme et eclaire le fond autour du logo): les
+# verifications de rendu qui comparent des pixels le coupent, et check_holo() le rallume explicitement.
+HOLO_DEFAULT_ON = gl.DEFAULT_PARAMS["holo_on"]
+gl.DEFAULT_PARAMS["holo_on"] = 0.0
 
 failures: list[str] = []
 
@@ -329,11 +329,11 @@ def check_gui() -> None:
             c["color_var"].set("#FF0000")
             out["color_ok"] = params["logo_glow_color"]
             out["x"], out["fx1"], out["master"] = params["logo_x"], params["fx_on"][1], params["master"]
-            c["chrome_var"].set(0)
-            out["chrome_off"] = params["chrome_on"]
-            c["chrome_var"].set(1)
-            out["chrome_on"] = params["chrome_on"]
-            out["chrome_box_hidden"] = c["chrome_box"].winfo_manager() == ""
+            c["holo_var"].set(0)
+            out["holo_off"] = params["holo_on"]
+            c["holo_var"].set(1)
+            out["holo_on"] = params["holo_on"]
+            out["holo_box_hidden"] = c["holo_box"].winfo_manager() == ""
             out["logo"] = params["logo_path"]
             out["pattern_hidden"] = c["pattern_box"].winfo_manager()
             c["bg_var"].set("pattern")
@@ -396,14 +396,14 @@ def check_gui() -> None:
             # presets overlay: charger un integre, widgets qui suivent, exclusions, sauvegarde, protection
             params["sensitivity"] = 2.2
             c["load_overlay_preset"]("neon")
-            out["p_neon"] = (params["bg_mode"], params["bg_palette"], params["chrome_intensity"], params["fx_link"],
+            out["p_neon"] = (params["bg_mode"], params["bg_palette"], params["holo_intensity"], params["fx_link"],
                              params["logo_glow_color"], params["fxl_on"][3])
             out["p_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["fxl_on_vars"][3].get(),
                                 c["color_var"].get(), c["logo_fx_box"].winfo_manager())
             out["p_sens"] = params["sensitivity"]
             c["load_overlay_preset"]("default")
-            out["p_default"] = (params["bg_mode"], params["fx_link"], params["chrome_intensity"], params["fx_on"])
-            out["p_default_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["chrome_var"].get())
+            out["p_default"] = (params["bg_mode"], params["fx_link"], params["holo_intensity"], params["fx_on"])
+            out["p_default_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["holo_var"].get())
             params["bg_hue"] = 0.42
             params["text_content"] = "MON TEXTE"
             c["save_name_var"].set("Mon Look")
@@ -446,13 +446,13 @@ def check_gui() -> None:
     finally:
         gl.OVERLAY_PRESETS_PATH = real_presets_path
     p = out.get("p_neon", ())
-    check(p == ("pattern", "duo", 1.8, 0.0, "#ff3df2", 1), "preset overlay integre charge dans les parametres", str(p))
+    check(p == ("pattern", "duo", 1.5, 0.0, "#ff3df2", 1), "preset overlay integre charge dans les parametres", str(p))
     w = out.get("p_widgets", ())
     check(w[:4] == ("pattern", 0, 1, "#ff3df2") and w[4] == "grid" if len(w) == 5 else False,
           "preset overlay: les widgets suivent (fond, lier, effets du logo, couleur) et le bloc logo apparait", str(w))
     check(out.get("p_sens") == 2.2, "preset overlay: la sensibilite du kick (micro) n'est pas touchee")
     d = out.get("p_default", ())
-    check(d == ("live", 1.0, 1.2, [1, 1, 1, 1, 1]) and out.get("p_default_widgets") == ("live", 1, int(gl.DEFAULT_PARAMS["chrome_on"] >= 0.5)),
+    check(d == ("live", 1.0, 1.0, [1, 1, 1, 1, 1]) and out.get("p_default_widgets") == ("live", 1, int(gl.DEFAULT_PARAMS["holo_on"] >= 0.5)),
           "preset 'default': retour aux reglages d'origine, widgets compris", str(d))
     check(out.get("p_saved"), "sauvegarde sous un nom (minuscules), sans la sensibilite, avec les automations")
     r = out.get("p_reload", ())
@@ -477,8 +477,8 @@ def check_gui() -> None:
     check(out.get("style") == "radio", "style radio (GUI d'audio2wave) -> producteur remplace", str(out.get("style")))
     check(out.get("x") == 0.2 and out.get("fx1") == 0 and abs(out.get("master", 0) - 1.4) < 1e-9,
           "reglages logo/effets ecrits tout de suite dans les parametres")
-    check(out.get("chrome_off") == 0.0 and out.get("chrome_on") == 1.0 and out.get("chrome_box_hidden"),
-          "halo chrome: case ecrit chrome_on, reglages replies par defaut (fenetre plus basse)")
+    check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0 and out.get("holo_box_hidden"),
+          "halo holographique: case ecrit holo_on, reglages replies par defaut (fenetre plus basse)")
     check(out.get("logo") == "", "logo vide = aucun logo")
     check(out.get("color_bad") == gl.DEFAULT_PARAMS["logo_glow_color"] and out.get("color_ok") == "#ff0000",
           "couleur du contour: invalide ignoree, valide appliquee")
@@ -908,17 +908,12 @@ def check_logo_video() -> None:
             return None
         full = np.frombuffer(frame, np.uint8).reshape(h, w, 4)
         last_full["v"] = full
-        (px, py), (cw, ch) = video.pad, video.content
-        return full[py:py + ch, px:px + cw]          # le logo sans sa marge transparente
+        return full
 
     last_full: dict = {}
     v = gl.LogoVideo(str(alpha))
     f = first_frame(v)
     full = last_full["v"]
-    check(v.size[0] > v.content[0] and v.size[1] > v.content[1] and full[:, :v.pad[0], 3].max() == 0
-          and full[:v.pad[1], :, 3].max() == 0 and full[-v.pad[1]:, :, 3].max() == 0,
-          "logo video: marge transparente ajoutee autour (le halo chrome a de la place)",
-          f"{v.content} -> {v.size}")
     check(f is not None and f[16, 8, 3] > 250 and f[16, 56, 3] < 5, "webm VP9 : alpha conserve (moitie opaque, moitie transparente)")
     check(f is not None and f[16, 8, 0] > 200 and f[16, 8, 1] < 60, "alpha DROIT: la couleur n'est pas premultipliee")
     t0 = time.monotonic()
@@ -985,104 +980,162 @@ def check_logo_video() -> None:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
-def check_chrome() -> None:
-    print("Halo chrome")
-    check(CHROME_DEFAULT_ON == 1.0 and gl.DEFAULT_PARAMS["chrome_react"] == 0.0 and
-          (gl.DEFAULT_PARAMS["chrome_intensity"], gl.DEFAULT_PARAMS["chrome_bump"], gl.DEFAULT_PARAMS["chrome_speed"])
-          == (1.2, 8.0, 0.15), "par defaut: actif, NON audioreactif, intensite 1,2 / relief 8 / vitesse 0,15")
+def check_holo() -> None:
+    print("Halo holographique")
+    d = gl.DEFAULT_PARAMS
+    check(HOLO_DEFAULT_ON == 1.0 and d["holo_react"] == 0.0 and (d["holo_intensity"], d["holo_reach"], d["holo_warp"],
+                                                                   d["holo_dust"], d["holo_speed"]) == (1.0, 1.3, 1.0, 1.0, 0.15),
+          "par defaut: actif, NON audioreactif")
     try:
         ctx = gl.moderngl.create_standalone_context()
     except Exception as exc:
         check(False, "contexte OpenGL standalone", str(exc))
         return
+
+    def make(size):
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        r = gl.Renderer(ctx, size, None)
+        yy, xx = np.mgrid[0:size[1], 0:size[0]]
+        cell = max(size[1] // 10, 4)
+        chk = ((xx // cell + yy // cell) % 2).astype(np.uint8)
+        bg = np.stack([20 + 60 * chk, 15 + 30 * chk, 50 + 90 * chk], axis=2).astype(np.uint8)   # damier: la deformation se voit
+        r.video_tex.write(np.ascontiguousarray(bg).tobytes())
+        r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+        return r, fbo
+
     size = (640, 360)
-    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
-    r = gl.Renderer(ctx, size, None)
-    r.video_tex.write(bytes([10, 10, 14]) * (size[0] * size[1]))            # fond sombre: la lumiere ajoutee se voit
-    r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
-    check(r.logo_tex.size == (64 + 2 * 16, 64 + 2 * 16) and r.logo_pad == (16, 16),
-          "la texture du logo recoit une marge transparente", str(r.logo_tex.size))
-    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.3, logo_opacity=1.0, logo_glow=0.0,
-                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1])
+    r, fbo = make(size)
     quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
     loud = {"bass": 1.0, "mid": 0.5, "high": 0.5, "rms": 0.8, "beat": 1.0, "since_beat": 0.0, "beats": 4}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.25, logo_opacity=1.0, logo_glow=0.0,
+                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1])
 
-    def render(state=quiet, frames=1, **kw):
+    def render(state=quiet, frames=1, rr=None, ff=None, sz=size, **kw):
+        rr, ff = rr or r, ff or fbo
         for i in range(frames):
-            r.draw(fbo, size, state, dict(base, **kw), 0.05 * (i + 1))
-        return read_target(ctx, fbo, size).astype(int)
+            rr.draw(ff, sz, state, dict(base, **kw), 0.05 * (i + 1))
+        return read_target(ctx, ff, sz).astype(int)
 
-    off = render(chrome_on=0.0)
-    on = render(chrome_on=1.0)
-    mask = (off[:, :, 0] > 240) & (off[:, :, 1] > 240)
-    ys, xs = np.nonzero(mask)
+    off = render(holo_on=0.0)
+    on = render(holo_on=1.0, frames=30)
+    white = (off[:, :, 0] > 240) & (off[:, :, 1] > 240) & (off[:, :, 2] > 240)
+    ys, xs = np.nonzero(white)
     y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
     inside = np.zeros(size[::-1], bool)
     inside[y0:y1 + 1, x0:x1 + 1] = True
-    halo = (on - off).max(axis=2)
-    check((halo[~inside] > 30).sum() > 600, "halo visible autour du logo", f"{(halo[~inside] > 30).sum()} px eclaircis")
-    check(halo[inside].max() == 0, "le logo opaque n'est pas modifie (halo additif sous le logo)")
-    margin = int(0.3 * size[1] * 0.25) + 8                # marge de la texture en pixels d'ecran, + tolerance
-    far = np.ones(size[::-1], bool)
-    far[max(y0 - margin, 0):y1 + margin + 1, max(x0 - margin, 0):x1 + margin + 1] = False
-    check(halo[far].max() == 0, "halo borne par la marge: rien au-dela (pas de coupure nette dans l'image)")
-    d = np.abs(on[~inside] - off[~inside]).sum(axis=1)
-    check(on[~inside][d > 0].max() > 120, "reflets clairs du chrome", f"max {on[~inside][d > 0].max()}")
-    check(np.array_equal(render(chrome_on=1.0, chrome_intensity=0.0), off), "intensite 0 = identique a coupe")
+    diff = np.abs(on - off).max(axis=2)
+    check(np.array_equal(on[inside], off[inside]), "le logo reste INTACT (aucun pixel du logo ne change)")
+    check((diff[~inside] > 8).sum() > 6000, "le fond est modifie autour du logo", f"{(diff[~inside] > 8).sum()} px")
+    # portee: bien au-dela du logo (au moins une fois sa largeur de chaque cote)
+    lw = x1 - x0 + 1
+    far = np.zeros(size[::-1], bool)
+    far[:, :max(x0 - lw, 0)] = True
+    far[:, x1 + lw + 1:] = True
+    far |= np.zeros(size[::-1], bool)
+    check((diff[far] > 8).sum() > 500, "portee : des pixels modifies a plus d'une largeur de logo de celui-ci",
+          f"{(diff[far] > 8).sum()} px (logo {lw} px de large)")
+    check(np.abs(diff[:, :4]).max() <= 40 and diff[:2, :].mean() < 8, "le halo s'eteint loin du logo (bords de l'image calmes)")
 
-    # non audioreactif par defaut: ni l'intensite ni la vitesse ne suivent le kick ou les basses
-    r._chrome_t = 0.0
-    calm = render(quiet, frames=20, chrome_on=1.0)
-    r._chrome_t = 0.0
-    shout = render(loud, frames=20, chrome_on=1.0)
-    check(np.array_equal(calm, shout), "chrome_react = 0 : insensible a l'audio (kick, basses)")
-    r._chrome_t = 0.0
-    shout2 = render(loud, frames=20, chrome_on=1.0, chrome_react=1.0)
-    check(np.abs(shout2 - calm).max() > 30, "chrome_react > 0 : reagit au kick et aux basses")
+    # deformation seule / lumiere seule / poussiere seule
+    warp_only = render(holo_on=1.0, frames=30, holo_intensity=0.0, holo_dust=0.0)
+    light_only = render(holo_on=1.0, frames=30, holo_warp=0.0, holo_dust=0.0)
+    dust_only = render(holo_on=1.0, frames=30, holo_warp=0.0, holo_intensity=0.0)
+    check((np.abs(warp_only - off).max(axis=2)[~inside] > 8).sum() > 2000 and np.array_equal(warp_only[inside], off[inside]),
+          "deformation seule : le fond (damier) est deforme, sans lumiere ajoutee en plus")
+    lum = lambda a: a.sum(axis=2)
+    check((lum(light_only) - lum(off))[~inside].min() >= 0 and (lum(light_only) - lum(off)).max() > 150,
+          "lumiere seule : ajoute de la lumiere (jamais d'ombre), sans deformer")
+    check((np.abs(dust_only - off).max(axis=2)[~inside] > 30).sum() > 100, "poussiere seule : des etoiles apparaissent")
+    none = render(holo_on=1.0, frames=30, holo_intensity=0.0, holo_dust=0.0, holo_warp=0.0)
+    check(np.array_equal(none, off), "intensite, deformation et poussiere a 0 = identique a coupe")
+    g0 = render(holo_on=1.0, frames=30, holo_dust=0.0, holo_warp=0.0, holo_intensity=1.0)
+    check((np.abs(g0 - off).max(axis=2) > 8).sum() > 3000, "la lumiere irisee est colorée autour du logo")
+
+    # portee reglable
+    def reach_area(reach):
+        img = render(holo_on=1.0, frames=30, holo_reach=reach, holo_dust=0.0, holo_warp=0.0)
+        return int((np.abs(img - off).max(axis=2) > 8).sum())
+
+    small, big = reach_area(0.4), reach_area(2.0)
+    check(big > small * 1.5, "holo_reach : plus grand = halo plus etendu", f"{small} -> {big} px")
+
+    # non audioreactif par defaut (kick / basses), audioreactif si on le demande
+    r._holo_t = 0.0
+    calm = render(quiet, frames=20, holo_on=1.0)
+    r._holo_t = 0.0
+    shout = render(loud, frames=20, holo_on=1.0)
+    check(np.array_equal(calm, shout), "holo_react = 0 : insensible a l'audio (kick, basses)")
+    r._holo_t = 0.0
+    shout2 = render(loud, frames=20, holo_on=1.0, holo_react=1.0)
+    check(np.abs(shout2 - calm).max() > 30, "holo_react > 0 : reagit au kick et aux basses")
     # anime par le temps seulement
-    r._chrome_t = 0.0
-    t0 = render(quiet, frames=1, chrome_on=1.0)
-    later = render(quiet, frames=40, chrome_on=1.0)
-    check(np.abs(later - t0)[~inside].max() > 30, "les reflets defilent avec le temps")
-    r._chrome_t = 0.0
-    a1 = render(quiet, frames=20, chrome_on=1.0, chrome_speed=0.15)
-    r._chrome_t = 0.0
-    a2 = render(quiet, frames=20, chrome_on=1.0, chrome_speed=0.6)
-    check(np.abs(a2 - a1).max() > 30, "la vitesse change le defilement")
-    b_low = render(chrome_on=1.0, chrome_bump=1.0)
-    b_high = render(chrome_on=1.0, chrome_bump=16.0)
-    check(np.abs(b_low - b_high).max() > 30, "le relief change le contraste du chrome")
-    # un logo sans marge propre (bord a bord) a quand meme un halo complet
-    r.set_logo(np.full((32, 200, 4), 255, np.uint8), "wide")
-    wide_off = render(chrome_on=0.0)
-    wide_on = render(chrome_on=1.0)
-    check((wide_on - wide_off).max() > 20, "logo tres allonge: halo present aussi")
-    # sans logo: pas de halo
+    r._holo_t = 0.0
+    t0 = render(quiet, frames=1, holo_on=1.0)
+    later = render(quiet, frames=60, holo_on=1.0)
+    check((np.abs(later - t0).max(axis=2)[~inside] > 20).sum() > 500, "l'animation avance avec le temps")
+    r._holo_t = 0.0
+    a1 = render(quiet, frames=20, holo_on=1.0, holo_speed=0.15)
+    r._holo_t = 0.0
+    a2 = render(quiet, frames=20, holo_on=1.0, holo_speed=0.6)
+    check(np.abs(a2 - a1).max() > 30, "la vitesse change l'animation")
+
+    # activer / couper : la couche logo ne doit pas rester en filtre a mipmaps sans mipmaps (texture noire)
+    white_count = int(white.sum())
+    back = render(holo_on=0.0)
+    w2 = (back[:, :, 0] > 240) & (back[:, :, 1] > 240) & (back[:, :, 2] > 240)
+    check(int(w2.sum()) == white_count and np.array_equal(back, off), "couper le halo apres l'avoir allume : image identique, logo intact")
+
+    # independant de la resolution : meme proportion de l'image touchee a 320x180 et 640x360
+    r2, fbo2 = make((320, 180))
+    o2 = render(holo_on=0.0, rr=r2, ff=fbo2, sz=(320, 180))
+    n2 = render(holo_on=1.0, frames=30, rr=r2, ff=fbo2, sz=(320, 180), holo_dust=0.0)
+    frac_small = (np.abs(n2 - o2).max(axis=2) > 8).mean()
+    n1 = render(holo_on=1.0, frames=30, holo_dust=0.0)
+    frac_big = (np.abs(n1 - off).max(axis=2) > 8).mean()
+    check(abs(frac_small - frac_big) < 0.12, "la portee ne depend pas de la resolution de l'ecran",
+          f"{frac_small:.2f} (320x180) contre {frac_big:.2f} (640x360)")
+
+    # la portee suit la position et la taille du logo
+    moved = render(holo_on=1.0, frames=30, logo_x=0.2, logo_y=0.3, holo_dust=0.0, holo_warp=0.0)
+    mo = render(holo_on=0.0, logo_x=0.2, logo_y=0.3)
+    md = np.abs(moved - mo).max(axis=2) > 8
+    ysm, xsm = np.nonzero(md)
+    check(abs(xsm.mean() - 0.2 * size[0]) < 0.12 * size[0] and abs(ysm.mean() - 0.3 * size[1]) < 0.15 * size[1],
+          "le halo suit le logo (position)", f"centre du halo ({xsm.mean():.0f}, {ysm.mean():.0f})")
+
+    # sans logo : aucun effet ; logo texte : fonctionne aussi
     r.set_logo(None, "")
-    check(np.array_equal(render(chrome_on=1.0), render(chrome_on=0.0)), "sans logo: aucun halo")
-    # logo video: la texture est remise en mipmaps a chaque image (le halo est lu sur les niveaux flous)
+    check(np.array_equal(render(holo_on=1.0, frames=5), render(holo_on=0.0)), "sans logo: aucun halo")
+    from types import SimpleNamespace as NS
+    s = NS(params=dict(base, logo_source="text", text_content="HELLO", text_scale=0.2, holo_on=1.0), status={})
+    r.logo_requested = None
+    gl.apply_logo_request(s, r)
+    t_on = render(holo_on=1.0, frames=30, logo_source="text", text_content="HELLO", text_scale=0.2)
+    t_off = render(holo_on=0.0, logo_source="text", text_content="HELLO", text_scale=0.2)
+    check((np.abs(t_on - t_off).max(axis=2) > 8).sum() > 4000, "logo texte: halo aussi")
+    r.set_logo(None, "")
+
+    # logo video
     import shutil
     if shutil.which("ffmpeg"):
         import subprocess
-        tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_chrome_"))
+        tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_holo_"))
         src = tmp / "sq.mp4"
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                         "color=c=0x00ff00:s=64x64:r=20:d=1", "-vf", "drawbox=x=16:y=16:w=32:h=32:color=white:t=fill",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], capture_output=True, timeout=60)
         if src.is_file():
-            from types import SimpleNamespace as NS
-            params = dict(base, logo_source="video", logo_video=str(src), logo_key="#00ff00", chrome_on=1.0)
+            params = dict(base, logo_source="video", logo_video=str(src), logo_key="#00ff00", holo_on=1.0)
             s = NS(params=params, status={})
             r.logo_requested = None
             gl.apply_logo_request(s, r)
             wait_until(lambda: r.logo_video.reader.frames_read > 0)
-            r.draw(fbo, size, quiet, params, 0.5)
-            r.draw(fbo, size, quiet, params, 0.55)
+            for i in range(30):
+                r.draw(fbo, size, quiet, params, 0.05 * (i + 1))
             img = read_target(ctx, fbo, size).astype(int)
-            params_off = dict(params, chrome_on=0.0)
-            r.draw(fbo, size, quiet, params_off, 0.6)
+            r.draw(fbo, size, quiet, dict(params, holo_on=0.0), 2.0)
             ref = read_target(ctx, fbo, size).astype(int)
-            check((img - ref).max() > 100, "logo video detoure: halo chrome autour de la forme")
+            check((np.abs(img - ref).max(axis=2) > 8).sum() > 3000, "logo video detoure: halo autour de la forme decoupee")
             r.set_logo(None, "")
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1291,7 +1344,7 @@ def main() -> None:
     check_features()
     check_text()
     check_logo_video()
-    check_chrome()
+    check_holo()
     check_layers()
     check_automation()
     check_params()

@@ -1,9 +1,9 @@
 @echo off
 rem Lanceur de casual-overlay : fenetre de reglages (--gui) + fenetre OpenGL.
 rem Les arguments donnes au .bat sont transmis tels quels, par exemple :
-rem     lancer.bat -d "Microphone (Realtek(R) Audio)"
-rem     lancer.bat --text "CASUAL RAVERS" --background pattern
-rem     lancer.bat --synthetic --no-fullscreen      (sans micro ni ffmpeg)
+rem     start.bat -d "Microphone (Realtek(R) Audio)"
+rem     start.bat --text "CASUAL RAVERS" --background pattern
+rem     start.bat --synthetic --no-fullscreen      (sans micro ni ffmpeg)
 rem Sans -d, choisis l'entree audio dans la fenetre de reglages.
 
 setlocal
