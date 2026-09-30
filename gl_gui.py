@@ -90,6 +90,7 @@ SHORTCUTS_HELP = (
     "    du logo (delie fond et logo)\n"
     "L : lier / separer les effets du fond\n"
     "    et du logo\n"
+    "C : halo chrome du logo on/off\n"
     "Haut / Bas : sensibilite du kick\n"
     "R : recharger shaders et reglages\n"
     "P : sauver les reglages"
@@ -387,6 +388,40 @@ def run_gui(s, live, on_ready=None) -> None:
 
     link_var.trace_add("write", on_link)
     on_link()
+
+    # ---- colonne A : HALO CHROME autour du logo (non audioreactif par defaut)
+    add_separator(zone_a, "Halo chrome (logo)")
+    chrome_var = tk.IntVar(value=int(float(params["chrome_on"]) >= 0.5))
+    bind_param("chrome_on", chrome_var, float)
+    chrome_row = tk.Frame(col_a)
+    chrome_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    chrome_check = tk.Checkbutton(chrome_row, text="Halo chrome", variable=chrome_var)
+    chrome_check.pack(side="left")
+    chrome_box = tk.Frame(col_a)            # reglages repliables: une fenetre trop haute deborde de l'ecran
+    chrome_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="nw")
+    chrome_box.grid_remove()
+
+    def toggle_chrome_box() -> None:
+        if chrome_box.winfo_manager():
+            chrome_box.grid_remove()
+            chrome_toggle.config(text="Reglages >")
+        else:
+            chrome_box.grid()
+            chrome_toggle.config(text="Reglages v")
+
+    chrome_toggle = tk.Button(chrome_row, text="Reglages >", command=toggle_chrome_box, padx=6)
+    chrome_toggle.pack(side="left", padx=(8, 0))
+    cz = Zone(chrome_box)
+    Tooltip(chrome_check, "Halo metallique autour du logo, image, texte ou video: relief tire de l'alpha flou, "
+                          "reflet d'un faux studio (bandes claires/sombres), ajoute en lumiere sur le fond. "
+                          "Anime par le temps seulement (reaction a l'audio = 0 par defaut). Marche sur un fond "
+                          "sombre: il n'ajoute que de la lumiere.")
+    param_slider(cz, "Intensite", "chrome_intensity", 0.0, 3.0, 0.05, "Force du halo.")
+    param_slider(cz, "Relief", "chrome_bump", 0.0, 20.0, 0.5, "Plus haut = chrome plus contraste.")
+    param_slider(cz, "Vitesse", "chrome_speed", 0.0, 1.0, 0.01, "Vitesse de defilement des reflets.")
+    param_slider(cz, "Bandes", "chrome_bands", 1.0, 12.0, 0.5, "Nombre de bandes claires/sombres reflechies.")
+    param_slider(cz, "Reaction audio", "chrome_react", 0.0, 2.0, 0.05,
+                 "0 = aucune (defaut). Sinon: intensite qui monte au kick, reflets acceleres par les basses.")
 
     # ---- colonne B : LOGO
     add_section_title(zone_b, "Logo / texte")
@@ -687,6 +722,8 @@ def run_gui(s, live, on_ready=None) -> None:
                 v.set(float(params["fxl_int"][i]))
         if link_var.get() != int(float(params["fx_link"]) >= 0.5):
             link_var.set(int(float(params["fx_link"]) >= 0.5))
+        if chrome_var.get() != int(float(params["chrome_on"]) >= 0.5):
+            chrome_var.set(int(float(params["chrome_on"]) >= 0.5))
         if abs(master_var.get() - params["master"]) > 1e-6:
             master_var.set(params["master"])
         if abs(sens_var.get() - params["sensitivity"]) > 1e-6:
@@ -722,7 +759,7 @@ def run_gui(s, live, on_ready=None) -> None:
             "root": root, "restart_event": restart_event, "live_status": live_status, "close": on_close,
             "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "chrome_var": chrome_var, "chrome_box": chrome_box, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,

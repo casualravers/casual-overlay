@@ -54,6 +54,10 @@ A droite, les panneaux propres a casual-overlay :
   logo a ses propres interrupteurs et intensites, ses ondes partent de son centre et son glitch tire
   d'autres bandes (ex. un fond qui ondule sur les basses, un logo net qui n'encaisse que le glitch).
   L'effet 5 (pulsation, tremblement, contour du logo) reste a part.
+- **Halo chrome** : halo metallique autour du logo (image, texte ou video) : relief tire du contour, reflet
+  d'un faux studio a bandes claires/sombres, ajoute en lumiere (plus spectaculaire sur fond sombre).
+  Actif par defaut, anime par le temps seulement (reaction a l'audio a 0 ; touche C). Reglages (intensite,
+  relief, vitesse, bandes, reaction audio) dans le bloc repliable « Reglages ».
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
 - **Analyse audio et affichage** : entree d'analyse, plein ecran, barres debug, recharger les
@@ -80,6 +84,7 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 | 1 a 5 | wobble, ripple, aberration chromatique, glitch (fond), effets du logo (pulsation, contour) |
 | Maj + 1 a 4 | le meme effet sur la couche du logo (delie fond et logo) |
 | L | lier / separer les effets du fond et du logo |
+| C | halo chrome du logo : on / off |
 | + / - (ou PageUp / PageDown) | intensite globale |
 | Haut / Bas | sensibilite de la detection du kick |
 | R | recharge les shaders (`gl_shaders/*.glsl`) et les reglages |
@@ -96,6 +101,9 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 - **Scenes nommees** : sauvegarder et rappeler sous un nom l'ensemble des reglages casual-overlay (fond
   motif, logo, effets, automations), comme les presets d'audio2wave le font pour les options live ;
   aujourd'hui un seul jeu de reglages (`gl_params.json`).
+- **Halo chrome plus riche** : automations de l'intensite et du relief, environnements au choix
+  (studio, neon, arc-en-ciel), couleur de teinte reglable, et mode « ombre » (soustractif) pour qu'il
+  reste lisible sur un fond clair ou sur le motif.
 - **Synchro du logo anime sur le kick** : vitesse de lecture ou saut d'image au rythme de la musique
   (le fichier est lu a sa cadence propre).
 - **Detourage plus fin du logo video** : similarite et fondu reglables dans la GUI (valeurs fixes),

@@ -40,7 +40,7 @@ Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--s
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
 Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif, T automations, 1-5 effets
-(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), +/- ou PageUp/PageDown intensite globale, haut/bas
+(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo chrome, +/- ou PageUp/PageDown intensite globale, haut/bas
 sensibilite du kick, R recharge shaders + reglages, P sauve dans
 `~/.audio2wave/gl_params.json` (recharge au lancement).
 
@@ -142,6 +142,33 @@ les basses).
 - Le producteur ffmpeg continue de tourner en mode motif (negligeable, et le retour au
   spectre est instantane) ; la GUI n'affiche alors plus son statut.
 - Le logo et tous les effets post-traitement s'appliquent aussi au motif.
+
+### Halo chrome (`chrome_*`, touche C)
+
+Halo metallique autour du logo (image, texte ou video), calcule dans `scene.frag` pendant la passe
+logo (`chrome_halo()`, d'apres `chrome_halo-1.frag` fourni) : **relief** = alpha du logo flou a 6
+echelles par les mipmaps (`textureLod`), **normale** tiree de ce relief, **chrome** = reflexion d'un faux
+studio (`chrome_env`: bandes nettes claires/sombres, reflet brillant, teinte irisee) ; le halo
+est ajoute en **lumiere** (rgb additif, alpha du logo inchange, comme le contour lumineux) puis le logo
+est pose par-dessus. Reglages : `chrome_on`, `chrome_intensity` 1,2, `chrome_bump` 8 (relief/contraste),
+`chrome_speed` 0,15, `chrome_bands` 5, `chrome_react` **0** (defaut : non audioreactif ; > 0 = intensite
+au kick, reflets acceleres par les basses). La phase est **integree** image par image (`_chrome_t`),
+comme celles du motif.
+- **Marge transparente** : `set_logo` ajoute `LOGO_PAD` (25 % de la largeur/hauteur par cote) a la
+  texture, et le logo video la recoit de ffmpeg (`pad=...:color=0x00000000` apres le detourage,
+  `LogoVideo.content/pad/size`) ; le rectangle dessine est agrandi d'autant (`u_logo_rect`), la mise
+  en page (`logo_layout`) reste celle du logo sans marge. Sans elle le halo serait coupe net.
+- **Largeur du halo proportionnelle a la taille du logo**, pas a la resolution du PNG : les 6 echelles
+  vont de 1/128 a 1/4 du petit cote (`u_chrome_lod0` = log2(petit cote) - 8), bornees par la marge
+  (`u_chrome_maxlod`). Premiere version avec les niveaux 1..6 bruts : un PNG de 2048 px donnait un liseré
+  de 1 px, un de 256 px un halo enorme. Le halo s'eteint aussi vers le bord de la texture (jamais
+  coupe net par son rectangle). Mipmaps + `LINEAR_MIPMAP_LINEAR` ; pour le logo video, `build_mipmaps()`
+  apres chaque image envoyee.
+- Comme il n'ajoute que de la lumiere, **les bandes sombres ne se voient pas sur un fond clair** :
+  le chrome est spectaculaire sur un fond sombre (spectre ffmpeg noir), discret sur le motif.
+- Actif par defaut (`chrome_on` = 1) ; `check_gl.py` le coupe pour les comparaisons de pixels
+  (`DEFAULT_PARAMS["chrome_on"] = 0`) et `check_chrome()` le rallume. GUI : case "Halo chrome" +
+  bloc "Reglages" **replie** par defaut (sinon la fenetre depasse 1100 px en mode motif).
 
 ### Effets par couche (fond / logo decorreles)
 
@@ -325,6 +352,8 @@ Gain, radio Style, case Plein ecran) : Snap/Ridge retires, taille figee, presets
 automations presents, rafale de reglages = un seul redemarrage sur une copie, taille du
 rendu toujours remise, plein ecran = commande GL sans redemarrage ffmpeg, statut relaye,
 et nos panneaux (couleur invalide ignoree, logo, effets, fond) ;
+halo chrome (par defaut actif et non audioreactif, marge transparente, borne par la marge, insensible au
+kick a chrome_react = 0, anime par le temps, logo video, texture video remise en mipmaps) ;
 effets par couche (intensites effectives lie/separe, delier copie, wobble sur le logo seul = fond strictement
 intact, wobble sur le fond seul = logo strictement intact, lie = les deux deformes, glitch du logo limite a
 ses lignes, pas de frange noire, sans logo = fond seul) ;

@@ -105,6 +105,14 @@ DEFAULT_PARAMS = {
     "logo_glow": 1.0,                 # intensite du contour lumineux
     "logo_glow_radius": 1.0,          # multiplicateur du rayon du contour
     "logo_glow_color": "#5fd4c8",
+    # Halo chrome autour du logo (relief flou + faux environnement de studio), additif, anime par le
+    # temps seulement: chrome_react = 0 => aucune reaction a l'audio.
+    "chrome_on": 1.0,
+    "chrome_intensity": 1.2,
+    "chrome_bump": 8.0,               # relief: plus haut = chrome plus contraste
+    "chrome_speed": 0.15,             # vitesse de defilement des reflets
+    "chrome_bands": 5.0,              # nombre de bandes de l'environnement
+    "chrome_react": 0.0,              # 0 = pas audioreactif; >0: intensite au kick, vitesse aux basses
     # Fond: "live" = spectre ffmpeg, "pattern" = motif genere dans le shader (degrades + damier)
     "bg_mode": "live",
     "bg_palette": "classic",          # "classic" (arc-en-ciel d'origine) ou "duo" (color1 -> color2)
@@ -839,6 +847,14 @@ def _premultiplied(img):
     return np.rint(arr).astype(np.uint8)
 
 
+LOGO_PAD = 0.25     # marge transparente autour du logo, en fraction de sa largeur / hauteur, par cote
+
+
+def logo_pad_px(width: int, height: int) -> tuple[int, int]:
+    """Marge (px) ajoutee a gauche/droite et en haut/bas d'une texture de logo de width x height."""
+    return max(2, round(width * LOGO_PAD)), max(2, round(height * LOGO_PAD))
+
+
 def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple[float, float],
                 pulse: float = 0.0, jitter: tuple[float, float] = (0.0, 0.0), fit: str = "box"):
     """(cx, cy, demi-largeur, demi-hauteur) en uv (origine haut gauche). pulse (0.12 = +12 %) et
@@ -893,6 +909,9 @@ class Renderer:
         self.logo_kind = "image"
         self.logo_path = ""
         self.logo_video: LogoVideo | None = None
+        self.logo_pad = (0, 0)             # marge transparente ajoutee a la texture (px), par cote
+        self.logo_content = (1, 1)         # taille du logo sans la marge
+        self._chrome_t = 0.0               # phase d'animation du chrome, integree image par image
         # Dernier chemin DEMANDE (charge ou non): evite de retenter un fichier invalide a chaque image.
         self.logo_requested = logo_path
         self.set_logo(logo_rgba, logo_path)
@@ -908,16 +927,23 @@ class Renderer:
         self.release_logo_video()
         self.logo_kind = kind
         old = self.logo_tex
+        self.logo_pad = (0, 0)
         if logo_rgba is not None:
             h, w = logo_rgba.shape[:2]
-            tex = self.ctx.texture((w, h), 4, data=logo_rgba.tobytes())
+            px, py = logo_pad_px(w, h)
+            # Marge transparente tout autour: le halo chrome a besoin de place, sinon il est coupe.
+            padded = np.pad(logo_rgba, ((py, py), (px, px), (0, 0)))
+            tex = self.ctx.texture((w + 2 * px, h + 2 * py), 4, data=np.ascontiguousarray(padded).tobytes())
             tex.build_mipmaps()
             tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
             tex.anisotropy = 8.0
             self.logo_aspect = w / h
+            self.logo_pad = (px, py)
+            self.logo_content = (w, h)
         else:
             tex = self.ctx.texture((1, 1), 4, data=bytes(4))
             self.logo_aspect = 1.0
+            self.logo_content = (1, 1)
         tex.repeat_x = tex.repeat_y = False
         self.logo_tex = tex
         self.has_logo = logo_rgba is not None
@@ -930,12 +956,15 @@ class Renderer:
         nouvelle image (voir draw). Le Renderer possede `video` et l'arrete quand il est remplace."""
         self.set_logo(None, "")                 # libere l'ancien logo / l'ancienne video
         old = self.logo_tex
-        w, h = video.size
+        w, h = video.size                       # marge transparente comprise (ajoutee par ffmpeg)
         tex = self.ctx.texture((w, h), 4, data=bytes(w * h * 4))
-        tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        tex.anisotropy = 8.0
         tex.repeat_x = tex.repeat_y = False
         self.logo_tex = tex
-        self.logo_aspect = w / h
+        self.logo_content = video.content
+        self.logo_pad = video.pad
+        self.logo_aspect = video.content[0] / video.content[1]
         self.logo_kind = "video"
         self.logo_video = video
         self.has_logo = True
@@ -1006,11 +1035,15 @@ class Renderer:
         self._set(sp, "u_video", 0)
         self._set(sp, "u_logo", 1)
         self._set(sp, "u_res", (float(width), float(height)))
-        self._set(sp, "u_logo_rect", rect)
+        # Le rectangle du logo sert de mise en page (taille, bords, pulsation); la texture a en plus une marge
+        # transparente (LOGO_PAD par cote), donc on dessine un rectangle agrandi d'autant.
+        cw, ch = self.logo_content
+        pad_x, pad_y = (self.logo_tex.width / cw, self.logo_tex.height / ch) if self.has_logo else (1.0, 1.0)
+        self._set(sp, "u_logo_rect", (rect[0], rect[1], rect[2] * pad_x, rect[3] * pad_y))
         self._set(sp, "u_logo_on", 1.0 if self.has_logo else 0.0)
         self._set(sp, "u_logo_straight", 1.0 if self.logo_video is not None else 0.0)
-        if self.logo_video is not None:
-            self.logo_video.reader.upload_to(self.logo_tex)
+        if self.logo_video is not None and self.logo_video.reader.upload_to(self.logo_tex):
+            self.logo_tex.build_mipmaps()        # le halo chrome lit les niveaux flous (textureLod)
         self._set(sp, "u_logo_opacity", min(max(float(p["logo_opacity"]), 0.0), 1.0))
         self._set(sp, "u_bass", float(bass))
         self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0))
@@ -1022,6 +1055,19 @@ class Renderer:
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
+        # Halo chrome: phase integree (changer la vitesse ne fait pas sauter les reflets). Sans
+        # chrome_react (defaut), ni l'intensite ni la vitesse ne dependent de l'audio.
+        c_react = max(float(p["chrome_react"]), 0.0)
+        self._chrome_t += dt * float(p["chrome_speed"]) * (1.0 + c_react * float(bass) * 3.0)
+        pad_px = min(self.logo_pad) if self.has_logo else 0
+        max_lod = max(1.0, math.floor(math.log2(max(pad_px, 2))))             # flou borne par la marge
+        self._set(sp, "u_chrome_lod0", math.log2(max(min(self.logo_content), 2)) - 8.0)
+        self._set(sp, "u_chrome", (float(p["chrome_intensity"]) * (1.0 + c_react * float(beat) * 1.5)
+                                   if float(p["chrome_on"]) >= 0.5 else 0.0))
+        self._set(sp, "u_chrome_bump", float(p["chrome_bump"]))
+        self._set(sp, "u_chrome_phase", self._chrome_t)
+        self._set(sp, "u_chrome_bands", float(p["chrome_bands"]))
+        self._set(sp, "u_chrome_maxlod", max_lod)
         react = max(float(p["bg_react"]), 0.0)
         self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bass) * 1.5)
         self._bg_flip_t += dt * float(p["bg_flip"])
@@ -1257,7 +1303,8 @@ def probe_video(path: str) -> tuple[int, int, str]:
         raise RuntimeError(f"pas de flux video lisible ({out.stderr.strip()[:120] or 'fichier invalide'})")
 
 
-def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = "") -> list[str]:
+def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = "",
+                       pad: tuple[int, int] | None = None) -> list[str]:
     """Commande ffmpeg: decode `path` en boucle, a sa cadence native (-re), en rawvideo rgba
     (alpha DROIT, non premultiplie: le shader le premultiplie). `key` (#rrggbb) detoure cette
     couleur pour un fichier sans canal alpha (fond vert...)."""
@@ -1270,6 +1317,8 @@ def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = 
     filters = [f"scale={size[0]}:{size[1]}:flags=bilinear", "format=rgba"]
     if key:
         filters.append(f"colorkey=0x{key.lstrip('#')}:{LOGO_KEY_SIMILARITY}:{LOGO_KEY_BLEND}")
+    if pad:     # marge transparente (le halo chrome a besoin de place), ajoutee APRES le detourage
+        filters.append(f"pad={size[0] + 2 * pad[0]}:{size[1] + 2 * pad[1]}:{pad[0]}:{pad[1]}:color=0x00000000")
     return cmd + ["-i", path, "-an", "-vf", ",".join(filters), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]
 
 
@@ -1280,8 +1329,10 @@ class LogoVideo:
     def __init__(self, path: str, key: str = ""):
         w, h, codec = probe_video(path)
         ratio = min(1.0, LOGO_VIDEO_MAX_SIDE / max(w, h))
-        self.size = (max(2, round(w * ratio)), max(2, round(h * ratio)))
-        cmd = logo_video_command(path, self.size, codec, key)
+        self.content = (max(2, round(w * ratio)), max(2, round(h * ratio)))     # le logo sans marge
+        self.pad = logo_pad_px(*self.content)
+        self.size = (self.content[0] + 2 * self.pad[0], self.content[1] + 2 * self.pad[1])   # image decodee
+        cmd = logo_video_command(path, self.content, codec, key, self.pad)
         self.proc = spawn_big_pipe(cmd, stderr=subprocess.PIPE) or subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.reader = FrameReader(self.proc.stdout, self.size[0] * self.size[1] * 4)
@@ -1980,6 +2031,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             save_params(params)
             print(f"Reglages sauves dans {PARAMS_PATH}")
             s.status["msg"] = f"Reglages sauves ({PARAMS_PATH.name})"
+        elif name == "chrome":
+            params["chrome_on"] = 0.0 if float(params["chrome_on"]) >= 0.5 else 1.0
+            print(f"halo chrome: {'on' if params['chrome_on'] >= 0.5 else 'off'}")
         elif name == "link":
             set_fx_link(params, float(params["fx_link"]) < 0.5)
             print(f"effets fond/logo: {'lies' if params['fx_link'] >= 0.5 else 'separes'}")
@@ -2018,6 +2072,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     repeatable = {"master+", "master-", "sens+", "sens-"}
 
     key_actions[glfw.KEY_L] = "link"
+    key_actions[glfw.KEY_C] = "chrome"
 
     def on_key(win, key, scancode, action, mods):
         name = key_actions.get(key)
@@ -2028,7 +2083,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
     glfw.set_key_callback(handle, on_key)
     print("Echap quitte | F plein ecran | H barres debug | B fond live/motif | T automations | 1-5 effets (Maj+1-4: "
-          "logo) | L lier fond/logo | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
+          "logo) | L lier fond/logo | C halo chrome | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
     print(status_line())
 
     query = ctx.query(time=True) if args.stats else None
