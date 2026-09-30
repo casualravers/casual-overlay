@@ -23,11 +23,14 @@ n'est modifie.
 from __future__ import annotations
 
 import argparse
+import copy
 import ctypes
+import functools
 import json
 import math
 import os
 import queue
+import random
 import shlex
 import shutil
 import subprocess
@@ -53,11 +56,13 @@ glfw = _optional_import("glfw", "glfw")
 moderngl = _optional_import("moderngl", "moderngl")
 sd = _optional_import("sounddevice", "sounddevice")
 PIL_Image = _optional_import("PIL.Image", "Pillow")
+PIL_ImageDraw = _optional_import("PIL.ImageDraw", "Pillow")
+PIL_ImageFont = _optional_import("PIL.ImageFont", "Pillow")
 
 
 def require_deps() -> None:
     if MISSING:
-        print(f"Dependances manquantes: {', '.join(MISSING)}.\n"
+        print(f"Dependances manquantes: {', '.join(dict.fromkeys(MISSING))}.\n"
               "Installe-les avec:  pip install -r requirements-gl.txt", file=sys.stderr)
         sys.exit(1)
 
@@ -72,10 +77,25 @@ FX_NAMES = ["wobble", "ripple", "chroma", "glitch", "logo"]
 DEFAULT_PARAMS = {
     "fx_on": [1, 1, 1, 1, 1],
     "fx_int": [1.0, 1.0, 1.0, 1.0, 1.0],
+    # Effets de la COUCHE LOGO (wobble, ripple, chroma, glitch). fx_on/fx_int[0..3] sont ceux du FOND ;
+    # l'indice 4 (reaction du logo: pulsation, tremblement, contour) reste a part. Avec fx_link = 1
+    # le logo subit les memes effets que le fond (reglages fx_*, centre de l'image), exactement comme
+    # avant la separation des couches ; a 0 il a les siens (fxl_*) et ses ondes partent de son centre.
+    "fx_link": 1.0,
+    "fxl_on": [1, 1, 1, 1],
+    "fxl_int": [1.0, 1.0, 1.0, 1.0],
     "master": 1.0,
     "sensitivity": 1.0,
     # Incrustation du logo (pilotee par la GUI ou --logo*, relue a chaque image)
+    "logo_source": "image",           # "image" (PNG), "text" (texte tape a la main) ou "video" (logo anime)
+    "logo_video": "",                 # fichier video/GIF anime (source "video")
+    "logo_key": "",                   # #rrggbb a detourer si le fichier n'a pas d'alpha ("" = aucun)
     "logo_path": str(DEFAULT_LOGO),   # "" = aucun logo
+    "text_content": "CASUAL RAVERS",  # source texte: le texte (plusieurs lignes possibles)
+    "text_font": "auto",              # nom de police de TEXT_FONTS, chemin d'un .ttf/.otf, ou "auto"
+    "text_color": "#ffffff",
+    "text_align": "center",           # "left" | "center" | "right" (texte sur plusieurs lignes)
+    "text_scale": 0.16,               # hauteur du bloc de texte, fraction de la hauteur de l'image
     "logo_x": 0.5,                    # centre, fraction de la largeur (origine a gauche)
     "logo_y": 0.5,                    # centre, fraction de la hauteur (origine en haut)
     "logo_scale": 0.35,               # cote du carre englobant, fraction de la hauteur
@@ -85,7 +105,175 @@ DEFAULT_PARAMS = {
     "logo_glow": 1.0,                 # intensite du contour lumineux
     "logo_glow_radius": 1.0,          # multiplicateur du rayon du contour
     "logo_glow_color": "#5fd4c8",
+    # Fond: "live" = spectre ffmpeg, "pattern" = motif genere dans le shader (degrades + damier)
+    "bg_mode": "live",
+    "bg_palette": "classic",          # "classic" (arc-en-ciel d'origine) ou "duo" (color1 -> color2)
+    "bg_color1": "#3a1cff",           # palette duo
+    "bg_color2": "#14f0d8",
+    "bg_angle": 0.0,                  # direction du degrade duo, en degres
+    "bg_hue": 0.0,                    # rotation de teinte, 0..1 (un tour)
+    "bg_speed": 1.0,                  # vitesse de defilement des degrades
+    "bg_tile": 80.0,                  # cote d'un carreau, en pixels pour 720 px de haut
+    "bg_checker": 0.24,               # contraste du damier
+    "bg_flip": 2.0,                   # bascules du damier par seconde
+    "bg_react": 1.0,                  # reaction a l'audio: flash + damier au kick, defilement aux basses
+    "auto_master": 1.0,               # interrupteur general des automations (1 = actives)
 }
+
+# --- Automations de reglages ------------------------------------------------------------
+# Meme principe que "Variation automatique" d'audio2wave (voir son CLAUDE.md): chaque reglage
+# automatise suit sa PROPRE courbe (AUTOMATION_POINTS points de controle boucles, interpoles
+# lineairement) a sa PROPRE vitesse, et la valeur est une fonction pure du temps. Le moteur
+# tourne ici, dans le fil de rendu (precision a l'image, et ca marche aussi sans --gui) ;
+# la GUI reprend l'editeur de courbes d'audio2wave et ne fait que lire/ecrire
+# params["_automation"].
+AUTOMATION_POINTS = 12       # meme valeur que AUTOMATE_CURVE_POINTS d'audio2wave (compatibilite des editeurs)
+
+# cle de params -> (libelle, min, max, courbe, periode en s, active par defaut). Min/max = plage
+# de l'automation (plus etroite que celle du curseur: un reglage automatise est PILOTE, le curseur
+# suit). Periodes volontairement premieres entre elles (pas de multiple commun) pour que
+# l'ensemble ne se repete jamais a l'identique. Actives par defaut: ce qui donne de la vie sans
+# rien deplacer (teinte, angle, carreaux, intensites d'effets); position, taille et opacite du
+# logo sont proposees mais coupees (une marque ne doit pas se promener sans qu'on l'ait voulu).
+AUTOMATION_SPECS: dict[str, tuple] = {
+    "bg_hue":           ("Teinte", 0.0, 0.5, "sinus", 79, True),
+    "bg_angle":         ("Angle du degrade", 20.0, 160.0, "sinus", 53, True),
+    "bg_speed":         ("Vitesse", 0.4, 1.8, "sinus", 37, True),
+    "bg_tile":          ("Taille des carreaux", 50.0, 150.0, "sinus", 29, True),
+    "bg_checker":       ("Contraste du damier", 0.06, 0.32, "sinus", 23, True),
+    "bg_flip":          ("Cadence du damier", 0.5, 3.5, "triangle", 47, True),
+    "logo_x":           ("Position X", 0.35, 0.65, "sinus", 43, False),
+    "logo_y":           ("Position Y", 0.42, 0.58, "sinus", 31, False),
+    "logo_scale":       ("Taille (image)", 0.30, 0.42, "sinus", 13, False),
+    "text_scale":       ("Taille du texte", 0.12, 0.20, "sinus", 13, False),
+    "logo_opacity":     ("Opacite", 0.6, 1.0, "sinus", 19, False),
+    "logo_pulse":       ("Pulsation", 0.05, 0.30, "sinus", 21, True),
+    "logo_glow":        ("Contour lumineux", 0.4, 1.5, "sinus", 11, True),
+    "logo_glow_radius": ("Rayon du contour", 0.6, 1.6, "sinus", 17, True),
+    "fx_int0":          ("Intensite wobble", 0.4, 1.2, "sinus", 19, True),
+    "fx_int1":          ("Intensite onde de choc", 0.4, 1.3, "sinus", 41, True),
+    "fx_int2":          ("Intensite aberration", 0.3, 1.2, "sinus", 7, True),
+    "fx_int3":          ("Intensite glitch", 0.15, 1.0, "aleatoire", 61, True),
+    "fx_int4":          ("Intensite logo", 0.6, 1.2, "sinus", 59, True),
+    # Effets de la couche logo (utiles seulement quand fx_link = 0). Periodes differentes de celles
+    # du fond: les deux couches ne respirent pas en phase.
+    "fxl_int0":         ("Logo: intensite wobble", 0.4, 1.2, "sinus", 67, True),
+    "fxl_int1":         ("Logo: intensite onde de choc", 0.4, 1.3, "sinus", 31, True),
+    "fxl_int2":         ("Logo: intensite aberration", 0.3, 1.2, "sinus", 71, True),
+    "fxl_int3":         ("Logo: intensite glitch", 0.15, 1.0, "aleatoire", 83, True),
+}
+
+FX_EFFECTS = 4               # wobble, ripple, chroma, glitch: les effets qui se deforment par couche
+
+
+def curve_points(name: str, n: int = AUTOMATION_POINTS, seed: int = 7) -> list[float]:
+    """Courbe de depart (valeurs 0..1, bouclee): memes formes que les presets d'audio2wave."""
+    if name == "triangle":
+        return [2 * (i / n) if i / n <= 0.5 else 2 * (1 - i / n) for i in range(n)]
+    if name == "carre":
+        return [1.0 if i / n < 0.5 else 0.0 for i in range(n)]
+    if name == "dents":
+        return [i / n for i in range(n)]
+    if name == "aleatoire":
+        rng = random.Random(seed)
+        return [rng.random() for _ in range(n)]
+    return [0.5 + 0.5 * math.sin(2 * math.pi * i / n) for i in range(n)]
+
+
+def default_automation() -> dict:
+    """Etat initial {cle: {"enabled", "points", "period"}}: celui de AUTOMATION_SPECS."""
+    return {key: {"enabled": bool(spec[5]), "points": curve_points(spec[3], seed=i), "period": float(spec[4])}
+            for i, (key, spec) in enumerate(AUTOMATION_SPECS.items())}
+
+
+def merge_automation(saved) -> dict:
+    """Etat sauve valide, complete par les valeurs par defaut (cle absente ou entree invalide)."""
+    merged = default_automation()
+    if isinstance(saved, dict):
+        for key, entry in saved.items():
+            if key not in merged or not isinstance(entry, dict):
+                continue
+            points = entry.get("points")
+            if isinstance(points, list) and len(points) == AUTOMATION_POINTS \
+                    and all(isinstance(v, (int, float)) for v in points):
+                merged[key]["points"] = [min(max(float(v), 0.0), 1.0) for v in points]
+            if isinstance(entry.get("period"), (int, float)) and entry["period"] > 0:
+                merged[key]["period"] = float(entry["period"])
+            if "enabled" in entry:
+                merged[key]["enabled"] = bool(entry["enabled"])
+    return merged
+
+
+def _list_key(key: str):
+    """'fx_int2' -> ('fx_int', 2), 'fxl_int0' -> ('fxl_int', 0), sinon None (reglage scalaire)."""
+    for prefix in ("fx_int", "fxl_int"):
+        if key.startswith(prefix) and key[len(prefix):].isdigit():
+            return prefix, int(key[len(prefix):])
+    return None
+
+
+def get_param(params: dict, key: str):
+    lk = _list_key(key)
+    return params[lk[0]][lk[1]] if lk else params[key]
+
+
+def set_param(params: dict, key: str, value: float) -> None:
+    lk = _list_key(key)
+    if lk:
+        params[lk[0]][lk[1]] = value
+    else:
+        params[key] = value
+
+
+def set_fx_link(params: dict, linked: bool) -> None:
+    """Lie ou delie les effets du logo et du fond. En deliant, les reglages du logo partent de ceux du
+    fond (rien ne saute a l'ecran)."""
+    if not linked and float(params["fx_link"]) >= 0.5:
+        for i in range(FX_EFFECTS):
+            params["fxl_on"][i] = params["fx_on"][i]
+            params["fxl_int"][i] = params["fx_int"][i]
+    params["fx_link"] = 1.0 if linked else 0.0
+
+
+def layer_effects(params: dict) -> tuple[list[float], list[float]]:
+    """Intensites effectives (interrupteur x intensite x intensite globale) des quatre effets de
+    deformation : (fond, logo). Lie, le logo reprend celles du fond."""
+    master = float(params["master"])
+    bg = [float(params["fx_on"][i]) * float(params["fx_int"][i]) * master for i in range(FX_EFFECTS)]
+    if float(params["fx_link"]) >= 0.5:
+        return bg, list(bg)
+    return bg, [float(params["fxl_on"][i]) * float(params["fxl_int"][i]) * master for i in range(FX_EFFECTS)]
+
+
+class AutomationEngine:
+    """Applique les automations a `params` (fil de rendu, une fois par image). Une automation
+    repart du debut de sa courbe chaque fois qu'elle est (re)activee ; `auto_master` = 0 fige
+    toutes les valeurs la ou elles sont (sans toucher aux interrupteurs individuels)."""
+
+    def __init__(self):
+        self._start: dict[str, float] = {}
+
+    def step(self, params: dict, now: float) -> None:
+        data = params.get("_automation")
+        if not isinstance(data, dict):
+            return
+        if float(params.get("auto_master", 1.0)) < 0.5:
+            self._start.clear()            # a la reprise, chaque courbe repart de son debut
+            return
+        for key, entry in data.items():
+            spec = AUTOMATION_SPECS.get(key)
+            if spec is None or not entry.get("enabled"):
+                self._start.pop(key, None)
+                continue
+            points = entry["points"]
+            n = len(points)
+            start = self._start.setdefault(key, now)
+            pos = ((now - start) / max(0.5, float(entry["period"])) % 1.0) * n
+            i0 = int(pos) % n
+            frac = pos - int(pos)
+            v = points[i0] + (points[(i0 + 1) % n] - points[i0]) * frac
+            set_param(params, key, spec[1] + (spec[2] - spec[1]) * v)
+
 
 # --- Analyse audio -----------------------------------------------------------------
 
@@ -395,6 +583,7 @@ class AudioAnalyzer:
         with self.lock:
             state = dict(self.levels)
             t_beat = self.t_beat
+            state["beats"] = self.beats
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since
         state["beat"] = math.exp(-since / BEAT_DECAY_TAU_S) if t_beat is not None else 0.0
@@ -560,7 +749,87 @@ class ShaderError(Exception):
 
 def load_logo(path: Path):
     """PNG -> tableau uint8 RGBA premultiplie (premiere ligne = haut), <= 2048 px."""
-    img = PIL_Image.open(path).convert("RGBA")
+    return _premultiplied(PIL_Image.open(path).convert("RGBA"))
+
+
+# Polices proposees dans la GUI (nom affiche -> fichier Windows). Seules celles presentes sur le
+# poste sont listees; un chemin vers un .ttf/.otf quelconque est aussi accepte.
+TEXT_FONTS = {
+    "Bahnschrift": "bahnschrift.ttf", "Arial Black": "ariblk.ttf", "Impact": "impact.ttf",
+    "Segoe UI Black": "seguibl.ttf", "Segoe UI Bold": "segoeuib.ttf", "Arial Bold": "arialbd.ttf",
+    "Verdana Bold": "verdanab.ttf", "Trebuchet MS Bold": "trebucbd.ttf", "Tahoma Bold": "tahomabd.ttf",
+    "Georgia Bold": "georgiab.ttf", "Times New Roman Bold": "timesbd.ttf", "Comic Sans MS Bold": "comicbd.ttf",
+    "Consolas Bold": "consolab.ttf", "Courier New Bold": "courbd.ttf",
+}
+AUTO_FONT_ORDER = ("Bahnschrift", "Arial Black", "Impact", "Segoe UI Black", "Arial Bold")
+
+
+def font_dirs() -> list[Path]:
+    dirs = [Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        dirs.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
+    return dirs
+
+
+def available_fonts() -> dict[str, Path]:
+    """Polices de TEXT_FONTS effectivement installees: nom -> chemin."""
+    found = {}
+    for name, filename in TEXT_FONTS.items():
+        for directory in font_dirs():
+            if (directory / filename).is_file():
+                found[name] = directory / filename
+                break
+    return found
+
+
+def load_font(font: str, size: int):
+    """Police PIL pour un nom de TEXT_FONTS, un chemin de fichier, ou "auto"; repli sur la police
+    integree de Pillow si rien n'est trouve (jamais d'exception: un texte doit toujours s'afficher)."""
+    installed = available_fonts()
+    candidates: list[Path] = []
+    if font and font != "auto":
+        if font in installed:
+            candidates.append(installed[font])
+        elif Path(font).is_file():
+            candidates.append(Path(font))
+    if not candidates:
+        candidates += [installed[name] for name in AUTO_FONT_ORDER if name in installed]
+    for path in candidates:
+        try:
+            return PIL_ImageFont.truetype(str(path), size)
+        except OSError:
+            continue
+    try:
+        return PIL_ImageFont.load_default(size)
+    except TypeError:          # Pillow < 10.1: pas de taille pour la police integree
+        return PIL_ImageFont.load_default()
+
+
+def render_text(text: str, font: str = "auto", color: str = "#ffffff", align: str = "center",
+                size: int = 256):
+    """Texte (plusieurs lignes possibles) -> tableau uint8 RGBA premultiplie, comme load_logo().
+    None si le texte est vide. Une marge transparente de 0,18 x la taille entoure le texte, pour
+    que le contour lumineux ne soit pas coupe par le bord du rectangle."""
+    if not text or not text.strip():
+        return None
+    fnt = load_font(font, size)
+    spacing = int(size * 0.15)
+    align = align if align in ("left", "center", "right") else "center"
+    draw = PIL_ImageDraw.Draw(PIL_Image.new("L", (8, 8)))
+    box = draw.multiline_textbbox((0, 0), text, font=fnt, align=align, spacing=spacing)
+    # Pillow renvoie des flottants pour un texte sur plusieurs lignes (et des entiers pour une ligne).
+    left, top, right, bottom = math.floor(box[0]), math.floor(box[1]), math.ceil(box[2]), math.ceil(box[3])
+    pad = int(size * 0.18)
+    img = PIL_Image.new("RGBA", (max(right - left, 1) + 2 * pad, max(bottom - top, 1) + 2 * pad), (0, 0, 0, 0))
+    r, g, b = (int(round(c * 255)) for c in hex_to_rgb(color, "#ffffff"))
+    PIL_ImageDraw.Draw(img).multiline_text((pad - left, pad - top), text, font=fnt, fill=(r, g, b, 255),
+                                           align=align, spacing=spacing)
+    return _premultiplied(img)
+
+
+def _premultiplied(img):
+    """Image PIL RGBA -> uint8 RGBA a alpha premultiplie, reduite a 2048 px maximum."""
     if max(img.size) > 2048:
         ratio = 2048 / max(img.size)
         img = img.resize((max(1, round(img.width * ratio)), max(1, round(img.height * ratio))),
@@ -571,14 +840,22 @@ def load_logo(path: Path):
 
 
 def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple[float, float],
-                pulse: float = 0.0, jitter: tuple[float, float] = (0.0, 0.0)):
-    """(cx, cy, demi-largeur, demi-hauteur) en uv (origine haut gauche). Le logo tient dans
-    un carre de cote scale*hauteur, ratio conserve ; pulse (0.12 = +12 %) et jitter
-    ne le font jamais sortir du cadre."""
-    box = max(min(scale * height, 0.95 * min(width, height)), 2.0)
-    w_px, h_px = (box, box / aspect) if aspect >= 1.0 else (box * aspect, box)
-    if w_px > 0.95 * width:
-        w_px, h_px = 0.95 * width, 0.95 * width / aspect
+                pulse: float = 0.0, jitter: tuple[float, float] = (0.0, 0.0), fit: str = "box"):
+    """(cx, cy, demi-largeur, demi-hauteur) en uv (origine haut gauche). pulse (0.12 = +12 %) et
+    jitter ne le font jamais sortir du cadre.
+    fit="box" (images): le logo tient dans un carre de cote scale*hauteur, ratio conserve.
+    fit="height" (texte): le bloc a pour hauteur scale*hauteur, sa largeur suit le ratio (un
+    carre de cote scale*hauteur ecraserait une ligne de texte); reduit s'il depasse le cadre."""
+    if fit == "height":
+        h_px = max(min(scale * height, 0.95 * height), 2.0)
+        w_px = h_px * aspect
+        if w_px > 0.95 * width:
+            w_px, h_px = 0.95 * width, 0.95 * width / aspect
+    else:
+        box = max(min(scale * height, 0.95 * min(width, height)), 2.0)
+        w_px, h_px = (box, box / aspect) if aspect >= 1.0 else (box * aspect, box)
+        if w_px > 0.95 * width:
+            w_px, h_px = 0.95 * width, 0.95 * width / aspect
     hw0, hh0 = w_px / width / 2.0, h_px / height / 2.0
     cx = min(max(pos[0] + jitter[0], hw0), 1.0 - hw0)
     cy = min(max(pos[1] + jitter[1], hh0), 1.0 - hh0)
@@ -600,6 +877,11 @@ class Renderer:
         self.video_size = video_size
         self.hud = False
         self.rng = np.random.default_rng(3)
+        # Phases d'animation du motif de fond, integrees image par image (un changement de
+        # vitesse ne fait ainsi jamais sauter le motif, contrairement a speed * temps).
+        self._last_t: float | None = None
+        self._bg_scroll = 0.0
+        self._bg_flip_t = 0.0
 
         self.video_tex = ctx.texture(video_size, 3, data=bytes(video_size[0] * video_size[1] * 3))
         self.video_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -608,18 +890,23 @@ class Renderer:
         self.logo_tex = None
         self.logo_aspect = 1.0
         self.has_logo = False
+        self.logo_kind = "image"
         self.logo_path = ""
+        self.logo_video: LogoVideo | None = None
         # Dernier chemin DEMANDE (charge ou non): evite de retenter un fichier invalide a chaque image.
         self.logo_requested = logo_path
         self.set_logo(logo_rgba, logo_path)
 
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
-        self.scene_tex = self.scene_fbo = None
+        self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = None
         self.reload_shaders()
 
-    def set_logo(self, logo_rgba, path: str = "") -> None:
-        """Remplace la texture du logo (None = aucun). A appeler depuis le fil GL."""
+    def set_logo(self, logo_rgba, path: str = "", kind: str = "image") -> None:
+        """Remplace la texture du logo (None = aucun). `kind` = "image" ou "text" (mise en page
+        differente, voir logo_layout). A appeler depuis le fil GL."""
+        self.release_logo_video()
+        self.logo_kind = kind
         old = self.logo_tex
         if logo_rgba is not None:
             h, w = logo_rgba.shape[:2]
@@ -637,6 +924,28 @@ class Renderer:
         self.logo_path = path if logo_rgba is not None else ""
         if old is not None:
             old.release()
+
+    def set_logo_video(self, video: LogoVideo, path: str = "") -> None:
+        """Logo anime: la texture (rgba, alpha droit) est reecrite par `video.reader` a chaque
+        nouvelle image (voir draw). Le Renderer possede `video` et l'arrete quand il est remplace."""
+        self.set_logo(None, "")                 # libere l'ancien logo / l'ancienne video
+        old = self.logo_tex
+        w, h = video.size
+        tex = self.ctx.texture((w, h), 4, data=bytes(w * h * 4))
+        tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        tex.repeat_x = tex.repeat_y = False
+        self.logo_tex = tex
+        self.logo_aspect = w / h
+        self.logo_kind = "video"
+        self.logo_video = video
+        self.has_logo = True
+        self.logo_path = path
+        old.release()
+
+    def release_logo_video(self) -> None:
+        if self.logo_video is not None:
+            self.logo_video.stop()
+            self.logo_video = None
 
     def _read(self, name: str) -> str:
         return (self.shader_dir / name).read_text(encoding="utf-8")
@@ -657,10 +966,17 @@ class Renderer:
     def _ensure_scene(self, size: tuple[int, int]) -> None:
         if self.scene_tex is not None and self.scene_tex.size == size:
             return
+        for old in (self.scene_tex, self.layer_tex):
+            if old is not None:
+                old.release()
+        # scene_* = couche FOND (opaque), layer_* = couche LOGO (rgba premultiplie, transparente)
         self.scene_tex = self.ctx.texture(size, 4)
-        self.scene_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-        self.scene_tex.repeat_x = self.scene_tex.repeat_y = False
+        self.layer_tex = self.ctx.texture(size, 4)
+        for tex in (self.scene_tex, self.layer_tex):
+            tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            tex.repeat_x = tex.repeat_y = False
         self.scene_fbo = self.ctx.framebuffer(color_attachments=[self.scene_tex])
+        self.layer_fbo = self.ctx.framebuffer(color_attachments=[self.layer_tex])
 
     @staticmethod
     def _set(prog, name: str, value) -> None:
@@ -683,39 +999,83 @@ class Renderer:
         pulse = p["logo_pulse"] * beat * logo_fx
         jit = p["logo_jitter"] * high * logo_fx
         jitter = (float(self.rng.uniform(-1, 1)) * jit, float(self.rng.uniform(-1, 1)) * jit)
-        rect = logo_layout(width, height, self.logo_aspect, p["logo_scale"], (p["logo_x"], p["logo_y"]),
-                           pulse, jitter)
+        is_text = self.logo_kind == "text"
+        rect = logo_layout(width, height, self.logo_aspect, p["text_scale"] if is_text else p["logo_scale"],
+                           (p["logo_x"], p["logo_y"]), pulse, jitter, "height" if is_text else "box")
         sp = self.scene_prog
         self._set(sp, "u_video", 0)
         self._set(sp, "u_logo", 1)
         self._set(sp, "u_res", (float(width), float(height)))
         self._set(sp, "u_logo_rect", rect)
         self._set(sp, "u_logo_on", 1.0 if self.has_logo else 0.0)
+        self._set(sp, "u_logo_straight", 1.0 if self.logo_video is not None else 0.0)
+        if self.logo_video is not None:
+            self.logo_video.reader.upload_to(self.logo_tex)
         self._set(sp, "u_logo_opacity", min(max(float(p["logo_opacity"]), 0.0), 1.0))
         self._set(sp, "u_bass", float(bass))
         self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0))
         self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
         self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
+        self._set(sp, "u_beat", float(beat))
+
+        # Fond: video ffmpeg ou motif genere. Les phases avancent meme quand le motif est cache,
+        # pour qu'un retour au motif ne reparte pas d'un etat fige.
+        dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
+        self._last_t = t
+        react = max(float(p["bg_react"]), 0.0)
+        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bass) * 1.5)
+        self._bg_flip_t += dt * float(p["bg_flip"])
+        flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 else 0.0)
+        self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
+        self._set(sp, "u_bg_palette", 1.0 if p["bg_palette"] == "duo" else 0.0)
+        self._set(sp, "u_bg_c1", hex_to_rgb(p["bg_color1"], DEFAULT_PARAMS["bg_color1"]))
+        self._set(sp, "u_bg_c2", hex_to_rgb(p["bg_color2"], DEFAULT_PARAMS["bg_color2"]))
+        self._set(sp, "u_bg_phase", (self._bg_scroll, flips))
+        self._set(sp, "u_bg_tile", float(p["bg_tile"]))
+        self._set(sp, "u_bg_checker", float(p["bg_checker"]))
+        self._set(sp, "u_bg_react", react)
+        self._set(sp, "u_bg_hue", float(p["bg_hue"]))
+        self._set(sp, "u_bg_angle", float(p["bg_angle"]))
         self.video_tex.use(0)
         self.logo_tex.use(1)
+        # Passe 1a: couche fond. 1b: couche logo seule (videe si pas de logo: le post-traitement
+        # ne la lit alors pas, mais elle reste coherente).
+        self._set(sp, "u_pass", 0.0)
         self.scene_fbo.viewport = (0, 0, width, height)
         self.scene_fbo.use()
         self.scene_vao.render(moderngl.TRIANGLE_STRIP)
+        self.layer_fbo.viewport = (0, 0, width, height)
+        self.layer_fbo.use()
+        if self.has_logo:
+            self._set(sp, "u_pass", 1.0)
+            self.scene_vao.render(moderngl.TRIANGLE_STRIP)
+        else:
+            self.layer_fbo.clear(0.0, 0.0, 0.0, 0.0)
 
-        # Passe 2 : post-traitement de l'image entiere vers la cible.
+        # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.
+        fx_bg, fx_logo = layer_effects(p)
+        linked = float(p["fx_link"]) >= 0.5
+        # Decorreles, les ondes du logo partent de son centre (origine GL = bas gauche) et son glitch
+        # tire d'autres bandes; lies, tout est identique au fond (comme un seul post-traitement).
+        center = (0.5, 0.5) if linked else (rect[0], 1.0 - rect[1])
         pp = self.post_prog
         self._set(pp, "u_scene", 0)
+        self._set(pp, "u_logo", 1)
+        self._set(pp, "u_logo_on", 1.0 if self.has_logo else 0.0)
+        self._set(pp, "u_fx_bg", tuple(fx_bg))
+        self._set(pp, "u_fx_logo", tuple(fx_logo))
+        self._set(pp, "u_center_logo", (float(center[0]), float(center[1])))
+        self._set(pp, "u_salt_logo", 0.0 if linked else 13.0)
         self._set(pp, "u_res", (float(width), float(height)))
         self._set(pp, "u_time", float(t))
         for name in ("bass", "mid", "high", "rms"):
             self._set(pp, f"u_{name}", float(state[name]))
         self._set(pp, "u_beat", float(beat))
         self._set(pp, "u_since_beat", float(state["since_beat"]))
-        for i, name in enumerate(FX_NAMES[:4]):
-            self._set(pp, f"u_fx_{name}", eff[i])
         self._set(pp, "u_hud", 1.0 if self.hud else 0.0)
         self._set(pp, "u_fx_state", tuple(float(v) for v in fx_on))
         self.scene_tex.use(0)
+        self.layer_tex.use(1)
         target.viewport = (0, 0, width, height)
         target.use()
         self.post_vao.render(moderngl.TRIANGLE_STRIP)
@@ -737,6 +1097,8 @@ def load_params() -> dict:
                     params[key] = value
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 params[key] = float(value)
+        if isinstance(saved.get("_automation"), dict):
+            params["_automation"] = merge_automation(saved["_automation"])
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as exc:
@@ -773,8 +1135,12 @@ def load_live(a2w_dir: Path):
     return audio2wave_live
 
 
-def build_live_args(live, device: str | None, size: tuple[int, int], fps: int, extra: str | None):
+def build_live_args(live, device: str | None, size: tuple[int, int], fps: int, extra: str | None,
+                    fullscreen: bool = True):
     argv = ["audio2wave_live.py", "--size", f"{size[0]}x{size[1]}", "--fps", str(fps)]
+    if not fullscreen:
+        # Sans effet sur ffmpeg, mais la case "Plein ecran" de la GUI d'audio2wave la reflete.
+        argv.append("--no-fullscreen")
     if device:
         argv += ["-d", device]
     argv += shlex.split(extra or "")
@@ -794,31 +1160,150 @@ PIPE_BUFFER = 1 << 24   # 16 Mo: plusieurs frames 1080p
 PRODUCER_WARMUP_CAP_S = 2.0
 
 
+@functools.lru_cache(maxsize=1)
+def ffmpeg_color_names() -> frozenset[str]:
+    """Noms de couleur connus d'ffmpeg (`ffmpeg -colors`, en minuscules). Vide si la liste est illisible
+    (on n'invalide alors rien)."""
+    try:
+        out = subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-colors"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    names = [line.split()[0].lower() for line in out.splitlines()[1:] if line.split()]
+    return frozenset(names) | {"random"}
+
+
+def is_ffmpeg_color(text: str) -> bool:
+    """Couleur acceptee par ffmpeg : nom connu, 0xRRGGBB ou #RRGGBB (+ alpha 'AA' ou '@0.5' eventuel)."""
+    base = text.strip().split("@")[0].lower()
+    if not base:
+        return False
+    body = base[2:] if base.startswith("0x") else base[1:] if base.startswith("#") else None
+    if body is not None:
+        return len(body) in (6, 8) and all(c in HEX_DIGITS for c in body)
+    names = ffmpeg_color_names()
+    return not names or base in names
+
+
+def invalid_colors(new_args, current_args) -> list[str]:
+    """Couleurs des nouvelles options (trace, separees par |, et fond) qu'ffmpeg ne connait pas. Une
+    valeur deja en service est toleree (le defaut 'grey' d'audio2wave_live n'existe pas pour ffmpeg mais
+    n'arrete pas le producteur). Sert a NE PAS relancer ffmpeg sur un nom a moitie tape ('t' pour 'teal')."""
+    bad = []
+    current = {str(getattr(current_args, "colors", "")), str(getattr(current_args, "bg_color", ""))}
+    current |= set(str(getattr(current_args, "colors", "")).split("|"))
+    candidates = [c for c in str(getattr(new_args, "colors", "")).split("|")] + [str(getattr(new_args, "bg_color", ""))]
+    for color in candidates:
+        color = color.strip()
+        if color and color not in current and not is_ffmpeg_color(color):
+            bad.append(color)
+    return bad
+
+
+def spawn_big_pipe(cmd: list[str], **popen_kw) -> subprocess.Popen | None:
+    """Popen(cmd) dont stdout est un pipe Windows a GROS tampon (16 Mo). Sous Windows un pipe
+    anonyme fait 4 Ko : le lecteur devait alors reprendre le GIL ~700 fois par frame 720p, et
+    des que la boucle de rendu tournait vite il ne suivait plus (mesure: 30 -> 7 frames/s).
+    Avec 16 Mo, une frame se lit en un ou deux appels. None hors Windows ou en cas d'echec."""
+    if os.name != "nt":
+        return None
+    try:
+        import msvcrt
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        read_h, write_h = wintypes.HANDLE(), wintypes.HANDLE()
+        if not kernel32.CreatePipe(ctypes.byref(read_h), ctypes.byref(write_h), None, PIPE_BUFFER):
+            raise OSError(ctypes.get_last_error(), "CreatePipe")
+        write_fd = msvcrt.open_osfhandle(write_h.value, 0)
+        read_fd = msvcrt.open_osfhandle(read_h.value, os.O_RDONLY)
+        try:
+            proc = subprocess.Popen(cmd, stdout=write_fd, **popen_kw)
+        finally:
+            os.close(write_fd)          # le parent ne garde pas l'extremite d'ecriture
+        proc.stdout = open(read_fd, "rb", buffering=0)
+        return proc
+    except Exception as exc:
+        print(f"Pipe a gros tampon indisponible ({exc}), repli sur le pipe standard.", file=sys.stderr)
+        return None
+
+
 def spawn_producer(live, live_args) -> subprocess.Popen:
     """Lance le producteur ffmpeg de audio2wave_live (meme commande), stdout relie a un
-    pipe a GROS tampon. Sous Windows un pipe anonyme fait 4 Ko : le lecteur devait alors
-    reprendre le GIL ~700 fois par frame 720p, et des que la boucle de rendu tournait vite
-    il ne suivait plus (mesure: 30 -> 7 frames/s). Avec 16 Mo, une frame se lit en un
-    ou deux appels. Repli sur live.spawn_producer() hors Windows ou en cas d'echec."""
-    if os.name == "nt":
+    pipe a gros tampon (voir spawn_big_pipe). Repli sur live.spawn_producer()."""
+    return spawn_big_pipe(live.producer_command(live_args)) or live.spawn_producer(live_args)
+
+
+# --- Logo anime (video) -----------------------------------------------------------------
+
+LOGO_VIDEO_MAX_SIDE = 960       # cote max decode (un logo n'a pas besoin de plus)
+LOGO_KEY_SIMILARITY = 0.3
+LOGO_KEY_BLEND = 0.1
+HEX_DIGITS = "0123456789abcdefABCDEF"
+LOGO_VIDEO_EXTENSIONS = "*.webm *.mov *.mp4 *.mkv *.gif *.apng *.webp *.avi"
+
+
+def probe_video(path: str) -> tuple[int, int, str]:
+    """(largeur, hauteur, codec) du premier flux video, via ffprobe. Leve RuntimeError sinon."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffprobe introuvable (installe ffmpeg complet)")
+    out = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "stream=width,height,codec_name", "-of", "json", path],
+                         capture_output=True, text=True, timeout=15)
+    try:
+        st = json.loads(out.stdout)["streams"][0]
+        return int(st["width"]), int(st["height"]), st.get("codec_name", "")
+    except (KeyError, IndexError, ValueError):
+        raise RuntimeError(f"pas de flux video lisible ({out.stderr.strip()[:120] or 'fichier invalide'})")
+
+
+def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = "") -> list[str]:
+    """Commande ffmpeg: decode `path` en boucle, a sa cadence native (-re), en rawvideo rgba
+    (alpha DROIT, non premultiplie: le shader le premultiplie). `key` (#rrggbb) detoure cette
+    couleur pour un fichier sans canal alpha (fond vert...)."""
+    cmd = [shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1"]
+    # Le decodeur vp9/vp8 natif d'ffmpeg ignore l'alpha des .webm: il faut celui de libvpx.
+    if codec == "vp9":
+        cmd += ["-c:v", "libvpx-vp9"]
+    elif codec == "vp8":
+        cmd += ["-c:v", "libvpx"]
+    filters = [f"scale={size[0]}:{size[1]}:flags=bilinear", "format=rgba"]
+    if key:
+        filters.append(f"colorkey=0x{key.lstrip('#')}:{LOGO_KEY_SIMILARITY}:{LOGO_KEY_BLEND}")
+    return cmd + ["-i", path, "-an", "-vf", ",".join(filters), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]
+
+
+class LogoVideo:
+    """Logo anime: un ffmpeg qui boucle sur le fichier + un FrameReader (latest wins). La texture
+    est mise a jour depuis le fil GL par `upload_to` ; la cadence est celle du fichier."""
+
+    def __init__(self, path: str, key: str = ""):
+        w, h, codec = probe_video(path)
+        ratio = min(1.0, LOGO_VIDEO_MAX_SIDE / max(w, h))
+        self.size = (max(2, round(w * ratio)), max(2, round(h * ratio)))
+        cmd = logo_video_command(path, self.size, codec, key)
+        self.proc = spawn_big_pipe(cmd, stderr=subprocess.PIPE) or subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.reader = FrameReader(self.proc.stdout, self.size[0] * self.size[1] * 4)
+        self.reader.start()
+
+    def error(self) -> str:
+        """Message d'ffmpeg si le processus est mort sans avoir produit une seule image."""
+        if self.proc.poll() is None or self.reader.frames_read:
+            return ""
         try:
-            import msvcrt
-            from ctypes import wintypes
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            read_h, write_h = wintypes.HANDLE(), wintypes.HANDLE()
-            if not kernel32.CreatePipe(ctypes.byref(read_h), ctypes.byref(write_h), None, PIPE_BUFFER):
-                raise OSError(ctypes.get_last_error(), "CreatePipe")
-            write_fd = msvcrt.open_osfhandle(write_h.value, 0)
-            read_fd = msvcrt.open_osfhandle(read_h.value, os.O_RDONLY)
+            return self.proc.stderr.read().decode(errors="replace").strip().splitlines()[-1][:160]
+        except Exception:
+            return "ffmpeg s'est arrete"
+
+    def stop(self) -> None:
+        self.reader.stop()
+        stop_process(self.proc)
+        for stream in (self.proc.stdout, self.proc.stderr):
             try:
-                proc = subprocess.Popen(live.producer_command(live_args), stdout=write_fd)
-            finally:
-                os.close(write_fd)          # le parent ne garde pas l'extremite d'ecriture
-            proc.stdout = open(read_fd, "rb", buffering=0)
-            return proc
-        except Exception as exc:
-            print(f"Pipe a gros tampon indisponible ({exc}), repli sur le pipe standard.", file=sys.stderr)
-    return live.spawn_producer(live_args)
+                stream.close()
+            except Exception:
+                pass
 
 
 def stop_process(proc: subprocess.Popen | None) -> None:
@@ -847,7 +1332,9 @@ class ProducerManager:
 
     def __init__(self, live, live_args, frame_size: int, status: dict, spawn=None):
         self.live = live
-        self.args = live_args
+        # COPIE: la GUI d'audio2wave mute ses options en place; si on gardait le meme objet, le gestionnaire
+        # verrait toujours des options "deja appliquees" et ne redemarrerait plus jamais ffmpeg.
+        self.args = copy.copy(live_args)
         self.frame_size = frame_size
         self.status = status
         self._spawn = spawn or (lambda a: spawn_producer(live, a))
@@ -959,9 +1446,36 @@ def pick_monitor(index: int | None):
     return monitors[0]
 
 
+def has_secondary_monitor() -> bool:
+    """Vrai s'il y a plus d'un moniteur (Windows, EnumDisplayMonitors). Sert a decider du plein
+    ecran par defaut AVANT d'ouvrir la moindre fenetre (la GUI doit connaitre l'etat au depart)."""
+    if os.name != "nt":
+        return False
+    try:
+        return ctypes.windll.user32.GetSystemMetrics(80) > 1     # SM_CMONITORS
+    except Exception:
+        return False
+
+
+def resolve_fullscreen(requested: bool | None, monitor_index: int | None, has_secondary: bool) -> bool:
+    """Plein ecran par defaut UNIQUEMENT s'il y a un second moniteur (le videoprojecteur) ou si
+    --monitor en designe un explicitement. Avec un seul ecran, un plein ecran borderless
+    recouvrirait le poste de travail et la GUI: il faut le demander (--fullscreen)."""
+    if requested is not None:
+        return requested
+    return monitor_index is not None or has_secondary
+
+
+def hide_cursor(fullscreen: bool, on_primary: bool) -> bool:
+    """Le curseur n'est masque qu'en plein ecran sur un moniteur NON principal (projecteur).
+    Sur le moniteur principal, le masquer ferait perdre la souris a l'utilisateur."""
+    return fullscreen and not on_primary
+
+
 class Window:
     def __init__(self, monitor, windowed_size: tuple[int, int], fullscreen: bool):
         self.monitor = monitor
+        self.is_primary = _addr(monitor) == _addr(glfw.get_primary_monitor())
         self.mx, self.my = glfw.get_monitor_pos(monitor)
         mode = glfw.get_video_mode(monitor)
         self.mw, self.mh = mode.size.width, mode.size.height
@@ -988,7 +1502,8 @@ class Window:
             glfw.set_window_attrib(self.handle, glfw.DECORATED, False)
             glfw.set_window_pos(self.handle, self.mx, self.my)
             glfw.set_window_size(self.handle, self.mw, self.mh)
-            glfw.set_input_mode(self.handle, glfw.CURSOR, glfw.CURSOR_HIDDEN)
+            hidden = hide_cursor(True, self.is_primary)
+            glfw.set_input_mode(self.handle, glfw.CURSOR, glfw.CURSOR_HIDDEN if hidden else glfw.CURSOR_NORMAL)
         else:
             w, h = self.windowed_size
             glfw.set_window_attrib(self.handle, glfw.DECORATED, True)
@@ -1016,9 +1531,20 @@ def parse_args() -> argparse.Namespace:
                    "(voir --list-audio-devices). Defaut: meme nom que --device si trouve, sinon defaut systeme")
     p.add_argument("--gui", action="store_true",
                    help="Ouvre la fenetre de reglages (tkinter): visuel live, logo et effets en direct")
+    p.add_argument("--background", choices=["live", "pattern"], default=None,
+                   help="Fond: live = spectre ffmpeg, pattern = motif genere (defaut: reglage sauve, sinon live)")
+    p.add_argument("--text", default=None,
+                   help='Incruste ce texte a la place du logo PNG (ex. --text "CASUAL RAVERS"; "\\n" = retour '
+                        "a la ligne). Police, couleur, alignement et taille se reglent dans la GUI")
     p.add_argument("--logo", default=None,
                    help="PNG RGBA a incruster, ou 'none' (defaut: reglage sauve, sinon "
                         "asset/Casual Ravers - Kit_Sigle - Blanc.png)")
+    p.add_argument("--logo-video", default=None,
+                   help="Logo anime: video ou GIF en boucle (WebM VP9 / MOV ProRes 4444 / GIF / APNG avec alpha "
+                        "pour un logo detoure). Remplace le PNG et le texte")
+    p.add_argument("--logo-key", default=None,
+                   help="Couleur #rrggbb a detourer dans --logo-video si le fichier n'a pas d'alpha "
+                        "(ex. #00ff00 pour un fond vert), 'none' pour ne rien detourer")
     p.add_argument("--logo-scale", type=float, default=None,
                    help="Cote du carre englobant le logo, en fraction de la hauteur (defaut: 0.35)")
     p.add_argument("--logo-pos", default=None,
@@ -1028,14 +1554,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--render-size", default="1280x720",
                    help="Resolution de rendu ffmpeg, independante de la fenetre (defaut: 1280x720)")
     p.add_argument("--fps", type=int, default=30, help="Images par seconde du producteur ffmpeg (defaut: 30)")
-    p.add_argument("--fullscreen", action=argparse.BooleanOptionalAction, default=True,
-                   help="Fenetre borderless sur le moniteur cible (defaut: active, --no-fullscreen pour une fenetre)")
+    p.add_argument("--fullscreen", action=argparse.BooleanOptionalAction, default=None,
+                   help="Fenetre borderless plein ecran sur le moniteur cible. Defaut: active seulement s'il "
+                        "y a un SECOND moniteur (le projecteur); avec un seul ecran, fenetre normale "
+                        "(--fullscreen pour forcer, --no-fullscreen pour l'interdire)")
     p.add_argument("--monitor", type=int, default=None,
                    help="Index glfw du moniteur cible (defaut: premier moniteur non principal)")
     p.add_argument("--sensitivity", type=float, default=None,
                    help="Sensibilite du kick (defaut: valeur sauvee, sinon 1.0; plus haut = plus sensible)")
     p.add_argument("--fps-cap", type=float, default=None,
                    help="Cadence maximale du rendu (defaut: frequence du moniteur cible +2 %%, 0 = sans limite)")
+    p.add_argument("--automation", action=argparse.BooleanOptionalAction, default=None,
+                   help="Automations de reglages (courbes qui font varier teinte, carreaux, effets...: voir "
+                        "AUTOMATION_SPECS, editables dans la GUI). Defaut: reglage sauve, sinon actives. "
+                        "--no-automation fige tout (touche T)")
     p.add_argument("--hud", action="store_true", help="Affiche les barres de debug des le lancement (touche H)")
     p.add_argument("--synthetic", action="store_true",
                    help="Source video et audio synthetiques: ni ffmpeg ni micro requis")
@@ -1063,6 +1595,7 @@ def parse_pair(text: str, what: str, sep: str) -> tuple[float, float]:
 
 def main() -> None:
     args = parse_args()
+    args.fullscreen = resolve_fullscreen(args.fullscreen, args.monitor, has_secondary_monitor())
 
     if args.list_audio_devices:
         require_deps()
@@ -1086,17 +1619,18 @@ def main() -> None:
         return
 
     live_args = None
-    if not args.synthetic:
-        if not args.device and not args.gui:
+    if not args.synthetic or args.gui:       # la GUI d'audio2wave a besoin des options live, meme en synthetique
+        if not args.synthetic and not args.device and not args.gui:
             print("Indique une entree avec -d/--device (ou --list-devices, --gui, --synthetic).", file=sys.stderr)
             sys.exit(2)
-        live_args = build_live_args(live, args.device, (render_w, render_h), args.fps, args.live_args)
+        live_args = build_live_args(live, args.device, (render_w, render_h), args.fps, args.live_args,
+                                    args.fullscreen)
         if live.resolve_size(live_args) != (render_w, render_h):
             print(f"--live-args ne doit pas changer --size (rendu {render_w}x{render_h}).", file=sys.stderr)
             sys.exit(2)
 
     if args.dry_run:
-        if live_args is None:
+        if args.synthetic:
             print("Mode --synthetic: aucune commande ffmpeg, flux video/audio generes en Python.")
         elif not args.device:
             print("--dry-run demande une entree (-d).", file=sys.stderr)
@@ -1195,7 +1729,24 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
     params = load_params()
     if args.sensitivity is not None:
         params["sensitivity"] = args.sensitivity
+    params["_automation"] = merge_automation(params.get("_automation"))
+    if args.automation is not None:
+        params["auto_master"] = 1.0 if args.automation else 0.0
+    if args.background is not None:
+        params["bg_mode"] = args.background
+    if args.text is not None:
+        params["logo_source"] = "text"
+        params["text_content"] = args.text.replace("\\n", "\n")
+    if args.logo_video is not None:
+        if not Path(args.logo_video).is_file():
+            print(f"Video introuvable: {args.logo_video}", file=sys.stderr)
+            sys.exit(2)
+        params["logo_source"] = "video"
+        params["logo_video"] = str(Path(args.logo_video).resolve())
+    if args.logo_key is not None:
+        params["logo_key"] = "" if args.logo_key.lower() == "none" else args.logo_key
     if args.logo is not None:
+        params["logo_source"] = "image"
         if args.logo.lower() == "none":
             params["logo_path"] = ""
         elif not Path(args.logo).is_file():
@@ -1258,7 +1809,7 @@ class NoDeviceManager(ProducerManager):
     avec une entree choisie demarre le flux."""
 
     def __init__(self, live, live_args, frame_size: int):
-        self.live, self.args, self.frame_size, self.status = live, live_args, frame_size, {}
+        self.live, self.args, self.frame_size, self.status = live, copy.copy(live_args), frame_size, {}
         self._spawn = lambda a: spawn_producer(live, a)
         self.producer = None
         self.reader = FrameReader(_EmptyStream(), frame_size, hold_on_eof=True)
@@ -1276,12 +1827,63 @@ class _EmptyStream:
         return b""
 
 
+def logo_signature(params: dict) -> tuple:
+    """Ce qui determine la texture du logo: si ca change, il faut la regenerer. Les autres
+    reglages (position, taille, opacite, effets...) sont relus a chaque image, sans regeneration."""
+    if params.get("logo_source") == "text":
+        return ("text", params.get("text_content", ""), params.get("text_font", "auto"),
+                params.get("text_color", "#ffffff"), params.get("text_align", "center"))
+    if params.get("logo_source") == "video":
+        key = str(params.get("logo_key", "")).strip().lstrip("#").lower()
+        key = key if len(key) == 6 and all(c in HEX_DIGITS for c in key) else ""
+        return ("video", params.get("logo_video", ""), key)
+    return ("image", params.get("logo_path", ""))
+
+
 def apply_logo_request(s: Session, renderer: Renderer) -> None:
-    """Charge le logo demande par params["logo_path"] s'il a change (fil GL)."""
-    want = s.params.get("logo_path", "")
-    if want == renderer.logo_requested:
+    """(Re)genere la texture du logo si ce qui la determine a change (fil GL): image PNG, texte
+    tape a la main rendu par Pillow, ou video animee (ffmpeg en boucle)."""
+    if renderer.logo_video is not None:
+        err = renderer.logo_video.error()
+        if err:                                   # ffmpeg mort sans image (codec absent, fichier corrompu)
+            s.status["logo"] = f"Video illisible: {err}"
+            print(s.status["logo"], file=sys.stderr)
+            renderer.set_logo(None, "")
+    signature = logo_signature(s.params)
+    if signature == renderer.logo_requested:
         return
-    renderer.logo_requested = want
+    renderer.logo_requested = signature
+    if signature[0] == "video":
+        want = signature[1]
+        if not want:
+            renderer.set_logo(None, "")
+            s.status["logo"] = "Aucune video"
+            return
+        if not Path(want).is_file():
+            s.status["logo"] = f"Video introuvable: {want}"
+            print(s.status["logo"], file=sys.stderr)
+            return
+        try:
+            video = LogoVideo(want, signature[2])
+        except Exception as exc:
+            s.status["logo"] = f"Video illisible ({Path(want).name}): {exc}"
+            print(s.status["logo"], file=sys.stderr)
+            return
+        renderer.set_logo_video(video, want)
+        s.status["logo"] = f"Video: {Path(want).name}"
+        return
+    if signature[0] == "text":
+        try:
+            rgba = render_text(signature[1], signature[2], signature[3], signature[4])
+        except Exception as exc:
+            s.status["logo"] = f"Texte illisible: {exc}"
+            print(s.status["logo"], file=sys.stderr)
+            return
+        renderer.set_logo(rgba, "", "text")
+        first = signature[1].strip().splitlines()[0] if signature[1].strip() else ""
+        s.status["logo"] = f"Texte: {first[:24]}" if rgba is not None else "Texte vide"
+        return
+    want = signature[1]
     if not want or want.lower() == "none":
         renderer.set_logo(None, "")
         s.status["logo"] = "Aucun logo"
@@ -1292,7 +1894,7 @@ def apply_logo_request(s: Session, renderer: Renderer) -> None:
         print(s.status["logo"], file=sys.stderr)
         return
     try:
-        renderer.set_logo(load_logo(path), want)
+        renderer.set_logo(load_logo(path), want, "image")
         s.status["logo"] = f"Logo: {path.name}"
     except Exception as exc:
         s.status["logo"] = f"Logo illisible ({path.name}): {exc}"
@@ -1323,6 +1925,8 @@ def gl_main(s: Session) -> None:
         s.renderer, s.window = renderer, window
         loop(s, window, ctx, renderer)
     finally:
+        if s.renderer is not None:
+            s.renderer.release_logo_video()
         s.renderer = None
         if window is not None:
             glfw.destroy_window(window.handle)
@@ -1335,11 +1939,14 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     analyzer = s.audio.analyzer
     handle = window.handle
     quit_flag = {"v": False}
+    automation = AutomationEngine()
 
     def status_line() -> str:
         on = "".join(str(int(v)) for v in params["fx_on"])
         return (f"intensite {params['master']:.1f} | sensibilite kick {params['sensitivity']:.2f} | "
-                f"effets {on} ({'/'.join(FX_NAMES)})")
+                f"effets {on} ({'/'.join(FX_NAMES)})"
+                + ("" if params["fx_link"] >= 0.5 else
+                   f" | logo {''.join(str(int(v)) for v in params['fxl_on'])} (separes du fond)"))
 
     def act(name: str) -> None:
         """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""
@@ -1347,12 +1954,22 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             quit_flag["v"] = True
         elif name == "fullscreen":
             window.toggle_fullscreen()
+        elif name.startswith("fullscreen="):      # etat explicite (case "Plein ecran" de la GUI)
+            if window.fullscreen != (name.endswith("1")):
+                window.toggle_fullscreen()
         elif name == "hud":
             renderer.hud = not renderer.hud
+        elif name == "bg":
+            params["bg_mode"] = "live" if params["bg_mode"] == "pattern" else "pattern"
+            print(f"fond: {params['bg_mode']}")
+        elif name == "auto":
+            params["auto_master"] = 0.0 if params["auto_master"] >= 0.5 else 1.0
+            print(f"automations: {'actives' if params['auto_master'] >= 0.5 else 'figees'}")
         elif name == "reload":
             try:
                 renderer.reload_shaders()
-                keep = {"sensitivity", "logo_path"}      # ne pas ecraser ce que la GUI vient de regler
+                # ne pas ecraser ce que la GUI vient de regler (ni l'etat des automations qu'elle edite)
+                keep = {"sensitivity", "logo_path", "logo_video", "logo_key", "bg_mode", "logo_source", "_automation", "auto_master"}
                 params.update({k: v for k, v in load_params().items() if k not in keep})
                 print("Shaders et reglages recharges.")
                 s.status["msg"] = "Shaders recharges"
@@ -1363,6 +1980,15 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             save_params(params)
             print(f"Reglages sauves dans {PARAMS_PATH}")
             s.status["msg"] = f"Reglages sauves ({PARAMS_PATH.name})"
+        elif name == "link":
+            set_fx_link(params, float(params["fx_link"]) < 0.5)
+            print(f"effets fond/logo: {'lies' if params['fx_link'] >= 0.5 else 'separes'}")
+        elif name.startswith("fxl") and name[3:].isdigit():
+            if float(params["fx_link"]) >= 0.5:      # toucher a la couche du logo la delie (reglages copies)
+                set_fx_link(params, False)
+            i = int(name[3:])
+            params["fxl_on"][i] = 0 if params["fxl_on"][i] else 1
+            print(f"effet {FX_NAMES[i]} (logo): {'on' if params['fxl_on'][i] else 'off'}")
         elif name.startswith("fx") and name[2:].isdigit():
             i = int(name[2:])
             params["fx_on"][i] = 0 if params["fx_on"][i] else 1
@@ -1380,7 +2006,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             params["sensitivity"] = max(params["sensitivity"] / 1.15, 0.25)
             print(status_line())
 
-    key_actions = {glfw.KEY_ESCAPE: "quit", glfw.KEY_F: "fullscreen", glfw.KEY_H: "hud",
+    key_actions = {glfw.KEY_ESCAPE: "quit", glfw.KEY_F: "fullscreen", glfw.KEY_H: "hud", glfw.KEY_B: "bg", glfw.KEY_T: "auto",
                    glfw.KEY_R: "reload", glfw.KEY_P: "save",
                    glfw.KEY_EQUAL: "master+", glfw.KEY_KP_ADD: "master+", glfw.KEY_PAGE_UP: "master+",
                    glfw.KEY_MINUS: "master-", glfw.KEY_KP_SUBTRACT: "master-", glfw.KEY_PAGE_DOWN: "master-",
@@ -1391,14 +2017,18 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         key_actions[k] = f"fx{i}"
     repeatable = {"master+", "master-", "sens+", "sens-"}
 
+    key_actions[glfw.KEY_L] = "link"
+
     def on_key(win, key, scancode, action, mods):
         name = key_actions.get(key)
+        if name and mods & glfw.MOD_SHIFT and name in ("fx0", "fx1", "fx2", "fx3"):
+            name = "fxl" + name[2:]              # Maj + 1..4: meme effet sur la couche du logo
         if name and (action == glfw.PRESS or (action == glfw.REPEAT and name in repeatable)):
             act(name)
 
     glfw.set_key_callback(handle, on_key)
-    print("Echap quitte | F plein ecran | H barres debug | 1-5 effets | +/- intensite | "
-          "haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
+    print("Echap quitte | F plein ecran | H barres debug | B fond live/motif | T automations | 1-5 effets (Maj+1-4: "
+          "logo) | L lier fond/logo | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
     print(status_line())
 
     query = ctx.query(time=True) if args.stats else None
@@ -1437,6 +2067,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             break
 
         apply_logo_request(s, renderer)
+        automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
 
         u0 = time.perf_counter()

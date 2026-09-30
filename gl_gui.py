@@ -1,14 +1,22 @@
 """Fenetre de reglages tkinter de audio2wave_gl (--gui).
 
-Meme theme, memes conventions et memes helpers d'aspect qu'audio2wave_live.py --gui
-(style_gui, Tooltip, style_option_menu importes du depot audio2wave), en trois panneaux:
+La partie "Live" (le visuel de fond ffmpeg) N'EST PAS reecrite ici : c'est la fenetre de
+reglages d'audio2wave_live.py (`build_gui`, importee du depot audio2wave comme dependance),
+avec ses presets, ses automations de courbes, ses info-bulles et son theme. Ce module :
 
-  - LIVE   : le visuel de fond (style, couleurs, spectre, entree ffmpeg). Chaque changement
-             remplace le PRODUCTEUR ffmpeg a chaud, anti-rebond de 400 ms, sans jamais
-             toucher a la fenetre GL (voir ProducerManager dans audio2wave_gl.py);
-  - LOGO   : fichier, position, taille, opacite et reactions a l'audio (pulsation,
-             tremblement, contour lumineux): relus a chaque image, effet immediat;
-  - EFFETS : les 5 effets, intensite globale, sensibilite du kick, entree d'analyse.
+  1. l'appelle telle quelle sur la fenetre Tk, avec ses trois evenements habituels
+     (`restart_event`, `stop_event`, `finished_event`) ;
+  2. la nettoie de ce qui n'a pas de sens ici (boutons Snap/Ridge, taille de fenetre) ;
+  3. fait le pont entre son `restart_event` et `ProducerManager` : a chaque reglage, `build_gui`
+     a deja mute les options live et positionne l'evenement, on en prend une copie et on
+     remplace le producteur ffmpeg a chaud, sans toucher a la fenetre GL (aucun redemarrage
+     si la commande ffmpeg est inchangee) ;
+  4. ajoute a droite ses propres panneaux, dans la meme fenetre :
+        FOND (motif genere)  + EFFETS + ANALYSE AUDIO
+        LOGO                 + AFFICHAGE + mesures.
+
+Sous-ensembles sans aucune modification du depot audio2wave : tout passe par le contrat public
+de `build_gui(args, width, height, status, restart_event, stop_event, finished_event, root)`.
 
 tkinter garde le fil principal, la fenetre GL tourne dans un fil (comme run() dans les
 scripts d'audio2wave): toute action qui doit s'executer dans le fil GL passe par
@@ -18,78 +26,168 @@ scripts d'audio2wave): toute action qui doit s'executer dans le fil GL passe par
 from __future__ import annotations
 
 import copy
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, filedialog
 
 import audio2wave_gl as gl
 
-APPLY_DEBOUNCE_MS = 400    # meme valeur qu'audio2wave_live: chaque redemarrage rouvre le peripherique
 REFRESH_MS = 500
 METER_MS = 60
-PANELS = {"left": (0, 1), "mid": (3, 4), "right": (6, 7)}   # (colonne du label, colonne du controle)
-TOTAL_COLUMNS = 8
+BRIDGE_MS = 100
+AUTOMATION_SYNC_MS = 200
+HEX_DIGITS = "0123456789abcdefABCDEF"
+
+
+class Zone:
+    """Endroit ou poser des widgets en grille: un Frame avec son propre compteur de lignes."""
+
+    def __init__(self, parent, label_col: int = 0, ctrl_col: int = 1, first_row: int = 0):
+        self.parent, self.label_col, self.ctrl_col = parent, label_col, ctrl_col
+        self.row = first_row
+
+    def next_row(self) -> int:
+        self.row += 1
+        return self.row - 1
+
+
+def tidy_live_gui(root) -> None:
+    """Retire de la fenetre d'audio2wave ce qui n'a pas de sens dans casual-overlay:
+    les boutons de bascule Snap/Ridge (ces modes ne sont pas des sources ici) et la taille
+    de fenetre, qui devient la taille du rendu ffmpeg, fixe (la texture video est fixee au
+    lancement: le pont remet toujours cette taille)."""
+
+    def walk(widget) -> None:
+        for child in widget.winfo_children():
+            cls = child.winfo_class()
+            if cls == "Button" and child.cget("text") in ("Snap", "Ridge"):
+                child.destroy()
+                continue
+            if cls == "Entry" and int(child.cget("width")) == 6:
+                child.config(state="readonly")
+            if cls == "Label" and child.cget("text") == "Taille fenetre":
+                child.config(text="Taille du rendu")
+            if cls == "Label" and child.cget("text") == "Reglages Live":
+                child.config(text="Reglages casual-overlay GL")
+            walk(child)
+
+    walk(root)
+
+
+SHORTCUTS_HELP = (
+    "Raccourcis (fenetre de rendu active) :\n"
+    "Echap : quitter\n"
+    "F : fenetre / plein ecran\n"
+    "H : barres de debug\n"
+    "B : fond spectre / motif genere\n"
+    "T : automations actives / figees\n"
+    "1 a 5 : effets on/off (wobble, ripple,\n"
+    "    chroma, glitch, logo)\n"
+    "+ / - ou PageUp / PageDown : intensite\n"
+    "    globale des effets\n"
+    "Maj + 1 a 4 : meme effet sur la couche\n"
+    "    du logo (delie fond et logo)\n"
+    "L : lier / separer les effets du fond\n"
+    "    et du logo\n"
+    "Haut / Bas : sensibilite du kick\n"
+    "R : recharger shaders et reglages\n"
+    "P : sauver les reglages"
+)
 
 
 def run_gui(s, live, on_ready=None) -> None:
     """Construit la fenetre et bloque dans mainloop() jusqu'a la fin de la session.
 
-    `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite,
-    avec un dict {"root", "live_vars", "apply_live", "logo_var", ...} pour la piloter."""
+    `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite."""
     import audio2wave as a2w
 
     Tooltip = live.Tooltip
-    root = tk.Tk()
-    root.title("casual-overlay GL - reglages")
-    root.resizable(False, False)
-    a2w.style_gui(root)
-
     params = s.params
     manager = s.manager
-    ROW_PADX, ROW_PADY, SECTION_GAP = 11, 4, 7
-    rows = {"left": 1, "mid": 1, "right": 1}
+    render_w, render_h = s.render_size
 
-    def next_row(panel: str) -> int:
-        rows[panel] += 1
-        return rows[panel] - 1
+    root = tk.Tk()
 
-    def add_label(panel: str, text: str, r: int, tooltip: str | None = None) -> tk.Label:
-        label = tk.Label(root, text=text)
-        label.grid(row=r, column=PANELS[panel][0], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    # ---------------------------------------------------- 1. la GUI d'audio2wave, telle quelle
+    restart_event = threading.Event()
+    live_status = {"text": ""}
+    live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
+                   s.finished_event, root=root)
+    root.title("casual-overlay GL - reglages")
+    tidy_live_gui(root)
+    root.update_idletasks()
+    cols, nrows = root.grid_size()
+    ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
+
+    # ------------------------------------------------ 2. pont restart_event -> ProducerManager
+    last = {"fullscreen": bool(s.live_args.fullscreen)}
+
+    def push_live() -> None:
+        args = s.live_args
+        # La case "Plein ecran" de la GUI live commande la fenetre GL.
+        if bool(args.fullscreen) != last["fullscreen"]:
+            last["fullscreen"] = bool(args.fullscreen)
+            s.commands.put(f"fullscreen={int(last['fullscreen'])}")
+        if manager is None:
+            live_status["text"] = "Mode --synthetic: les reglages du fond ffmpeg sont ignores"
+            return
+        new = copy.copy(args)                       # build_gui a fini de muter `args`: copie coherente
+        new.size = f"{render_w}x{render_h}"         # resolution du rendu fixe
+        if not new.device:
+            live_status["text"] = "Choisis une entree audio"
+            return
+        bad = gl.invalid_colors(new, manager.args)
+        if bad:
+            # La GUI d'audio2wave applique chaque saisie apres 400 ms: "teal" tape lentement passe par "t".
+            # ffmpeg ne refuse pas un nom inconnu (il logue et affiche du blanc): on attend un nom valide.
+            live_status["text"] = f"Couleur inconnue: {', '.join(bad)} (en attente d'un nom valide)"
+            return
+        if live.producer_command(new) == live.producer_command(manager.args):
+            live_status["text"] = "Reglages a jour"   # rien ne change cote ffmpeg (ex. plein ecran)
+            return
+        manager.request_restart(new)
+
+    seen_live = {"text": None}
+
+    def poll_bridge() -> None:
+        if restart_event.is_set():
+            restart_event.clear()
+            push_live()
+        if manager is not None:
+            msg = manager.status.get("live")
+            if msg and msg != seen_live["text"]:
+                seen_live["text"] = msg
+                live_status["text"] = msg            # affiche dans la ligne de statut d'audio2wave
+        root.after(BRIDGE_MS, poll_bridge)
+
+    # ------------------------------------------------------ 3. nos panneaux, a droite
+    separator = tk.Frame(root, bg=a2w.GUI_PANEL_BG, width=1)
+    separator.grid(row=1, column=cols, rowspan=nrows - 1, sticky="ns", padx=ROW_PADX + 4)
+    col_a = tk.Frame(root)
+    col_a.grid(row=1, column=cols + 1, rowspan=nrows - 1, sticky="nw", padx=(0, 10))
+    col_b = tk.Frame(root)
+    col_b.grid(row=1, column=cols + 2, rowspan=nrows - 1, sticky="nw", padx=(0, 10))
+    zone_a = Zone(col_a)
+    zone_b = Zone(col_b)
+
+    def add_label(z: Zone, text: str, r: int, tooltip: str | None = None) -> tk.Label:
+        label = tk.Label(z.parent, text=text)
+        label.grid(row=r, column=z.label_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         if tooltip:
             Tooltip(label, tooltip)
         return label
 
-    def add_section_title(panel: str, title: str) -> None:
-        tk.Label(root, text=title.upper(), font=a2w.GUI_FONT_SMALL, fg=a2w.GUI_MUTED_FG).grid(
-            row=next_row(panel), column=PANELS[panel][0], columnspan=2, sticky="w",
-            padx=ROW_PADX, pady=(0, 2))
+    def add_section_title(z: Zone, title: str) -> None:
+        tk.Label(z.parent, text=title.upper(), font=a2w.GUI_FONT_SMALL, fg=a2w.GUI_MUTED_FG).grid(
+            row=z.next_row(), column=z.label_col, columnspan=3, sticky="w", padx=ROW_PADX, pady=(0, 2))
 
-    def add_separator(panel: str, title: str | None = None) -> None:
-        tk.Frame(root, bg=a2w.GUI_PANEL_BG, height=1).grid(
-            row=next_row(panel), column=PANELS[panel][0], columnspan=2, sticky="ew",
+    def add_separator(z: Zone, title: str | None = None) -> None:
+        tk.Frame(z.parent, bg=a2w.GUI_PANEL_BG, height=1).grid(
+            row=z.next_row(), column=z.label_col, columnspan=3, sticky="ew",
             padx=ROW_PADX, pady=(SECTION_GAP, SECTION_GAP if title is None else 4))
         if title:
-            add_section_title(panel, title)
-
-    tk.Label(root, text="Reglages casual-overlay GL", font=a2w.GUI_FONT_HEADING, fg=a2w.GUI_ACCENT).grid(
-        row=0, column=0, columnspan=TOTAL_COLUMNS, sticky="w", padx=ROW_PADX, pady=(10, SECTION_GAP))
-
-    # ---------------------------------------------------------------- fabriques de widgets
-    # Deux familles: les variables "live" (rejouent le producteur ffmpeg, anti-rebond) et les
-    # variables "param" (ecrites tout de suite dans session.params, relues a chaque image).
-    live_vars: dict[str, tuple[tk.Variable, object]] = {}
-    apply_after = {"id": None}
-
-    def schedule_apply(*_a) -> None:
-        if apply_after["id"] is not None:
-            root.after_cancel(apply_after["id"])
-
-        def run() -> None:
-            apply_after["id"] = None
-            apply_live()
-
-        apply_after["id"] = root.after(APPLY_DEBOUNCE_MS, run)
+            add_section_title(z, title)
 
     def bind_param(key: str, var: tk.Variable, conv=float) -> None:
         def on_write(*_a) -> None:
@@ -100,174 +198,226 @@ def run_gui(s, live, on_ready=None) -> None:
 
         var.trace_add("write", on_write)
 
-    def add_slider(panel: str, label: str, lo: float, hi: float, step: float, var: tk.Variable,
-                   tooltip: str | None = None, length: int = 170) -> tk.Scale:
-        r = next_row(panel)
-        add_label(panel, label, r, tooltip)
-        scale = tk.Scale(root, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var,
+    # ---- automations: l'editeur de courbes d'audio2wave (case "~" + bouton de courbe), pose a droite
+    # du curseur (3e colonne) plutot que dessous, pour ne pas allonger la fenetre. Le MOTEUR est dans
+    # audio2wave_gl (AutomationEngine, fil de rendu): ici on ne fait qu'editer l'etat (copie dans
+    # params["_automation"]) et faire suivre les curseurs.
+    params["_automation"] = gl.merge_automation(params.get("_automation"))
+    automation = live.AutomationManager(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, a2w.GUI_ACCENT)
+    auto_vars: dict[str, tk.Variable] = {}
+
+    def add_auto(z: Zone, r: int, key: str, var: tk.Variable) -> None:
+        label, lo, hi = gl.AUTOMATION_SPECS[key][:3]
+        holder = tk.Frame(z.parent)
+        holder.grid(row=r, column=2, sticky="w", padx=(0, 4))
+        automation.register(holder, key, label, lo, hi)
+        for widget in holder.winfo_children()[0].winfo_children():
+            if widget.winfo_class() == "Button":
+                widget.config(text="∿", padx=3)          # "courbe" -> compact, l'info-bulle reste
+        auto_vars[key] = var
+
+    def add_slider(z: Zone, label: str, lo: float, hi: float, step: float, var: tk.Variable,
+                   tooltip: str | None = None, length: int = 120, auto_key: str | None = None) -> tk.Scale:
+        r = z.next_row()
+        add_label(z, label, r, tooltip)
+        scale = tk.Scale(z.parent, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var,
                          length=length, showvalue=True)
-        scale.grid(row=r, column=PANELS[panel][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        scale.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        if auto_key:
+            add_auto(z, r, auto_key, var)
         return scale
 
-    def param_slider(panel: str, label: str, key: str, lo: float, hi: float, step: float,
+    def param_slider(z: Zone, label: str, key: str, lo: float, hi: float, step: float,
                      tooltip: str | None = None) -> tk.DoubleVar:
         var = tk.DoubleVar(value=params[key])
         bind_param(key, var)
-        add_slider(panel, label, lo, hi, step, var, tooltip)
+        add_slider(z, label, lo, hi, step, var, tooltip, auto_key=key if key in gl.AUTOMATION_SPECS else None)
         return var
 
-    def live_slider(label: str, attr: str, lo: float, hi: float, step: float, initial: float, conv,
-                    tooltip: str | None = None) -> tk.DoubleVar:
-        var = tk.DoubleVar(value=initial)
-        var.trace_add("write", schedule_apply)
-        live_vars[attr] = (var, conv)
-        add_slider("left", label, lo, hi, step, var, tooltip)
+    def param_radio(z: Zone, label: str, key: str, choices: tuple[tuple[str, str], ...],
+                    tooltip: str | None = None) -> tk.StringVar:
+        r = z.next_row()
+        add_label(z, label, r, tooltip)
+        var = tk.StringVar(value=params[key])
+        bind_param(key, var, str)
+        frame = tk.Frame(z.parent)
+        frame.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        for text, value in choices:
+            tk.Radiobutton(frame, text=text, variable=var, value=value).pack(side="left")
         return var
 
-    def live_entry(label: str, attr: str, initial: str, tooltip: str | None = None) -> tk.StringVar:
-        r = next_row("left")
-        add_label("left", label, r, tooltip)
-        var = tk.StringVar(value=initial)
-        tk.Entry(root, textvariable=var, width=20).grid(
-            row=r, column=PANELS["left"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        var.trace_add("write", schedule_apply)
-        live_vars[attr] = (var, str)
+    def color_row(z: Zone, label: str, key: str, tooltip: str | None = None) -> tk.StringVar:
+        """Champ hexadecimal + pastille + selecteur de couleur, ecrit params[key]."""
+        r = z.next_row()
+        add_label(z, label, r, tooltip)
+        frame = tk.Frame(z.parent)
+        frame.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        var = tk.StringVar(value=params[key])
+        swatch = tk.Label(frame, width=3, bg=params[key])
+        tk.Entry(frame, textvariable=var, width=8).pack(side="left")
+        swatch.pack(side="left", padx=(8, 0))
+
+        def on_write(*_a) -> None:
+            text = var.get().strip().lstrip("#")
+            # Seule une valeur complete et valide est poussee: pendant la saisie, l'ancienne reste.
+            if len(text) == 6 and all(c in HEX_DIGITS for c in text):
+                params[key] = "#" + text.lower()
+                swatch.config(bg=params[key])
+
+        var.trace_add("write", on_write)
+
+        def pick() -> None:
+            chosen = colorchooser.askcolor(color=params[key], title=label)
+            if chosen and chosen[1]:
+                var.set(chosen[1])
+
+        pick_button = tk.Button(frame, text="...", command=pick, padx=6)
+        pick_button.pack(side="left", padx=(6, 0))
+        Tooltip(pick_button, "Choisir une couleur")
         return var
 
-    def live_dropdown(label: str, attr: str, initial: str, choices: tuple[str, ...],
-                      tooltip: str | None = None) -> tk.StringVar:
-        r = next_row("left")
-        add_label("left", label, r, tooltip)
-        var = tk.StringVar(value=initial)
-        menu = tk.OptionMenu(root, var, *choices)
-        a2w.style_option_menu(menu)
-        menu.grid(row=r, column=PANELS["left"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        var.trace_add("write", schedule_apply)
-        live_vars[attr] = (var, str)
-        return var
+    # ---- colonne A : FOND (motif genere)
+    add_section_title(zone_a, "Fond")
+    bg_var = tk.StringVar(value=params["bg_mode"])
+    r = zone_a.next_row()
+    add_label(zone_a, "Fond", r, "Spectre audio = le visuel ffmpeg regle dans le panneau de gauche. "
+                                 "Motif genere = degrades et damier calcules par la carte graphique (touche B).")
+    bg_frame = tk.Frame(col_a)
+    bg_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    for text, value in (("Spectre audio", "live"), ("Motif genere", "pattern")):
+        tk.Radiobutton(bg_frame, text=text, variable=bg_var, value=value).pack(side="left")
+    bind_param("bg_mode", bg_var, str)
 
-    def live_radio(label: str, attr: str, initial: str, values: tuple[str, ...],
-                   tooltip: str | None = None) -> tk.StringVar:
-        r = next_row("left")
-        add_label("left", label, r, tooltip)
-        var = tk.StringVar(value=initial)
-        frame = tk.Frame(root)
-        frame.grid(row=r, column=PANELS["left"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        for value in values:
-            tk.Radiobutton(frame, text=value, variable=var, value=value).pack(side="left")
-        var.trace_add("write", schedule_apply)
-        live_vars[attr] = (var, str)
-        return var
+    pattern_box = tk.Frame(col_a)
+    pattern_box.grid(row=zone_a.next_row(), column=0, columnspan=2, sticky="nw")
+    pz = Zone(pattern_box)
+    add_section_title(pz, "Motif genere")
+    param_radio(pz, "Palette", "bg_palette", (("Arc-en-ciel", "classic"), ("Duo", "duo")),
+                tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
+                        "Duo: degrade lisse entre deux couleurs.")
+    bg_color1_var = color_row(pz, "Couleur 1", "bg_color1", "Palette Duo uniquement.")
+    bg_color2_var = color_row(pz, "Couleur 2", "bg_color2", "Palette Duo uniquement.")
+    param_slider(pz, "Angle du degrade", "bg_angle", 0, 360, 5, "Direction du degrade de la palette Duo, en degres.")
+    param_slider(pz, "Teinte", "bg_hue", 0.0, 1.0, 0.01, "Rotation des couleurs (0 = d'origine).")
+    add_separator(pz, "Animation")
+    param_slider(pz, "Vitesse", "bg_speed", 0.0, 4.0, 0.05, "Vitesse de defilement des degrades.")
+    param_slider(pz, "Taille des carreaux", "bg_tile", 20, 300, 5,
+                 "Cote d'un carreau du damier, en pixels pour une image de 720 px de haut.")
+    param_slider(pz, "Contraste du damier", "bg_checker", 0.0, 1.0, 0.02)
+    param_slider(pz, "Cadence du damier", "bg_flip", 0.0, 8.0, 0.25, "Nombre de bascules du damier par seconde.")
+    param_slider(pz, "Reaction a l'audio", "bg_react", 0.0, 2.0, 0.1,
+                 "Flash et bascule du damier a chaque kick, defilement accelere par les basses. 0 = aucune.")
 
-    # =========================================================== PANNEAU GAUCHE : LIVE
-    add_section_title("left", "Live - fond")
-    if manager is None:
-        tk.Label(root, text="Mode --synthetique: pas de flux ffmpeg a regler.", fg=a2w.GUI_MUTED_FG,
-                 wraplength=300, justify="left").grid(
-            row=next_row("left"), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    else:
-        args0 = s.live_args
-        width = s.render_size[0]
+    def show_bg(*_a) -> None:
+        if bg_var.get() == "pattern":
+            pattern_box.grid()
+        else:
+            pattern_box.grid_remove()
 
-        # Entree ffmpeg (dshow). Sans -d au lancement, le flux demarre au premier choix.
-        device_var = tk.StringVar(value=args0.device or "")
-        device_var.trace_add("write", schedule_apply)
-        live_vars["device"] = (device_var, lambda v: v or None)
-        r = next_row("left")
-        add_label("left", "Entree audio", r, "Entree DirectShow lue par ffmpeg pour le visuel de fond. "
-                                              "L'analyse des effets a sa propre entree (panneau de droite).")
-        frame = tk.Frame(root)
-        frame.grid(row=r, column=0 + 1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        device_menu = tk.OptionMenu(frame, device_var, device_var.get() or "(aucune)")
-        a2w.style_option_menu(device_menu)
-        device_menu.pack(side="left")
+    bg_var.trace_add("write", show_bg)
+    show_bg()
 
-        def refresh_devices() -> None:
-            names = live.list_audio_devices()
-            if args0.device and args0.device not in names:
-                names = [args0.device] + names
-            menu = device_menu["menu"]
-            menu.delete(0, "end")
-            for name in names:
-                menu.add_command(label=name, command=lambda n=name: device_var.set(n))
-            s.status["msg"] = f"{len(names)} entree(s) audio detectee(s)"
+    # ---- colonne A : EFFETS
+    add_separator(zone_a, "Effets")
+    fx_on_vars: list[tk.IntVar] = []
+    fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
+    fx_tips = ("Ondulation de l'image, amplitude = basses.",
+               "Onde de choc depuis le centre a chaque kick.",
+               "Canaux R/V/B decales depuis le centre au kick.",
+               "Bandes horizontales decalees sur les gros kicks / aigus.",
+               "Interrupteur des reactions du logo (pulsation, tremblement, contour).")
+    for i, name in enumerate(fx_labels):
+        r = zone_a.next_row()
+        on_var = tk.IntVar(value=int(params["fx_on"][i]))
+        fx_on_vars.append(on_var)
+        on_var.trace_add("write", lambda *_a, i=i, v=on_var: params["fx_on"].__setitem__(i, int(v.get())))
+        cb = tk.Checkbutton(col_a, text=name, variable=on_var)
+        cb.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        Tooltip(cb, fx_tips[i])
+        int_var = tk.DoubleVar(value=params["fx_int"][i])
+        int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fx_int"].__setitem__(i, _safe(v, 1.0)))
+        tk.Scale(col_a, from_=0, to=2, resolution=0.05, orient="horizontal", variable=int_var,
+                 length=110, showvalue=True).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        add_auto(zone_a, r, f"fx_int{i}", int_var)
 
-        tk.Button(frame, text="Actualiser", command=refresh_devices).pack(side="left", padx=(8, 0))
-        refresh_devices()
+    master_var = tk.DoubleVar(value=params["master"])
+    bind_param("master", master_var)
+    add_slider(zone_a, "Intensite globale", 0.0, 2.0, 0.1, master_var, length=110)
+    sens_var = tk.DoubleVar(value=params["sensitivity"])
+    bind_param("sensitivity", sens_var)
+    add_slider(zone_a, "Sensibilite kick", 0.25, 4.0, 0.05, sens_var, length=110,
+               tooltip="Plus haut = kicks detectes plus facilement (aussi touches haut/bas dans la fenetre GL).")
 
-        style_var = live_radio("Style", "style", args0.style, ("analyzer", "radio"))
-        live_radio("Forme", "shape", args0.shape, ("bar", "line"),
-                   tooltip="Uniquement pour le style analyzer: barres (bar) ou courbe (line).")
-        previous_style = {"v": args0.style}
+    # ---- colonne A : EFFETS DE LA COUCHE LOGO (le fond garde les reglages ci-dessus)
+    add_separator(zone_a, "Effets sur le logo")
+    link_var = tk.IntVar(value=int(float(params["fx_link"]) >= 0.5))
+    link_check = tk.Checkbutton(col_a, text="Memes effets que le fond", variable=link_var)
+    link_check.grid(row=zone_a.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    Tooltip(link_check, "Coche: le logo subit exactement les memes deformations que le fond. Decoche: le logo a "
+                        "ses propres effets (ci-dessous), ses ondes partent de son centre et son glitch tire "
+                        "d'autres bandes. Touche L; Maj+1 a 4 dans la fenetre GL agissent sur le logo.")
+    logo_fx_box = tk.Frame(col_a)
+    logo_fx_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="nw")
+    lz = Zone(logo_fx_box)
+    fxl_on_vars: list[tk.IntVar] = []
+    fxl_int_vars: list[tk.DoubleVar] = []
+    for i, name in enumerate(fx_labels[:gl.FX_EFFECTS]):
+        r = lz.next_row()
+        on_var = tk.IntVar(value=int(params["fxl_on"][i]))
+        fxl_on_vars.append(on_var)
+        on_var.trace_add("write", lambda *_a, i=i, v=on_var: params["fxl_on"].__setitem__(i, int(v.get())))
+        cb = tk.Checkbutton(logo_fx_box, text=name, variable=on_var)
+        cb.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        Tooltip(cb, fx_tips[i] + " (couche logo)")
+        int_var = tk.DoubleVar(value=params["fxl_int"][i])
+        fxl_int_vars.append(int_var)
+        int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fxl_int"].__setitem__(i, _safe(v, 1.0)))
+        tk.Scale(logo_fx_box, from_=0, to=2, resolution=0.05, orient="horizontal", variable=int_var,
+                 length=110, showvalue=True).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        add_auto(lz, r, f"fxl_int{i}", int_var)
 
-        add_separator("left", "Couleurs")
-        live_entry("Couleurs", "colors", args0.colors,
-                   tooltip="Une ou plusieurs couleurs (separees par |). Un nom inconnu de ffmpeg "
-                           "n'arrete pas le flux: il retombe sur du blanc (erreur dans la console). "
-                           "Attention: 'grey' n'existe pas pour ffmpeg, ecrire 'gray'.")
-        live_entry("Couleur de fond", "bg_color", args0.bg_color)
+    def on_link(*_a) -> None:
+        linked = bool(link_var.get())
+        if linked != (float(params["fx_link"]) >= 0.5):
+            gl.set_fx_link(params, linked)        # delier copie les reglages du fond (rien ne saute)
+        if linked:
+            logo_fx_box.grid_remove()
+        else:
+            logo_fx_box.grid()
 
-        add_separator("left", "Spectre")
-        live_slider("Barres/points", "bars", 8, 400, 4, live.resolve_bars(args0, width), int)
-        gain_var = live_slider("Gain (dB)", "gain", -60, 60, 1, live.resolve_gain(args0), float)
-        live_slider("Lissage", "averaging", 1, 30, 1, args0.averaging, int,
-                    tooltip="Uniquement pour le style analyzer: trames moyennees, poste de latence principal.")
-        live_slider("Espace entre barres", "bar_gap", 0, 1.5, 0.05, args0.bar_gap, float)
-        live_slider("Frequence max (Hz)", "max_freq", 1000, 20000, 500, args0.max_freq or 20000, int,
-                    tooltip="Frequence la plus haute affichee (style analyzer).")
-        live_dropdown("Echelle frequences", "freq_scale", args0.freq_scale, ("lin", "log", "rlog"))
-        live_dropdown("Echelle amplitude", "amp_scale", args0.amp_scale, ("lin", "sqrt", "cbrt", "log"))
-        stereo_var = tk.BooleanVar(value=args0.stereo)
-        stereo_var.trace_add("write", schedule_apply)
-        live_vars["stereo"] = (stereo_var, bool)
-        tk.Checkbutton(root, text="Stereo", variable=stereo_var).grid(
-            row=next_row("left"), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    link_var.trace_add("write", on_link)
+    on_link()
 
-        def on_style_change(*_a) -> None:
-            # Le gain par defaut depend du style (30 dB analyzer, -10 dB radio): on suit le
-            # defaut tant que l'utilisateur n'a pas regle le gain a la main.
-            new = style_var.get()
-            try:
-                if abs(float(gain_var.get()) - live.DEFAULT_GAIN_DB[previous_style["v"]]) < 0.5:
-                    gain_var.set(live.DEFAULT_GAIN_DB[new])
-            except (tk.TclError, KeyError, ValueError):
-                pass
-            previous_style["v"] = new
+    # ---- colonne B : LOGO
+    add_section_title(zone_b, "Logo / texte")
+    source_var = tk.StringVar(value=params["logo_source"])
+    r = zone_b.next_row()
+    add_label(zone_b, "Source", r, "Image PNG, texte que tu tapes, ou video animee (logo detoure): tout est "
+                                   "traite comme un logo (position, opacite, pulsation, tremblement, contour).")
+    source_frame = tk.Frame(col_b)
+    source_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    for text, value in (("Image", "image"), ("Texte", "text"), ("Video", "video")):
+        tk.Radiobutton(source_frame, text=text, variable=source_var, value=value).pack(side="left")
+    bind_param("logo_source", source_var, str)
 
-        style_var.trace_add("write", on_style_change)
+    # Les trois blocs occupent la meme cellule; un seul est affiche.
+    image_box = tk.Frame(col_b)
+    text_box = tk.Frame(col_b)
+    video_box = tk.Frame(col_b)
+    source_row = zone_b.next_row()
+    for box in (image_box, text_box, video_box):
+        box.grid(row=source_row, column=0, columnspan=2, sticky="nw")
+    iz = Zone(image_box)
+    tz = Zone(text_box)
+    vz = Zone(video_box)
 
-    def apply_live() -> None:
-        """Relit les widgets "live" dans une COPIE des options d'audio2wave_live et demande a
-        ProducerManager de remplacer le producteur (la copie evite de muter des options qu'un
-        lancement en cours est en train de lire)."""
-        if manager is None:
-            return
-        new = copy.copy(s.live_args)
-        try:
-            for attr, (var, conv) in live_vars.items():
-                value = var.get()
-                if attr in ("colors", "bg_color") and not str(value).strip():
-                    continue       # champ vide en cours de saisie: on garde la valeur precedente
-                setattr(new, attr, conv(value))
-        except (ValueError, tk.TclError):
-            return
-        if new.max_freq >= 20000:
-            new.max_freq = 0       # 0 = pleine bande
-        if not new.device:
-            s.status["live"] = "Choisis une entree audio"
-            return
-        s.live_args = new
-        manager.request_restart(new)
-
-    # ========================================================== PANNEAU MILIEU : LOGO
-    add_section_title("mid", "Logo")
-
-    r = next_row("mid")
-    add_label("mid", "Fichier", r, "PNG avec canal alpha. Vide = aucun logo.")
-    file_frame = tk.Frame(root)
-    file_frame.grid(row=r, column=PANELS["mid"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    # ---- source image
+    r = iz.next_row()
+    add_label(iz, "Fichier", r, "PNG avec canal alpha. Vide = aucun logo.")
+    file_frame = tk.Frame(image_box)
+    file_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     logo_var = tk.StringVar(value=params["logo_path"])
-    logo_entry = tk.Entry(file_frame, textvariable=logo_var, width=18)
+    logo_entry = tk.Entry(file_frame, textvariable=logo_var, width=13)
     logo_entry.pack(side="left")
 
     def apply_logo_path(_evt=None) -> None:
@@ -286,99 +436,171 @@ def run_gui(s, live, on_ready=None) -> None:
             logo_var.set(chosen)
             apply_logo_path()
 
-    tk.Button(file_frame, text="Parcourir...", command=browse_logo).pack(side="left", padx=(8, 0))
+    browse_button = tk.Button(file_frame, text="...", command=browse_logo, padx=6)
+    browse_button.pack(side="left", padx=(6, 0))
+    Tooltip(browse_button, "Parcourir...")
     tk.Button(file_frame, text="Aucun", command=lambda: (logo_var.set(""), apply_logo_path())).pack(
         side="left", padx=(4, 0))
+    scale_var = param_slider(iz, "Taille", "logo_scale", 0.05, 0.95, 0.01,
+                             "Cote du carre englobant, en fraction de la hauteur de l'image.")
 
-    add_separator("mid", "Position et taille")
-    x_var = param_slider("mid", "Position X", "logo_x", 0.0, 1.0, 0.01, "Centre du logo, 0 = gauche, 1 = droite.")
-    y_var = param_slider("mid", "Position Y", "logo_y", 0.0, 1.0, 0.01, "Centre du logo, 0 = haut, 1 = bas.")
-    param_slider("mid", "Taille", "logo_scale", 0.05, 0.95, 0.01,
-                 "Cote du carre englobant, en fraction de la hauteur de l'image.")
-    param_slider("mid", "Opacite", "logo_opacity", 0.0, 1.0, 0.05)
-    tk.Button(root, text="Centrer", command=lambda: (x_var.set(0.5), y_var.set(0.5))).grid(
-        row=next_row("mid"), column=PANELS["mid"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    # ---- source texte
+    r = tz.next_row()
+    add_label(tz, "Texte", r, "Tape ton texte (Entree = nouvelle ligne). Il s'affiche en direct.")
+    text_widget = tk.Text(text_box, width=22, height=3, wrap="word", undo=True, bg=a2w.GUI_PANEL_BG,
+                          fg=a2w.GUI_FG, insertbackground=a2w.GUI_FG, relief="flat", highlightthickness=1,
+                          highlightbackground=a2w.GUI_PANEL_BG, highlightcolor=a2w.GUI_ACCENT)
+    text_widget.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    text_widget.insert("1.0", params["text_content"])
 
-    add_separator("mid", "Reaction a l'audio")
-    param_slider("mid", "Pulsation", "logo_pulse", 0.0, 0.5, 0.01,
-                 "Zoom du logo a chaque kick (0,12 = +12 %). Jamais coupe hors cadre.")
-    param_slider("mid", "Tremblement", "logo_jitter", 0.0, 0.03, 0.001,
-                 "Vibration du logo proportionnelle aux aigus.")
-    param_slider("mid", "Contour lumineux", "logo_glow", 0.0, 3.0, 0.1,
-                 "Intensite du halo autour du logo, module par les basses.")
-    param_slider("mid", "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
+    def apply_text(_evt=None) -> None:
+        params["text_content"] = text_widget.get("1.0", "end-1c")
 
-    r = next_row("mid")
-    add_label("mid", "Couleur du contour", r)
-    color_frame = tk.Frame(root)
-    color_frame.grid(row=r, column=PANELS["mid"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    color_var = tk.StringVar(value=params["logo_glow_color"])
-    swatch = tk.Label(color_frame, width=3, bg=params["logo_glow_color"])
-    tk.Entry(color_frame, textvariable=color_var, width=9).pack(side="left")
-    swatch.pack(side="left", padx=(8, 0))
+    text_widget.bind("<KeyRelease>", apply_text)     # couvre aussi le collage (Ctrl+V)
+    text_widget.bind("<FocusOut>", apply_text)
 
-    def on_color_write(*_a) -> None:
-        text = color_var.get().strip().lstrip("#")
-        # Seule une valeur complete et valide est poussee: pendant la saisie, l'ancienne reste.
-        if len(text) == 6 and all(c in "0123456789abcdefABCDEF" for c in text):
-            params["logo_glow_color"] = "#" + text.lower()
-            swatch.config(bg=params["logo_glow_color"])
+    fonts = ["auto"] + list(gl.available_fonts())
+    if params["text_font"] not in fonts:
+        fonts.append(params["text_font"])            # police personnalisee (chemin) sauvee precedemment
+    font_var = tk.StringVar(value=params["text_font"])
+    bind_param("text_font", font_var, str)
+    r = tz.next_row()
+    add_label(tz, "Police", r, "Polices Windows courantes (auto = la premiere disponible), ou un fichier "
+                               ".ttf/.otf avec Parcourir.")
+    font_frame = tk.Frame(text_box)
+    font_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    font_menu = tk.OptionMenu(font_frame, font_var, *fonts)
+    a2w.style_option_menu(font_menu)
+    font_menu.pack(side="left")
 
-    color_var.trace_add("write", on_color_write)
+    def browse_font() -> None:
+        chosen = filedialog.askopenfilename(
+            title="Choisir une police", initialdir=str(gl.font_dirs()[0]) if gl.font_dirs()[0].is_dir() else ".",
+            filetypes=[("Polices", "*.ttf *.otf"), ("Tous les fichiers", "*.*")])
+        if chosen:
+            font_menu["menu"].add_command(label=chosen, command=lambda c=chosen: font_var.set(c))
+            font_var.set(chosen)
 
-    def pick_color() -> None:
-        chosen = colorchooser.askcolor(color=params["logo_glow_color"], title="Couleur du contour")
+    font_browse = tk.Button(font_frame, text="...", command=browse_font, padx=6)
+    font_browse.pack(side="left", padx=(6, 0))
+    Tooltip(font_browse, "Parcourir: choisir un fichier .ttf/.otf")
+    color_row(tz, "Couleur du texte", "text_color")
+    param_radio(tz, "Alignement", "text_align", (("gauche", "left"), ("centre", "center"), ("droite", "right")),
+                tooltip="Alignement des lignes entre elles (texte sur plusieurs lignes).")
+    param_slider(tz, "Taille du texte", "text_scale", 0.03, 0.6, 0.01,
+                 "Hauteur du bloc de texte, en fraction de la hauteur de l'image (marges comprises).")
+
+    # ---- source video (logo anime)
+    r = vz.next_row()
+    add_label(vz, "Fichier", r, "Video ou GIF lu en boucle. Pour un logo detoure: WebM VP9 avec alpha, "
+                                "MOV ProRes 4444, GIF, APNG ou WebP anime. Un MP4 n'a pas d'alpha: utilise "
+                                "le detourage par couleur ci-dessous.")
+    vfile_frame = tk.Frame(video_box)
+    vfile_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    video_var = tk.StringVar(value=params["logo_video"])
+    video_entry = tk.Entry(vfile_frame, textvariable=video_var, width=13)
+    video_entry.pack(side="left")
+
+    def apply_video_path(_evt=None) -> None:
+        params["logo_video"] = video_var.get().strip()
+
+    video_entry.bind("<Return>", apply_video_path)
+    video_entry.bind("<FocusOut>", apply_video_path)
+
+    def browse_video() -> None:
+        initial = Path(video_var.get()).parent if video_var.get() else gl.SCRIPT_DIR / "asset"
+        chosen = filedialog.askopenfilename(
+            title="Choisir une video", initialdir=str(initial if initial.is_dir() else gl.SCRIPT_DIR),
+            filetypes=[("Videos et animations", gl.LOGO_VIDEO_EXTENSIONS), ("Tous les fichiers", "*.*")])
+        if chosen:
+            video_var.set(chosen)
+            apply_video_path()
+
+    vbrowse = tk.Button(vfile_frame, text="...", command=browse_video, padx=6)
+    vbrowse.pack(side="left", padx=(6, 0))
+    Tooltip(vbrowse, "Parcourir...")
+    tk.Button(vfile_frame, text="Aucune", command=lambda: (video_var.set(""), apply_video_path())).pack(
+        side="left", padx=(4, 0))
+
+    r = vz.next_row()
+    add_label(vz, "Detourer", r, "Pour un fichier SANS canal alpha (MP4...): rend transparente cette couleur "
+                                  "(fond vert = #00ff00). Vide = aucun detourage. Relance le decodage a chaque "
+                                  "changement valide.")
+    key_frame = tk.Frame(video_box)
+    key_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    key_var = tk.StringVar(value=params["logo_key"])
+    key_swatch = tk.Label(key_frame, width=3, bg=params["logo_key"] or a2w.GUI_PANEL_BG)
+    tk.Entry(key_frame, textvariable=key_var, width=8).pack(side="left")
+    key_swatch.pack(side="left", padx=(8, 0))
+
+    def on_key_write(*_a) -> None:
+        text = key_var.get().strip().lstrip("#")
+        if not text:
+            params["logo_key"] = ""
+            key_swatch.config(bg=a2w.GUI_PANEL_BG)
+        elif len(text) == 6 and all(c in HEX_DIGITS for c in text):
+            params["logo_key"] = "#" + text.lower()
+            key_swatch.config(bg=params["logo_key"])
+
+    key_var.trace_add("write", on_key_write)
+
+    def pick_key() -> None:
+        chosen = colorchooser.askcolor(color=params["logo_key"] or "#00ff00", title="Couleur a detourer")
         if chosen and chosen[1]:
-            color_var.set(chosen[1])
+            key_var.set(chosen[1])
 
-    tk.Button(color_frame, text="Choisir...", command=pick_color).pack(side="left", padx=(8, 0))
+    key_pick = tk.Button(key_frame, text="...", command=pick_key, padx=6)
+    key_pick.pack(side="left", padx=(6, 0))
+    Tooltip(key_pick, "Choisir la couleur a detourer")
+    tk.Button(key_frame, text="Vert", command=lambda: key_var.set("#00ff00")).pack(side="left", padx=(4, 0))
+    tk.Button(key_frame, text="Aucun", command=lambda: key_var.set("")).pack(side="left", padx=(4, 0))
+    # Meme variable que le curseur de l'image (un seul reglage logo_scale, une seule automation).
+    add_slider(vz, "Taille", 0.05, 0.95, 0.01, scale_var,
+               "Cote du carre englobant, en fraction de la hauteur de l'image.")
 
-    # ========================================================= PANNEAU DROIT : EFFETS
-    add_section_title("right", "Effets")
-    fx_on_vars: list[tk.IntVar] = []
-    fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
-    fx_tips = ("Ondulation de l'image, amplitude = basses.",
-               "Onde de choc depuis le centre a chaque kick.",
-               "Canaux R/V/B decales depuis le centre au kick.",
-               "Bandes horizontales decalees sur les gros kicks / aigus.",
-               "Interrupteur des reactions du logo (pulsation, tremblement, contour).")
-    for i, name in enumerate(fx_labels):
-        r = next_row("right")
-        on_var = tk.IntVar(value=int(params["fx_on"][i]))
-        fx_on_vars.append(on_var)
-        on_var.trace_add("write", lambda *_a, i=i, v=on_var: params["fx_on"].__setitem__(i, int(v.get())))
-        cb = tk.Checkbutton(root, text=name, variable=on_var)
-        cb.grid(row=r, column=PANELS["right"][0], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        Tooltip(cb, fx_tips[i])
-        int_var = tk.DoubleVar(value=params["fx_int"][i])
-        int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fx_int"].__setitem__(i, _safe(v, 1.0)))
-        tk.Scale(root, from_=0, to=2, resolution=0.05, orient="horizontal", variable=int_var,
-                 length=150, showvalue=True).grid(
-            row=r, column=PANELS["right"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    def show_source(*_a) -> None:
+        shown = source_var.get()
+        for name, box in (("image", image_box), ("text", text_box), ("video", video_box)):
+            if name == shown:
+                box.grid()
+            else:
+                box.grid_remove()
 
-    master_var = tk.DoubleVar(value=params["master"])
-    bind_param("master", master_var)
-    add_slider("right", "Intensite globale", 0.0, 2.0, 0.1, master_var, length=150)
-    sens_var = tk.DoubleVar(value=params["sensitivity"])
-    bind_param("sensitivity", sens_var)
-    add_slider("right", "Sensibilite kick", 0.25, 4.0, 0.05, sens_var, length=150,
-               tooltip="Plus haut = kicks detectes plus facilement (aussi touches haut/bas dans la fenetre GL).")
+    source_var.trace_add("write", show_source)
+    show_source()
 
-    add_separator("right", "Analyse audio (effets)")
+    add_separator(zone_b, "Position")
+    x_var = param_slider(zone_b, "Position X", "logo_x", 0.0, 1.0, 0.01, "Centre, 0 = gauche, 1 = droite.")
+    y_var = param_slider(zone_b, "Position Y", "logo_y", 0.0, 1.0, 0.01, "Centre, 0 = haut, 1 = bas.")
+    param_slider(zone_b, "Opacite", "logo_opacity", 0.0, 1.0, 0.05)
+    tk.Button(col_b, text="Centrer", command=lambda: (x_var.set(0.5), y_var.set(0.5))).grid(
+        row=zone_b.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+
+    add_separator(zone_b, "Reaction a l'audio")
+    param_slider(zone_b, "Pulsation", "logo_pulse", 0.0, 0.5, 0.01,
+                 "Zoom du logo a chaque kick (0,12 = +12 %). Jamais coupe hors cadre.")
+    param_slider(zone_b, "Tremblement", "logo_jitter", 0.0, 0.03, 0.001, "Vibration du logo proportionnelle aux aigus.")
+    param_slider(zone_b, "Contour lumineux", "logo_glow", 0.0, 3.0, 0.1,
+                 "Intensite du halo autour du logo, module par les basses.")
+    param_slider(zone_b, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
+    color_var = color_row(zone_b, "Couleur du contour", "logo_glow_color")
+
+    # ---- colonne B : ANALYSE AUDIO + AFFICHAGE
+    add_separator(zone_b, "Analyse audio (effets)")
     audio_choices = gl.AudioController.input_choices() if not s.audio.synthetic else []
     if not audio_choices:
-        tk.Label(root, text=s.audio.name, fg=a2w.GUI_MUTED_FG, wraplength=300, justify="left").grid(
-            row=next_row("right"), column=6, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        tk.Label(col_b, text=s.audio.name, fg=a2w.GUI_MUTED_FG, wraplength=300, justify="left").grid(
+            row=zone_b.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     else:
         labels = {label: idx for idx, label in audio_choices}
-        current = next((label for idx, label in audio_choices if idx_matches(s, idx, label)), s.audio.name)
+        current = next((label for idx, label in audio_choices if s.audio.name in label), s.audio.name)
         audio_var = tk.StringVar(value=current)
-        r = next_row("right")
-        add_label("right", "Entree", r, "Entree sounddevice qui alimente les effets (kick, basses...). "
-                                        "Independante de l'entree ffmpeg du fond.")
-        menu = tk.OptionMenu(root, audio_var, *labels.keys())
+        r = zone_b.next_row()
+        add_label(zone_b, "Entree", r, "Entree sounddevice qui alimente les effets (kick, basses...). "
+                                       "Independante de l'entree ffmpeg du fond.")
+        menu = tk.OptionMenu(col_b, audio_var, *labels.keys())
         a2w.style_option_menu(menu)
-        menu.grid(row=r, column=PANELS["right"][1], sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        menu.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
         def on_audio_change(*_a) -> None:
             try:
@@ -389,18 +611,37 @@ def run_gui(s, live, on_ready=None) -> None:
 
         audio_var.trace_add("write", on_audio_change)
 
-    add_separator("right", "Affichage")
-    btn_frame = tk.Frame(root)
-    btn_frame.grid(row=next_row("right"), column=6, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    for text, cmd in (("Plein ecran", "fullscreen"), ("Barres debug", "hud")):
-        tk.Button(btn_frame, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
-    btn_frame2 = tk.Frame(root)
-    btn_frame2.grid(row=next_row("right"), column=6, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    for text, cmd in (("Recharger shaders", "reload"), ("Sauver reglages", "save")):
-        tk.Button(btn_frame2, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
+    add_separator(zone_b, "Affichage")
+    for row_buttons in ((("Plein ecran", "fullscreen"), ("Barres debug", "hud")),
+                        (("Recharger shaders", "reload"), ("Sauver reglages", "save"))):
+        frame = tk.Frame(col_b)
+        frame.grid(row=zone_b.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        for text, cmd in row_buttons:
+            tk.Button(frame, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
 
-    meter = tk.Canvas(root, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
-    meter.grid(row=next_row("right"), column=6, columnspan=2, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 2))
+    auto_master_var = tk.IntVar(value=int(float(params["auto_master"]) >= 0.5))
+    bind_param("auto_master", auto_master_var, float)
+    frame = tk.Frame(col_b)
+    frame.grid(row=zone_b.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    master_check = tk.Checkbutton(frame, text="Automations actives", variable=auto_master_var)
+    master_check.pack(side="left")
+    Tooltip(master_check, "Interrupteur general (touche T): decoche, toutes les valeurs restent ou elles sont. "
+                          "Les cases '~' a cote de chaque curseur choisissent ce qui varie, le bouton a cote "
+                          "ouvre l'editeur de courbe.")
+
+    def reset_automation() -> None:
+        params["_automation"] = gl.default_automation()
+        automation.apply(params["_automation"])
+        s.status["msg"] = "Automations: ambiance par defaut"
+
+    tk.Button(frame, text="Ambiance par defaut", command=reset_automation).pack(side="left", padx=(8, 0))
+
+    shortcuts_label = tk.Label(frame, text=" (i) ", fg=a2w.GUI_ACCENT, font=a2w.GUI_FONT, cursor="question_arrow")
+    shortcuts_label.pack(side="left", padx=(8, 0))
+    Tooltip(shortcuts_label, SHORTCUTS_HELP)
+
+    meter = tk.Canvas(col_b, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
+    meter.grid(row=zone_b.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 2))
     bars = {}
     for i, (name, color) in enumerate((("bass", "#ff5a4d"), ("mid", "#66ff73"), ("high", "#66b3ff"),
                                        ("beat", "#ffe633"))):
@@ -408,54 +649,84 @@ def run_gui(s, live, on_ready=None) -> None:
         meter.create_text(4, y0 + 5, text=name, anchor="w", fill=a2w.GUI_MUTED_FG, font=a2w.GUI_FONT_SMALL)
         bars[name] = meter.create_rectangle(52, y0, 52, y0 + 10, fill=color, width=0)
 
-    # ---------------------------------------------------------------- statut + boucle
-    status_label = tk.Label(root, text="", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=980)
-    status_label.grid(row=max(rows.values()) + 1, column=0, columnspan=TOTAL_COLUMNS, sticky="we",
-                      padx=ROW_PADX, pady=(SECTION_GAP, 10))
+    status_label = tk.Label(col_b, text="", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
+    status_label.grid(row=zone_b.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
+
+    # ---------------------------------------------------------------- boucle
+    automation.apply(params["_automation"])          # charge l'etat (sauve ou par defaut) dans l'editeur
+
+    def sync_automation_state() -> None:
+        """Editeur -> params (le moteur du fil GL lit params["_automation"]). Remplacement
+        atomique du dict: le fil GL ne voit jamais un etat a moitie ecrit."""
+        merged = dict(params.get("_automation") or {})
+        merged.update(automation.capture())
+        params["_automation"] = merged
+        root.after(AUTOMATION_SYNC_MS, sync_automation_state)
+
+    def follow_automation() -> None:
+        """params -> curseurs: les curseurs automatises suivent la valeur calculee par le moteur."""
+        if float(params["auto_master"]) >= 0.5:
+            data = params["_automation"]
+            for key, var in auto_vars.items():
+                if data.get(key, {}).get("enabled"):
+                    try:
+                        var.set(round(float(gl.get_param(params, key)), 3))
+                    except (tk.TclError, ValueError):
+                        pass
 
     def refresh() -> None:
         # Recopie les reglages que les touches de la fenetre GL ont pu changer.
         for i, v in enumerate(fx_on_vars):
             if int(params["fx_on"][i]) != v.get():
                 v.set(int(params["fx_on"][i]))
+        for i, v in enumerate(fxl_on_vars):
+            if int(params["fxl_on"][i]) != v.get():
+                v.set(int(params["fxl_on"][i]))
+        for i, v in enumerate(fxl_int_vars):
+            if abs(_safe(v, 0.0) - float(params["fxl_int"][i])) > 1e-6:
+                v.set(float(params["fxl_int"][i]))
+        if link_var.get() != int(float(params["fx_link"]) >= 0.5):
+            link_var.set(int(float(params["fx_link"]) >= 0.5))
         if abs(master_var.get() - params["master"]) > 1e-6:
             master_var.set(params["master"])
         if abs(sens_var.get() - params["sensitivity"]) > 1e-6:
             sens_var.set(params["sensitivity"])
+        if bg_var.get() != params["bg_mode"]:
+            bg_var.set(params["bg_mode"])
+        if auto_master_var.get() != int(float(params["auto_master"]) >= 0.5):
+            auto_master_var.set(int(float(params["auto_master"]) >= 0.5))
         st = s.status
-        parts = [f"{st.get('fps', 0):.0f} fps"]
-        for key in ("live", "logo", "msg"):
-            if st.get(key):
-                parts.append(st[key])
+        parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("logo", "msg") if st.get(k)]
         status_label.config(text="  |  ".join(parts))
         root.after(REFRESH_MS, refresh)
 
     def update_meter() -> None:
+        follow_automation()
         state = s.audio.analyzer.latest()
         for name, item in bars.items():
             meter.coords(item, 52, meter.coords(item)[1], 52 + 200 * min(max(state[name], 0.0), 1.0),
                          meter.coords(item)[3])
         root.after(METER_MS, update_meter)
 
-    def poll_finished() -> None:
-        if s.finished_event.is_set():
-            root.destroy()
-            return
-        root.after(100, poll_finished)
-
     def on_close() -> None:
-        s.stop_event.set()                # le fil GL sort, positionne finished_event, poll_finished ferme
+        s.stop_event.set()                # le fil GL sort, positionne finished_event, leur refresh() ferme
         root.after(3000, root.destroy)    # filet de securite si le fil GL ne repond plus
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     refresh()
     update_meter()
-    poll_finished()
+    poll_bridge()
+    sync_automation_state()
     if on_ready is not None:
         root.after(50, lambda: on_ready({
-            "root": root, "live_vars": live_vars, "apply_live": apply_live, "logo_var": logo_var,
-            "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
-            "fx_on_vars": fx_on_vars, "master_var": master_var, "close": on_close}))
+            "root": root, "restart_event": restart_event, "live_status": live_status, "close": on_close,
+            "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
+            "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
+            "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
+            "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
+            "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
+            "image_box": image_box, "text_box": text_box, "font_var": font_var}))
     root.mainloop()
 
 
@@ -464,8 +735,3 @@ def _safe(var: tk.Variable, default: float) -> float:
         return float(var.get())
     except (ValueError, tk.TclError):
         return default
-
-
-def idx_matches(s, index: int, label: str) -> bool:
-    """Vrai si l'entree sounddevice `index` est celle actuellement ecoutee (par nom)."""
-    return s.audio.name in label
