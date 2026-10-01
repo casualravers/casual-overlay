@@ -574,7 +574,7 @@ def check_gui() -> None:
           "reglages logo/effets ecrits tout de suite dans les parametres")
     check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0,
           "halo holographique: la case ecrit holo_on")
-    check(out.get("tabs") == ["Fond", "Effets", "Logo", "Aura du logo", "Affichage"],
+    check(out.get("tabs") == ["Fond", "Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Affichage"],
           "partie OVERLAY rangee en onglets", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
           str(out.get("win_height")))
@@ -787,6 +787,19 @@ def check_render() -> None:
     d = render(gl.Renderer(ctx, size, None), idle, duo, 0.0)
     check(d[:, :, 1].max() < 5 and d[:, :, 0].max() > 200 and d[:, :, 2].max() > 200,
           "palette duo rouge/bleu: aucun vert, les deux couleurs presentes")
+    # Palette "test": identique octet pour octet au flux de test SyntheticVideoStream, image par image.
+    stream = gl.SyntheticVideoStream(size[0], size[1])
+    tp = dict(p0, bg_palette="test", bg_hue=0.3, bg_tile=150.0, bg_checker=0.9, bg_react=1.0)   # ces reglages sont ignores
+    rt_pal = gl.Renderer(ctx, size, None)
+    rt_pal.draw(fbo, size, idle, tp, 0.0)
+    worst = 0
+    for n in (0, 1, 14, 15, 16, 85, 100, 300):
+        stream._n = n
+        want = np.frombuffer(stream._frame(), np.uint8).reshape(size[1], size[0], 3).astype(int)
+        rt_pal._bg_clock = (n + 0.5) / 30.0
+        worst = max(worst, int(abs(render(rt_pal, idle, tp, 0.0) - want).max()))
+    check(worst == 0, "palette 'Banc de test': identique octet pour octet a SyntheticVideoStream (8 images)",
+          f"ecart max {worst}")
     hue = render(gl.Renderer(ctx, size, None), idle, dict(duo, bg_hue=1.0 / 3.0), 0.0)
     check(hue[:, :, 2].max() < 5 and hue[:, :, 1].max() > 200 and hue[:, :, 0].max() > 200,
           "teinte +1/3 (120 deg): rouge -> vert, bleu -> rouge (plus de bleu)")
@@ -1239,6 +1252,149 @@ def check_holo() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_melt() -> None:
+    print("Fonte acide du logo")
+    d = gl.DEFAULT_PARAMS
+    check(d["melt_on"] == 0.0 and d["melt_react"] == 0.0, "par defaut: coupee et NON audioreactive")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    chk = ((xx // 36 + yy // 36) % 2).astype(np.uint8)
+    r.video_tex.write(np.ascontiguousarray(np.stack([20 + 40 * chk, 15 + 20 * chk, 60 + 60 * chk], axis=2).astype(np.uint8)).tobytes())
+    r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    loud = {"bass": 1.0, "mid": 0.5, "high": 0.5, "rms": 0.8, "beat": 1.0, "since_beat": 0.0, "beats": 4}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.3, logo_opacity=1.0, logo_glow=0.0,
+                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_on=0.0)
+
+    def render(phase=0.0, state=quiet, **kw):
+        pr = dict(base, **kw)
+        r.draw(fbo, size, state, pr, 1.0)
+        r._melt_t, r._melt_clock = phase, 0.0
+        r.draw(fbo, size, state, pr, 1.0)                  # meme instant: dt = 0, la phase posee est celle rendue
+        return read_target(ctx, fbo, size).astype(int)
+
+    off = render(melt_on=0.0)
+    white = (off[:, :, 0] > 240) & (off[:, :, 1] > 240) & (off[:, :, 2] > 240)
+    ys, xs = np.nonzero(white)
+    box = np.zeros(size[::-1], bool)
+    box[ys.min():ys.max() + 1, xs.min():xs.max() + 1] = True
+    n_white = int(white.sum())
+    check(np.array_equal(render(0.5, melt_on=0.0), off), "coupee: aucun effet, meme au plus fort du cycle")
+    check(np.array_equal(render(0.0, melt_on=1.0), off) and np.array_equal(render(1.0, melt_on=1.0), off),
+          "debut et fin de cycle: logo intact (identique a coupe)")
+    check(np.array_equal(render(0.5, melt_on=1.0, melt_depth=0.0), off), "profondeur 0 = intact")
+    nologo = render(0.0, melt_on=0.0, logo_opacity=0.0)
+    cover = lambda img: int((np.abs(img - nologo).max(axis=2) > 25).sum())     # pixels ou le logo (ou l'acide) est visible
+    deep = render(0.5, melt_on=1.0)
+    check(cover(deep) < 0.4 * n_white, "au plus fort du cycle, la majeure partie du logo a disparu",
+          f"{n_white} -> {cover(deep)} px")
+    mid = render(0.3, melt_on=1.0)
+    check(0.1 * n_white < cover(mid) < 0.9 * n_white, "a mi-parcours, le logo est partiellement dissous",
+          f"{cover(mid)}/{n_white} px")
+    acid = (mid[:, :, 1] > 100) & (mid[:, :, 2] < 0.6 * mid[:, :, 1])
+    check(acid.sum() > 200, "lisiere acide (vert-jaune) autour des trous", f"{int(acid.sum())} px")
+    check(np.array_equal(mid[~box], off[~box]), "la fonte ne deborde jamais du rectangle du logo (le fond n'est pas touche)")
+    check(np.array_equal(render(0.3, melt_on=1.0), render(0.7, melt_on=1.0)),
+          "le logo se reforme comme il a fondu (cycle symetrique)")
+    check(np.array_equal(render(0.3, quiet, melt_on=1.0), render(0.3, loud, melt_on=1.0)), "melt_react = 0: insensible a l'audio")
+    check(abs(render(0.3, melt_on=1.0, melt_scale=3.0) - mid).max() > 60, "le grain change la forme des trous")
+    check(abs(render(0.3, melt_on=1.0, melt_color="#ff2030") - mid).max() > 60, "la couleur de l'acide est reglable")
+
+    def after_frames(state, **kw):
+        r._melt_t, r._melt_clock = 0.0, 0.0
+        pr = dict(base, melt_on=1.0, melt_period=4.0, **kw)
+        for i in range(40):
+            r.draw(fbo, size, state, pr, 2.0 + 0.05 * i)
+        return read_target(ctx, fbo, size).astype(int)
+
+    check(abs(after_frames(loud, melt_react=1.0) - after_frames(quiet, melt_react=1.0)).max() > 60,
+          "melt_react > 0: le cycle s'accelere avec les basses")
+
+
+def check_cells() -> None:
+    print("Cellules organiques du logo")
+    d = gl.DEFAULT_PARAMS
+    check(d["cell_on"] == 0.0 and d["cell_react"] == 0.0, "par defaut: coupees et NON audioreactives")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    chk = ((xx // 36 + yy // 36) % 2).astype(np.uint8)
+    r.video_tex.write(np.ascontiguousarray(np.stack([20 + 40 * chk, 15 + 20 * chk, 60 + 60 * chk], axis=2).astype(np.uint8)).tobytes())
+    # logo test: carre plein, moitie gauche rouge, moitie droite bleue (les couleurs doivent rester lisibles)
+    logo = np.zeros((64, 64, 4), np.uint8)
+    logo[:, :32] = (255, 0, 0, 255)
+    logo[:, 32:] = (0, 0, 255, 255)
+    r.set_logo(logo, "x")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    loud = {"bass": 1.0, "mid": 0.5, "high": 0.5, "rms": 0.8, "beat": 1.0, "since_beat": 0.0, "beats": 4}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.4, logo_opacity=1.0, logo_glow=0.0,
+                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_on=0.0)
+
+    def render(t_cells=0.0, state=quiet, **kw):
+        pr = dict(base, **kw)
+        r.draw(fbo, size, state, pr, 1.0)
+        r._cell_t = t_cells
+        r.draw(fbo, size, state, pr, 1.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    off = render(cell_on=0.0)
+    nologo = render(cell_on=0.0, logo_opacity=0.0)
+    cover = lambda img: np.abs(img - nologo).max(axis=2) > 25
+    shape = cover(off)
+    ys, xs = np.nonzero(shape)
+    box = np.zeros(size[::-1], bool)
+    box[ys.min():ys.max() + 1, xs.min():xs.max() + 1] = True
+    check(np.array_equal(render(1.0, cell_on=0.0, cell_amount=1.0), off), "coupees: aucun effet")
+    check(np.array_equal(render(1.0, cell_on=1.0, cell_amount=0.0), off), "intensite 0 = logo d'origine")
+    on = render(1.0, cell_on=1.0)
+    check(int((np.abs(on - off).max(axis=2) > 25).sum()) > 3000 and cover(on).sum() < cover(off).sum(),
+          "le logo est decompose en cellules (des ecarts apparaissent entre elles)",
+          f"{int((np.abs(on - off).max(axis=2) > 25).sum())} px changes")
+    check(np.array_equal(on[~box], off[~box]), "rien ne deborde du rectangle du logo (le fond n'est pas touche)")
+    left, right = on[shape & (xx < (xs.min() + xs.max()) // 2 - 10)], on[shape & (xx > (xs.min() + xs.max()) // 2 + 10)]
+    check(left[:, 0].mean() > left[:, 2].mean() + 30 and right[:, 2].mean() > right[:, 0].mean() + 30,
+          "les cellules gardent les couleurs du logo (rouge a gauche, bleu a droite)")
+    green = render(1.0, cell_on=1.0, cell_ink="#00ff00")
+    greener = int(((green[:, :, 1] - on[:, :, 1]) > 40).sum())          # le contour (seul a changer) vire au vert
+    check(greener > 30 and int((np.abs(green - on)[:, :, [0, 2]].max(axis=2) > 120).sum()) < greener * 3,
+          "le contour des cellules prend la couleur choisie", f"{greener} px plus verts")
+    check(np.abs(render(2.5, cell_on=1.0) - on).max() > 60, "les cellules derivent avec le temps")
+    small = cover(render(1.0, cell_on=1.0, cell_fusion=0.25)).sum()
+    big = cover(render(1.0, cell_on=1.0, cell_fusion=1.8)).sum()
+    check(big > small * 1.3, "fusion: petit = bulles isolees (moins de matiere), grand = masse fusionnee", f"{small} -> {big} px")
+    fine = render(1.0, cell_on=1.0, cell_scale=2.5)
+    check(np.abs(fine - on).max() > 60, "la taille des cellules change leur nombre")
+    check(np.array_equal(render(1.0, quiet, cell_on=1.0), render(1.0, loud, cell_on=1.0)), "cell_react = 0: insensible a l'audio")
+    # le logo n'occupe que la moitie gauche de son rectangle : les cellules ne doivent apparaitre QUE dessus
+    half = np.zeros((64, 64, 4), np.uint8)
+    half[:, :32] = (255, 255, 255, 255)
+    r.set_logo(half, "x")
+    cx = (xs.min() + xs.max()) // 2
+    h_on = render(1.0, cell_on=1.0, cell_amount=1.0, cell_fusion=1.2)
+    h_nologo = render(1.0, cell_on=0.0, logo_opacity=0.0)
+    empty_side = (np.abs(h_on - h_nologo).max(axis=2) > 25) & box & (xx > cx + 8)
+    full_side = (np.abs(h_on - h_nologo).max(axis=2) > 25) & box & (xx < cx - 8)
+    check(int(empty_side.sum()) == 0 and int(full_side.sum()) > 2000,
+          "les cellules reprennent la forme du logo, pas la zone qu'il occupe",
+          f"{int(empty_side.sum())} px hors logo, {int(full_side.sum())} px sur le logo")
+    r.set_logo(logo, "x")
+    check(np.abs(render(1.0, loud, cell_on=1.0, cell_react=1.0) - render(1.0, quiet, cell_on=1.0, cell_react=1.0)).max() > 40,
+          "cell_react > 0: la fusion pulse au kick")
+
+
 def check_layers() -> None:
     print("Effets decorreles fond / logo")
     p = dict(gl.DEFAULT_PARAMS)
@@ -1444,6 +1600,8 @@ def main() -> None:
     check_text()
     check_logo_video()
     check_holo()
+    check_melt()
+    check_cells()
     check_layers()
     check_automation()
     check_params()

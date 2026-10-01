@@ -93,8 +93,16 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp) {
 // Le champ (distance "logarithmique" au logo + gradient) est calcule a basse resolution par holo.frag
 // et lu ici en bilineaire. Le gradient donne la direction "vers le logo" : il sert de lentille
 // (deformation du fond), de direction de derive pour la poussiere d'etoiles et de teinte irisee.
+// Palette irisee tirant vers le metal : l'arc-en-ciel d'origine est melange (HOLO_METAL) a un reflet
+// d'acier froid qui vire doucement au champagne, ce qui garde un peu d'irisation sans les couleurs vives.
+const float HOLO_METAL = 0.70;       // part de metal (0 = arc-en-ciel d'origine, 1 = acier pur)
+const float HOLO_SAT = 0.62;         // saturation de ce qui reste d'irisation
+const float HOLO_DULL = 0.86;        // luminosite globale: un metal brosse, pas un neon
 vec3 holo_palette(float t) {
-    return 0.5 + 0.5 * cos(6.2831853 * (vec3(0.0, 0.33, 0.67) + t));
+    vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (vec3(0.0, 0.33, 0.67) + t));
+    irid = mix(vec3(dot(irid, vec3(0.299, 0.587, 0.114))), irid, HOLO_SAT);
+    vec3 steel = mix(vec3(0.62, 0.69, 0.80), vec3(0.84, 0.79, 0.70), 0.5 + 0.5 * sin(6.2831853 * t * 0.5));
+    return mix(irid, steel, HOLO_METAL) * HOLO_DULL;
 }
 
 // Poussiere d'etoiles sur une grille POLAIRE centree sur le logo : chaque anneau a son nombre de
@@ -111,11 +119,12 @@ float dust_layer(vec2 px, vec2 c, float cell, float stretch, float speed, float 
     float b = atan(d.y, d.x) / 6.2831853 * n;
     vec2 id = vec2(ia, floor(b));
     float h = hash(id + seed);
-    float present = step(0.78, h);
-    vec2 o = (vec2(hash(id + seed + 3.1), hash(id + seed + 7.7)) - 0.5) * 0.5;
+    float present = step(0.45, h) * (0.3 + 0.7 * hash(id + seed + 5.3));         // grains d'intensites variees
+    vec2 o = (vec2(hash(id + seed + 3.1), hash(id + seed + 7.7)) - 0.5) * 0.6;
     vec2 f = vec2(fract(a), fract(b)) - 0.5 - o;
-    // traine : le coeur est etire le long du rayon (coordonnee a), court en travers
-    float core = smoothstep(0.34, 0.0, length(vec2(f.x / 1.0, f.y * 1.0 * stretch / 1.8)));
+    // grain diffus : coeur doux (chute quadratique, pas de bord net), legerement etire le long du rayon
+    float core = smoothstep(0.55, 0.0, length(vec2(f.x, f.y * stretch / 1.4)));
+    core *= core;
     float twinkle = 0.45 + 0.55 * sin(u_time * (1.5 + 3.0 * h) + h * 40.0);
     return present * core * twinkle;
 }
@@ -147,8 +156,17 @@ void holo(vec2 uv, out vec2 disp, out vec3 light) {
     vec2 px = uv * u_res;
     float scale = u_res.y / 720.0;
     vec2 c = u_holo_center * u_res;
-    float dust = dust_layer(px, c, 20.0 * scale, 2.6, 0.9, 0.0) + 0.7 * dust_layer(px, c, 36.0 * scale, 2.2, 0.5, 11.0);
-    light += holo_palette(hue + 0.3) * dust * (0.25 + 0.75 * v) * smoothstep(0.0, 0.25, v) * u_holo_dust * u_holo * 2.0 * open_;
+    // Une poussiere de grains minuscules (3 a 8 px) dont la densite suit des voiles lents qui ondulent et
+    // derivent : l'ensemble se lit comme un fluide fait de grains plutot que comme des etoiles isolees.
+    vec2 dd = px / scale - c / scale;
+    float flow = 0.5 + 0.5 * sin(dot(dd, vec2(0.011, 0.007)) - u_holo_phase * 3.0
+                                 + 2.0 * sin(dd.y * 0.013 - u_holo_phase * 2.0)
+                                 + 2.0 * sin(dd.x * 0.009 + u_holo_phase * 1.5));
+    flow = 0.12 + 0.88 * smoothstep(0.2, 0.95, flow);
+    float dust = dust_layer(px, c, 3.2 * scale, 1.2, 0.9, 0.0)
+               + 0.8 * dust_layer(px, c, 5.0 * scale, 1.2, 0.6, 11.0)
+               + 0.6 * dust_layer(px, c, 8.0 * scale, 1.2, 0.35, 23.0);
+    light += holo_palette(hue + 0.3) * dust * flow * (0.25 + 0.75 * v) * smoothstep(0.0, 0.25, v) * u_holo_dust * u_holo * 2.6 * open_;
 }
 void main() {
     // Halo holographique: deformation du fond + lumiere (jamais sur le logo: pose dessus, intact).
