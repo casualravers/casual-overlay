@@ -6,7 +6,8 @@ avec ses presets, ses automations de courbes, ses info-bulles et son theme. Ce m
 
   1. l'appelle telle quelle sur la fenetre Tk, avec ses trois evenements habituels
      (`restart_event`, `stop_event`, `finished_event`) ;
-  2. la nettoie de ce qui n'a pas de sens ici (boutons Snap/Ridge, taille de fenetre) ;
+  2. la nettoie de ce qui n'a pas de sens ici (taille de fenetre) ; les boutons Live / Snap / Ridge
+     changent la source du fond (modes Snap et Ridge d'audio2wave via py_modes.py, fenetre reconstruite) ;
   3. fait le pont entre son `restart_event` et `ProducerManager` : a chaque reglage, `build_gui`
      a deja mute les options live et positionne l'evenement, on en prend une copie et on
      remplace le producteur ffmpeg a chaud, sans toucher a la fenetre GL (aucun redemarrage
@@ -30,7 +31,7 @@ import copy
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import colorchooser, filedialog
+from tkinter import colorchooser, filedialog, ttk
 
 import audio2wave_gl as gl
 
@@ -72,33 +73,116 @@ def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> 
     label.grid_configure(sticky="ew", pady=(6, 3))
 
 
-def tidy_live_gui(root) -> None:
-    """Retire de la fenetre d'audio2wave ce qui n'a pas de sens dans casual-overlay:
-    les boutons de bascule Snap/Ridge (ces modes ne sont pas des sources ici) et la taille
-    de fenetre, qui devient la taille du rendu ffmpeg, fixe (la texture video est fixee au
-    lancement: le pont remet toujours cette taille)."""
+class HostFrame(tk.Frame):
+    """Cadre qui tient le role de `root` pour les `build_gui` d'audio2wave (Live, Snap, Ridge).
+
+    Ils appellent `root.title / resizable / protocol` (sans objet ici : la vraie fenetre est geree par
+    `build_window`), vident `root.winfo_children()` puis y posent leurs widgets en grille. Comme ce cadre
+    est dans un canvas defilant, un panneau plus haut que l'ecran (Snap : ~950 px) reste utilisable."""
+
+    def title(self, *_a, **_k) -> str:
+        return ""
+
+    def resizable(self, *_a, **_k) -> None:
+        return None
+
+    def protocol(self, *_a, **_k) -> None:
+        return None
+
+
+LIVE_MAX_HEIGHT = 640            # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
+MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
+                "snap": "SNAP  -  photo de l'onde (audio2wave)",
+                "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
+
+
+def tidy_mode_gui(host, mode: str) -> None:
+    """Retire ou renomme, dans la fenetre d'un mode d'audio2wave, ce qui n'a pas de sens ici.
+
+    Tous les modes : le titre ("Reglages Live"...) disparait (un bandeau le remplace) et les titres de
+    section deviennent des bandeaux. Live seulement : la taille de fenetre devient la taille du rendu, figee
+    (la texture video est fixee au lancement ; Snap et Ridge n'ont pas ce champ, leur taille est fixee
+    par `py_modes.make_args`). Les boutons de bascule Live / Snap / Ridge sont GARDES : ils pilotent
+    `on_switch_mode`, donc le changement de source."""
 
     import audio2wave as a2w
 
     def walk(widget) -> None:
         for child in widget.winfo_children():
             cls = child.winfo_class()
-            if cls == "Button" and child.cget("text") in ("Snap", "Ridge"):
-                child.destroy()
-                continue
-            if cls == "Label" and child.cget("text") in LIVE_SECTIONS:
-                # Les petits titres de section d'audio2wave deviennent des bandeaux pleine largeur,
-                # pour que les parties de la fenetre se distinguent d'un coup d'oeil.
-                style_band(child, a2w, LIVE_SECTIONS[child.cget("text")])
-            if cls == "Entry" and int(child.cget("width")) == 6:
+            if cls == "Label":
+                text = child.cget("text")
+                span = int(child.grid_info().get("columnspan", 1) or 1) if child.winfo_manager() == "grid" else 1
+                if text in ("Reglages Live", "Reglages Snap", "Reglages Ridge"):
+                    child.grid_remove()
+                elif mode == "live" and text in LIVE_SECTIONS:
+                    # Les petits titres de section d'audio2wave deviennent des bandeaux pleine largeur,
+                    # pour que les parties de la fenetre se distinguent d'un coup d'oeil.
+                    style_band(child, a2w, LIVE_SECTIONS[text])
+                elif mode != "live" and ((text.isupper() and span >= 2) or text == "Presets"):
+                    # Titres de section de Snap / Ridge (un titre couvre au moins deux colonnes ; 'BPM', 1 colonne,
+                    # est un libelle de curseur).
+                    style_band(child, a2w, f"PRESETS {mode.upper()}  (audio2wave)" if text.upper() == "PRESETS"
+                               else text.upper())
+                elif text == "Taille fenetre":
+                    child.config(text="Taille du rendu")
+            elif cls == "Entry" and int(child.cget("width")) == 6:
                 child.config(state="readonly")
-            if cls == "Label" and child.cget("text") == "Taille fenetre":
-                child.config(text="Taille du rendu")
-            if cls == "Label" and child.cget("text") == "Reglages Live":
-                child.config(text="Reglages casual-overlay GL")
+            elif mode != "live" and cls == "Checkbutton" and child.cget("text") == "Plein ecran":
+                child.config(state="disabled")      # l'affichage est gere par notre fenetre GL
             walk(child)
 
-    walk(root)
+    walk(host)
+
+
+def activate_mode(s, live, new: str) -> str | None:
+    """Fait de `new` ("live", "snap" ou "ridge") la source du fond. Renvoie un message si c'est
+    impossible (le mode courant reste alors en place), sinon None.
+
+    Live = ffmpeg (`s.manager`, suspendu pendant les autres modes) ; Snap / Ridge = `py_modes.PyModeSource`
+    (leur propre fil de rendu, images captees par un faux ffplay). `s.reader` pointe vers le flux du mode
+    actif, que le fil GL relit a chaque image. L'entree audio suit : celle choisie dans un mode devient
+    celle des autres. Les options de chaque mode sont gardees (`s.mode_args`) : revenir a Snap retrouve ses
+    reglages."""
+    import py_modes
+
+    old = s.mode
+    if new == old:
+        return None
+    if s.manager is None:
+        return "Les modes Snap et Ridge ne sont pas disponibles en --synthetic"
+    old_src = s.pysrc
+    device = (old_src.args.device if old_src is not None else s.live_args.device) or ""
+    if new == "ridge" and not device:
+        return "Ridge a besoin d'une entree audio : choisis-la d'abord dans le mode Live ou Snap"
+    src = None
+    if new != "live":
+        try:
+            mod = py_modes.load_mode(Path(live.__file__).resolve().parent, new)
+            args = s.mode_args.get(new)
+            if args is None:
+                args = s.mode_args[new] = py_modes.make_args(mod, new, device, s.render_size)
+            args.device = device or None
+            src = py_modes.PyModeSource(new, mod, args, s.render_size, gl.FrameReader,
+                                        capture_factory=getattr(s, "capture_factory", None))
+            src.start()
+        except Exception as exc:
+            return f"{new}: demarrage impossible ({exc})"
+    if old_src is not None:
+        old_src.stop()
+    elif old == "live":
+        s.manager.suspend()
+    s.mode, s.pysrc = new, src
+    if new == "live":
+        if device:
+            s.live_args.device = device
+        s.reader = s.manager.reader
+        resumed = copy.copy(s.live_args)
+        resumed.size = f"{s.render_size[0]}x{s.render_size[1]}"
+        s.manager.resume(resumed)
+    else:
+        s.reader = src.reader
+    return None
 
 
 SHORTCUTS_HELP = (
@@ -124,43 +208,122 @@ SHORTCUTS_HELP = (
 
 
 def run_gui(s, live, on_ready=None) -> None:
-    """Construit la fenetre et bloque dans mainloop() jusqu'a la fin de la session.
+    """Cree la fenetre Tk, la construit pour le mode courant et bloque dans mainloop() jusqu'a la fin.
 
     `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite."""
+    root = tk.Tk()
+    build_window(s, live, root, s.mode, on_ready)
+    root.mainloop()
+
+
+def build_window(s, live, root, mode: str, on_ready=None) -> None:
+    """(Re)construit tout le contenu de `root` pour le mode `mode` : le panneau d'audio2wave de ce mode
+    (a gauche, dans un cadre defilant) et les panneaux de casual-overlay (a droite). Appelee a chaque
+    changement de source : l'etat (reglages overlay, automations) vit dans `s.params`, les widgets
+    le relisent a leur creation."""
     import audio2wave as a2w
 
     Tooltip = live.Tooltip
     params = s.params
     manager = s.manager
     render_w, render_h = s.render_size
+    alive = {"ok": True}
 
-    root = tk.Tk()
+    def after(ms: int, fn) -> None:
+        """root.after() qui s'arrete tout seul quand la fenetre est reconstruite (changement de mode)."""
+        def guarded() -> None:
+            if alive["ok"]:
+                fn()
+        root.after(ms, guarded)
 
-    # ---------------------------------------------------- 1. la GUI d'audio2wave, telle quelle
+    for child in list(root.winfo_children()):
+        child.destroy()
+    live.style_gui(root)
+    root.title("casual-overlay GL - reglages")
+    root.resizable(False, False)
+
+    def on_switch(new_mode: str) -> None:
+        root.after(30, lambda: request_mode(new_mode))     # hors du callback du bouton qu'on va detruire
+
+    def request_mode(new_mode: str) -> None:
+        sync_automation_now()
+        message = activate_mode(s, live, new_mode)
+        alive["ok"] = False
+        if message:
+            s.status["msg"] = message
+        build_window(s, live, root, s.mode, on_ready)
+
+    # ---------------------------------------------------- 1. la GUI du mode d'audio2wave, telle quelle
+    live_wrap = tk.Frame(root)
+    live_wrap.grid(row=1, column=0, sticky="nw", padx=(6, 0))
+    canvas = tk.Canvas(live_wrap, highlightthickness=0, bd=0, width=10, height=10, bg=a2w.GUI_BG,
+                       yscrollincrement=24)
+    vbar = tk.Scrollbar(live_wrap, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=vbar.set)
+    canvas.pack(side="left")
+    host = HostFrame(canvas)
+    canvas.create_window((0, 0), window=host, anchor="nw")
+
     restart_event = threading.Event()
     live_status = {"text": ""}
-    live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
-                   s.finished_event, root=root)
+    if mode == "live":
+        live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
+                       s.finished_event, root=host, on_switch_mode=on_switch)
+    else:
+        src = s.pysrc
+        never = threading.Event()     # leur refresh() ferme la fenetre quand cet evenement est positionne: jamais ici
+        if mode == "snap":
+            src.module.build_gui(src.args, s.render_size, src.status, src.capture_state, src.stop_event, never,
+                                 root=host, on_switch_mode=on_switch)
+        else:
+            src.module.build_gui(src.args, s.render_size, src.status, src.stop_event, never,
+                                 root=host, on_switch_mode=on_switch)
     root.title("casual-overlay GL - reglages")
-    tidy_live_gui(root)
-    root.update_idletasks()
-    cols, nrows = root.grid_size()
+    tidy_mode_gui(host, mode)
 
-    # Deux grandes parties, bien distinctes : bandeaux de couleur en haut (a la place du titre
-    # d'audio2wave) et gros trait vertical entre les deux.
-    title = next((w for w in root.grid_slaves(row=0) if w.winfo_class() == "Label"
-                  and w.cget("text") == "Reglages casual-overlay GL"), None)
-    if title is not None:
-        title.grid_remove()
-    tk.Label(root, text="LIVE  -  spectre audio (audio2wave)", bg=LIVE_COLOR, fg=BANNER_FG,
+    # Le panneau d'audio2wave est a l'aise (lignes de 4 a 7 px de marge): on resserre ses marges
+    # verticales pour gagner de la hauteur, sans toucher a ses widgets ni a son code.
+    for w in host.winfo_children():
+        info = w.grid_info()
+        if not info:
+            continue
+        pady = info["pady"]
+        values = [pady] if isinstance(pady, (int, str)) else list(pady)
+        tight = tuple(max(1, round(float(v) * 0.35)) for v in values)
+        w.grid_configure(pady=tight[0] if len(tight) == 1 else tight)
+
+    cap = max(420, min(LIVE_MAX_HEIGHT, root.winfo_screenheight() - 200))
+
+    def fit(_e=None) -> None:
+        """Le canvas prend la taille du panneau, plafonnee : au-dela, un ascenseur apparait."""
+        w, h = host.winfo_reqwidth(), host.winfo_reqheight()
+        canvas.configure(width=w, height=min(h, cap), scrollregion=(0, 0, w, h))
+        if h > cap:
+            if not vbar.winfo_ismapped():
+                vbar.pack(side="right", fill="y")
+        else:
+            vbar.pack_forget()
+            canvas.yview_moveto(0)
+
+    def on_wheel(e) -> None:
+        if str(e.widget).startswith(str(canvas)) and host.winfo_reqheight() > cap:
+            canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+    host.bind("<Configure>", fit)
+    root.bind_all("<MouseWheel>", on_wheel)
+    host.update_idletasks()
+    fit()
+
+    # Deux grandes parties, bien distinctes : bandeaux de couleur en haut et gros trait vertical entre les deux.
+    tk.Label(root, text=MODE_BANNERS[mode], bg=LIVE_COLOR, fg=BANNER_FG,
              font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5).grid(
-        row=0, column=0, columnspan=cols, sticky="ew", padx=(6, 0), pady=(8, 2))
+        row=0, column=0, sticky="ew", padx=(6, 0), pady=(8, 2))
     tk.Label(root, text="OVERLAY  -  fond, logo, effets (casual-overlay)", bg=OVERLAY_COLOR, fg=BANNER_FG,
              font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5).grid(
-        row=0, column=cols + 1, columnspan=2, sticky="ew", padx=(0, 10), pady=(8, 2))
+        row=0, column=2, sticky="ew", padx=(0, 10), pady=(8, 2))
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
-    # ------------------------------------------------ 2. pont restart_event -> ProducerManager
+    # ------------------------------------------------ 2. pont restart_event -> ProducerManager (mode Live)
     last = {"fullscreen": bool(s.live_args.fullscreen)}
 
     def push_live() -> None:
@@ -199,17 +362,37 @@ def run_gui(s, live, on_ready=None) -> None:
             if msg and msg != seen_live["text"]:
                 seen_live["text"] = msg
                 live_status["text"] = msg            # affiche dans la ligne de statut d'audio2wave
-        root.after(BRIDGE_MS, poll_bridge)
+        after(BRIDGE_MS, poll_bridge)
 
     # ------------------------------------------------------ 3. nos panneaux, a droite
     separator = tk.Frame(root, bg=OVERLAY_COLOR, width=3)       # frontiere LIVE | OVERLAY
-    separator.grid(row=1, column=cols, rowspan=nrows - 1, sticky="ns", padx=ROW_PADX + 4)
-    col_a = tk.Frame(root)
-    col_a.grid(row=1, column=cols + 1, rowspan=nrows - 1, sticky="nw", padx=(0, 10))
-    col_b = tk.Frame(root)
-    col_b.grid(row=1, column=cols + 2, rowspan=nrows - 1, sticky="nw", padx=(0, 10))
-    zone_a = Zone(col_a)
-    zone_b = Zone(col_b)
+    separator.grid(row=1, column=1, sticky="ns", padx=ROW_PADX + 4)
+    # Partie OVERLAY: les presets restent toujours visibles en haut, le reste est range en ONGLETS (Fond, Effets,
+    # Logo, Aura, Affichage). Une seule colonne de reglages a la fois: la fenetre fait environ la moitie de la
+    # hauteur qu'avec des colonnes empilees (qui depassait la hauteur d'un ecran des qu'un bloc s'ouvrait).
+    right = tk.Frame(root)
+    right.grid(row=1, column=2, sticky="nsew", padx=(0, 10))
+    preset_bar = tk.Frame(right)
+    preset_bar.pack(fill="x")
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    edge = {"bordercolor": a2w.GUI_BG, "lightcolor": a2w.GUI_BG, "darkcolor": a2w.GUI_BG}   # pas de filets clairs
+    style.configure("TNotebook", background=a2w.GUI_BG, borderwidth=0, tabmargins=(0, 0, 0, 0), **edge)
+    style.configure("TNotebook.Tab", background=a2w.GUI_PANEL_BG, foreground=a2w.GUI_MUTED_FG,
+                    padding=(14, 5), borderwidth=0, font=("Segoe UI", 9, "bold"), **edge)
+    style.map("TNotebook.Tab", background=[("selected", OVERLAY_COLOR)], foreground=[("selected", BANNER_FG)])
+    notebook = ttk.Notebook(right)
+    notebook.pack(fill="both", expand=True, pady=(6, 0))
+
+    def new_tab(title: str) -> tk.Frame:
+        frame = tk.Frame(notebook)
+        notebook.add(frame, text=title)
+        return frame
+
+    tab_fond, tab_fx, tab_logo = new_tab("Fond"), new_tab("Effets"), new_tab("Logo")
+    tab_aura, tab_aff = new_tab("Aura du logo"), new_tab("Affichage")
+    zone_p, zone_f, zone_fx = Zone(preset_bar), Zone(tab_fond), Zone(tab_fx)
+    zone_logo, zone_aura, zone_aff = Zone(tab_logo), Zone(tab_aura), Zone(tab_aff)
 
     def add_label(z: Zone, text: str, r: int, tooltip: str | None = None) -> tk.Label:
         label = tk.Label(z.parent, text=text)
@@ -354,13 +537,13 @@ def run_gui(s, live, on_ready=None) -> None:
 
     # ---- colonne A : PRESETS OVERLAY (look complet: fond, logo, effets, halo, automations)
     # Meme classe (PresetStore) et memes gestes que les presets LIVE d'audio2wave, dans un fichier a part.
-    add_section_title(zone_a, "Presets overlay")
+    add_section_title(zone_p, "Presets overlay")
     overlay_store = live.PresetStore(gl.OVERLAY_PRESETS, gl.OVERLAY_PRESETS_PATH)
     overlay_var = tk.StringVar(value="default")
     preset_msg = tk.StringVar(value="Un preset = tout le look de l'overlay.")
 
-    load_row = tk.Frame(col_a)
-    load_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    load_row = tk.Frame(preset_bar)
+    load_row.grid(row=zone_p.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     tk.Label(load_row, text="Charger").pack(side="left", padx=(0, 10))
     overlay_menu = tk.OptionMenu(load_row, overlay_var, "")
     a2w.style_option_menu(overlay_menu)
@@ -421,8 +604,8 @@ def run_gui(s, live, on_ready=None) -> None:
     tk.Button(load_row, text="Mettre a jour", command=update_overlay_preset).pack(side="left", padx=(8, 0))
     tk.Button(load_row, text="Supprimer", command=delete_overlay_preset).pack(side="left", padx=(6, 0))
 
-    save_row = tk.Frame(col_a)
-    save_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    save_row = tk.Frame(preset_bar)
+    save_row.grid(row=zone_p.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     tk.Label(save_row, text="Sauvegarder sous").pack(side="left", padx=(0, 10))
     save_name_var = tk.StringVar(value="")
     save_entry = tk.Entry(save_row, textvariable=save_name_var, width=14)
@@ -444,24 +627,24 @@ def run_gui(s, live, on_ready=None) -> None:
 
     save_entry.bind("<Return>", save_overlay_preset)
     tk.Button(save_row, text="Sauvegarder", command=save_overlay_preset).pack(side="left", padx=(8, 0))
-    tk.Label(col_a, textvariable=preset_msg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=380).grid(
-        row=zone_a.next_row(), column=0, columnspan=3, sticky="we", padx=ROW_PADX, pady=(0, 2))
+    tk.Label(preset_bar, textvariable=preset_msg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=380).grid(
+        row=zone_p.next_row(), column=0, columnspan=3, sticky="we", padx=ROW_PADX, pady=(0, 2))
     refresh_overlay_menu()
 
     # ---- colonne A : FOND (motif genere)
-    add_section_title(zone_a, "Fond")
+    add_section_title(zone_f, "Fond")
     bg_var = tk.StringVar(value=params["bg_mode"])
-    r = zone_a.next_row()
-    add_label(zone_a, "Fond", r, "Spectre audio = le visuel ffmpeg regle dans le panneau de gauche. "
-                                 "Motif genere = degrades et damier calcules par la carte graphique (touche B).")
-    bg_frame = tk.Frame(col_a)
+    r = zone_f.next_row()
+    add_label(zone_f, "Fond", r, "Audio2wave = le visuel du mode choisi dans le panneau de gauche (Live, Snap ou "
+                                 "Ridge). Motif genere = degrades et damier calcules par la carte graphique (touche B).")
+    bg_frame = tk.Frame(tab_fond)
     bg_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    for text, value in (("Spectre audio", "live"), ("Motif genere", "pattern")):
+    for text, value in (("Audio2wave", "live"), ("Motif genere", "pattern")):
         tk.Radiobutton(bg_frame, text=text, variable=bg_var, value=value).pack(side="left")
     bind_param("bg_mode", bg_var, str)
 
-    pattern_box = tk.Frame(col_a)
-    pattern_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="new")
+    pattern_box = tk.Frame(tab_fond)
+    pattern_box.grid(row=zone_f.next_row(), column=0, columnspan=3, sticky="new")
     pattern_box.columnconfigure(2, weight=1)         # le bandeau "Motif genere" prend toute la largeur
     pz = Zone(pattern_box)
     add_section_title(pz, "Motif genere")
@@ -494,7 +677,7 @@ def run_gui(s, live, on_ready=None) -> None:
     show_bg()
 
     # ---- colonne A : EFFETS
-    add_separator(zone_a, "Effets")
+    add_separator(zone_fx, "Effets")
     fx_on_vars: list[tk.IntVar] = []
     fx_int_vars: list[tk.DoubleVar] = []
     fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
@@ -504,37 +687,37 @@ def run_gui(s, live, on_ready=None) -> None:
                "Bandes horizontales decalees sur les gros kicks / aigus.",
                "Interrupteur des reactions du logo (pulsation, tremblement, contour).")
     for i, name in enumerate(fx_labels):
-        r = zone_a.next_row()
+        r = zone_fx.next_row()
         on_var = tk.IntVar(value=int(params["fx_on"][i]))
         fx_on_vars.append(on_var)
         on_var.trace_add("write", lambda *_a, i=i, v=on_var: params["fx_on"].__setitem__(i, int(v.get())))
-        cb = tk.Checkbutton(col_a, text=name, variable=on_var)
+        cb = tk.Checkbutton(tab_fx, text=name, variable=on_var)
         cb.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         Tooltip(cb, fx_tips[i])
         int_var = tk.DoubleVar(value=params["fx_int"][i])
         fx_int_vars.append(int_var)
         int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fx_int"].__setitem__(i, _safe(v, 1.0)))
-        compact_scale(col_a, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        add_auto(zone_a, r, f"fx_int{i}", int_var)
+        compact_scale(tab_fx, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        add_auto(zone_fx, r, f"fx_int{i}", int_var)
 
     master_var = tk.DoubleVar(value=params["master"])
     bind_param("master", master_var)
-    add_slider(zone_a, "Intensite globale", 0.0, 2.0, 0.1, master_var, length=110)
+    add_slider(zone_fx, "Intensite globale", 0.0, 2.0, 0.1, master_var, length=110)
     sens_var = tk.DoubleVar(value=params["sensitivity"])
     bind_param("sensitivity", sens_var)
-    add_slider(zone_a, "Sensibilite kick", 0.25, 4.0, 0.05, sens_var, length=110,
+    add_slider(zone_fx, "Sensibilite kick", 0.25, 4.0, 0.05, sens_var, length=110,
                tooltip="Plus haut = kicks detectes plus facilement (aussi touches haut/bas dans la fenetre GL).")
 
     # ---- colonne A : EFFETS DE LA COUCHE LOGO (le fond garde les reglages ci-dessus)
-    add_separator(zone_a, "Effets sur le logo")
+    add_separator(zone_fx, "Effets sur le logo")
     link_var = tk.IntVar(value=int(float(params["fx_link"]) >= 0.5))
-    link_check = tk.Checkbutton(col_a, text="Memes effets que le fond", variable=link_var)
-    link_check.grid(row=zone_a.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    link_check = tk.Checkbutton(tab_fx, text="Memes effets que le fond", variable=link_var)
+    link_check.grid(row=zone_fx.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     Tooltip(link_check, "Coche: le logo subit exactement les memes deformations que le fond. Decoche: le logo a "
                         "ses propres effets (ci-dessous), ses ondes partent de son centre et son glitch tire "
                         "d'autres bandes. Touche L; Maj+1 a 4 dans la fenetre GL agissent sur le logo.")
-    logo_fx_box = tk.Frame(col_a)
-    logo_fx_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="nw")
+    logo_fx_box = tk.Frame(tab_fx)
+    logo_fx_box.grid(row=zone_fx.next_row(), column=0, columnspan=3, sticky="nw")
     lz = Zone(logo_fx_box)
     fxl_on_vars: list[tk.IntVar] = []
     fxl_int_vars: list[tk.DoubleVar] = []
@@ -566,27 +749,15 @@ def run_gui(s, live, on_ready=None) -> None:
     on_link()
 
     # ---- colonne A : HALO HOLOGRAPHIQUE autour du logo (non audioreactif par defaut)
-    add_separator(zone_a, "Halo holographique (logo)")
+    add_separator(zone_aura, "Halo holographique (logo)")
     holo_var = tk.IntVar(value=int(float(params["holo_on"]) >= 0.5))
     bind_param("holo_on", holo_var, float)
-    holo_row = tk.Frame(col_a)
-    holo_row.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    holo_row = tk.Frame(tab_aura)
+    holo_row.grid(row=zone_aura.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     holo_check = tk.Checkbutton(holo_row, text="Halo holographique", variable=holo_var)
     holo_check.pack(side="left")
-    holo_box = tk.Frame(col_a)            # reglages repliables: une fenetre trop haute deborde de l'ecran
-    holo_box.grid(row=zone_a.next_row(), column=0, columnspan=3, sticky="nw")
-    holo_box.grid_remove()
-
-    def toggle_holo_box() -> None:
-        if holo_box.winfo_manager():
-            holo_box.grid_remove()
-            holo_toggle.config(text="Reglages >")
-        else:
-            holo_box.grid()
-            holo_toggle.config(text="Reglages v")
-
-    holo_toggle = tk.Button(holo_row, text="Reglages >", command=toggle_holo_box, padx=6)
-    holo_toggle.pack(side="left", padx=(8, 0))
+    holo_box = tk.Frame(tab_aura)            # les reglages tiennent dans l'onglet: plus besoin de les replier
+    holo_box.grid(row=zone_aura.next_row(), column=0, columnspan=3, sticky="nw")
     cz = Zone(holo_box)
     Tooltip(holo_check, "Lumiere holographique a grande portee autour du logo (image, texte ou video): elle "
                         "deforme le FOND (lentille, ondes qui se propagent), l'irise, et y traine de la "
@@ -601,22 +772,22 @@ def run_gui(s, live, on_ready=None) -> None:
                  "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
 
     # ---- colonne B : LOGO
-    add_section_title(zone_b, "Logo / texte")
+    add_section_title(zone_logo, "Logo / texte")
     source_var = tk.StringVar(value=params["logo_source"])
-    r = zone_b.next_row()
-    add_label(zone_b, "Source", r, "Image PNG, texte que tu tapes, ou video animee (logo detoure): tout est "
+    r = zone_logo.next_row()
+    add_label(zone_logo, "Source", r, "Image PNG, texte que tu tapes, ou video animee (logo detoure): tout est "
                                    "traite comme un logo (position, opacite, pulsation, tremblement, contour).")
-    source_frame = tk.Frame(col_b)
+    source_frame = tk.Frame(tab_logo)
     source_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     for text, value in (("Image", "image"), ("Texte", "text"), ("Video", "video")):
         tk.Radiobutton(source_frame, text=text, variable=source_var, value=value).pack(side="left")
     bind_param("logo_source", source_var, str)
 
     # Les trois blocs occupent la meme cellule; un seul est affiche.
-    image_box = tk.Frame(col_b)
-    text_box = tk.Frame(col_b)
-    video_box = tk.Frame(col_b)
-    source_row = zone_b.next_row()
+    image_box = tk.Frame(tab_logo)
+    text_box = tk.Frame(tab_logo)
+    video_box = tk.Frame(tab_logo)
+    source_row = zone_logo.next_row()
     for box in (image_box, text_box, video_box):
         box.grid(row=source_row, column=0, columnspan=2, sticky="nw")
     iz = Zone(image_box)
@@ -781,36 +952,36 @@ def run_gui(s, live, on_ready=None) -> None:
     source_var.trace_add("write", show_source)
     show_source()
 
-    add_separator(zone_b, "Position")
-    x_var = param_slider(zone_b, "Position X", "logo_x", 0.0, 1.0, 0.01, "Centre, 0 = gauche, 1 = droite.")
-    y_var = param_slider(zone_b, "Position Y", "logo_y", 0.0, 1.0, 0.01, "Centre, 0 = haut, 1 = bas.")
-    param_slider(zone_b, "Opacite", "logo_opacity", 0.0, 1.0, 0.05)
-    tk.Button(col_b, text="Centrer", command=lambda: (x_var.set(0.5), y_var.set(0.5))).grid(
-        row=zone_b.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    add_separator(zone_logo, "Position")
+    x_var = param_slider(zone_logo, "Position X", "logo_x", 0.0, 1.0, 0.01, "Centre, 0 = gauche, 1 = droite.")
+    y_var = param_slider(zone_logo, "Position Y", "logo_y", 0.0, 1.0, 0.01, "Centre, 0 = haut, 1 = bas.")
+    param_slider(zone_logo, "Opacite", "logo_opacity", 0.0, 1.0, 0.05)
+    tk.Button(tab_logo, text="Centrer", command=lambda: (x_var.set(0.5), y_var.set(0.5))).grid(
+        row=zone_logo.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
-    add_separator(zone_b, "Reaction a l'audio")
-    param_slider(zone_b, "Pulsation", "logo_pulse", 0.0, 0.5, 0.01,
+    add_separator(zone_aura, "Reaction a l'audio")
+    param_slider(zone_aura, "Pulsation", "logo_pulse", 0.0, 0.5, 0.01,
                  "Zoom du logo a chaque kick (0,12 = +12 %). Jamais coupe hors cadre.")
-    param_slider(zone_b, "Tremblement", "logo_jitter", 0.0, 0.03, 0.001, "Vibration du logo proportionnelle aux aigus.")
-    param_slider(zone_b, "Contour lumineux", "logo_glow", 0.0, 3.0, 0.1,
+    param_slider(zone_aura, "Tremblement", "logo_jitter", 0.0, 0.03, 0.001, "Vibration du logo proportionnelle aux aigus.")
+    param_slider(zone_aura, "Contour lumineux", "logo_glow", 0.0, 3.0, 0.1,
                  "Intensite du halo autour du logo, module par les basses.")
-    param_slider(zone_b, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
-    color_var = color_row(zone_b, "Couleur du contour", "logo_glow_color")
+    param_slider(zone_aura, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
+    color_var = color_row(zone_aura, "Couleur du contour", "logo_glow_color")
 
     # ---- colonne B : ANALYSE AUDIO + AFFICHAGE
-    add_separator(zone_b, "Analyse audio (effets)")
+    add_separator(zone_aff, "Analyse audio (effets)")
     audio_choices = gl.AudioController.input_choices() if not s.audio.synthetic else []
     if not audio_choices:
-        tk.Label(col_b, text=s.audio.name, fg=a2w.GUI_MUTED_FG, wraplength=300, justify="left").grid(
-            row=zone_b.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        tk.Label(tab_aff, text=s.audio.name, fg=a2w.GUI_MUTED_FG, wraplength=300, justify="left").grid(
+            row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     else:
         labels = {label: idx for idx, label in audio_choices}
         current = next((label for idx, label in audio_choices if s.audio.name in label), s.audio.name)
         audio_var = tk.StringVar(value=current)
-        r = zone_b.next_row()
-        add_label(zone_b, "Entree", r, "Entree sounddevice qui alimente les effets (kick, basses...). "
+        r = zone_aff.next_row()
+        add_label(zone_aff, "Entree", r, "Entree sounddevice qui alimente les effets (kick, basses...). "
                                        "Independante de l'entree ffmpeg du fond.")
-        menu = tk.OptionMenu(col_b, audio_var, *labels.keys())
+        menu = tk.OptionMenu(tab_aff, audio_var, *labels.keys())
         a2w.style_option_menu(menu)
         menu.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
@@ -823,18 +994,18 @@ def run_gui(s, live, on_ready=None) -> None:
 
         audio_var.trace_add("write", on_audio_change)
 
-    add_separator(zone_b, "Affichage")
+    add_separator(zone_aff, "Affichage")
     for row_buttons in ((("Plein ecran", "fullscreen"), ("Barres debug", "hud")),
                         (("Recharger shaders", "reload"), ("Sauver reglages", "save"))):
-        frame = tk.Frame(col_b)
-        frame.grid(row=zone_b.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        frame = tk.Frame(tab_aff)
+        frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         for text, cmd in row_buttons:
             tk.Button(frame, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
 
     auto_master_var = tk.IntVar(value=int(float(params["auto_master"]) >= 0.5))
     bind_param("auto_master", auto_master_var, float)
-    frame = tk.Frame(col_b)
-    frame.grid(row=zone_b.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    frame = tk.Frame(tab_aff)
+    frame.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     master_check = tk.Checkbutton(frame, text="Automations actives", variable=auto_master_var)
     master_check.pack(side="left")
     Tooltip(master_check, "Interrupteur general (touche T): decoche, toutes les valeurs restent ou elles sont. "
@@ -852,8 +1023,8 @@ def run_gui(s, live, on_ready=None) -> None:
     shortcuts_label.pack(side="left", padx=(8, 0))
     Tooltip(shortcuts_label, SHORTCUTS_HELP)
 
-    meter = tk.Canvas(col_b, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
-    meter.grid(row=zone_b.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 2))
+    meter = tk.Canvas(tab_aff, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
+    meter.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 2))
     bars = {}
     for i, (name, color) in enumerate((("bass", "#ff5a4d"), ("mid", "#66ff73"), ("high", "#66b3ff"),
                                        ("beat", "#ffe633"))):
@@ -861,8 +1032,8 @@ def run_gui(s, live, on_ready=None) -> None:
         meter.create_text(4, y0 + 5, text=name, anchor="w", fill=a2w.GUI_MUTED_FG, font=a2w.GUI_FONT_SMALL)
         bars[name] = meter.create_rectangle(52, y0, 52, y0 + 10, fill=color, width=0)
 
-    status_label = tk.Label(col_b, text="", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
-    status_label.grid(row=zone_b.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
+    status_label = tk.Label(tab_aff, text="", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
+    status_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
 
     # ---------------------------------------------------------------- boucle
     automation.apply(params["_automation"])          # charge l'etat (sauve ou par defaut) dans l'editeur
@@ -876,7 +1047,7 @@ def run_gui(s, live, on_ready=None) -> None:
 
     def sync_automation_state() -> None:
         sync_automation_now()
-        root.after(AUTOMATION_SYNC_MS, sync_automation_state)
+        after(AUTOMATION_SYNC_MS, sync_automation_state)
 
     def sync_widgets() -> None:
         """params -> widgets, apres le chargement d'un preset (les variables ecrivent params par leur
@@ -916,6 +1087,9 @@ def run_gui(s, live, on_ready=None) -> None:
                         pass
 
     def refresh() -> None:
+        if s.finished_event.is_set():              # le fil GL est sorti: on ferme la fenetre
+            root.destroy()
+            return
         # Recopie les reglages que les touches de la fenetre GL ont pu changer.
         for i, v in enumerate(fx_on_vars):
             if int(params["fx_on"][i]) != v.get():
@@ -941,7 +1115,7 @@ def run_gui(s, live, on_ready=None) -> None:
         st = s.status
         parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("logo", "msg") if st.get(k)]
         status_label.config(text="  |  ".join(parts))
-        root.after(REFRESH_MS, refresh)
+        after(REFRESH_MS, refresh)
 
     def update_meter() -> None:
         follow_automation()
@@ -949,7 +1123,7 @@ def run_gui(s, live, on_ready=None) -> None:
         for name, item in bars.items():
             meter.coords(item, 52, meter.coords(item)[1], 52 + 200 * min(max(state[name], 0.0), 1.0),
                          meter.coords(item)[3])
-        root.after(METER_MS, update_meter)
+        after(METER_MS, update_meter)
 
     def on_close() -> None:
         s.stop_event.set()                # le fil GL sort, positionne finished_event, leur refresh() ferme
@@ -958,14 +1132,15 @@ def run_gui(s, live, on_ready=None) -> None:
     root.protocol("WM_DELETE_WINDOW", on_close)
     refresh()
     update_meter()
-    poll_bridge()
+    if mode == "live":
+        poll_bridge()
     sync_automation_state()
     if on_ready is not None:
         root.after(50, lambda: on_ready({
-            "root": root, "restart_event": restart_event, "live_status": live_status, "close": on_close,
+            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close,
             "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "overlay_var": overlay_var,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_aff), "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
@@ -974,7 +1149,6 @@ def run_gui(s, live, on_ready=None) -> None:
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
             "image_box": image_box, "text_box": text_box, "font_var": font_var}))
-    root.mainloop()
 
 
 def _safe(var: tk.Variable, default: float) -> float:

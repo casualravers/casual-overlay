@@ -1474,6 +1474,22 @@ class ProducerManager:
         self.reader.stop()
         stop_process(self.producer)
 
+    _suspended = False
+
+    def suspend(self) -> None:
+        """Un autre mode (Snap/Ridge) fournit le fond : arrete ffmpeg sans toucher au lecteur ni au
+        fil du gestionnaire. Les demandes de redemarrage sont ignorees jusqu'a `resume()`."""
+        with self._lock:
+            self._suspended = True
+            self._request = None
+        stop_process(self.producer)
+
+    def resume(self, new_args) -> None:
+        """Retour au mode Live : relance ffmpeg avec `new_args` (chauffe comme un redemarrage doux)."""
+        self._suspended = False
+        if getattr(new_args, "device", None):          # sans entree audio, rien a relancer
+            self.request_restart(new_args)
+
     def _run(self) -> None:
         while not self._stop.is_set():
             self._wake.wait(0.2)
@@ -1482,7 +1498,7 @@ class ProducerManager:
             with self._lock:
                 new_args, self._request = self._request, None
                 self._wake.clear()
-            if new_args is not None:
+            if new_args is not None and not self._suspended:
                 self._replace(new_args)
 
     def _warmup_seconds(self, args) -> float:
@@ -1521,10 +1537,16 @@ class ProducerManager:
         except Exception as exc:
             self.status["live"] = f"Lancement de ffmpeg impossible: {exc}"
             return
+        if self._suspended:                       # un autre mode a pris la main pendant le lancement
+            stop_process(new)
+            return
         if not self._drain(new, self._warmup_seconds(new_args)):
             stop_process(new)
             self.status["live"] = ("Reglage refuse (ffmpeg s'est arrete): ancien flux conserve. "
                                    "Verifie couleurs / valeurs.")
+            return
+        if self._suspended:
+            stop_process(new)
             return
         old = self.producer
         self.producer = new
@@ -1834,6 +1856,9 @@ class Session:
         self.finished_event = threading.Event()
         self.renderer: Renderer | None = None
         self.window: Window | None = None
+        self.mode = "live"                 # source du fond : "live" (ffmpeg), "snap" ou "ridge" (py_modes)
+        self.pysrc = None                  # PyModeSource courant (modes snap / ridge)
+        self.mode_args: dict = {}          # options de chaque mode Snap / Ridge, gardees entre deux bascules
 
 
 def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
@@ -1908,6 +1933,8 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
         s.stop_event.set()
         if thread is not None:
             thread.join(5)
+        if s.pysrc is not None:
+            s.pysrc.stop()
         audio.stop()
         if manager is not None:
             manager.stop()
@@ -2186,10 +2213,11 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         analyzer.extractor.sensitivity = params["sensitivity"]
 
         u0 = time.perf_counter()
+        reader = s.reader                       # change quand on bascule Live / Snap / Ridge
         if reader.upload_to(renderer.video_tex):
             up_ms += (time.perf_counter() - u0) * 1000.0
             up_n += 1
-        producer = s.manager.producer if s.manager else None
+        producer = s.manager.producer if s.manager and s.mode == "live" else None
         if s.manager and s.manager.restarts != last_restarts:
             last_restarts, warned = s.manager.restarts, False
         if producer is not None and not warned and producer.poll() is not None:

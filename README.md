@@ -49,9 +49,16 @@ de couleur ; chaque section porte aussi son bandeau.
 **LIVE (bandeau turquoise, a gauche)** : **la fenetre de reglages d'`audio2wave_live.py --gui`, reprise telle
 quelle** du depot audio2wave (meme theme, automations de courbes, info-bulles) pour le visuel de fond
 ffmpeg : chaque reglage remplace le flux a chaud (environ 0,4 s apres le dernier), sans que la
-fenetre video ne bouge. Les boutons Snap/Ridge et la taille de fenetre n'y sont pas repris ; la
-case *Plein ecran* commande la fenetre video. **Ses presets sont la** (section *PRESETS LIVE*, en bas :
-Charger / Mettre a jour / Supprimer / Sauvegarder sous), partages avec audio2wave (memes fichiers).
+fenetre video ne bouge. La taille de fenetre n'y est pas reprise ; la case *Plein ecran* commande la fenetre
+video. **Ses presets sont la** (section *PRESETS LIVE*, en bas : Charger / Mettre a jour / Supprimer /
+Sauvegarder sous), partages avec audio2wave (memes fichiers).
+
+**Live, Snap, Ridge** : les boutons *Live / Snap / Ridge* (a cote de l'entree audio) changent le mode d'audio2wave
+qui fournit le fond, dans la meme fenetre : le panneau de gauche devient celui du mode (ses reglages, ses
+presets *PRESETS SNAP* / *PRESETS RIDGE*, ceux d'audio2wave), la partie OVERLAY reste telle quelle. Snap (photo de
+l'onde : crayon, rekordbox, onde pleine) et Ridge (vagues empilees) sont dessines en Python par audio2wave, puis
+affiches comme fond avec le logo et les effets par-dessus. Le panneau de ces modes est plus haut que celui de
+Live : il defile (ascenseur ou molette). Ridge demande une entree audio (a choisir d'abord dans Live ou Snap).
 
 **OVERLAY (bandeau violet, a droite)** : les panneaux propres a casual-overlay, en commencant par
 les **presets overlay** (section *PRESETS OVERLAY*, en haut) : un preset = tout le look (fond, logo ou
@@ -61,7 +68,11 @@ que les presets live : *Charger* (le menu applique tout de suite), *Mettre a jou
 fond qui ondule doucement), `neon` (fond duo sombre, halo holographique ample, contour magenta), `chaos` (tout reagit).
 Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
 
-- **Fond** : *Spectre audio* (celui de gauche) ou *Motif genere* (degrades + damier animes par la
+Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour que la fenetre reste courte
+(environ 650 px de haut) : *Fond*, *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
+*Affichage*.
+
+- **Fond** : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Motif genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel ou Duo, couleurs, angle, teinte, vitesse, taille des
   carreaux, contraste, cadence, reaction au kick ; effet immediat).
 - **Effets** : les 5 effets (interrupteur + intensite), intensite globale, sensibilite du kick.
@@ -74,7 +85,7 @@ Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
   **deforme le fond** (lentille, ondes qui partent du logo, franges colorees) et y traine de la poussiere
   d'etoiles ; le logo reste net. Actif par defaut, anime par le temps seulement (reaction a l'audio a 0 ;
   touche C). Reglages (intensite, portee, deformation, poussiere, vitesse, reaction audio) dans le bloc
-  repliable « Reglages ».
+  (onglet *Aura du logo*).
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
 - **Analyse audio et affichage** : entree d'analyse, plein ecran, barres debug, recharger les
@@ -123,6 +134,17 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   « ombre » (soustractif) pour assombrir aussi le fond.
 - **Synchro du logo anime sur le kick** : vitesse de lecture ou saut d'image au rythme de la musique
   (le fichier est lu a sa cadence propre).
+- **Rendu GL natif de Snap et Ridge** : aujourd'hui ils sont dessines en Python pur par audio2wave (CPU, une
+  image au rythme de leur trace progressif) ; les porter en shaders les rendrait aussi fluides que le motif
+  genere et utilisables a 60 images/s. Pistes liees : brancher leurs automations de courbes sur le moteur GL et
+  charger leur Mode VJ (enchainement de presets) en meme temps qu'un preset overlay.
+- **Doodle dessine a la main depuis un site web** : une page de dessin (PNG transparent) depose le trait sur
+  un serveur ; casual-overlay l'interroge toutes les quelques secondes et l'incruste comme logo (nouvelle
+  source « Doodle (web) »). A trancher : hebergement, validation manuelle avant affichage (moderation), un doodle
+  a la fois ou une file ; l'image est toujours revalidee (taille, dimensions, Pillow) avant chargement.
+  Hebergement prevu : GitHub Pages pour la page de dessin. Attention, c'est un hebergement **statique** : il
+  sert la page mais ne peut pas recevoir un dessin. Il faudra un point de depot a cote (fonction serverless,
+  Firebase/Supabase, ou commit d'un `latest.png` via l'API GitHub) que casual-overlay interrogerait ensuite.
 - **Detourage plus fin du logo video** : similarite et fondu reglables dans la GUI (valeurs fixes),
   et relance du decodage sans a-coup.
 - **Plusieurs logos ou textes a la fois**, chacun avec sa couche d'effets.

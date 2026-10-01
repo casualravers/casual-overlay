@@ -179,8 +179,8 @@ revele qu'a intensite 0 tout s'eteignait). La phase est **integree** (`_holo_t`)
 - Plus de marge transparente sur les textures du logo (l'ancien `LOGO_PAD`) : elle n'avait de sens que
   pour le chrome, et le logo retrouve exactement son echantillonnage d'avant.
 - Actif par defaut ; `check_gl.py` le coupe pour les comparaisons de pixels
-  (`DEFAULT_PARAMS["holo_on"] = 0`) et `check_holo()` le rallume. GUI : case "Halo holographique" + bloc
-  "Reglages" **replie** par defaut (sinon la fenetre depasse 1100 px en mode motif).
+  (`DEFAULT_PARAMS["holo_on"] = 0`) et `check_holo()` le rallume. GUI : case "Halo holographique" et ses
+  six curseurs dans l'onglet "Aura du logo".
 
 ### Effets par couche (fond / logo decorreles)
 
@@ -252,33 +252,76 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    `restart_event` ; `status["text"]` alimente sa ligne de statut ; `WM_DELETE_WINDOW` ->
    `stop_event` ; son `refresh()` detruit la fenetre quand `finished_event` est positionne ;
    pas de `mainloop()` (il est ici) ;
-2. la nettoie (`tidy_live_gui`, parcours de l'arbre de widgets) : boutons Snap/Ridge retires
-   (ces modes ne sont pas des sources ici), "Taille fenetre" renommee "Taille du rendu" et
-   figee (`readonly`) ;
+2. la nettoie (`tidy_mode_gui`, parcours de l'arbre de widgets) : titre retire, sections en bandeaux,
+   "Taille fenetre" renommee "Taille du rendu" et figee (`readonly`). Les boutons de bascule
+   Live / Snap / Ridge sont **gardes** : voir "Modes Snap et Ridge" plus bas ;
 3. fait le **pont** `restart_event` -> `ProducerManager` (`poll_bridge`, dans le fil tkinter
    toutes les 100 ms, donc apres que `apply()` a fini de muter `args`) : copie des options,
    `size` toujours remise a la taille du rendu (la texture video est fixee au lancement),
    aucun redemarrage si `producer_command()` est identique a celle du producteur courant
    (plein ecran seul, automation qui ne change rien), message du gestionnaire reecrit dans
    leur ligne de statut ;
-4. accroche a droite, dans la meme fenetre, **deux colonnes a nous** (chaque curseur automatisable porte sa case `~` et son bouton de courbe dans une 3e colonne, sur la meme ligne : dessous, la fenetre devenait trop haute) : (A) Fond (selecteur
-   Spectre audio / Motif genere + tous les reglages du motif) puis Effets ; (B) Logo ou texte (source Image/Texte), reaction
-   a l'audio du logo, entree d'analyse sounddevice, boutons (plein ecran, barres debug,
-   recharger shaders, sauver), mesures bass/mid/high/beat et statut (fps, logo, messages).
-   Les cadres sont poses avec un `rowspan` sur toute la hauteur de leur grille : sur une
-   grille commune, un bloc haut dans une ligne etirerait leurs panneaux (piege rencontre :
-   fenetre de 1288 px de haut au premier essai). Taille obtenue : environ 1840 x 850 px (spectre) et
-  940 px (motif affiche) ; un ecran 1080 p laisse ~1000 px utiles, donc **surveiller la hauteur** :
-  les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px
-  par ligne), les deux couleurs du motif sont sur une ligne, les blocs annexes (halo holographique, effets du logo)
-  sont replies ou masques par defaut.
+4. accroche a droite, dans la meme fenetre, la partie OVERLAY : les **presets overlay** toujours visibles en haut
+   (`preset_bar`), puis un `ttk.Notebook` en **onglets** (chaque curseur automatisable porte sa case `~` et son
+   bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (selecteur Audio2wave / Motif genere +
+   reglages du motif), *Effets* (les 5 effets, intensite globale, sensibilite, effets propres au logo), *Logo*
+   (source Image/Texte/Video, position, opacite), *Aura du logo* (halo holographique + reaction a l'audio :
+   pulsation, tremblement, contour), *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
+   debug / recharger shaders / sauver, automations, mesures bass/mid/high/beat et statut fps/logo/messages).
+   **Hauteur** : la fenetre depassait la hauteur d'un ecran (deux colonnes empilees : 850 px au repos, plus de
+   1100 px avec le motif ouvert + les effets du logo delies + le halo deplie). Les onglets l'ont ramenee a
+   **648 px au repos et 653 px dans le pire cas** (1300-1380 px de large) ; elle est maintenant dictee par le
+   panneau LIVE d'audio2wave (763 px a l'origine), dont `build_window` **resserre les marges verticales** (x0,35 :
+   -115 px) sans toucher a son code. Le panneau d'audio2wave est dans un **canvas defilant** plafonne a 640 px
+   (`LIVE_MAX_HEIGHT`, ascenseur + molette) : Snap (~950 px) et Ridge (~850 px) sont plus hauts que Live. `check_gl.py` verifie qu'elle reste sous 700 px. Pieges : (1) une cellule
+   de grille qui s'etend sur plusieurs lignes (`rowspan`) etire les lignes voisines (la ligne 1 de la fenetre a
+   maintenant trois cellules sans `rowspan` : panneau d'audio2wave | trait | partie OVERLAY) ; (2) `ttk.Notebook` ne prend pas le theme sombre tout seul (`theme_use("clam")` + couleurs
+   des onglets, filets clairs a neutraliser `bordercolor/lightcolor/darkcolor`) ; (3) un widget d'un onglet
+   non affiche ne recoit pas les evenements clavier : les tests selectionnent l'onglet Logo avant de taper du texte.
+   Les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px par ligne).
 - **Structure visible** : deux grandes parties, LIVE (bandeau turquoise, fenetre d'audio2wave) et OVERLAY
   (bandeau violet), separees par un trait violet de 3 px ; le titre d'audio2wave est retire de la ligne 0
   pour y poser les bandeaux. Toutes les sections sont des **bandeaux** (`style_band`, fond `GUI_PANEL_BG`, texte
   gras colore) : ceux d'audio2wave (SOURCE, SPECTRE, COULEURS, SORTIE, PRESETS -> "PRESETS LIVE") sont
-  restyles par `tidy_live_gui`, les notres par `add_section_title`. Le bloc "Motif genere" doit etre pose
+  restyles par `tidy_mode_gui`, les notres par `add_section_title`. Le bloc "Motif genere" doit etre pose
   avec `sticky="new"` + `columnconfigure(2, weight=1)` pour que son bandeau prenne toute la largeur.
+  Le halo holographique n'est plus replie (il a son onglet).
 
+- **Modes Snap et Ridge** ([py_modes.py](py_modes.py), `activate_mode` / `build_window` dans gl_gui.py) : les boutons
+  Live / Snap / Ridge d'audio2wave changent la **source du fond**, sans nouvelle fenetre et sans modifier
+  audio2wave (leurs `build_gui` appellent `on_switch_mode`, qu'on branche). Snap et Ridge dessinent leurs images
+  en Python et les ecrivent dans l'entree d'un `ffplay` (`viewer.stdin.write`, rgb24, meme taille que la video
+  live) : on lance leur `run()` **tel quel dans un fil de notre processus** et on remplace seulement ce ffplay :
+  le module `subprocess` de snap/ridge est remplace par une enveloppe (`_SubprocessShim`) qui rend un
+  `FakeViewer` pour `Popen(["ffplay", ...])` ; chaque image va dans un `PushStream` (derniere gagne, aucune
+  image melangee) lu par un `FrameReader` normal. `PyModeSource` = un mode en marche (capture micro ffmpeg
+  propre au mode, comme leur `run_app`), `make_args` = options a la taille du rendu et sans plein ecran.
+  - Le fil GL relit `s.reader` a chaque image : changer de mode = changer `s.reader` (flux Live du
+    `ProducerManager`, ou flux du `PyModeSource`). **Live est suspendu** pendant Snap/Ridge
+    (`ProducerManager.suspend()` arrete ffmpeg, `resume(args)` le relance en doux au retour) ; l'arret d'un mode
+    Python ferme son flux (le `run()` s'arrete a sa prochaine ecriture) puis se termine en arriere-plan.
+  - **Toute la fenetre est reconstruite a chaque bascule** (`build_window(s, live, root, mode)`, appelee par
+    `request_mode`) : l'etat vit dans `s.params` (reglages overlay, `_automation` copie avant la
+    reconstruction), les widgets le relisent a leur creation ; les `root.after` de la fenetre passent par
+    `after()` qui s'arrete tout seul (`alive`). Les options de chaque mode sont gardees (`s.mode_args`) : revenir
+    a Snap retrouve ses reglages. L'entree audio suit d'un mode a l'autre.
+  - Le panneau du mode est dans un `HostFrame` (un `tk.Frame` qui joue le role de `root` : `title`,
+    `resizable`, `protocol` sans effet) pose dans un canvas ; on ne surcharge **pas** `destroy()` : le parent le
+    detruit en cascade et fermerait la vraie fenetre. Leur `refresh()` ferme la fenetre quand `finished_event`
+    est positionne : on leur donne un evenement jamais positionne pour Snap/Ridge, et c'est notre `refresh()`
+    qui ferme la fenetre quand `s.finished_event` l'est.
+  - **Piege (fond noir en mode Snap)** : `run()` remplace son visionneur quand `fullscreen` ou la taille change
+    (charger le preset `club`, qui coche Plein ecran) et ferme l'ancien (`stdin.close()`). Si fermer un
+    `FakeViewer` fermait le flux, plus aucune image n'arrivait. Un visionneur ferme donc seulement lui-meme ;
+    seul `PyModeSource.stop()` ferme le flux. Les images de taille differente de celle du rendu sont ignorees,
+    et le champ taille et la case Plein ecran de Snap/Ridge sont figes dans la GUI.
+  - Presets : chaque mode a ses presets (`live_presets.json`, `snap_presets.json`, `ridge_presets.json` dans
+    `~/.audio2wave/`, memes fichiers que dans audio2wave), section "PRESETS LIVE / SNAP / RIDGE". Ridge exige
+    une entree audio (refus avec message sinon) ; Snap sans entree attend qu'on en choisisse une.
+  - Limites : les rendus Snap/Ridge sont en Python pur (CPU, une image au rythme du trace progressif) et leur
+    micro est ouvert une fois de plus (ffmpeg dshow, en plus de sounddevice et du producteur live suspendu) ;
+    la case "Plein ecran" de Snap/Ridge n'existe pas (c'est notre fenetre GL qui gere l'affichage) ; le Mode VJ
+    d'audio2wave (enchainement de presets) n'est pas verifie ici.
 - **Case "Plein ecran"** de leur fenetre : `args.fullscreen` change -> commande
   `fullscreen=0|1` envoyee au fil GL (`Session.commands`), sans redemarrer ffmpeg. La
   touche F de la fenetre GL ne remet pas la case a jour (sens unique).
@@ -382,10 +425,12 @@ features sur signaux synthetiques (un beat par salve a 48 et 44,1 kHz, periode 5
 (P) ; remplacement du producteur a chaud (`switch_stream` sans frame melangee, ancien flux
 conserve si le nouveau meurt, demandes fusionnees, arret propre) avec de faux producteurs ;
 GUI : la vraie fenetre d'audio2wave_live integree, pilotee par ses propres widgets (curseur
-Gain, radio Style, case Plein ecran) : Snap/Ridge retires, taille figee, presets et
+Gain, radio Style, case Plein ecran) : taille figee, presets et
 automations presents, rafale de reglages = un seul redemarrage sur une copie, taille du
 rendu toujours remise, plein ecran = commande GL sans redemarrage ffmpeg, statut relaye,
-et nos panneaux (couleur invalide ignoree, logo, effets, fond) ;
+et nos panneaux (couleur invalide ignoree, logo, effets, fond) ; bascule Live -> Snap -> Ridge -> Live avec un
+faux micro (mode actif, ffmpeg live suspendu puis relance sur la meme entree, images du mode lues par le rendu,
+bandeau / presets / boutons du mode, fenetre sous 700 px) ;
 presets overlay (chargement d'un integre, widgets qui suivent, sensibilite exclue, `default`, sauvegarde /
 rechargement d'un preset utilisateur avec texte et curseurs, integre non ecrasable, `default` non modifiable,
 menu, suppression) ;
@@ -430,8 +475,7 @@ une mesure de l'application.
 
 ## Hors POC
 
-Modes Snap/Ridge en source (leurs fenetres existent dans audio2wave, cf. `on_switch_mode` de
-`build_gui`), presets combines live + overlay (les deux se chargent separement), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
+Rendu GL natif de Snap/Ridge (aujourd'hui Python pur), presets combines live + overlay (les deux se chargent separement), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
 redemarre ffmpeg), MIDI,
 sortie Spout/NDI, plusieurs logos a la fois, synchro de la lecture du logo anime sur le kick.
 

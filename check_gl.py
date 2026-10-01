@@ -251,12 +251,34 @@ def check_gui() -> None:
         manager.args = new_args
 
     manager.request_restart = request_restart
+    manager.suspended, manager.resumed, manager.reader = False, [], object()
+    manager.suspend = lambda: setattr(manager, "suspended", True)
+    manager.resume = lambda new_args: (setattr(manager, "suspended", False), manager.resumed.append(new_args))
+
+    class SineStream:                     # faux micro pour les modes Snap / Ridge (PCM s16le mono, 48 kHz)
+        def __init__(self):
+            self.t = 0
+
+        def read(self, n):
+            import array
+            import math
+            time.sleep(n / 2 / 48000)
+            k = n // 2
+            data = array.array("h", [int(12000 * math.sin(2 * math.pi * 220 * (self.t + i) / 48000)) for i in range(k)])
+            self.t += k
+            return data.tobytes()
+
+    def fake_capture(a, module):
+        stream = SineStream()
+        return NS(stdout=stream, terminate=lambda: None, wait=lambda: None), module.LiveCapture(stream, module.chunk_size(a))
+
     analyzer = NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0})
     audio = NS(synthetic=True, name="synthetique", analyzer=analyzer)
     params = gl.load_params()
     s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio,
            commands=queue.SimpleQueue(), status={}, stop_event=threading.Event(),
-           finished_event=threading.Event())
+           finished_event=threading.Event(), mode="live", pysrc=None, mode_args={}, reader=manager.reader,
+           capture_factory=fake_capture)
     original_gain = args.gain
     out: dict = {}
 
@@ -280,8 +302,56 @@ def check_gui() -> None:
                     return sub
         return None
 
+    def mode_stage(c):
+        """Appelee a chaque reconstruction de la fenetre apres la premiere (bascule Snap / Ridge / Live)."""
+        root = c["root"]
+        stage = out["stage"]
+        texts = [w.cget("text") for w in walk(root) if w.winfo_class() in ("Label", "Button")]
+        if stage in ("snap", "ridge"):
+            out[stage] = dict(mode=s.mode, src=s.pysrc.name if s.pysrc else None, suspended=manager.suspended,
+                              banner=any(t.startswith(stage.upper()) for t in texts),
+                              presets=any(t.startswith(f"PRESETS {stage.upper()}") for t in texts),
+                              buttons=("Live" in texts, "Snap" in texts, "Ridge" in texts),
+                              overlay=any(t.startswith("OVERLAY") for t in texts),
+                              height=root.winfo_reqheight(), reader_ok=s.reader is s.pysrc.reader)
+
+            def later(tries=0):
+                # La premiere image d'un mode arrive apres un "temps par photo" (4 s par defaut pour Snap).
+                if s.pysrc.reader.frames_read <= 5 and tries < 100:
+                    root.after(200, lambda: later(tries + 1))
+                    return
+                out[stage]["frames"] = s.pysrc.reader.frames_read
+                if stage == "snap" and "fs_frames" not in out:
+                    # un preset (ex. 'club') coche Plein ecran : run() remplace son visionneur ; le flux doit survivre
+                    s.pysrc.args.fullscreen = True
+                    base = s.pysrc.reader.frames_read
+
+                    def after_fs(tries=0):
+                        if s.pysrc.reader.frames_read < base + 6 and tries < 150:
+                            root.after(200, lambda: after_fs(tries + 1))
+                            return
+                        out["fs_frames"] = s.pysrc.reader.frames_read - base
+                        out["stage"] = "ridge"
+                        c["switch"]("ridge")
+                    after_fs()
+                    return
+                out["stage"] = "ridge" if stage == "snap" else "live"
+                c["switch"]("ridge" if stage == "snap" else "live")
+            root.after(200, later)
+        else:
+            out["live_back"] = dict(mode=s.mode, src=s.pysrc, suspended=manager.suspended,
+                                    resumed=[r.device for r in manager.resumed], reader_ok=s.reader is manager.reader,
+                                    banner=any(t.startswith("LIVE") for t in texts),
+                                    gain=find_scale(c["live_host"], "Gain (dB)") is not None)
+            c["close"]()
+            s.finished_event.set()
+
     def on_ready(c):
         root = c["root"]
+        out["builds"] = out.get("builds", 0) + 1
+        if out["builds"] > 1:
+            mode_stage(c)
+            return
 
         def step1():
             out["snap_ridge"] = any(w.winfo_class() == "Button" and w.cget("text") in ("Snap", "Ridge")
@@ -292,7 +362,7 @@ def check_gui() -> None:
                                  for w in walk(root))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
                                     and w.cget("text") == "courbe")
-            scale = find_scale(root, "Gain (dB)")
+            scale = find_scale(c["live_host"], "Gain (dB)")
             for v in (5, 8, 12):                                  # rafale: un seul redemarrage attendu
                 scale.set(v)
             root.after(1100, step2)
@@ -333,7 +403,14 @@ def check_gui() -> None:
             out["holo_off"] = params["holo_on"]
             c["holo_var"].set(1)
             out["holo_on"] = params["holo_on"]
-            out["holo_box_hidden"] = c["holo_box"].winfo_manager() == ""
+            out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
+            c["bg_var"].set("pattern")                   # pire cas: bloc motif ouvert + effets du logo delies
+            c["link_var"].set(0)
+            root.update_idletasks()
+            out["win_height"] = root.winfo_reqheight()
+            c["link_var"].set(1)
+            c["bg_var"].set("live")
+            root.update_idletasks()
             out["logo"] = params["logo_path"]
             out["pattern_hidden"] = c["pattern_box"].winfo_manager()
             c["bg_var"].set("pattern")
@@ -346,6 +423,8 @@ def check_gui() -> None:
             out["source_param"] = params["logo_source"]
             out["text_shown"] = c["text_box"].winfo_manager()
             out["image_hidden"] = c["image_box"].winfo_manager()
+            c["notebook"].select(2)                      # onglet Logo: le champ texte doit etre affiche pour recevoir le clavier
+            root.update()
             tw = c["text_widget"]
             tw.delete("1.0", "end")
             tw.insert("1.0", "HELLO\nWORLD")
@@ -432,8 +511,8 @@ def check_gui() -> None:
             texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
             out["live_msg"] = "message du gestionnaire" in texts       # dans la ligne de statut d'audio2wave
             out["mine_msg"] = any("Automations: ambiance par defaut" in t and "fps" in t for t in texts)
-            c["close"]()
-            s.finished_event.set()
+            out["stage"] = "snap"
+            c["switch"]("snap")               # bascule de source : la fenetre est reconstruite (on_ready rappelee)
 
         step1()
 
@@ -464,7 +543,23 @@ def check_gui() -> None:
     check(out.get("p_menu", [])[:1] == ["default"] and {"sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
           "menu des presets: default en tete, integres et utilisateur")
     check(out.get("p_delete") is True, "suppression d'un preset utilisateur")
-    check(out.get("snap_ridge") is False, "boutons Snap/Ridge retires de la fenetre d'audio2wave")
+    check(out.get("snap_ridge") is True, "boutons Snap / Ridge de la fenetre d'audio2wave conserves (bascule de source)")
+    for name in ("snap", "ridge"):
+        m = out.get(name, {})
+        check(m.get("mode") == name and m.get("src") == name and m.get("suspended") is (True)
+              and m.get("reader_ok") and m.get("frames", 0) > 5,
+              f"mode {name}: source active, ffmpeg live suspendu, images du mode lues par le rendu",
+              f"{m.get('frames')} images")
+        check(m.get("banner") and m.get("presets") and m.get("overlay") and m.get("buttons") == (True, name != "snap", name != "ridge"),
+              f"mode {name}: panneau d'audio2wave (bandeau, presets, boutons de bascule) + partie OVERLAY", str(m.get("buttons")))
+        check(m.get("height", 9999) <= 700, f"mode {name}: fenetre sous 700 px de haut (ascenseur dans le panneau)",
+              str(m.get("height")))
+    check(out.get("fs_frames", 0) >= 6, "mode snap: un preset qui change Plein ecran (visionneur remplace) n'interrompt pas le flux",
+          str(out.get("fs_frames")))
+    b = out.get("live_back", {})
+    check(b.get("mode") == "live" and b.get("src") is None and b.get("suspended") is False
+          and b.get("resumed") == ["Micro"] and b.get("reader_ok") and b.get("banner") and b.get("gain"),
+          "retour au mode Live : ffmpeg relance sur l'entree courante, lecteur d'origine, panneau Live reconstruit", str(b))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
     check(out.get("presets") and out.get("automation", 0) >= 1,
           "presets et automations d'audio2wave presents", f"{out.get('automation')} curseurs automatables")
@@ -477,8 +572,12 @@ def check_gui() -> None:
     check(out.get("style") == "radio", "style radio (GUI d'audio2wave) -> producteur remplace", str(out.get("style")))
     check(out.get("x") == 0.2 and out.get("fx1") == 0 and abs(out.get("master", 0) - 1.4) < 1e-9,
           "reglages logo/effets ecrits tout de suite dans les parametres")
-    check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0 and out.get("holo_box_hidden"),
-          "halo holographique: case ecrit holo_on, reglages replies par defaut (fenetre plus basse)")
+    check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0,
+          "halo holographique: la case ecrit holo_on")
+    check(out.get("tabs") == ["Fond", "Effets", "Logo", "Aura du logo", "Affichage"],
+          "partie OVERLAY rangee en onglets", str(out.get("tabs")))
+    check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
+          str(out.get("win_height")))
     check(out.get("logo") == "", "logo vide = aucun logo")
     check(out.get("color_bad") == gl.DEFAULT_PARAMS["logo_glow_color"] and out.get("color_ok") == "#ff0000",
           "couleur du contour: invalide ignoree, valide appliquee")
