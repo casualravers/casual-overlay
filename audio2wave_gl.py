@@ -115,9 +115,28 @@ DEFAULT_PARAMS = {
     "holo_dust": 1.0,                 # quantite de poussiere d'etoiles
     "holo_speed": 0.15,               # vitesse de l'animation (ondes, derive des etoiles)
     "holo_react": 0.0,                # 0 = pas audioreactif; >0: intensite au kick, vitesse aux basses
+    # Fonte acide du logo: il se dissout sur place (trous qui grandissent, lisiere acide) puis se reforme, en boucle.
+    # Coupee par defaut (une marque ne doit pas disparaitre sans l'avoir voulu) ; non audioreactive par defaut.
+    "melt_on": 0.0,
+    "melt_depth": 0.9,                # degre maximal de dissolution (1 = disparait entierement)
+    "melt_period": 14.0,              # secondes pour un cycle complet (fond puis se reforme)
+    "melt_scale": 1.0,                # finesse des trous (petit = grosses plaques, grand = fines piqures)
+    "melt_edge": 1.0,                 # largeur et intensite de la lisiere acide
+    "melt_color": "#a6ff00",          # couleur de l'acide
+    "melt_react": 0.0,                # 0 = pas audioreactif; >0: cycle accelere par les basses
+    # Cellules organiques du logo (Voronoi, cell shading): le logo se DECOMPOSE en cellules (il garde sa forme).
+    # Coupees par defaut, non audioreactives.
+    "cell_on": 0.0,
+    "cell_amount": 0.65,              # decomposition: 0 = logo intact .. 1 = entierement en cellules separees
+    "cell_scale": 1.0,                # finesse des cellules (grand = petites cellules)
+    "cell_fusion": 1.0,               # rayon des cellules: petit = bulles isolees, grand = elles se touchent et se chevauchent
+    "cell_speed": 0.3,                # vitesse de derive des cellules
+    "cell_flat": 0.85,                # 0 = couleurs d'origine, 1 = aplat de la couleur au centre de la cellule
+    "cell_ink": "#14103a",            # contour des cellules
+    "cell_react": 0.0,                # 0 = pas audioreactif; >0: derive acceleree par les basses, fusion pulsee au kick
     # Fond: "live" = spectre ffmpeg, "pattern" = motif genere dans le shader (degrades + damier)
     "bg_mode": "live",
-    "bg_palette": "classic",          # "classic" (arc-en-ciel d'origine) ou "duo" (color1 -> color2)
+    "bg_palette": "classic",          # "classic" (arc-en-ciel), "duo" (color1 -> color2) ou "test" (copie exacte du banc de test)
     "bg_color1": "#3a1cff",           # palette duo
     "bg_color2": "#14f0d8",
     "bg_angle": 0.0,                  # direction du degrade duo, en degres
@@ -895,6 +914,10 @@ class Renderer:
         self._last_t: float | None = None
         self._bg_scroll = 0.0
         self._bg_flip_t = 0.0
+        self._bg_clock = 0.0
+        self._melt_t = 0.0          # cycles de fonte ecoules (partie entiere = cycles complets)
+        self._melt_clock = 0.0      # secondes (derive du bruit)
+        self._cell_t = 0.0          # temps integre de la derive des cellules
 
         self.video_tex = ctx.texture(video_size, 3, data=bytes(video_size[0] * video_size[1] * 3))
         self.video_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -1049,12 +1072,39 @@ class Renderer:
         h_react = max(float(p["holo_react"]), 0.0)
         self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(bass) * 3.0)
         holo_on = float(p["holo_on"]) >= 0.5 and self.has_logo
+        # Fonte acide: phase integree (changer la periode ne fait pas sauter l'animation). Triangle 0 -> 1 -> 0 avec
+        # un palier intact et un palier dissous, adouci: le logo reste lisible un moment, puis fond, puis se reforme.
+        m_react = max(float(p["melt_react"]), 0.0)
+        self._melt_t += dt / max(float(p["melt_period"]), 1.0) * (1.0 + m_react * float(bass) * 3.0)
+        self._melt_clock += dt
+        tri = 1.0 - abs(2.0 * (self._melt_t % 1.0) - 1.0)
+        s_ = min(max((tri - 0.15) / 0.7, 0.0), 1.0)
+        melt = s_ * s_ * (3.0 - 2.0 * s_) * min(max(float(p["melt_depth"]), 0.0), 1.0)
+        if float(p["melt_on"]) < 0.5:
+            melt = 0.0
+        self._set(sp, "u_melt", melt)
+        self._set(sp, "u_melt_scale", max(float(p["melt_scale"]), 0.1))
+        self._set(sp, "u_melt_edge", max(float(p["melt_edge"]), 0.0))
+        self._set(sp, "u_melt_color", hex_to_rgb(p["melt_color"], DEFAULT_PARAMS["melt_color"]))
+        self._set(sp, "u_melt_t", self._melt_clock)
+        # Cellules du logo: derive integree (changer la vitesse ne fait pas sauter les gouttes).
+        c_react = max(float(p["cell_react"]), 0.0)
+        self._cell_t += dt * float(p["cell_speed"]) * (1.0 + c_react * float(bass) * 3.0)
+        cell_on = float(p["cell_on"]) >= 0.5
+        self._set(sp, "u_cell", min(max(float(p["cell_amount"]), 0.0), 1.0) if cell_on else 0.0)
+        self._set(sp, "u_cell_scale", max(float(p["cell_scale"]), 0.1))
+        self._set(sp, "u_cell_fusion", max(float(p["cell_fusion"]), 0.05) * (1.0 + c_react * float(beat) * 0.6))
+        self._set(sp, "u_cell_flat", min(max(float(p["cell_flat"]), 0.0), 1.0))
+        self._set(sp, "u_cell_ink", hex_to_rgb(p["cell_ink"], DEFAULT_PARAMS["cell_ink"]))
+        self._set(sp, "u_cell_t", self._cell_t)
         react = max(float(p["bg_react"]), 0.0)
         self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bass) * 1.5)
         self._bg_flip_t += dt * float(p["bg_flip"])
         flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 else 0.0)
         self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
-        self._set(sp, "u_bg_palette", 1.0 if p["bg_palette"] == "duo" else 0.0)
+        self._bg_clock += dt                       # horloge reelle: la palette "test" tourne a 30 images/s fixes
+        self._set(sp, "u_bg_palette", {"duo": 1.0, "test": 2.0}.get(p["bg_palette"], 0.0))
+        self._set(sp, "u_bg_frame", float(int(self._bg_clock * 30.0)))
         self._set(sp, "u_bg_c1", hex_to_rgb(p["bg_color1"], DEFAULT_PARAMS["bg_color1"]))
         self._set(sp, "u_bg_c2", hex_to_rgb(p["bg_color2"], DEFAULT_PARAMS["bg_color2"]))
         self._set(sp, "u_bg_phase", (self._bg_scroll, flips))
@@ -2121,6 +2171,12 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         elif name == "holo":
             params["holo_on"] = 0.0 if float(params["holo_on"]) >= 0.5 else 1.0
             print(f"halo holographique: {'on' if params['holo_on'] >= 0.5 else 'off'}")
+        elif name == "melt":
+            params["melt_on"] = 0.0 if float(params["melt_on"]) >= 0.5 else 1.0
+            print(f"fonte acide du logo: {'on' if params['melt_on'] >= 0.5 else 'off'}")
+        elif name == "cell":
+            params["cell_on"] = 0.0 if float(params["cell_on"]) >= 0.5 else 1.0
+            print(f"cellules du logo: {'on' if params['cell_on'] >= 0.5 else 'off'}")
         elif name == "link":
             set_fx_link(params, float(params["fx_link"]) < 0.5)
             print(f"effets fond/logo: {'lies' if params['fx_link'] >= 0.5 else 'separes'}")
@@ -2160,6 +2216,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
     key_actions[glfw.KEY_L] = "link"
     key_actions[glfw.KEY_C] = "holo"
+    key_actions[glfw.KEY_M] = "melt"
+    key_actions[glfw.KEY_V] = "cell"
 
     def on_key(win, key, scancode, action, mods):
         name = key_actions.get(key)

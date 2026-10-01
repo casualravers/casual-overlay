@@ -70,10 +70,10 @@ Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
 
 Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour que la fenetre reste courte
 (environ 650 px de haut) : *Fond*, *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
-*Affichage*.
+*Fonte du logo*, *Cellules*, *Affichage*.
 
 - **Fond** : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Motif genere* (degrades + damier animes par la
-  carte graphique : palette Arc-en-ciel ou Duo, couleurs, angle, teinte, vitesse, taille des
+  carte graphique : palette Arc-en-ciel, Duo ou Banc de test (copie exacte du motif de test, sans reglage), couleurs, angle, teinte, vitesse, taille des
   carreaux, contraste, cadence, reaction au kick ; effet immediat).
 - **Effets** : les 5 effets (interrupteur + intensite), intensite globale, sensibilite du kick.
   Wobble, onde de choc, aberration et glitch s'appliquent au **fond** et au **logo** chacun dans sa
@@ -86,6 +86,18 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
   d'etoiles ; le logo reste net. Actif par defaut, anime par le temps seulement (reaction a l'audio a 0 ;
   touche C). Reglages (intensite, portee, deformation, poussiere, vitesse, reaction audio) dans le bloc
   (onglet *Aura du logo*).
+- **Fonte acide du logo** (onglet *Fonte du logo*, touche M) : le logo, le texte ou la video se **dissout sur
+  place**, ronge par un acide : des trous grandissent, leur lisiere vire au vert-jaune acide et brille, puis
+  la matiere se reforme, en boucle (intact, fond, dissous, se reforme). Reglages : profondeur (1 = il disparait
+  entierement), duree du cycle, grain des trous, bord acide, couleur de l'acide, reaction audio. Coupee par
+  defaut et non audioreactive ; l'aura suit la forme rongee.
+- **Cellules organiques** (onglet *Cellules*, touche V) : le logo, le texte ou la video **se decompose en
+  cellules** (Voronoi). Il garde sa forme : il est fait de bulles qui glissent, se retrecissent et s'ecartent les
+  unes des autres, chacune en aplat translucide avec contour et reflet de bulle (cell shading). Les cellules ne
+  reprennent que la forme du logo, jamais la zone qu'il occupe. Reglages : decomposition (0 = logo intact, 1 =
+  cellules separees), rayon des cellules (petit = bulles isolees, grand = elles se touchent), taille des
+  cellules, vitesse, aplat (couleurs d'origine ou couleur du centre de la cellule), couleur du contour, reaction
+  audio. Coupee par defaut et non audioreactive. Limite : les cellules restent dans le rectangle du logo.
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
 - **Analyse audio et affichage** : entree d'analyse, plein ecran, barres debug, recharger les
@@ -114,6 +126,8 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 | Maj + 1 a 4 | le meme effet sur la couche du logo (delie fond et logo) |
 | L | lier / separer les effets du fond et du logo |
 | C | halo holographique : on / off |
+| M | fonte acide du logo : on / off |
+| V | cellules organiques du logo : on / off |
 | + / - (ou PageUp / PageDown) | intensite globale |
 | Haut / Bas | sensibilite de la detection du kick |
 | R | recharge les shaders (`gl_shaders/*.glsl`) et les reglages |

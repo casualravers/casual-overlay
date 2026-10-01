@@ -40,7 +40,7 @@ Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--s
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
 Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif, T automations, 1-5 effets
-(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, +/- ou PageUp/PageDown intensite globale, haut/bas
+(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, M fonte acide du logo, V cellules du logo, +/- ou PageUp/PageDown intensite globale, haut/bas
 sensibilite du kick, R recharge shaders + reglages, P sauve dans
 `~/.audio2wave/gl_params.json` (recharge au lancement).
 
@@ -136,6 +136,12 @@ couleurs 1/2, angle, teinte (rotation autour de l'axe du gris), vitesse, taille 
 (en px pour 720 px de haut, mise a l'echelle), contraste du damier, cadence de bascule,
 reaction a l'audio (flash au kick, damier qui bascule a chaque kick, defilement accelere par
 les basses).
+- **Palette `test` ("Banc de test")** : copie **octet pour octet** de `SyntheticVideoStream._frame` (`test_pattern()`
+  dans scene.frag, numero d'image `u_bg_frame` = horloge reelle x 30, `_bg_clock`). Aucun reglage du motif ne
+  s'y applique (teinte, taille, contraste, vitesse, reaction) : carreaux de 80 px fixes. Elle reproduit un
+  **defaut du flux de test** : `x*255` y est calcule en uint16 et deborde pour x > 257, d'ou un degrade coupe
+  en bandes ; c'est ce qui la distingue d'Arc-en-ciel (version "propre" du meme visuel). `check_gl.py` compare
+  8 images au flux de test, ecart 0.
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
   (`dt * vitesse`), pas calculees par `vitesse * temps` : changer la vitesse dans la GUI ne
   fait jamais sauter le motif.
@@ -170,6 +176,11 @@ Trois passes, toutes dans le post-traitement :
    l'exterieur, coeur etire le long du rayon (traine). Le logo est pose par-dessus, jamais deforme par ceci.
    `field.a` eteint lumiere, deformation et poussiere **dans** le logo : avec le PNG a traits fins du
    depot, sinon le halo se voyait a travers ses trous et le rendait illisible.
+Teinte : palette irisee **tres metallique, peu saturee, un peu terne** (`HOLO_METAL` 0,70 = part de reflet
+d'acier froid qui vire au champagne, `HOLO_SAT` 0,62, `HOLO_DULL` 0,86, constantes en tete de `holo_palette`
+dans post.frag). Poussiere : **fluide de grains minuscules** : trois couches de grains de 3 a 8 px a 720 p
+(coeur doux, quasi ronds) dont la densite suit des voiles lents qui ondulent et derivent (`flow`), plutot que
+des etoiles isolees.
 Reglages : `holo_on`, `holo_intensity` (lumiere) 1, `holo_reach` 1,3 (1 = ~1,5 x la taille du logo),
 `holo_warp` 1, `holo_dust` 1, `holo_speed` 0,15, `holo_react` **0** (defaut : non audioreactif ; > 0 =
 intensite et deformation au kick, animation acceleree par les basses). `u_holo` = interrupteur x reaction,
@@ -181,6 +192,51 @@ revele qu'a intensite 0 tout s'eteignait). La phase est **integree** (`_holo_t`)
 - Actif par defaut ; `check_gl.py` le coupe pour les comparaisons de pixels
   (`DEFAULT_PARAMS["holo_on"] = 0`) et `check_holo()` le rallume. GUI : case "Halo holographique" et ses
   six curseurs dans l'onglet "Aura du logo".
+
+### Fonte acide du logo (`melt_*`, touche M)
+
+Le logo (image, texte ou video) se **dissout sur place** puis se reforme, en boucle. Tout est dans
+`logo_at()` de `scene.frag`, donc dans la **couche logo** : la lisiere de glow, l'aura holographique (son
+champ est calcule sur l'alpha de cette couche) et les effets par couche suivent la forme rongee.
+- `melt_field()` : bruit de valeur a trois octaves, dans le repere du logo (isotrope a l'ecran, colle au logo
+  quand il bouge), compare a un seuil `m` qui monte avec `u_melt`. Sous le seuil : la matiere disparait
+  (`vis`) ; juste au-dessus (`band`) : elle **vire a l'acide** (remplacement de couleur, pas seulement additif :
+  un logo blanc + additif ne donnait qu'un jaune pale) avec un coeur chaud (`core`) et un liseré additif.
+  La matiere s'affaisse un peu (`q.y` decale) la ou elle cede. Rien ne deborde du rectangle du logo.
+- Cycle cote CPU (`Renderer.draw`) : phase **integree** `_melt_t` (cycles), triangle 0 -> 1 -> 0 adouci avec
+  un palier intact et un palier dissous ; `melt_depth` plafonne l'amplitude, `melt_period` en secondes.
+  `u_melt` = 0 coupe tout (`melt_on` = 0, le defaut : une marque ne doit pas disparaitre sans l'avoir voulu).
+  La branche `u_melt > 0.001` evite le cout du bruit quand l'effet est coupe (logo_at est appelee ~25 fois
+  par pixel pour le glow).
+- Reglages : `melt_on`, `melt_depth` 0,9, `melt_period` 14 s, `melt_scale` 1 (grain), `melt_edge` 1 (lisiere),
+  `melt_color` `#a6ff00`, `melt_react` **0** (> 0 : cycle accelere par les basses). GUI : onglet "Fonte du logo".
+  `check_gl.py` (`check_melt`) : intact aux deux bouts du cycle, symetrique, lisiere acide, rien hors du logo.
+
+### Cellules organiques du logo (`cell_*`, touche V)
+
+Le logo **se decompose en cellules** (Voronoi + cell shading) ; il garde sa forme. Comme la fonte, tout est dans
+`logo_at()` de `scene.frag` (`logo_cells()`), donc dans la couche logo : glow, aura et effets par couche suivent.
+- Une premiere version remplissait des cellules **dans le rectangle du logo** (champ de metaballes + logo flou) :
+  elles reprenaient la zone occupee et non la forme (signale : "les cellules ne reprennent absolument pas le
+  logo"). Remplacee par une **decomposition du vrai logo** : chaque cellule est un disque qui contient le morceau
+  de logo correspondant (`qs` = position du morceau dans le logo : `graine + (v - centre)`), et qui glisse
+  (`wob`, ondes triangulaires bon marche), s'ecarte du centre et se retrecit avec `u_cell` (decomposition). Les
+  pixels sans logo restent vides car la couleur et l'alpha viennent du logo echantillonne en `qs`.
+- Grille jitteree de graines (`cell_base`), 3x3 candidates par pixel, la cellule retenue est celle dont le
+  disque (rayon `0,75 x cell_fusion x (1 - 0,25 x decomposition)`, un peu inegal d'une cellule a l'autre) contient
+  le pixel au plus pres de son centre. Deplacement <= 0,28 case et rayon <= 0,9 : **3x3 suffisent** (au-dela,
+  des cellules seraient coupees net). A `u_cell` = 0 le logo est intact (melange avec l'original par `u_cell`).
+- Rendu cell shading : aplat de la couleur moyenne du logo autour de la graine (lod 3) melange a la couleur
+  d'origine par `cell_flat`, deux tons, reflet de bulle, contour en `cell_ink`, translucide.
+- Pieges : **`textureLod` et non `texture`** dans cette fonction (retour anticipe = derivees fausses, mauvais
+  niveau de mipmap aux frontieres des cellules, traits parasites) ; hachage **sans `sin`** (`chash`), car
+  `logo_at` est appelee ~13 fois par pixel avec le glow ; les cellules restent **dans le rectangle du logo**
+  (les textes ont une marge transparente de 0,18 x la taille).
+- Reglages : `cell_on` 0, `cell_amount` 0,65 (decomposition), `cell_fusion` 1 (rayon des cellules, 0,2 a 1,2),
+  `cell_scale` 1, `cell_speed` 0,3, `cell_flat` 0,85, `cell_ink` `#14103a`, `cell_react` **0** (> 0 : derive
+  acceleree par les basses, cellules gonflees au kick). GUI : onglet "Cellules". `check_gl.py`
+  (`check_cells`) : intact a 0, decompose, couleurs gardees, **les cellules ne couvrent que la forme du logo** (logo
+  a moitie transparent), rien hors du rectangle, contour de la couleur choisie, derive, audio.
 
 ### Effets par couche (fond / logo decorreles)
 
@@ -266,7 +322,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (selecteur Audio2wave / Motif genere +
    reglages du motif), *Effets* (les 5 effets, intensite globale, sensibilite, effets propres au logo), *Logo*
    (source Image/Texte/Video, position, opacite), *Aura du logo* (halo holographique + reaction a l'audio :
-   pulsation, tremblement, contour), *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
+   pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
    debug / recharger shaders / sauver, automations, mesures bass/mid/high/beat et statut fps/logo/messages).
    **Hauteur** : la fenetre depassait la hauteur d'un ecran (deux colonnes empilees : 850 px au repos, plus de
    1100 px avec le motif ouvert + les effets du logo delies + le halo deplie). Les onglets l'ont ramenee a

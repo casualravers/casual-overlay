@@ -201,6 +201,8 @@ SHORTCUTS_HELP = (
     "L : lier / separer les effets du fond\n"
     "    et du logo\n"
     "C : halo holographique on/off\n"
+    "M : fonte acide du logo on/off\n"
+    "V : cellules du logo on/off\n"
     "Haut / Bas : sensibilite du kick\n"
     "R : recharger shaders et reglages\n"
     "P : sauver les reglages"
@@ -390,9 +392,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return frame
 
     tab_fond, tab_fx, tab_logo = new_tab("Fond"), new_tab("Effets"), new_tab("Logo")
-    tab_aura, tab_aff = new_tab("Aura du logo"), new_tab("Affichage")
+    tab_aura, tab_melt = new_tab("Aura du logo"), new_tab("Fonte du logo")
+    tab_cell, tab_aff = new_tab("Cellules"), new_tab("Affichage")
     zone_p, zone_f, zone_fx = Zone(preset_bar), Zone(tab_fond), Zone(tab_fx)
-    zone_logo, zone_aura, zone_aff = Zone(tab_logo), Zone(tab_aura), Zone(tab_aff)
+    zone_logo, zone_aura, zone_melt = Zone(tab_logo), Zone(tab_aura), Zone(tab_melt)
+    zone_cell, zone_aff = Zone(tab_cell), Zone(tab_aff)
 
     def add_label(z: Zone, text: str, r: int, tooltip: str | None = None) -> tk.Label:
         label = tk.Label(z.parent, text=text)
@@ -648,9 +652,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     pattern_box.columnconfigure(2, weight=1)         # le bandeau "Motif genere" prend toute la largeur
     pz = Zone(pattern_box)
     add_section_title(pz, "Motif genere")
-    param_radio(pz, "Palette", "bg_palette", (("Arc-en-ciel", "classic"), ("Duo", "duo")),
+    param_radio(pz, "Palette", "bg_palette", (("Arc-en-ciel", "classic"), ("Duo", "duo"), ("Banc de test", "test")),
                 tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
-                        "Duo: degrade lisse entre deux couleurs.")
+                        "Duo: degrade lisse entre deux couleurs. "
+                        "Banc de test: copie EXACTE du motif de test (carreaux de 80 px, 30 images/s) ; "
+                        "les autres reglages du motif ne s'y appliquent pas.")
     r = pz.next_row()
     add_label(pz, "Couleurs 1 / 2", r, "Les deux couleurs du degrade de la palette Duo.")
     pair = tk.Frame(pattern_box)
@@ -770,6 +776,54 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     param_slider(cz, "Vitesse", "holo_speed", 0.0, 1.0, 0.01, "Vitesse des ondes et de la derive des etoiles.")
     param_slider(cz, "Reaction audio", "holo_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
+
+    # ---- FONTE ACIDE du logo (onglet a cote de l'aura) : dissolution sur place puis reformation, en boucle
+    add_separator(zone_melt, "Fonte acide (logo)")
+    melt_var = tk.IntVar(value=int(float(params["melt_on"]) >= 0.5))
+    bind_param("melt_on", melt_var, float)
+    melt_row = tk.Frame(tab_melt)
+    melt_row.grid(row=zone_melt.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    melt_check = tk.Checkbutton(melt_row, text="Fonte acide", variable=melt_var)
+    melt_check.pack(side="left")
+    Tooltip(melt_check, "Le logo (image, texte ou video) se dissout sur place, ronge par un acide : des trous "
+                        "grandissent, leur lisiere brille, puis il se reforme, en boucle. Coupee par defaut, "
+                        "anime par le temps seulement (reaction a l'audio = 0). Touche M.")
+    param_slider(zone_melt, "Profondeur", "melt_depth", 0.0, 1.0, 0.02,
+                 "Degre maximal de dissolution. 1 = le logo disparait entierement au plus fort du cycle.")
+    param_slider(zone_melt, "Duree du cycle", "melt_period", 4.0, 60.0, 1.0,
+                 "Secondes pour un cycle complet : intact, fond, dissous, se reforme.")
+    param_slider(zone_melt, "Grain", "melt_scale", 0.3, 4.0, 0.05,
+                 "Finesse des trous : petit = grosses plaques, grand = fines piqures.")
+    param_slider(zone_melt, "Bord acide", "melt_edge", 0.0, 2.0, 0.05,
+                 "Largeur et intensite de la lisiere acide autour des trous.")
+    melt_color_var = color_row(zone_melt, "Couleur de l'acide", "melt_color")
+    param_slider(zone_melt, "Reaction audio", "melt_react", 0.0, 2.0, 0.05,
+                 "0 = aucune (defaut). Sinon: le cycle s'accelere avec les basses.")
+
+    # ---- CELLULES du logo (Voronoi + metaballes, cell shading)
+    add_separator(zone_cell, "Cellules organiques (logo)")
+    cell_var = tk.IntVar(value=int(float(params["cell_on"]) >= 0.5))
+    bind_param("cell_on", cell_var, float)
+    cell_row = tk.Frame(tab_cell)
+    cell_row.grid(row=zone_cell.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    cell_check = tk.Checkbutton(cell_row, text="Cellules", variable=cell_var)
+    cell_check.pack(side="left")
+    Tooltip(cell_check, "Le logo (image, texte ou video) se DECOMPOSE en cellules organiques (Voronoi) : "
+                        "il garde sa forme mais est fait de bulles qui glissent, se retrecissent et "
+                        "s'ecartent, rendues en aplats avec contour et reflet (cell shading). Coupee par defaut, anime par le temps "
+                        "seulement (reaction a l'audio = 0). Touche V.")
+    param_slider(zone_cell, "Decomposition", "cell_amount", 0.0, 1.0, 0.02,
+                 "0 = logo intact, 1 = entierement decompose en cellules separees.")
+    param_slider(zone_cell, "Rayon des cellules", "cell_fusion", 0.2, 1.2, 0.02,
+                 "Petit = bulles isolees, grand = les cellules se touchent et se chevauchent.")
+    param_slider(zone_cell, "Taille des cellules", "cell_scale", 0.3, 3.0, 0.05,
+                 "Grand = beaucoup de petites cellules, petit = quelques grosses.")
+    param_slider(zone_cell, "Vitesse", "cell_speed", 0.0, 2.0, 0.02, "Vitesse de derive des cellules.")
+    param_slider(zone_cell, "Aplat", "cell_flat", 0.0, 1.0, 0.02,
+                 "0 = couleurs d'origine du logo, 1 = chaque cellule en aplat de la couleur de son centre.")
+    cell_ink_var = color_row(zone_cell, "Couleur du contour", "cell_ink")
+    param_slider(zone_cell, "Reaction audio", "cell_react", 0.0, 2.0, 0.05,
+                 "0 = aucune (defaut). Sinon: derive acceleree par les basses, cellules gonflees au kick.")
 
     # ---- colonne B : LOGO
     add_section_title(zone_logo, "Logo / texte")
@@ -1069,6 +1123,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 var.set(params[name][i])
         link_var.set(int(float(params["fx_link"]) >= 0.5))
         holo_var.set(int(float(params["holo_on"]) >= 0.5))
+        melt_var.set(int(float(params["melt_on"]) >= 0.5))
+        cell_var.set(int(float(params["cell_on"]) >= 0.5))
         logo_var.set(params["logo_path"])
         video_var.set(params["logo_video"])
         key_var.set(params["logo_key"])
@@ -1102,6 +1158,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 v.set(float(params["fxl_int"][i]))
         if link_var.get() != int(float(params["fx_link"]) >= 0.5):
             link_var.set(int(float(params["fx_link"]) >= 0.5))
+        if cell_var.get() != int(float(params["cell_on"]) >= 0.5):
+            cell_var.set(int(float(params["cell_on"]) >= 0.5))
+        if melt_var.get() != int(float(params["melt_on"]) >= 0.5):
+            melt_var.set(int(float(params["melt_on"]) >= 0.5))
         if holo_var.get() != int(float(params["holo_on"]) >= 0.5):
             holo_var.set(int(float(params["holo_on"]) >= 0.5))
         if abs(master_var.get() - params["master"]) > 1e-6:
@@ -1140,7 +1200,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close,
             "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_aff), "overlay_var": overlay_var,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff), "melt_var": melt_var, "cell_var": cell_var, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
