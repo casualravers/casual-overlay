@@ -34,6 +34,8 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, ttk
 
 import audio2wave_gl as gl
+import gui_colors
+import gui_gates
 
 REFRESH_MS = 500
 METER_MS = 60
@@ -90,6 +92,7 @@ class HostFrame(tk.Frame):
         return None
 
 
+MIN_WIN_W, MIN_WIN_H = 940, 420   # en dessous, le panneau d'audio2wave seul ne tient plus
 LIVE_MAX_HEIGHT = 640            # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "snap": "SNAP  -  photo de l'onde (audio2wave)",
@@ -126,13 +129,18 @@ def tidy_mode_gui(host, mode: str) -> None:
                                else text.upper())
                 elif text == "Taille fenetre":
                     child.config(text="Taille du rendu")
-            elif cls == "Entry" and int(child.cget("width")) == 6:
-                child.config(state="readonly")
-            elif mode != "live" and cls == "Checkbutton" and child.cget("text") == "Plein ecran":
-                child.config(state="disabled")      # l'affichage est gere par notre fenetre GL
             walk(child)
 
     walk(host)
+    # Ligne "Taille fenetre" (champs largeur / hauteur + Plein ecran) : taille du rendu figee, plein ecran gere par notre
+    # fenetre GL. On cible la LIGNE (et non "tous les champs de 6 caracteres" : le crossover de Snap en a aussi).
+    size_label = gui_gates.find(host, "Label", "Taille du rendu")
+    for w in (gui_gates.row_widgets(host, size_label) if size_label is not None else []):
+        for x in gui_gates.leaves(w):
+            if x.winfo_class() == "Entry":
+                x.config(state="readonly")
+            elif mode != "live" and x.winfo_class() == "Checkbutton" and x.cget("text") == "Plein ecran":
+                x.config(state="disabled")
 
 
 def activate_mode(s, live, new: str) -> str | None:
@@ -242,7 +250,21 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         child.destroy()
     live.style_gui(root)
     root.title("casual-overlay GL - reglages")
-    root.resizable(False, False)
+    root.resizable(True, True)
+    root.rowconfigure(0, weight=1)
+    root.columnconfigure(0, weight=1)
+    root.minsize(MIN_WIN_W, MIN_WIN_H)
+
+    # Page: tout le contenu vit dans un canvas defilant (ascenseur vertical + molette) : jamais de contenu coupe quand la
+    # fenetre est petite, et au-dela de la taille voulue le contenu s'etire. La mise en page (cote a cote / empilee)
+    # s'adapte a la largeur : voir `set_layout` plus bas.
+    page_canvas = tk.Canvas(root, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollincrement=24)
+    page_bar = tk.Scrollbar(root, orient="vertical", command=page_canvas.yview)
+    page_canvas.configure(yscrollcommand=page_bar.set)
+    page_canvas.grid(row=0, column=0, sticky="nsew")
+    page = tk.Frame(page_canvas)
+    page_item = page_canvas.create_window((0, 0), window=page, anchor="nw")
+    layout = {"name": "wide", "wide_need": 0}
 
     def on_switch(new_mode: str) -> None:
         root.after(30, lambda: request_mode(new_mode))     # hors du callback du bouton qu'on va detruire
@@ -256,13 +278,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         build_window(s, live, root, s.mode, on_ready)
 
     # ---------------------------------------------------- 1. la GUI du mode d'audio2wave, telle quelle
-    live_wrap = tk.Frame(root)
-    live_wrap.grid(row=1, column=0, sticky="nw", padx=(6, 0))
+    live_wrap = tk.Frame(page)
     canvas = tk.Canvas(live_wrap, highlightthickness=0, bd=0, width=10, height=10, bg=a2w.GUI_BG,
                        yscrollincrement=24)
     vbar = tk.Scrollbar(live_wrap, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=vbar.set)
-    canvas.pack(side="left")
+    canvas.pack(side="left", fill="both", expand=True)
     host = HostFrame(canvas)
     canvas.create_window((0, 0), window=host, anchor="nw")
 
@@ -282,6 +303,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                                  root=host, on_switch_mode=on_switch)
     root.title("casual-overlay GL - reglages")
     tidy_mode_gui(host, mode)
+    gui_colors.add_color_helpers(host, a2w.GUI_ACCENT, a2w.GUI_ACCENT_FG)      # pastilles + selecteur sur les champs couleur
+    gui_gates.install_mode_gates(host, mode, a2w.GUI_MUTED_FG)     # grise ce qui n'a pas de sens dans ce mode
 
     # Le panneau d'audio2wave est a l'aise (lignes de 4 a 7 px de marge): on resserre ses marges
     # verticales pour gagner de la hauteur, sans toucher a ses widgets ni a son code.
@@ -296,33 +319,50 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     cap = max(420, min(LIVE_MAX_HEIGHT, root.winfo_screenheight() - 200))
 
-    def fit(_e=None) -> None:
-        """Le canvas prend la taille du panneau, plafonnee : au-dela, un ascenseur apparait."""
-        w, h = host.winfo_reqwidth(), host.winfo_reqheight()
-        canvas.configure(width=w, height=min(h, cap), scrollregion=(0, 0, w, h))
-        if h > cap:
+    def cap_now() -> int:
+        """Plafond de hauteur du panneau d'audio2wave : a cote de l'overlay il est plafonne (ascenseur propre) ; empile, il
+        prend toute sa hauteur et c'est la page qui defile."""
+        return cap if layout["name"] == "wide" else 10 ** 5
+
+    def visible_height() -> int:
+        """Hauteur reellement offerte au panneau (la fenetre est redimensionnable) ; avant l'affichage, la taille voulue."""
+        h = canvas.winfo_height()
+        return h if h > 50 else min(host.winfo_reqheight(), cap_now())
+
+    def update_scrollbar(_e=None) -> None:
+        if host.winfo_reqheight() > visible_height() + 1:
             if not vbar.winfo_ismapped():
                 vbar.pack(side="right", fill="y")
         else:
-            vbar.pack_forget()
+            if vbar.winfo_ismapped():
+                vbar.pack_forget()
             canvas.yview_moveto(0)
 
-    def on_wheel(e) -> None:
-        if str(e.widget).startswith(str(canvas)) and host.winfo_reqheight() > cap:
-            canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+    def fit(_e=None) -> None:
+        """Taille voulue du canvas = celle du panneau (plafonnee a l'ouverture) ; ensuite c'est la fenetre qui decide,
+        et un ascenseur apparait des que le panneau est plus haut que la place disponible."""
+        w, h = host.winfo_reqwidth(), host.winfo_reqheight()
+        canvas.configure(width=w, height=min(h, cap_now()), scrollregion=(0, 0, w, h))
+        update_scrollbar()
 
+    def on_wheel(e) -> None:
+        step = -1 if e.delta > 0 else 1
+        if str(e.widget).startswith(str(canvas)) and host.winfo_reqheight() > visible_height() + 1:
+            canvas.yview_scroll(step, "units")            # le panneau d'audio2wave defile d'abord...
+        elif page_bar.winfo_ismapped():
+            page_canvas.yview_scroll(step, "units")       # ...sinon c'est la page
+
+    canvas.bind("<Configure>", update_scrollbar)
     host.bind("<Configure>", fit)
     root.bind_all("<MouseWheel>", on_wheel)
     host.update_idletasks()
     fit()
 
     # Deux grandes parties, bien distinctes : bandeaux de couleur en haut et gros trait vertical entre les deux.
-    tk.Label(root, text=MODE_BANNERS[mode], bg=LIVE_COLOR, fg=BANNER_FG,
-             font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5).grid(
-        row=0, column=0, sticky="ew", padx=(6, 0), pady=(8, 2))
-    tk.Label(root, text="OVERLAY  -  fond, logo, effets (casual-overlay)", bg=OVERLAY_COLOR, fg=BANNER_FG,
-             font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5).grid(
-        row=0, column=2, sticky="ew", padx=(0, 10), pady=(8, 2))
+    banner_live = tk.Label(page, text=MODE_BANNERS[mode], bg=LIVE_COLOR, fg=BANNER_FG,
+                           font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5)
+    banner_overlay = tk.Label(page, text="OVERLAY  -  logo, effets (casual-overlay)", bg=OVERLAY_COLOR, fg=BANNER_FG,
+                              font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5)
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
     # ------------------------------------------------ 2. pont restart_event -> ProducerManager (mode Live)
@@ -367,13 +407,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         after(BRIDGE_MS, poll_bridge)
 
     # ------------------------------------------------------ 3. nos panneaux, a droite
-    separator = tk.Frame(root, bg=OVERLAY_COLOR, width=3)       # frontiere LIVE | OVERLAY
-    separator.grid(row=1, column=1, sticky="ns", padx=ROW_PADX + 4)
-    # Partie OVERLAY: les presets restent toujours visibles en haut, le reste est range en ONGLETS (Fond, Effets,
+    separator = tk.Frame(page, bg=OVERLAY_COLOR, width=3)       # frontiere LIVE | OVERLAY (mise en page cote a cote)
+    # Partie OVERLAY: les presets restent toujours visibles en haut, le reste est range en ONGLETS (Effets,
     # Logo, Aura, Affichage). Une seule colonne de reglages a la fois: la fenetre fait environ la moitie de la
     # hauteur qu'avec des colonnes empilees (qui depassait la hauteur d'un ecran des qu'un bloc s'ouvrait).
-    right = tk.Frame(root)
-    right.grid(row=1, column=2, sticky="nsew", padx=(0, 10))
+    right = tk.Frame(page)
     preset_bar = tk.Frame(right)
     preset_bar.pack(fill="x")
     style = ttk.Style(root)
@@ -391,7 +429,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         notebook.add(frame, text=title)
         return frame
 
-    tab_fond, tab_fx, tab_logo = new_tab("Fond"), new_tab("Effets"), new_tab("Logo")
+    # Le fond est un reglage de la partie LIVE (c'est la source du visuel d'audio2wave) : ce bloc est pose sous le
+    # panneau du mode, dans le meme canvas defilant, et non dans les onglets OVERLAY.
+    host_cols, host_rows = host.grid_size()
+    tab_fond = tk.Frame(host)
+    tab_fond.grid(row=host_rows, column=0, columnspan=max(host_cols, 1), sticky="new")
+    tab_fx, tab_logo = new_tab("Effets"), new_tab("Logo")
     tab_aura, tab_melt = new_tab("Aura du logo"), new_tab("Fonte du logo")
     tab_cell, tab_aff = new_tab("Cellules"), new_tab("Affichage")
     zone_p, zone_f, zone_fx = Zone(preset_bar), Zone(tab_fond), Zone(tab_fx)
@@ -539,104 +582,127 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         Tooltip(pick_button, "Choisir une couleur")
         return var
 
-    # ---- colonne A : PRESETS OVERLAY (look complet: fond, logo, effets, halo, automations)
-    # Meme classe (PresetStore) et memes gestes que les presets LIVE d'audio2wave, dans un fichier a part.
-    add_section_title(zone_p, "Presets overlay")
-    overlay_store = live.PresetStore(gl.OVERLAY_PRESETS, gl.OVERLAY_PRESETS_PATH)
-    overlay_var = tk.StringVar(value="default")
-    preset_msg = tk.StringVar(value="Un preset = tout le look de l'overlay.")
+    # ---- PRESETS : deux jeux decorreles (overlay = logo + effets, fond = source + motif), meme interface.
+    # Tout est modifiable, y compris les integres ; `default` reste le premier de la liste (voir gl.PresetBook).
+    def make_preset_bar(parent, title: str, book, capture, values_of, hint: str) -> dict:
+        z = Zone(parent)
+        add_section_title(z, title)
+        name_var = tk.StringVar(value="default")
+        msg = tk.StringVar(value=hint)
 
-    load_row = tk.Frame(preset_bar)
-    load_row.grid(row=zone_p.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    tk.Label(load_row, text="Charger").pack(side="left", padx=(0, 10))
-    overlay_menu = tk.OptionMenu(load_row, overlay_var, "")
-    a2w.style_option_menu(overlay_menu)
-    overlay_menu.pack(side="left")
+        load_row = tk.Frame(parent)
+        load_row.grid(row=z.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        tk.Label(load_row, text="Charger").pack(side="left", padx=(0, 10))
+        menu_widget = tk.OptionMenu(load_row, name_var, "")
+        a2w.style_option_menu(menu_widget)
+        menu_widget.pack(side="left")
 
-    def refresh_overlay_menu(select: str | None = None) -> None:
-        names = sorted(overlay_store.all(), key=lambda n: (n != "default", n))
-        menu = overlay_menu["menu"]
-        menu.delete(0, "end")
-        for name in names:
-            menu.add_command(label=name, command=lambda n=name: load_overlay_preset(n))
-        if select is not None:
-            overlay_var.set(select)
-        elif overlay_var.get() not in names:
-            overlay_var.set("default")
+        def refresh_menu(select: str | None = None) -> None:
+            names = book.names()                       # `default` toujours en tete
+            menu = menu_widget["menu"]
+            menu.delete(0, "end")
+            for n in names:
+                menu.add_command(label=n, command=lambda n=n: load_preset(n))
+            if select is not None:
+                name_var.set(select)
+            elif name_var.get() not in names:
+                name_var.set("default")
 
-    def load_overlay_preset(name: str) -> None:
-        overlay_var.set(name)
-        presets = overlay_store.all()
-        if name not in presets:
-            preset_msg.set(f"preset inconnu: {name}")
-            return
-        values = gl.overlay_preset_values(presets[name], params)
-        automation_state = values.pop("_automation", None)
-        for key, value in values.items():
-            params[key] = value                  # lu a chaque image par le fil GL
-        if automation_state is not None:
-            params["_automation"] = automation_state
-            automation.apply(automation_state)
-        sync_widgets()
-        preset_msg.set(f"preset '{name}' charge")
+        def load_preset(name: str) -> None:
+            name_var.set(name)
+            presets = book.all()
+            if name not in presets:
+                msg.set(f"preset inconnu: {name}")
+                return
+            sync_automation_now()
+            values = values_of(presets[name], params)
+            automation_state = values.pop("_automation", None)
+            for key, value in values.items():
+                params[key] = value                  # lu a chaque image par le fil GL
+            if automation_state is not None:
+                params["_automation"] = automation_state
+                automation.apply(automation_state)
+            sync_widgets()
+            msg.set(f"preset '{name}' charge")
 
-    def update_overlay_preset() -> None:
-        name = overlay_var.get()
-        if name == "default":
-            preset_msg.set("'default' n'est pas modifiable (reglages d'origine)")
-            return
-        sync_automation_now()
-        overlay_store.save_user(name, gl.capture_overlay(params))
-        preset_msg.set(f"preset '{name}' mis a jour ({gl.OVERLAY_PRESETS_PATH.name})"
-                       + (" - remplace le preset integre du meme nom" if name in gl.OVERLAY_PRESETS else ""))
+        def update_preset() -> None:
+            name = name_var.get()
+            sync_automation_now()
+            book.save(name, capture(params))
+            note = " - sera le point de depart (Supprimer = version d'origine)" if name == "default" else ""
+            msg.set(f"preset '{name}' mis a jour ({book.path.name}){note}")
 
-    def delete_overlay_preset() -> None:
-        name = overlay_var.get()
-        if name not in overlay_store.load_user():
-            preset_msg.set(f"'{name}' est un preset integre, impossible a supprimer")
-            return
+        def delete_preset() -> None:
+            name = name_var.get()
 
-        def do_delete() -> None:
-            overlay_store.delete_user(name)
-            refresh_overlay_menu()
-            preset_msg.set(f"preset '{name}' supprime")
+            def do_delete() -> None:
+                kind = book.delete(name)
+                refresh_menu()
+                if kind == "reset":
+                    name_var.set("default")
+                    msg.set("'default' remis a sa version d'origine (il reste toujours en tete)")
+                else:
+                    msg.set(f"preset '{name}' supprime")
 
-        live.confirm_dialog(root, "Supprimer le preset",
-                            f"Supprimer definitivement le preset overlay '{name}' ?\nCette action est irreversible.",
-                            do_delete)
+            question = (f"Remettre le preset '{name}' a sa version d'origine ?" if name == "default"
+                        else f"Supprimer definitivement le preset '{name}' ?\nCette action est irreversible.")
+            live.confirm_dialog(root, "Supprimer le preset", question, do_delete)
 
-    tk.Button(load_row, text="Mettre a jour", command=update_overlay_preset).pack(side="left", padx=(8, 0))
-    tk.Button(load_row, text="Supprimer", command=delete_overlay_preset).pack(side="left", padx=(6, 0))
+        tk.Button(load_row, text="Mettre a jour", command=update_preset).pack(side="left", padx=(8, 0))
+        tk.Button(load_row, text="Supprimer", command=delete_preset).pack(side="left", padx=(6, 0))
 
-    save_row = tk.Frame(preset_bar)
-    save_row.grid(row=zone_p.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    tk.Label(save_row, text="Sauvegarder sous").pack(side="left", padx=(0, 10))
-    save_name_var = tk.StringVar(value="")
-    save_entry = tk.Entry(save_row, textvariable=save_name_var, width=14)
-    save_entry.pack(side="left")
+        save_row = tk.Frame(parent)
+        save_row.grid(row=z.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        tk.Label(save_row, text="Sauvegarder sous").pack(side="left", padx=(0, 10))
+        save_name_var = tk.StringVar(value="")
+        save_entry = tk.Entry(save_row, textvariable=save_name_var, width=14)
+        save_entry.pack(side="left")
 
-    def save_overlay_preset(_evt=None) -> None:
-        name = save_name_var.get().strip().lower()
-        if not name:
-            preset_msg.set("nom de preset vide")
-            return
-        if name in gl.OVERLAY_PRESETS:
-            preset_msg.set(f"'{name}' est un preset integre, choisis un autre nom")
-            return
-        sync_automation_now()
-        overlay_store.save_user(name, gl.capture_overlay(params))
-        refresh_overlay_menu(select=name)
-        save_name_var.set("")
-        preset_msg.set(f"preset '{name}' sauvegarde ({gl.OVERLAY_PRESETS_PATH.name})")
+        def save_preset(_evt=None) -> None:
+            name = save_name_var.get().strip().lower()
+            if not name or name.startswith("_"):
+                msg.set("nom de preset vide ou invalide")
+                return
+            existed = name in book.all()
+            sync_automation_now()
+            book.save(name, capture(params))
+            refresh_menu(select=name)
+            save_name_var.set("")
+            msg.set(f"preset '{name}' " + ("remplace" if existed else "sauvegarde") + f" ({book.path.name})")
 
-    save_entry.bind("<Return>", save_overlay_preset)
-    tk.Button(save_row, text="Sauvegarder", command=save_overlay_preset).pack(side="left", padx=(8, 0))
-    tk.Label(preset_bar, textvariable=preset_msg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=380).grid(
-        row=zone_p.next_row(), column=0, columnspan=3, sticky="we", padx=ROW_PADX, pady=(0, 2))
-    refresh_overlay_menu()
+        def restore_presets() -> None:
+            book.restore_builtins()
+            refresh_menu()
+            msg.set("presets integres d'origine restaures (les tiens sont gardes)")
+
+        save_entry.bind("<Return>", save_preset)
+        tk.Button(save_row, text="Sauvegarder", command=save_preset).pack(side="left", padx=(8, 0))
+        restore_button = tk.Button(save_row, text="Restaurer", command=restore_presets)
+        restore_button.pack(side="left", padx=(6, 0))
+        Tooltip(restore_button, "Rend les presets integres (default, sobre, neon, chaos) a leur version d'origine, "
+                                "meme supprimes ou modifies. Tes propres presets ne sont pas touches.")
+        tk.Label(parent, textvariable=msg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=380).grid(
+            row=z.next_row(), column=0, columnspan=3, sticky="we", padx=ROW_PADX, pady=(0, 2))
+        refresh_menu()
+        return {"var": name_var, "msg": msg, "menu": menu_widget, "book": book, "load": load_preset,
+                "update": update_preset, "delete": delete_preset, "save": save_preset, "save_var": save_name_var,
+                "restore": restore_presets, "refresh": refresh_menu}
+
+    overlay_presets = make_preset_bar(preset_bar, "Presets overlay", gl.OVERLAY_BOOK, gl.capture_overlay,
+                                      gl.overlay_preset_values,
+                                      "Un preset = le look du logo et des effets (le fond a ses propres presets).")
+    overlay_store, overlay_var, preset_msg = overlay_presets["book"], overlay_presets["var"], overlay_presets["msg"]
+    overlay_menu, save_name_var = overlay_presets["menu"], overlay_presets["save_var"]
+    load_overlay_preset, update_overlay_preset = overlay_presets["load"], overlay_presets["update"]
+    save_overlay_preset = overlay_presets["save"]
 
     # ---- colonne A : FOND (motif genere)
-    add_section_title(zone_f, "Fond")
+    add_section_title(zone_f, "Fond de l'overlay")
+    bg_preset_bar = tk.Frame(tab_fond)
+    bg_preset_bar.grid(row=zone_f.next_row(), column=0, columnspan=3, sticky="new")
+    bg_presets = make_preset_bar(bg_preset_bar, "Presets fond", gl.BACKGROUND_BOOK, gl.capture_background,
+                                 gl.background_preset_values,
+                                 "Un preset de fond = la source et le motif (ni le logo, ni les effets).")
     bg_var = tk.StringVar(value=params["bg_mode"])
     r = zone_f.next_row()
     add_label(zone_f, "Fond", r, "Audio2wave = le visuel du mode choisi dans le panneau de gauche (Live, Snap ou "
@@ -1089,6 +1155,20 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     status_label = tk.Label(tab_aff, text="", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
     status_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
 
+    # ---- Reglages incompatibles grises : un effet coupe, ou une palette qui ignore ces curseurs
+    gates = gui_gates.Gates(a2w.GUI_MUTED_FG)
+    gates.add([holo_box], lambda: holo_var.get() == 1)
+    gates.add(gui_gates.rows_after(tab_melt, melt_row), lambda: melt_var.get() == 1)
+    gates.add(gui_gates.rows_after(tab_cell, cell_row), lambda: cell_var.get() == 1)
+    palette_var = synced["bg_palette"]
+    pal_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(pattern_box, lb, panels=False)]
+    gates.add(pal_rows("Couleurs 1 / 2", "Angle du degrade"), lambda: palette_var.get() == "duo")
+    gates.add(pal_rows("Teinte", "Vitesse", "Taille des carreaux", "Contraste du damier", "Cadence du damier",
+                       "Reaction a l'audio"), lambda: palette_var.get() != "test")
+    for var in (holo_var, melt_var, cell_var, palette_var):
+        var.trace_add("write", lambda *_a: gates.refresh())
+    gates.refresh()
+
     # ---------------------------------------------------------------- boucle
     automation.apply(params["_automation"])          # charge l'etat (sauve ou par defaut) dans l'editeur
 
@@ -1105,18 +1185,25 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def sync_widgets() -> None:
         """params -> widgets, apres le chargement d'un preset (les variables ecrivent params par leur
-        trace, avec la meme valeur: aucun effet de bord)."""
-        for key, var in synced.items():
-            value = params.get(key)
-            try:
-                if isinstance(var, tk.StringVar):
-                    var.set(str(value))
-                elif isinstance(var, tk.IntVar):
-                    var.set(int(float(value) >= 0.5))
-                else:
-                    var.set(float(value))
-            except (tk.TclError, ValueError, TypeError):
-                pass
+        trace, avec la meme valeur: aucun effet de bord). Ecrire une variable peut griser un groupe de curseurs
+        (`Gates`), et Tk rend alors a un curseur la valeur PERIMEE de sa variable, qui reecrit `params` par la trace :
+        on part donc d'un instantane, on passe deux fois, et on remet l'instantane dans `params` a la fin."""
+        snapshot = {key: params.get(key) for key in synced}
+        for _pass in range(2):
+            for key, var in synced.items():
+                value = snapshot[key]
+                try:
+                    if isinstance(var, tk.StringVar):
+                        var.set(str(value))
+                    elif isinstance(var, tk.IntVar):
+                        var.set(int(float(value) >= 0.5))
+                    else:
+                        var.set(float(value))
+                except (tk.TclError, ValueError, TypeError):
+                    pass
+        for key, value in snapshot.items():
+            if value is not None:
+                params[key] = value
         for name, variables in (("fx_on", fx_on_vars), ("fx_int", fx_int_vars),
                                 ("fxl_on", fxl_on_vars), ("fxl_int", fxl_int_vars)):
             for i, var in enumerate(variables):
@@ -1189,6 +1276,60 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         s.stop_event.set()                # le fil GL sort, positionne finished_event, leur refresh() ferme
         root.after(3000, root.destroy)    # filet de securite si le fil GL ne repond plus
 
+    # ---- Mise en page adaptative : cote a cote quand la largeur le permet, sinon LIVE au-dessus de OVERLAY
+    def set_layout(name: str) -> None:
+        if layout["name"] == name and live_wrap.winfo_manager():
+            return
+        layout["name"] = name
+        for w in (banner_live, banner_overlay, live_wrap, separator, right):
+            w.grid_forget()
+        for i in range(4):
+            page.rowconfigure(i, weight=0)
+        for i in range(3):
+            page.columnconfigure(i, weight=0)
+        if name == "wide":
+            banner_live.grid(row=0, column=0, sticky="ew", padx=(6, 0), pady=(8, 2))
+            banner_overlay.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=(8, 2))
+            live_wrap.grid(row=1, column=0, sticky="nsw", padx=(6, 0))
+            separator.grid(row=1, column=1, sticky="ns", padx=ROW_PADX + 4)
+            right.grid(row=1, column=2, sticky="nsew", padx=(0, 10))
+            page.rowconfigure(1, weight=1)
+            page.columnconfigure(2, weight=1)             # la largeur en plus va a l'overlay
+        else:
+            banner_live.grid(row=0, column=0, columnspan=3, sticky="ew", padx=(6, 10), pady=(8, 2))
+            live_wrap.grid(row=1, column=0, columnspan=3, sticky="nw", padx=(6, 0))
+            banner_overlay.grid(row=2, column=0, columnspan=3, sticky="ew", padx=(6, 10), pady=(8, 2))
+            right.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=(6, 10))
+            page.rowconfigure(3, weight=1)
+            page.columnconfigure(0, weight=1)
+        fit()
+
+    def on_page_config(_e=None) -> None:
+        """Page = canvas : largeur du canvas pour le contenu, hauteur au moins celle du contenu (au-dela, ascenseur)."""
+        w, h = page_canvas.winfo_width(), page_canvas.winfo_height()
+        want_w, want_h = page.winfo_reqwidth(), page.winfo_reqheight()
+        # taille voulue de la fenetre tant que l'utilisateur ne l'a pas redimensionnee
+        page_canvas.configure(width=want_w, height=min(want_h, root.winfo_screenheight() - 100))
+        if w > 50:
+            page_canvas.itemconfigure(page_item, width=max(w, want_w if layout["name"] == "stack" else 1), height=max(h, want_h))
+            page_canvas.configure(scrollregion=(0, 0, max(w, want_w), max(h, want_h)))
+            before = layout["name"]
+            set_layout("wide" if w >= layout["wide_need"] else "stack")
+            if layout["name"] != before:
+                root.after_idle(on_page_config)          # les tailles voulues ont change: on recalcule la hauteur de la page
+        if want_h > h + 1 and w > 50:
+            page_bar.grid(row=0, column=1, sticky="ns")
+        else:
+            page_bar.grid_remove()
+            page_canvas.yview_moveto(0)
+
+    set_layout("wide")
+    page.update_idletasks()
+    layout["wide_need"] = page.winfo_reqwidth()          # largeur naturelle cote a cote : en dessous, on empile
+    page.bind("<Configure>", on_page_config)
+    page_canvas.bind("<Configure>", on_page_config)
+    on_page_config()
+
     root.protocol("WM_DELETE_WINDOW", on_close)
     refresh()
     update_meter()
@@ -1200,10 +1341,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close,
             "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff), "melt_var": melt_var, "cell_var": cell_var, "overlay_var": overlay_var,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff), "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,
+            "live_wrap": live_wrap, "right_panel": right, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
+            "overlay_presets": overlay_presets, "bg_presets": bg_presets,
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,

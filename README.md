@@ -61,18 +61,22 @@ affiches comme fond avec le logo et les effets par-dessus. Le panneau de ces mod
 Live : il defile (ascenseur ou molette). Ridge demande une entree audio (a choisir d'abord dans Live ou Snap).
 
 **OVERLAY (bandeau violet, a droite)** : les panneaux propres a casual-overlay, en commencant par
-les **presets overlay** (section *PRESETS OVERLAY*, en haut) : un preset = tout le look (fond, logo ou
-texte, effets, halo holographique, automations ; pas la sensibilite du kick, qui depend du micro). Memes gestes
-que les presets live : *Charger* (le menu applique tout de suite), *Mettre a jour*, *Supprimer*,
-*Sauvegarder sous* un nom. Integres : `default` (reglages d'origine, non modifiable), `sobre` (logo net,
-fond qui ondule doucement), `neon` (fond duo sombre, halo holographique ample, contour magenta), `chaos` (tout reagit).
-Ils sont dans `~/.audio2wave/overlay_presets.json`, a part des presets live.
+les **presets overlay** (section *PRESETS OVERLAY*, en haut) : un preset = le look du logo ou
+texte, des effets, du halo, de la fonte, des cellules et leurs automations (**pas le fond**, qui a ses propres presets,
+ni la sensibilite du kick, qui depend du micro). Memes gestes que les presets live : *Charger* (le menu applique
+tout de suite), *Mettre a jour*, *Supprimer*, *Sauvegarder sous* un nom, *Restaurer*. **Tous les presets se modifient
+et se suppriment, integres compris** (`default`, `sobre`, `neon`, `chaos`) : *Restaurer* rend les integres
+d'origine, sans toucher aux tiens. `default` reste toujours le premier de la liste (modifie, il devient le point de
+depart ; le supprimer le remet a sa version d'origine). Ils sont dans `~/.audio2wave/overlay_presets.json`.
+Le **fond** a le meme jeu de presets (section *PRESETS FOND*, dans le bloc Fond de la partie LIVE) : source
+Audio2wave / motif genere, palette, couleurs, reglages du motif et leurs automations, dans
+`~/.audio2wave/background_presets.json`. Charger l'un ne touche jamais l'autre.
 
 Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour que la fenetre reste courte
-(environ 650 px de haut) : *Fond*, *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
+(environ 650 px de haut) : *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
 *Fonte du logo*, *Cellules*, *Affichage*.
 
-- **Fond** : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Motif genere* (degrades + damier animes par la
+- **Fond** (dans la partie LIVE, sous le panneau du mode, car c'est la source du visuel d'audio2wave) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Motif genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel, Duo ou Banc de test (copie exacte du motif de test, sans reglage), couleurs, angle, teinte, vitesse, taille des
   carreaux, contraste, cadence, reaction au kick ; effet immediat).
 - **Effets** : les 5 effets (interrupteur + intensite), intensite globale, sensibilite du kick.
