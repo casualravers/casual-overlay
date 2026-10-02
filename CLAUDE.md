@@ -319,7 +319,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    leur ligne de statut ;
 4. accroche a droite, dans la meme fenetre, la partie OVERLAY : les **presets overlay** toujours visibles en haut
    (`preset_bar`), puis un `ttk.Notebook` en **onglets** (chaque curseur automatisable porte sa case `~` et son
-   bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (selecteur Audio2wave / Motif genere +
+   bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (**dans la partie LIVE**, sous le panneau d'audio2wave, dans le meme canvas defilant ; selecteur Audio2wave / Motif genere +
    reglages du motif), *Effets* (les 5 effets, intensite globale, sensibilite, effets propres au logo), *Logo*
    (source Image/Texte/Video, position, opacite), *Aura du logo* (halo holographique + reaction a l'audio :
    pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
@@ -334,6 +334,20 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    maintenant trois cellules sans `rowspan` : panneau d'audio2wave | trait | partie OVERLAY) ; (2) `ttk.Notebook` ne prend pas le theme sombre tout seul (`theme_use("clam")` + couleurs
    des onglets, filets clairs a neutraliser `bordercolor/lightcolor/darkcolor`) ; (3) un widget d'un onglet
    non affiche ne recoit pas les evenements clavier : les tests selectionnent l'onglet Logo avant de taper du texte.
+   **Fenetre redimensionnable et adaptative** (`resizable(True, True)`, minimum `MIN_WIN_W` x `MIN_WIN_H` = 940 x 420 ;
+   elle etait figee par un `root.resizable(False, False)` herite de `build_gui` d'audio2wave). Tout le contenu est dans
+   une **page** (`page`, un frame dans `page_canvas`, avec son ascenseur et la molette) : rien n'est jamais coupe, et
+   la page prend au moins la hauteur de son contenu. Trois etats, choisis par la largeur du canvas (`set_layout`,
+   `on_page_config`) : (1) **large** (>= `layout["wide_need"]`, la largeur naturelle cote a cote mesuree a l'ouverture) :
+   LIVE | trait | OVERLAY, la hauteur et la largeur en plus vont aux panneaux (colonne OVERLAY et ligne 1 ont un poids) ;
+   (2) **moyenne** : bandeau LIVE, panneau d'audio2wave a sa hauteur naturelle, bandeau OVERLAY, partie OVERLAY a toute
+   la largeur ; (3) **basse** : meme chose, avec l'ascenseur de la page. En mode large le panneau d'audio2wave garde
+   son propre ascenseur (`cap_now`, 640 px au depart) ; empile il n'a plus de plafond et c'est la page qui defile.
+   La molette defile d'abord le panneau d'audio2wave s'il est sous la souris, sinon la page.
+   Pieges : la taille **voulue** du canvas de page suit celle du contenu (sinon `root.winfo_reqheight()` ne bouge plus et la
+   fenetre ne s'ouvre pas a la bonne taille) ; changer de mise en page change les tailles voulues, d'ou un deuxieme
+   passage de `on_page_config` (`after_idle`), sans quoi la page garde la hauteur de l'etat precedent (vu : 1250 px de
+   haut en revenant en large).
    Les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px par ligne).
 - **Structure visible** : deux grandes parties, LIVE (bandeau turquoise, fenetre d'audio2wave) et OVERLAY
   (bandeau violet), separees par un trait violet de 3 px ; le titre d'audio2wave est retire de la ligne 0
@@ -378,23 +392,57 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
     micro est ouvert une fois de plus (ffmpeg dshow, en plus de sounddevice et du producteur live suspendu) ;
     la case "Plein ecran" de Snap/Ridge n'existe pas (c'est notre fenetre GL qui gere l'affichage) ; le Mode VJ
     d'audio2wave (enchainement de presets) n'est pas verifie ici.
+- **Reglages incompatibles grises** ([gui_gates.py](gui_gates.py)) : un reglage sans objet dans le mode ou l'etat
+  courant est **grise** (jamais retire : la disposition ne bouge pas et on voit qu'il existe). Pour les panneaux
+  d'audio2wave (aucune modification de leur code) : `install_mode_gates` retrouve les widgets par leur texte et
+  suit leurs variables Tk par une **trace Tcl** (`trace add variable`) ; surtout pas `tk.StringVar(name=...)`, dont
+  le ramasse-miettes detruirait la variable d'audio2wave. Regles : Live radio -> Forme, Lissage, Echelle des
+  frequences, Espace entre barres ; analyzer en ligne -> Espace entre barres ; Snap pencil -> Echelle, Filtre
+  colonne, Crossover ; Snap autre style -> trait, sinusoide, halo des kicks, videos (+ "Temps reel" et "Rayon du
+  halo" sans halo coche, oscillations sans sinusoide) ; Snap hors rekordbox -> Crossover ; Snap/Ridge en gain
+  automatique -> Gain manuel. Chez nous (`Gates`) : curseurs du halo / de la fonte / des cellules tant que l'effet
+  est coupe ; palette du fond (couleurs 1/2 et angle seulement en Duo, rien en Banc de test).
+  Un widget vise par plusieurs regles n'est actif que si **toutes** sont satisfaites, et son etat d'origine
+  (champ deja en lecture seule) est restaure, pas ecrase. Piege corrige au passage : la taille du rendu etait figee
+  en rendant en lecture seule tous les champs de 6 caracteres, ce qui figeait aussi le **crossover de Snap** ;
+  on cible maintenant la ligne "Taille du rendu". Un test qui detruit une fenetre d'audio2wave doit laisser tourner
+  leur `refresh()` apres `finished_event.set()` (sinon bruit Tcl, ou boucle d'evenements sans fin).
+- **Aides a la saisie des couleurs** ([gui_colors.py](gui_colors.py)) : les champs texte de couleur d'audio2wave
+  ("Couleurs", "Couleur de fond" ; "Couleur du trait" de Ridge) gardent leur champ mais gagnent, dans la meme cellule
+  de la grille, une **pastille par couleur** (un clic ouvre le selecteur et remplace CETTE couleur, ecrite en
+  `0xRRGGBB`), un **menu de 14 couleurs nommees** (remplace la premiere) et un **"+"** pour ajouter une couleur
+  aux champs qui en acceptent plusieurs ("Couleurs" de Live et de Snap/rekordbox). Les pastilles suivent le champ
+  par une trace Tcl (taper, charger un preset, choisir une couleur). Nos propres champs (`color_row`) avaient deja
+  leur selecteur. Pieges : le champ est **re-grille dans un conteneur** (`entry.grid(in_=box)`) et doit etre remonte
+  (`tkraise(box)`), sinon le conteneur le cache ; Snap et Ridge n'appliquent leur champ que sur Entree / perte de
+  focus, d'ou `focus_force()` + `<Return>` simules apres un choix (Tk ne livre un evenement clavier qu'a la fenetre
+  qui a le focus) ; un nom que PIL ne connait pas donne une pastille grise "?" (le champ reste valide pour ffmpeg).
 - **Case "Plein ecran"** de leur fenetre : `args.fullscreen` change -> commande
   `fullscreen=0|1` envoyee au fil GL (`Session.commands`), sans redemarrer ffmpeg. La
   touche F de la fenetre GL ne remet pas la case a jour (sens unique).
 - **Presets live (audio2wave)** : deja presents dans la fenetre d'audio2wave integree (section "PRESETS",
   rebaptisee "PRESETS LIVE"), partages avec le depot audio2wave (memes fichiers, `USER_PRESETS_PATH`) ; ils
   ne contiennent que les options live + automations des reglages live. Aucun code de notre cote.
-- **Presets overlay** (`OVERLAY_PRESETS`, `OVERLAY_PRESETS_PATH` = `~/.audio2wave/overlay_presets.json`) :
-  **meme classe** `live.PresetStore` et memes gestes que les presets live (menu qui applique, Mettre a jour,
-  Supprimer avec `live.confirm_dialog`, Sauvegarder sous ; `default` = reglages d'origine, non modifiable,
-  integres non supprimables ni ecrasables par une sauvegarde du meme nom). Un preset = `capture_overlay()`
-  (tous les `DEFAULT_PARAMS` + `_automation`, SANS `sensitivity`, qui depend du micro) ; charger =
-  `overlay_preset_values()` (valeurs par defaut + le preset, validees par `coerce_params`, la meme validation
-  que `load_params`) puis `sync_widgets()` (params -> variables Tk via le registre `synced`, +
-  listes des effets, fichiers, texte, automations) : les traces reecrivent `params` avec la meme valeur.
-  Les integres sont partiels (par-dessus les defauts) et **ne touchent pas aux automations** sauf si le preset
-  en contient ; un preset utilisateur les contient toujours. Les tests utilisent un fichier temporaire
-  (`gl.OVERLAY_PRESETS_PATH` remplace le temps de `run_gui`), jamais celui de l'utilisateur.
+- **Presets overlay et presets fond** (deux jeux **decorreles**, comme les deux parties de la GUI) : `OVERLAY_PRESETS`
+  (`OVERLAY_PRESETS_PATH` = `~/.audio2wave/overlay_presets.json`) = logo, effets, halo, fonte, cellules, automations
+  non `bg_` ; `BACKGROUND_PRESETS` (`BACKGROUND_PRESETS_PATH` = `~/.audio2wave/background_presets.json`) = cles `bg_*`
+  (`BG_KEYS`) + automations `bg_*` (`BG_AUTOMATION_KEYS`). `capture_overlay` / `capture_background` fabriquent un preset,
+  `overlay_preset_values` / `background_preset_values` le rendent applicable : un preset overlay **ignore** toute cle
+  `bg_*` (meme dans un ancien fichier) et garde le fond courant, un preset de fond ne change que `bg_*`
+  (`_split_automation` fusionne les automations de chaque cote). Memes gestes dans l'interface (`make_preset_bar`
+  dans gl_gui.py, une fois pour la partie OVERLAY, une fois dans le bloc Fond de la partie LIVE) : menu qui applique,
+  Mettre a jour, Supprimer avec `live.confirm_dialog`, Sauvegarder sous, Restaurer. **Tout est modifiable** : la classe
+  `PresetBook` (audio2wave_gl.py, remplace `live.PresetStore` qui interdisait de toucher aux integres) enregistre une
+  version utilisateur qui remplace l'integre, masque un integre supprime (cle reservee `_deleted` du meme JSON),
+  `restore_builtins()` rend les integres d'origine ; `default` est toujours present et **toujours en tete**
+  (`all()`/`names()`), le supprimer le remet a sa version d'origine. Charger = valeurs validees par `coerce_params`
+  puis `sync_widgets()`. Les integres sont partiels et ne touchent pas aux automations sauf si le preset en contient ;
+  un preset utilisateur les contient toujours. Les tests utilisent des fichiers temporaires
+  (`gl.OVERLAY_PRESETS_PATH` / `gl.BACKGROUND_PRESETS_PATH` remplaces le temps de `run_gui`), jamais ceux de l'utilisateur.
+  **Piege (vu en ecrivant ces tests)** : `Gates` grise des groupes de curseurs en reconfigurant leur `state`, et Tk rend
+  alors a un `Scale` la valeur perimee de sa variable, qui reecrit `params` par la trace : charger un preset restaurait
+  l'ancienne valeur d'un curseur. `Gates._apply` ne reconfigure que si l'etat change et reprend la valeur de la variable,
+  et `sync_widgets` part d'un instantane, passe deux fois et le remet dans `params`.
 - Trois sauvegardes distinctes : presets live, presets overlay, et `gl_params.json` (touche P / bouton
   "Sauver reglages", reglages courants recharges au lancement).
 - **Threads** : tkinter garde le fil principal, `gl_main()` (glfw + moderngl) tourne dans un
@@ -487,7 +535,7 @@ rendu toujours remise, plein ecran = commande GL sans redemarrage ffmpeg, statut
 et nos panneaux (couleur invalide ignoree, logo, effets, fond) ; bascule Live -> Snap -> Ridge -> Live avec un
 faux micro (mode actif, ffmpeg live suspendu puis relance sur la meme entree, images du mode lues par le rendu,
 bandeau / presets / boutons du mode, fenetre sous 700 px) ;
-presets overlay (chargement d'un integre, widgets qui suivent, sensibilite exclue, `default`, sauvegarde /
+presets overlay et fond decorreles (chargement d'un integre, widgets qui suivent, sensibilite exclue, fond jamais touche par un preset overlay et inversement, integres modifiables / supprimables / restaurables, `default` toujours en tete, sauvegarde /
 rechargement d'un preset utilisateur avec texte et curseurs, integre non ecrasable, `default` non modifiable,
 menu, suppression) ;
 halo holographique (actif par defaut et non audioreactif ; logo strictement intact ; fond modifie loin du logo ;

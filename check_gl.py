@@ -387,7 +387,25 @@ def check_gui() -> None:
             radio.invoke()
             root.after(900, step4)
 
+        def live_states(labels):
+            import gui_gates as gg
+            host = c["live_host"]
+            return {lb: {str(x.cget("state")) for w in gg.row_of_label(host, lb) for x in gg.leaves(w)
+                         if x.winfo_class() in ("Scale", "Menubutton", "Radiobutton")} for lb in labels}
+
         def step4():
+            import gui_gates as gg
+            labels = ("Forme", "Lissage", "Echelle frequences", "Espace entre barres", "Barres/points", "Gain (dB)")
+            out["g_live_radio"] = live_states(labels)
+            host = c["live_host"]
+            gg.find(host, "Radiobutton", "analyzer").invoke()
+            root.update()
+            out["g_live_bar"] = live_states(labels)
+            gg.find(host, "Radiobutton", "line").invoke()
+            root.update()
+            out["g_live_line"] = live_states(labels)
+            gg.find(host, "Radiobutton", "radio").invoke()      # retour a l'etat attendu par la suite
+            root.update()
             out["style"] = requests[-1].style if len(requests) > out["burst"] else None
             c["x_var"].set(0.2)
             c["fx_on_vars"][1].set(0)
@@ -399,10 +417,34 @@ def check_gui() -> None:
             c["color_var"].set("#FF0000")
             out["color_ok"] = params["logo_glow_color"]
             out["x"], out["fx1"], out["master"] = params["logo_x"], params["fx_on"][1], params["master"]
+            import gui_gates as gg
+
+            def scales(container):
+                return {str(x.cget("state")) for x in gg.leaves(container) if x.winfo_class() == "Scale"}
+
+            def row_states(label):
+                return {str(x.cget("state")) for w in gg.row_of_label(c["pattern_box"], label, panels=False)
+                        for x in gg.leaves(w) if x.winfo_class() in ("Scale", "Entry")}
             c["holo_var"].set(0)
             out["holo_off"] = params["holo_on"]
+            out["g_holo_off"] = scales(c["holo_box"])
             c["holo_var"].set(1)
             out["holo_on"] = params["holo_on"]
+            out["g_holo_on"] = scales(c["holo_box"])
+            tab_m, tab_c = c["tabs"][4], c["tabs"][5]
+            c["melt_var"].set(0)
+            c["cell_var"].set(0)
+            out["g_fx_off"] = (scales(tab_m), scales(tab_c))
+            c["melt_var"].set(1)
+            c["cell_var"].set(1)
+            out["g_fx_on"] = (scales(tab_m), scales(tab_c))
+            c["melt_var"].set(0)
+            c["cell_var"].set(0)
+            out["g_pal"] = {}
+            for pal in ("classic", "duo", "test"):
+                c["palette_var"].set(pal)
+                out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse")}
+            c["palette_var"].set("classic")
             out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
             c["bg_var"].set("pattern")                   # pire cas: bloc motif ouvert + effets du logo delies
             c["link_var"].set(0)
@@ -423,7 +465,7 @@ def check_gui() -> None:
             out["source_param"] = params["logo_source"]
             out["text_shown"] = c["text_box"].winfo_manager()
             out["image_hidden"] = c["image_box"].winfo_manager()
-            c["notebook"].select(2)                      # onglet Logo: le champ texte doit etre affiche pour recevoir le clavier
+            c["notebook"].select(1)                      # onglet Logo: le champ texte doit etre affiche pour recevoir le clavier
             root.update()
             tw = c["text_widget"]
             tw.delete("1.0", "end")
@@ -434,7 +476,6 @@ def check_gui() -> None:
             out["typed"] = params["text_content"]
             c["font_var"].set("Impact")
             out["font"] = params["text_font"]
-            manager.status["live"] = "message du gestionnaire"
             s.status["msg"] = "test"
             # automations: etat de l'editeur d'audio2wave -> params (synchro toutes les 200 ms)
             auto = c["automation"]
@@ -465,6 +506,9 @@ def check_gui() -> None:
             root.after(500, step4d)
 
         def step4d():
+            # Message du gestionnaire de flux, pose APRES les redemarrages que provoquent les clics de style plus haut
+            # (leur anti-rebond de 400 ms ecraserait sinon le message dans la ligne de statut).
+            manager.status["live"] = "message du gestionnaire"
             data = params["_automation"]
             out["reset"] = (data["logo_x"]["enabled"], data["bg_hue"]["enabled"], data["bg_tile"]["period"])
             compact = [w for w in walk(root) if w.winfo_class() == "Button" and w.cget("text") == "∿"]
@@ -472,42 +516,104 @@ def check_gui() -> None:
             root.after(300, step4e)
 
         def step4e():
-            # presets overlay: charger un integre, widgets qui suivent, exclusions, sauvegarde, protection
+            # presets decorreles : overlay (logo + effets) et fond (source + motif), tous deux modifiables
+            op, bp = c["overlay_presets"], c["bg_presets"]
+            obook, bbook = op["book"], bp["book"]
             params["sensitivity"] = 2.2
-            c["load_overlay_preset"]("neon")
+            c["bg_var"].set("live")
+            c["palette_var"].set("classic")
+            params["bg_hue"] = 0.11
+            op["load"]("neon")
             out["p_neon"] = (params["bg_mode"], params["bg_palette"], params["holo_intensity"], params["fx_link"],
-                             params["logo_glow_color"], params["fxl_on"][3])
+                             params["logo_glow_color"], params["fxl_on"][3], params["bg_hue"])
             out["p_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["fxl_on_vars"][3].get(),
                                 c["color_var"].get(), c["logo_fx_box"].winfo_manager())
             out["p_sens"] = params["sensitivity"]
-            c["load_overlay_preset"]("default")
+            bp["load"]("neon")
+            out["b_neon"] = (params["bg_mode"], params["bg_palette"], params["holo_intensity"], params["logo_glow_color"],
+                             params["fx_link"], c["bg_var"].get())
+            bp["load"]("default")
+            out["b_default"] = (params["bg_mode"], params["bg_palette"], params["holo_intensity"], c["bg_var"].get())
+            op["load"]("default")
             out["p_default"] = (params["bg_mode"], params["fx_link"], params["holo_intensity"], params["fx_on"])
             out["p_default_widgets"] = (c["bg_var"].get(), c["link_var"].get(), c["holo_var"].get())
+            # un ancien preset overlay qui contenait des cles du fond ne les applique plus
+            old = gl.overlay_preset_values({"bg_hue": 0.9, "bg_mode": "pattern", "holo_intensity": 2.0,
+                                            "_automation": {"bg_hue": {"enabled": False}, "logo_x": {"enabled": True}}},
+                                           {"bg_hue": 0.3, "bg_mode": "live", "_automation": gl.default_automation()})
+            out["p_old_bg"] = (old["bg_hue"], old["bg_mode"], old["holo_intensity"], old["_automation"]["bg_hue"]["enabled"],
+                               old["_automation"]["logo_x"]["enabled"])
             params["bg_hue"] = 0.42
             params["text_content"] = "MON TEXTE"
             c["save_name_var"].set("Mon Look")
-            c["save_overlay_preset"]()
+            op["save"]()
+            bp["save_var"].set("Mon Fond")
+            bp["save"]()
             saved = json.loads(gl.OVERLAY_PRESETS_PATH.read_text(encoding="utf-8")) if gl.OVERLAY_PRESETS_PATH.exists() else {}
-            out["p_saved"] = "mon look" in saved and "sensitivity" not in saved.get("mon look", {}) \
-                and saved["mon look"].get("bg_hue") == 0.42 and "_automation" in saved["mon look"]
+            sbg = json.loads(gl.BACKGROUND_PRESETS_PATH.read_text(encoding="utf-8")) if gl.BACKGROUND_PRESETS_PATH.exists() else {}
+            ml, mf = saved.get("mon look", {}), sbg.get("mon fond", {})
+            out["p_saved"] = ("mon look" in saved and "sensitivity" not in ml and "_automation" in ml
+                              and not any(k.startswith("bg_") for k in ml)
+                              and not any(k.startswith("bg_") for k in ml.get("_automation", {}))
+                              and ml.get("text_content") == "MON TEXTE")
+            out["b_saved"] = ("mon fond" in sbg and mf.get("bg_hue") == 0.42 and "text_content" not in mf
+                              and "holo_intensity" not in mf and "_automation" in mf
+                              and all(k.startswith("bg_") for k in mf["_automation"]))
             params["bg_hue"] = 0.0
             params["text_content"] = "AUTRE"
-            c["load_overlay_preset"]("mon look")
-            out["p_reload"] = (params["bg_hue"], c["auto_vars"]["bg_hue"].get(), params["text_content"],
-                               c["text_widget"].get("1.0", "end-1c"))
-            c["save_name_var"].set("neon")
-            c["save_overlay_preset"]()
-            out["p_builtin_msg"] = c["preset_msg"].get()
-            out["p_builtin_untouched"] = "neon" not in json.loads(gl.OVERLAY_PRESETS_PATH.read_text(encoding="utf-8"))
-            c["overlay_var"].set("default")
-            c["update_overlay_preset"]()
-            out["p_default_msg"] = c["preset_msg"].get()
+            op["load"]("mon look")
+            out["p_reload"] = (params["text_content"], c["text_widget"].get("1.0", "end-1c"), params["bg_hue"])
+            bp["load"]("mon fond")
+            out["b_reload"] = (params["bg_hue"], c["auto_vars"]["bg_hue"].get(), params["text_content"])
+            # les integres se modifient, se suppriment et se restaurent
+            op["var"].set("neon")
+            params["holo_intensity"] = 1.9
+            op["update"]()
+            op["load"]("default")
+            op["load"]("neon")
+            out["p_edit_builtin"] = (params["holo_intensity"], obook.is_modified("neon"))
+            out["p_delete_builtin"] = (obook.delete("sobre"), "sobre" in obook.names())
+            obook.restore_builtins()
+            op["refresh"]()
+            op["load"]("neon")
+            out["p_restore"] = (params["holo_intensity"], "sobre" in obook.names(), "mon look" in obook.names())
+            params["holo_intensity"] = 0.5
+            op["var"].set("default")
+            op["update"]()
+            out["p_default_msg"] = op["msg"].get()
+            params["holo_intensity"] = 1.0
+            op["load"]("default")
+            out["p_default_edit"] = params["holo_intensity"]
+            out["p_default_reset"] = (obook.delete("default"), obook.all()["default"])
+            op["load"]("default")
+            out["p_default_back"] = params["holo_intensity"]
+            c["save_name_var"].set("aaa")
+            op["save"]()
             out["p_menu"] = [c["overlay_menu"]["menu"].entrycget(i, "label")
                              for i in range(c["overlay_menu"]["menu"].index("end") + 1)]
-            out["p_delete"] = c["overlay_store"].delete_user("mon look")
+            out["p_delete"] = obook.delete("mon look")
+            bbook.delete("sobre")
+            out["b_menu"] = bbook.names()
+            bbook.restore_builtins()
+            out["b_restored"] = "sobre" in bbook.names()
+            out["b_default_first"] = bbook.names()[0]
+            params["holo_intensity"] = 1.0
             root.after(200, step5)
 
         def step5():
+            # Fenetre adaptative : cote a cote quand elle est large, empilee sinon, ascenseur quand elle est basse
+            lw, rp, pb = c["live_wrap"], c["right_panel"], c["page_bar"]
+
+            def geo(size):
+                root.geometry(size)
+                root.update()
+                root.update()
+                return (c["layout"]["name"], pb.winfo_ismapped(), lw.winfo_x(), lw.winfo_y(), lw.winfo_width(), lw.winfo_height(),
+                        rp.winfo_x(), rp.winfo_y(), rp.winfo_width(), rp.winfo_height(), root.winfo_width(), root.winfo_height())
+            out["lay_big"] = geo("1900x1000")
+            out["lay_mid"] = geo("1250x800")
+            out["lay_small"] = geo("1000x420")
+            out["lay_back"] = geo("1800x900")
             texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
             out["live_msg"] = "message du gestionnaire" in texts       # dans la ligne de statut d'audio2wave
             out["mine_msg"] = any("Automations: ambiance par defaut" in t and "fps" in t for t in texts)
@@ -519,30 +625,83 @@ def check_gui() -> None:
     import json
     import tempfile as _tf
     real_presets_path = gl.OVERLAY_PRESETS_PATH
-    gl.OVERLAY_PRESETS_PATH = Path(_tf.mkdtemp(prefix="casual_overlay_presets_")) / "overlay_presets.json"   # jamais le vrai fichier
+    real_bg_presets_path = gl.BACKGROUND_PRESETS_PATH
+    _tmp_presets = Path(_tf.mkdtemp(prefix="casual_overlay_presets_"))
+    gl.OVERLAY_PRESETS_PATH = _tmp_presets / "overlay_presets.json"        # jamais les vrais fichiers
+    gl.BACKGROUND_PRESETS_PATH = _tmp_presets / "background_presets.json"
     try:
         gl_gui.run_gui(s, live, on_ready)
     finally:
         gl.OVERLAY_PRESETS_PATH = real_presets_path
+        gl.BACKGROUND_PRESETS_PATH = real_bg_presets_path
     p = out.get("p_neon", ())
-    check(p == ("pattern", "duo", 1.5, 0.0, "#ff3df2", 1), "preset overlay integre charge dans les parametres", str(p))
+    check(p == ("live", "classic", 1.5, 0.0, "#ff3df2", 1, 0.11),
+          "preset overlay integre charge (logo, effets, halo) SANS toucher au fond", str(p))
     w = out.get("p_widgets", ())
-    check(w[:4] == ("pattern", 0, 1, "#ff3df2") and w[4] == "grid" if len(w) == 5 else False,
-          "preset overlay: les widgets suivent (fond, lier, effets du logo, couleur) et le bloc logo apparait", str(w))
+    check(w[:4] == ("live", 0, 1, "#ff3df2") and w[4] == "grid" if len(w) == 5 else False,
+          "preset overlay: les widgets suivent (lier, effets du logo, couleur), le fond reste celui d'avant", str(w))
     check(out.get("p_sens") == 2.2, "preset overlay: la sensibilite du kick (micro) n'est pas touchee")
+    bn = out.get("b_neon", ())
+    check(bn == ("pattern", "duo", 1.5, "#ff3df2", 0.0, "pattern"),
+          "preset de fond: change le motif et le widget, sans toucher au logo ni aux effets", str(bn))
+    check(out.get("b_default") == ("live", "classic", 1.5, "live"), "preset de fond 'default': fond d'origine, halo intact",
+          str(out.get("b_default")))
     d = out.get("p_default", ())
     check(d == ("live", 1.0, 1.0, [1, 1, 1, 1, 1]) and out.get("p_default_widgets") == ("live", 1, int(gl.DEFAULT_PARAMS["holo_on"] >= 0.5)),
-          "preset 'default': retour aux reglages d'origine, widgets compris", str(d))
-    check(out.get("p_saved"), "sauvegarde sous un nom (minuscules), sans la sensibilite, avec les automations")
+          "preset overlay 'default': retour aux reglages d'origine du logo et des effets, widgets compris", str(d))
+    check(out.get("p_old_bg") == (0.3, "live", 2.0, True, True),
+          "un preset overlay (ancien) qui contient des reglages du fond ne les applique plus", str(out.get("p_old_bg")))
+    check(out.get("p_saved"), "sauvegarde overlay: minuscules, sans sensibilite, sans fond ni automations du fond")
+    check(out.get("b_saved"), "sauvegarde du fond: seulement les cles bg_* et leurs automations")
     r = out.get("p_reload", ())
-    check(len(r) == 4 and r[0] == 0.42 and abs(r[1] - 0.42) < 1e-9 and r[2] == "MON TEXTE" and r[3] == "MON TEXTE",
-          "rechargement d'un preset utilisateur: valeurs, curseur et texte retrouves", str(r))
-    check("integre" in out.get("p_builtin_msg", "") and out.get("p_builtin_untouched"),
-          "un preset integre ne peut pas etre ecrase par une sauvegarde du meme nom")
-    check("pas modifiable" in out.get("p_default_msg", ""), "'default' n'est pas modifiable")
-    check(out.get("p_menu", [])[:1] == ["default"] and {"sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
-          "menu des presets: default en tete, integres et utilisateur")
-    check(out.get("p_delete") is True, "suppression d'un preset utilisateur")
+    check(r == ("MON TEXTE", "MON TEXTE", 0.0), "rechargement d'un preset overlay: texte retrouve, fond non touche", str(r))
+    r = out.get("b_reload", ())
+    check(len(r) == 3 and r[0] == 0.42 and abs(r[1] - 0.42) < 1e-9 and r[2] == "MON TEXTE",
+          "rechargement d'un preset de fond: valeur et curseur retrouves, texte non touche", str(r))
+    check(out.get("p_edit_builtin") == (1.9, True), "un preset integre se modifie (version utilisateur qui le remplace)",
+          str(out.get("p_edit_builtin")))
+    check(out.get("p_delete_builtin") == ("deleted", False), "un preset integre se supprime", str(out.get("p_delete_builtin")))
+    check(out.get("p_restore") == (1.5, True, True),
+          "Restaurer: integres d'origine rendus (modifie et supprime), presets utilisateur gardes", str(out.get("p_restore")))
+    check("point de depart" in out.get("p_default_msg", "") and out.get("p_default_edit") == 0.5,
+          "'default' est modifiable", str(out.get("p_default_msg")))
+    dr = out.get("p_default_reset", ())
+    check(dr and dr[0] == "reset" and dr[1] == {} and out.get("p_default_back") == 1.0,
+          "supprimer 'default' le remet a sa version d'origine (il ne disparait jamais)", str(dr))
+    check(out.get("p_menu", [])[:1] == ["default"] and {"aaa", "sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
+          "menu des presets overlay: default en tete meme avec un preset 'aaa'", str(out.get("p_menu")))
+    check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
+    check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
+          "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
+    lv = {k: out.get(k, {}) for k in ("g_live_radio", "g_live_bar", "g_live_line")}
+    off, on = {"disabled"}, {"normal"}
+    check(all(lv["g_live_radio"].get(lb) == off for lb in ("Forme", "Lissage", "Echelle frequences", "Espace entre barres"))
+          and lv["g_live_radio"].get("Barres/points") == on and lv["g_live_radio"].get("Gain (dB)") == on,
+          "Live, style radio: forme, lissage, echelle des frequences et espace entre barres grises ; barres et gain actifs",
+          str(lv["g_live_radio"]))
+    check(all(lv["g_live_bar"].get(lb) == on for lb in ("Forme", "Lissage", "Echelle frequences", "Espace entre barres")),
+          "Live, analyzer en barres: tout est actif", str(lv["g_live_bar"]))
+    check(lv["g_live_line"].get("Espace entre barres") == off and lv["g_live_line"].get("Lissage") == on
+          and lv["g_live_line"].get("Forme") == on, "Live, analyzer en ligne: l'espace entre barres est grise, le reste actif")
+    check(out.get("g_holo_off") == off and out.get("g_holo_on") == on, "halo coupe: ses curseurs sont grises, rallumes avec la case",
+          f"{out.get('g_holo_off')} {out.get('g_holo_on')}")
+    check(out.get("g_fx_off") == (off, off) and out.get("g_fx_on") == (on, on),
+          "fonte et cellules coupees: leurs curseurs sont grises, actifs une fois cochees", f"{out.get('g_fx_off')} {out.get('g_fx_on')}")
+    gp = out.get("g_pal", {})
+    check(gp.get("classic", {}).get("Couleurs 1 / 2") == off and gp.get("classic", {}).get("Angle du degrade") == off
+          and gp.get("classic", {}).get("Teinte") == on and gp.get("duo", {}).get("Couleurs 1 / 2") == on
+          and gp.get("duo", {}).get("Angle du degrade") == on and gp.get("test", {}).get("Teinte") == off
+          and gp.get("test", {}).get("Vitesse") == off and gp.get("test", {}).get("Couleurs 1 / 2") == off,
+          "palette du fond: couleurs et angle seulement en Duo ; en Banc de test tous les reglages du motif sont grises", str(gp))
+    big, mid, small, back = (out.get(k, ()) for k in ("lay_big", "lay_mid", "lay_small", "lay_back"))
+    check(len(big) == 12 and big[0] == "wide" and not big[1] and big[6] > big[2] + big[4] - 5 and big[7] == big[3]
+          and big[9] > 700 and big[8] > 800, "fenetre large: LIVE et OVERLAY cote a cote, l'overlay prend la place en plus", str(big))
+    check(len(mid) == 12 and mid[0] == "stack" and mid[7] >= mid[3] + mid[5] - 5 and mid[8] > 1100,
+          "fenetre moyenne: OVERLAY sous LIVE, a toute la largeur", str(mid))
+    check(len(small) == 12 and small[0] == "stack" and small[1] and small[8] <= small[10],
+          "fenetre basse: ascenseur de page, rien ne depasse en largeur", str(small))
+    check(len(back) == 12 and back[0] == "wide" and not back[1] and back[5] <= back[11],
+          "retour a une grande fenetre: cote a cote, plus d'ascenseur, pas de hauteur residuelle", str(back))
     check(out.get("snap_ridge") is True, "boutons Snap / Ridge de la fenetre d'audio2wave conserves (bascule de source)")
     for name in ("snap", "ridge"):
         m = out.get(name, {})
@@ -574,7 +733,7 @@ def check_gui() -> None:
           "reglages logo/effets ecrits tout de suite dans les parametres")
     check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0,
           "halo holographique: la case ecrit holo_on")
-    check(out.get("tabs") == ["Fond", "Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Affichage"],
+    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Affichage"],
           "partie OVERLAY rangee en onglets", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
           str(out.get("win_height")))
@@ -1318,6 +1477,118 @@ def check_melt() -> None:
           "melt_react > 0: le cycle s'accelere avec les basses")
 
 
+def check_gates() -> None:
+    print("Reglages incompatibles grises (modes d'audio2wave)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import threading
+
+    import gl_gui
+    import gui_colors
+    import gui_gates as gg
+    import py_modes
+
+    live_dir = gl.DEFAULT_A2W_DIR
+    gl.load_live(live_dir)
+    ev = threading.Event()
+
+    def states(host, label):
+        return {str(x.cget("state")) for w in gg.row_of_label(host, label) for x in gg.leaves(w)
+                if x.winfo_class() in ("Scale", "Menubutton", "Entry", "Checkbutton")}
+
+    built: dict = {}
+
+    def build(name):
+        mod = py_modes.load_mode(live_dir, name)
+        a = py_modes.make_args(mod, name, "x", (1280, 720))
+        host = gl_gui.HostFrame(root)
+        host.pack()
+        if name == "snap":
+            mod.build_gui(a, (1280, 720), {}, {"capture": None}, ev, ev, root=host, on_switch_mode=lambda m: None)
+        else:
+            mod.build_gui(a, (1280, 720), {}, ev, ev, root=host, on_switch_mode=lambda m: None)
+        gl_gui.tidy_mode_gui(host, name)
+        g = gg.install_mode_gates(host, name, "#888888")
+        root.update()
+        built[name] = (a, gui_colors.add_color_helpers(host, "#5fd4c8", "#0b1018"))
+        root.update()
+        return host, g
+
+    host, _ = build("snap")
+    off, on = {"disabled"}, {"normal"}
+    pencil = {lb: states(host, lb) for lb in ("Epaisseur du trait", "Echelle", "Filtre colonne", "Crossover Hz", "Video interieure",
+                                              "Rayon du halo", "Points / colonnes", "Gain manuel")}
+    check(pencil["Epaisseur du trait"] == on and pencil["Video interieure"] == on and pencil["Points / colonnes"] == on
+          and pencil["Echelle"] == off and pencil["Filtre colonne"] == off and pencil["Crossover Hz"] == off,
+          "Snap, style pencil: trait et videos actifs, echelle / filtre / crossover (rekordbox, simple) grises", str(pencil))
+    check(pencil["Rayon du halo"] == off and pencil["Gain manuel"] == off,
+          "Snap: rayon du halo grise tant que le halo n'est pas coche, gain manuel grise en gain automatique")
+    gg.find(host, "Checkbutton", "Halo sur les kicks").invoke()
+    gg.find(host, "Checkbutton", "Gain automatique").invoke()
+    root.update()
+    check(states(host, "Rayon du halo") == on and states(host, "Gain manuel") == on and
+          str(gg.find(host, "Checkbutton", "Temps reel").cget("state")) == "normal",
+          "Snap: cocher le halo active son rayon et 'Temps reel' ; decocher le gain automatique active le gain manuel")
+    gg.find(host, "Radiobutton", "rekordbox").invoke()
+    root.update()
+    rek = {lb: states(host, lb) for lb in ("Epaisseur du trait", "Echelle", "Crossover Hz", "Video interieure", "Rayon du halo")}
+    rek["Sinusoide"] = {str(gg.find(host, "Checkbutton", "Sinusoide").cget("state"))}
+    check(rek["Epaisseur du trait"] == off and rek["Video interieure"] == off and rek["Sinusoide"] == off and rek["Rayon du halo"] == off
+          and rek["Echelle"] == on and rek["Crossover Hz"] == on, "Snap, style rekordbox: options du crayon grisees, echelle et crossover actifs",
+          str(rek))
+    gg.find(host, "Radiobutton", "simple").invoke()
+    root.update()
+    check(states(host, "Crossover Hz") == off and states(host, "Echelle") == on, "Snap, style simple: crossover grise (rekordbox seul), echelle active")
+    gg.find(host, "Radiobutton", "rekordbox").invoke()
+    root.update()
+    cross = [x for w in gg.row_of_label(host, "Crossover Hz") for x in gg.leaves(w) if x.winfo_class() == "Entry"]
+    size_entries = [x for w in gg.row_of_label(host, "Taille du rendu") for x in gg.leaves(w) if x.winfo_class() == "Entry"]
+    check(cross and all(str(x.cget("state")) == "normal" for x in cross) and size_entries
+          and all(str(x.cget("state")) == "readonly" for x in size_entries),
+          "Snap: les champs du crossover restent modifiables, ceux de la taille du rendu sont figes",
+          f"{[str(x.cget('state')) for x in cross]} {[str(x.cget('state')) for x in size_entries]}")
+    # Aides a la saisie des couleurs (pastilles + selecteur + menu de noms), sur les champs d'audio2wave
+    sargs, sfields = built["snap"]
+    f = sfields.get("Couleurs")
+    check(f is not None and "Couleur de fond" in sfields, "Snap: pastilles de couleur sur 'Couleurs' et 'Couleur de fond'")
+    if f is not None:
+        f.set_segment(0, "red")
+        check(f.swatch_colors() == ["#ff0000"] and sargs.colors == "red",
+              "Snap: choisir une couleur remplit le champ ET l'applique (Entree simulee)", f"{f.swatch_colors()} {sargs.colors}")
+        f.add_segment()
+        f.set_segment(1, "0x00ff00")
+        f.set_segment(2, "#0000ff")
+        check(f.swatch_colors() == ["#ff0000", "#00ff00", "#0000ff"] and sargs.colors == "red|0x00ff00|#0000ff",
+              "Snap: trois couleurs separees par | (rekordbox), une pastille chacune", f"{f.swatch_colors()} {sargs.colors}")
+        f.write(["inconnue"])
+        check(f.swatch_colors() == ["#555555"], "couleur illisible: pastille grise '?', pas d'erreur")
+
+    host.destroy()
+
+    host, _ = build("ridge")
+    rargs, rfields = built["ridge"]
+    check("Couleur du trait" in rfields and "Couleur de fond" in rfields, "Ridge: pastilles sur 'Couleur du trait' et 'Couleur de fond'")
+    rfields["Couleur du trait"].set_segment(0, "teal")
+    check(rargs.colors == "teal" and rfields["Couleur du trait"].swatch_colors() == ["#008080"], "Ridge: couleur appliquee",
+          f"{rargs.colors}")
+    ridge = states(host, "Gain manuel (dB)")
+    gg.find(host, "Checkbutton", "Gain automatique").invoke()
+    root.update()
+    check(ridge == off and states(host, "Gain manuel (dB)") == on, "Ridge: gain manuel grise tant que le gain est automatique")
+    # Leur refresh() (toutes les 200 ms) ferme leur fenetre et cesse de se reprogrammer des que finished_event est positionne :
+    # on le laisse tourner avant de detruire, sinon un job programme viserait un widget detruit (bruit Tcl) ou, sans destroy,
+    # la boucle d'evenements d'un test suivant ne se terminerait jamais.
+    ev.set()
+    for _ in range(8):
+        root.update()
+        time.sleep(0.05)
+    root.destroy()
+
+
 def check_cells() -> None:
     print("Cellules organiques du logo")
     d = gl.DEFAULT_PARAMS
@@ -1602,6 +1873,7 @@ def main() -> None:
     check_holo()
     check_melt()
     check_cells()
+    check_gates()
     check_layers()
     check_automation()
     check_params()
