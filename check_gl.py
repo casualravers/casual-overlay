@@ -670,6 +670,30 @@ def check_gui() -> None:
           "supprimer 'default' le remet a sa version d'origine (il ne disparait jamais)", str(dr))
     check(out.get("p_menu", [])[:1] == ["default"] and {"aaa", "sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
           "menu des presets overlay: default en tete meme avec un preset 'aaa'", str(out.get("p_menu")))
+    names = ["Stereo Mix (Realtek(R) Audio)", "CABLE Output (VB-Audio Virtual Cable)", "Microphone (Realtek(R) Audio)",
+             "Microphone Array (Intel Smart S"]
+    check(gl.pick_default_device(names, "Microphone Array (Intel Smart Sound Technology)") == names[3],
+          "micro par defaut: correspond a l'entree par defaut de Windows (nom tronque)")
+    check(gl.pick_default_device(names, None) == names[2], "micro par defaut: sans info systeme, un nom de micro, pas un mixage")
+    check(gl.pick_default_device(["Stereo Mix (X)", "Line In (Y)"], None) == "Line In (Y)",
+          "micro par defaut: ecarte les boucles de sortie")
+    check(gl.pick_default_device(["Stereo Mix (X)"], None) == "Stereo Mix (X)" and gl.pick_default_device([], "x") is None,
+          "micro par defaut: repli sur la seule entree, None si aucune")
+    guard = gl.PerfGuard(144)                      # budget plafonne a 60 Hz (16,7 ms)
+    msgs = [guard.update(8.0, 0.1 * i, {"cell_on": 1.0}) for i in range(60)]
+    check(abs(guard.budget_ms - 1000 / 60) < 1e-6 and not any(msgs), "garde-fou: 8 ms par image = pas d'alerte, budget plafonne a 60 Hz")
+    g = gl.PerfGuard(59)
+    seen = [g.update(21.0, 0.1 * i, {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 0.0}) for i in range(60)]
+    first = next((i for i, m in enumerate(seen) if m), None)
+    check(first is not None and first >= 18 and "cellules" in seen[-1] and "halo" in seen[-1] and "fonte" not in seen[-1],
+          "garde-fou: alerte apres ~2 s de surcharge, nomme les effets couteux allumes", str(seen[-1]))
+    mid = [g.update(14.0, 6.0 + 0.1 * i, {}) for i in range(30)]
+    check(mid[-1] is not None, "garde-fou: entre les deux seuils l'alerte reste (pas de clignotement)")
+    seen = [g.update(10.0, 9.0 + 0.1 * i, {}) for i in range(60)]
+    check(seen[-1] is None, "garde-fou: alerte levee quand la charge redescend nettement", str(seen[-1]))
+    g2 = gl.PerfGuard(60)
+    texts = [g2.update(30.0, 0.1 * i, {}) for i in range(40)]
+    check("taille du rendu" in (texts[-1] or ""), "garde-fou: sans effet couteux allume, conseille de baisser le rendu")
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
     check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
           "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))

@@ -1260,7 +1260,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if auto_master_var.get() != int(float(params["auto_master"]) >= 0.5):
             auto_master_var.set(int(float(params["auto_master"]) >= 0.5))
         st = s.status
-        parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("logo", "msg") if st.get(k)]
+        parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("perf", "logo", "msg") if st.get(k)]
         status_label.config(text="  |  ".join(parts))
         after(REFRESH_MS, refresh)
 

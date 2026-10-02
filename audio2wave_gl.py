@@ -527,6 +527,42 @@ def find_input_device(query: str | None, dshow_name: str | None = None):
     return None
 
 
+# Entrees DirectShow qui ne sont pas un micro (boucle de sortie, cables virtuels...) : jamais choisies d'office.
+NOT_A_MIC = ("stereo mix", "mixage", "loopback", "what u hear", "virtual", "cable", "voicemeeter", "vb-audio", "obs",
+             "nvidia broadcast", "steam streaming")
+MIC_WORDS = ("microphone", "micro", "mic", "array", "headset", "casque")
+
+
+def pick_default_device(dshow_names: list[str], system_default: str | None = None) -> str | None:
+    """Entree DirectShow a utiliser quand l'utilisateur n'en a pas choisi : le micro du PC. Ordre : celle qui correspond
+    a l'entree par defaut de Windows (noms tronques a 31 caracteres cote DirectShow), puis un nom de micro evident, puis
+    la premiere qui n'est pas une boucle ou un cable virtuel, puis la premiere. Pure (testable sans materiel)."""
+    if not dshow_names:
+        return None
+    real = [n for n in dshow_names if not any(w in n.lower() for w in NOT_A_MIC)] or list(dshow_names)
+    if system_default:
+        sysname = system_default.lower().strip()
+        for n in real:
+            low = n.lower().strip()
+            if low == sysname or sysname.startswith(low) or low.startswith(sysname):
+                return n
+    for n in real:
+        if any(w in n.lower() for w in MIC_WORDS):
+            return n
+    return real[0]
+
+
+def system_default_input_name() -> str | None:
+    """Nom de l'entree audio par defaut de Windows (sounddevice), ou None."""
+    try:
+        index = sd.default.device[0]
+        if index is None or index < 0:
+            index = sd.query_hostapis(sd.default.hostapi)["default_input_device"]
+        return str(sd.query_devices(index)["name"]) if index is not None and index >= 0 else None
+    except Exception:
+        return None
+
+
 def print_audio_devices(file=sys.stdout) -> None:
     hostapis = sd.query_hostapis()
     print("Entrees sounddevice (utilise --audio-device <sous-chaine ou numero>):", file=file)
@@ -1926,6 +1962,13 @@ def main() -> None:
             print(f'  -d "{name}"')
         return
 
+    if not args.synthetic and not args.device and live is not None and shutil.which("ffmpeg") is not None:
+        # Aucune entree demandee : on prend le micro du PC (le programme doit marcher sur n'importe quelle machine).
+        require_deps()
+        args.device = pick_default_device(live.list_audio_devices(), system_default_input_name())
+        if args.device:
+            print(f"Aucune entree indiquee: micro du PC utilise ({args.device}). -d pour en choisir une autre.")
+
     live_args = None
     if not args.synthetic or args.gui:       # la GUI d'audio2wave a besoin des options live, meme en synthetique
         if not args.synthetic and not args.device and not args.gui:
@@ -2138,6 +2181,40 @@ class NoDeviceManager(ProducerManager):
 class _EmptyStream:
     def read(self, n: int) -> bytes:
         return b""
+
+
+class PerfGuard:
+    """Garde-fou de charge : previent quand le GPU ne tient plus l'image. Le budget est une image a 60 Hz au plus (un
+    projecteur a 59 Hz ne demande pas plus, un ecran a 144 Hz ne rend pas le budget impossible). Moyenne lissee des temps
+    GPU mesures ; alerte apres `HOLD_S` secondes au-dessus de `HIGH` x budget, levee sous `LOW` x budget (hysterese :
+    pas de message qui clignote). `update()` renvoie le texte a afficher, ou None quand tout va bien. Pure (testable)."""
+
+    HIGH, LOW, HOLD_S, ALPHA = 0.90, 0.80, 2.0, 0.2
+    # (cle de reglage, libelle, touche), du plus cher au moins cher (mesure : cellules > halo > fonte)
+    COSTLY = (("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"))
+
+    def __init__(self, refresh_hz: float) -> None:
+        self.budget_ms = 1000.0 / max(min(float(refresh_hz or 60.0), 60.0), 20.0)
+        self.avg = 0.0
+        self.over_since: float | None = None
+        self.active = False
+
+    def update(self, gpu_ms: float, now: float, params: dict) -> str | None:
+        self.avg = gpu_ms if self.avg == 0.0 else self.avg + self.ALPHA * (gpu_ms - self.avg)
+        if self.avg > self.HIGH * self.budget_ms:
+            if self.over_since is None:
+                self.over_since = now
+            if now - self.over_since >= self.HOLD_S:
+                self.active = True
+        else:
+            self.over_since = None
+            if self.avg < self.LOW * self.budget_ms:
+                self.active = False
+        if not self.active:
+            return None
+        on = [label for key, label in self.COSTLY if float(params.get(key, 0.0)) >= 0.5]
+        advice = ("coupe " + " ou ".join(on)) if on else "baisse la taille du rendu (--render-size)"
+        return f"GPU trop charge: {self.avg:.0f} ms par image pour {self.budget_ms:.0f} ms disponibles - {advice}"
 
 
 def logo_signature(params: dict) -> tuple:
@@ -2356,7 +2433,10 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
           "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
     print(status_line())
 
-    query = ctx.query(time=True) if args.stats else None
+    query = ctx.query(time=True)      # une image sur 8 (toutes avec --stats) : le garde-fou de charge et les mesures
+    guard = PerfGuard(glfw.get_video_mode(window.monitor).refresh_rate or 60)
+    frame_i = 0
+    perf_warned = False
     t0 = time.monotonic()
     last_title = t0
     frames = 0
@@ -2411,7 +2491,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
         state = analyzer.latest()
         size = window.framebuffer_size()
-        if query is not None:
+        sample = args.stats or frame_i % 8 == 0
+        frame_i += 1
+        if sample:
             with query:
                 renderer.draw(ctx.screen, size, state, params, now - t0)
         else:
@@ -2436,9 +2518,19 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 deadline = time.monotonic()
         frames += 1
         win_frames += 1
-        if query is not None:
-            gpu_ms += query.elapsed / 1e6
+        if sample:
+            elapsed = query.elapsed / 1e6
+            gpu_ms += elapsed
             gpu_n += 1
+            warning = guard.update(elapsed, time.monotonic(), params)
+            if warning:
+                s.status["perf"] = warning
+                if not perf_warned:
+                    print(warning, file=sys.stderr)
+                    perf_warned = True
+            else:
+                s.status.pop("perf", None)
+                perf_warned = False
 
         now = time.monotonic()
         if now - last_title >= 0.5:

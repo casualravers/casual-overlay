@@ -229,7 +229,7 @@ Le logo **se decompose en cellules** (Voronoi + cell shading) ; il garde sa form
 - Rendu cell shading : aplat de la couleur moyenne du logo autour de la graine (lod 3) melange a la couleur
   d'origine par `cell_flat`, deux tons, reflet de bulle, contour en `cell_ink`, translucide.
 - Pieges : **`textureLod` et non `texture`** dans cette fonction (retour anticipe = derivees fausses, mauvais
-  niveau de mipmap aux frontieres des cellules, traits parasites) ; hachage **sans `sin`** (`chash`), car
+  niveau de mipmap aux frontieres des cellules, traits parasites) ; hachage **sans `sin`** (`chash3`, un seul appel pour les trois valeurs d'une cellule), car
   `logo_at` est appelee ~13 fois par pixel avec le glow ; les cellules restent **dans le rectangle du logo**
   (les textes ont une marge transparente de 0,18 x la taille).
 - Reglages : `cell_on` 0, `cell_amount` 0,65 (decomposition), `cell_fusion` 1 (rayon des cellules, 0,2 a 1,2),
@@ -463,8 +463,12 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   fusionnees. Mesure avec le vrai ffmpeg/micro : changement de style analyzer -> radio,
   plus grand trou dans le flux video 63 ms (~2 frames), aucun ffmpeg residuel. La fenetre GL
   n'est jamais touchee.
-- Sans `-d`, la GUI demarre quand meme (`NoDeviceManager`) : le fond demarre au premier
-  choix d'entree dans leur menu. En `--synthetic`, leur GUI s'affiche mais ses reglages sont
+- **Sans `-d`, le micro du PC est choisi d'office** (`main`) : `pick_default_device()` (pure) prend l'entree
+  DirectShow qui correspond a l'entree par defaut de Windows (`system_default_input_name()`, sounddevice ; noms
+  tronques a 31 caracteres cote DirectShow, d'ou la comparaison par prefixe), sinon un nom de micro evident, en
+  ecartant mixage stereo / boucles / cables virtuels (`NOT_A_MIC`). Fonctionne donc sur n'importe quel PC, `--dry-run`
+  compris ; `-d` l'emporte. `NoDeviceManager` ne sert plus que si aucune entree n'existe : le fond demarre alors au
+  premier choix d'entree dans leur menu. En `--synthetic`, leur GUI s'affiche mais ses reglages sont
   ignores (message dans leur statut).
 - La resolution du rendu ffmpeg (`--render-size`) n'est pas reglable dans la GUI.
 
@@ -487,6 +491,18 @@ par seconde sur bruit ; les seuils du premier jet (0,8 / 2,5) aussi (28 / 60 s).
 manque a sensibilite 1,0 (battement entre les deux frequences) ; la touche haut (~2,5) le
 rattrape (39/40 en test). Valider en soiree avec le vrai son : c'est le composant le plus
 fragile.
+
+## Charge GPU : garde-fou et mesure
+
+- **Garde-fou** (`PerfGuard`, audio2wave_gl.py) : une image sur 8 (toutes avec `--stats`) est chronometree par une
+  requete GPU ; moyenne lissee comparee au budget d'une image a 60 Hz au plus (un ecran a 144 Hz ne rend pas le budget
+  impossible). Au-dessus de 90 % du budget pendant 2 s : message dans la ligne de statut de la GUI (`status["perf"]`,
+  en tete) et une fois sur stderr, qui nomme les effets couteux allumes (cellules > halo > fonte) ou conseille
+  `--render-size` plus petit ; levee sous 80 % (hysterese, pas de clignotement). Il previent, il ne degrade rien tout seul.
+- **Optimisations** (mesure ci-dessus) : le contour lumineux (~25 appels de `logo_at` par pixel) est saute hors du
+  rectangle du logo agrandi du rayon du contour (alpha nul au-dela, cellules et fonte comprises) ; une cellule candidate
+  ne coute plus qu'un hachage (`chash3`). Un shader de mesure : `--synthetic --stats --max-seconds 13` avec les
+  reglages voulus (`load_params` remplacable par un script).
 
 ## Pieges rencontres
 
@@ -566,6 +582,8 @@ reelle, latence acoustique bout en bout.
 | Upload texture | 0,5 ms (720p), 1,0-1,2 ms (1080p) |
 | Temps GPU par frame (2 passes) | 5-7 ms |
 | Halo holographique (champ a 1/4 de resolution + post), image + relecture | +1,7 ms a 720 p (6,9 -> 8,6), +3,3 ms a 1080 p (10,6 -> 13,9) |
+| Temps GPU 1080 p, effets du logo (fonte, cellules, halo, glow) tous allumes | 21,2 ms avant optimisation -> **14,5 ms** (budget 16,9 ms a 59 Hz) ; cellules seules 19,6 -> 12,7 ms ; defaut 12,8 -> 6,0 ms |
+| Temps GPU 720 p, tout allume | 11,1 ms avant optimisation |
 | Capture sounddevice | latence rapportee ~22 ms (blocs de 512, WASAPI, 48 kHz) |
 | Detection du kick (logicielle) | 25 ms mediane, 29 ms max (hop 10,7 ms + fenetre 2048), sur un vrai kick a attaque instantanee |
 

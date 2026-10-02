@@ -130,13 +130,15 @@ float chash(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-float ctri(float x) {
-    return abs(fract(x) * 2.0 - 1.0);       // onde triangulaire 0..1..0, bon marche
+// Trois valeurs d'un coup (un seul hachage au lieu de quatre par cellule candidate).
+vec3 chash3(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yzz) * p3.zyx);
 }
 
-// Graine au repos de la cellule `id` (grille jitteree).
-vec2 cell_base(vec2 id) {
-    return id + 0.5 + 0.68 * (vec2(chash(id), chash(id + 7.3)) - 0.5);
+float ctri(float x) {
+    return abs(fract(x) * 2.0 - 1.0);       // onde triangulaire 0..1..0, bon marche
 }
 
 // Le logo `c` (premultiplie) se DECOMPOSE en cellules : la grille de Voronoi decoupe le logo en morceaux ; chaque
@@ -157,9 +159,10 @@ vec4 logo_cells(vec2 q, vec4 c) {
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             vec2 id = ci + vec2(float(i), float(j));
-            vec2 s = cell_base(id);
-            float h1 = chash(id + 3.1);
-            float h2 = chash(id + 9.7);
+            vec3 hh = chash3(id);
+            vec2 s = id + 0.5 + 0.68 * (hh.xy - 0.5);                    // graine au repos (grille jitteree)
+            float h1 = hh.z;
+            float h2 = fract(h1 * 7.31 + hh.x * 3.77 + hh.y * 1.93);
             vec2 wob = vec2(ctri(u_cell_t * (0.5 + h1) + h2), ctri(u_cell_t * (0.45 + h2) + h1)) * 2.0 - 1.0;
             vec2 out_dir = (s - mid) / max(length(s - mid), 0.001);
             vec2 ctr = s + D * (0.26 * wob + 0.10 * out_dir);            // la cellule glisse et s'ecarte du centre
@@ -245,11 +248,17 @@ void main() {
             float radius = mix(0.006, 0.03, u_bass) * u_glow_radius;
             vec2 asp = vec2(u_res.y / u_res.x, 1.0);
             float acc = 0.0;
-            for (int i = 0; i < 12; i++) {
-                float ang = float(i) * 0.5235988;   // 2*pi/12
-                vec2 dir = vec2(cos(ang), sin(ang)) * asp;
-                acc += logo_at(p + dir * radius).a;
-                acc += logo_at(p + dir * radius * 0.5).a;
+            // Hors du rectangle du logo agrandi du rayon du contour, tous les echantillons seraient vides : on les saute
+            // (la plupart des pixels de l'ecran, ~25 appels de logo_at chacun, cellules et fonte comprises).
+            vec2 reach = vec2(u_logo_rect.z + radius * asp.x, u_logo_rect.w + radius);
+            vec2 away = abs(p - u_logo_rect.xy);
+            if (away.x < reach.x && away.y < reach.y) {
+                for (int i = 0; i < 12; i++) {
+                    float ang = float(i) * 0.5235988;   // 2*pi/12
+                    vec2 dir = vec2(cos(ang), sin(ang)) * asp;
+                    acc += logo_at(p + dir * radius).a;
+                    acc += logo_at(p + dir * radius * 0.5).a;
+                }
             }
             float halo = clamp(acc / 24.0 * 1.6, 0.0, 1.0) * (1.0 - lg.a);
             rgb += u_glow_color * halo * u_glow * (0.25 + 0.75 * u_bass);
