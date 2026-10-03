@@ -46,6 +46,24 @@ Options principales : `--logo`, `--logo-video`, `--logo-key`, `--text "LIGNE 1\n
 La fenetre a **deux grandes parties**, separees par un trait violet et chacune coiffee d'un bandeau
 de couleur ; chaque section porte aussi son bandeau.
 
+**SCENES (rangee ambre, tout en haut, toujours visible)** : une scene change **tout le look d'un clic** (ou F1 a F9 dans la
+fenetre de rendu, avec `--gui`). Une scene = **le fond (audio2wave OU motif genere) + l'overlay**, car le motif genere
+remplace le visuel d'audio2wave : s'il est choisi, la scene retient son reglage, sinon elle retient le mode (Live, Snap ou
+Ridge) et son preset. Pour en creer une : regle tout comme d'habitude, clique *+ Nouvelle scene*, donne un nom, *Enregistrer*
+(elle capture l'etat actuel). Clic sur une touche = charger ; **clic droit** = mettre a jour avec l'etat actuel, supprimer.
+**Mode VJ** (a droite de la rangee) : *▶ VJ* enchaine tes scenes tout seul, une toutes les N secondes, avec un **flash blanc
+et des bandes de glitch d'une demi-seconde** a chaque changement (le chiffre sur le bouton = secondes avant la prochaine).
+*▶▶* passe tout de suite a la suivante. *reglages VJ* : **dans l'ordre** ou **au hasard** (jamais la meme scene deux fois
+de suite), et la duree (10 s, 20 s, 30 s, 1 min, 2 min, 5 min). Choisir une scene a la main met le VJ en pause, pour qu'il ne
+se batte pas avec toi. Dans la fenetre de rendu : **Espace** = lecture / pause, **fleche droite** = scene suivante. Il faut
+au moins 2 scenes. Un changement de mode (Live, Snap, Ridge) prend environ une seconde : le flash le masque en partie.
+**Une scene ne change ni l'entree audio (elle reste celle qui est active), ni le plein ecran / la taille de la fenetre de
+rendu**, et quand le VJ tourne la fenetre de reglages garde sa taille meme si une scene change de mode.
+9 scenes au maximum, dans `~/.audio2wave/scenes.json`, **tout y compris l'etat du panneau d'audio2wave** : les scenes
+n'ajoutent rien aux presets d'audio2wave (une scene et un preset sont deux choses differentes). Les scenes creees avec
+une ancienne version (elles rangeaient un preset `scene-<nom>` chez audio2wave) sont migrees toutes seules au
+lancement suivant, et ces presets sont retires de leurs listes.
+
 **LIVE (bandeau turquoise, a gauche)** : **la fenetre de reglages d'`audio2wave_live.py --gui`, reprise telle
 quelle** du depot audio2wave (meme theme, automations de courbes, info-bulles) pour le visuel de fond
 ffmpeg : chaque reglage remplace le flux a chaud (environ 0,4 s apres le dernier), sans que la
@@ -74,11 +92,14 @@ Audio2wave / motif genere, palette, couleurs, reglages du motif et leurs automat
 
 Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour que la fenetre reste courte
 (environ 650 px de haut) : *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
-*Fonte du logo*, *Cellules*, *Affichage*.
+*Fonte du logo*, *Cellules*, *Noise*, *Affichage*.
 
 - **Fond** (dans la partie LIVE, sous le panneau du mode, car c'est la source du visuel d'audio2wave) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Motif genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel, Duo ou Banc de test (copie exacte du motif de test, sans reglage), couleurs, angle, teinte, vitesse, taille des
   carreaux, contraste, cadence, reaction au kick ; effet immediat).
+- **Noise** : un seul hasard, prereglé, qui joue le role d'une musique imaginaire : des ondulations et des coups au hasard,
+  meme sans son, sur les effets que tu coches (wobble, onde de choc, aberration, glitch, reaction du logo). Deux reglages :
+  son *intensite* et les cases de ce sur quoi il agit (rien n'est coche par defaut). Un indicateur montre ce qu'il envoie.
 - **Effets** : les 5 effets (interrupteur + intensite), intensite globale, sensibilite du kick.
   Wobble, onde de choc, aberration et glitch s'appliquent au **fond** et au **logo** chacun dans sa
   couche : par defaut « Memes effets que le fond » est coche (comportement d'origine), decochee, le
@@ -128,6 +149,9 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 | H | barres de debug (basses, mediums, aigus, RMS, kick + etat des effets) |
 | 1 a 5 | wobble, ripple, aberration chromatique, glitch (fond), effets du logo (pulsation, contour) |
 | Maj + 1 a 4 | le meme effet sur la couche du logo (delie fond et logo) |
+| F1 a F9 | scenes 1 a 9 (avec `--gui`) |
+| Espace | mode VJ : lecture / pause (avec `--gui`) |
+| Fleche droite | mode VJ : scene suivante (avec `--gui`) |
 | L | lier / separer les effets du fond et du logo |
 | C | halo holographique : on / off |
 | M | fonte acide du logo : on / off |
@@ -145,8 +169,37 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   detecteur de kick, ou un autre micro) en plus des effets separes, pour decorreler vraiment les deux
   couches. Suppose des enveloppes `bass/mid/high/beat` par couche dans le shader et un choix de source
   dans la GUI.
-- **Scenes combinees live + overlay** : un seul preset qui charge a la fois un preset live (spectre ffmpeg)
-  et un preset overlay ; aujourd'hui les deux se chargent separement.
+- **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre ou au hasard, flash a
+  chaque changement, Espace et fleche droite). Le developpement prevu :
+  - **Bouton « etendre » (expand)** sur le VJ : un panneau deplie qui donne plus de granularite sans alourdir la barre
+    (qui reste « une scene = une touche, un bouton VJ ») : liste des scenes dans l'ordre de passage, duree propre a chaque
+    scene, scenes a exclure du VJ, ordre libre (programme a composer), reglages de transition.
+  - **Glisser-deposer d'images ou d'animations** (PNG, GIF, WebM...) sur le panneau : soit **liees a l'overlay de la scene**
+    (logo, texte ou video qui font partie de la scene : aujourd'hui ces medias restent a part des presets), soit **ajoutees
+    en parametre d'audio2wave (mode Snap)**, qui sait deja jouer des videos / images dans son trace (reglages `video` et
+    `video2`). A trancher : copier le fichier dans un dossier de medias du depot ou garder le chemin d'origine, et que faire
+    d'un media introuvable au chargement d'une scene (repli sans erreur, message).
+  - **Changer en rythme** (toutes les N mesures, en comptant les kicks detectes) plutot qu'a la seconde.
+  - **Une vraie transition** (fondu des reglages numeriques ; un changement de mode Live -> Snap coupe la source, donc
+    plutot un fondu enchaine d'image a image).
+  L'interface doit rester simple et agreable : les options avancees vivent dans le panneau deplie, jamais dans la barre.
+- **Sets : enregistrer, exporter, importer et changer d'enchainement de scenes** : un **set** = un enchainement de scenes
+  (leur liste, l'ordre, les reglages du VJ, plus tard les durees par scene et les medias), enregistre sous un nom. A
+  reflechir puis a travailler :
+  - **Exporter / importer** un set dans **un seul fichier** pour le partager ou le sauvegarder (un set prepare pour un
+    evenement, un autre pour un club, un set d'un autre VJ). Le fichier doit etre autonome : les scenes et l'etat
+    d'audio2wave qu'elles contiennent y sont inclus ; les medias (logo, video, animations) sont le point delicat
+    (embarquer les fichiers dans une archive, ou garder des chemins et prevenir quand un media manque).
+  - **Basculer d'un set a un autre**, vite et sans risque en soiree : un selecteur de set (a cote de la rangee des scenes,
+    ou dans le panneau « etendre » du VJ) ; la rangee et F1..F9 montrent alors les scenes du set choisi. A trancher : un
+    set est-il actif seul (les scenes d'un autre set sont cachees), les scenes peuvent-elles etre partagees entre sets
+    (references plutot que copies), que devient le VJ en cours au moment du changement (pause, ou repart au debut du
+    nouveau set), et la limite de 9 scenes (une par touche F1..F9) : par set plutot que globale.
+  - **Import sans surprise** : nom deja pris (renommer ou remplacer, avec confirmation), fichier illisible ou d'une
+    version plus recente (message clair, jamais d'effacement), et scenes qui reposent sur une entree audio ou un
+    plein ecran propres a la machine d'origine (deja exclus des scenes : voir `scenes.SCENE_EXCLUDED`).
+  - Aujourd'hui il n'y a qu'un seul ensemble de scenes (`~/.audio2wave/scenes.json`) ; le passage a plusieurs sets demande
+    de faire de ce fichier un conteneur de sets (avec migration de l'existant en un set « principal »).
 - **Halo holographique plus riche** : automations de l'intensite et de la portee, teinte reglable, forme de
   la poussiere (etoiles a branches, comete), trainee directionnelle (vent) plutot que radiale, et mode
   « ombre » (soustractif) pour assombrir aussi le fond.

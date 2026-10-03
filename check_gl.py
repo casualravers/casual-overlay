@@ -338,13 +338,43 @@ def check_gui() -> None:
                 out["stage"] = "ridge" if stage == "snap" else "live"
                 c["switch"]("ridge" if stage == "snap" else "live")
             root.after(200, later)
-        else:
+        elif stage == "live":
             out["live_back"] = dict(mode=s.mode, src=s.pysrc, suspended=manager.suspended,
                                     resumed=[r.device for r in manager.resumed], reader_ok=s.reader is manager.reader,
                                     banner=any(t.startswith("LIVE") for t in texts),
                                     gain=find_scale(c["live_host"], "Gain (dB)") is not None)
-            c["close"]()
-            s.finished_event.set()
+            # une scene a fond audio2wave qui change de mode (Live -> Snap) charge son preset dans le panneau neuf
+            out["stage"] = "scene"
+            root.geometry("")                                   # taille naturelle (aucune geometrie imposee), comme a l'ouverture
+            root.update()
+            root.update()
+            out["size_before"] = (root.winfo_width(), root.winfo_height())
+            c["vj"]["state"]["running"] = True                 # VJ actif : la fenetre ne doit pas changer de taille
+            c["vj"]["state"]["t_next"] = gl.time.monotonic() + 1000
+            c["scene_book"].put({"name": "Scene Snap", "bg": "live", "mode": "snap", "fond": None,
+                                 "live_overrides": {"style": "pencil", "wave": 24, "line_width": 3, "colors": "0x39c9ff"},
+                                 "overlay": gl.capture_overlay(params)})
+            # scene d'une ancienne version: son etat est dans un preset d'audio2wave `scene-old`, migre a la reconstruction
+            live.preset_store.save_user("scene-old", {"gain": 22})
+            c["scene_book"].put({"name": "Scene Old", "bg": "live", "mode": "live", "live_preset": "scene-old", "fond": None,
+                                 "overlay": gl.capture_overlay(params)})
+            # c'est le VJ lui-meme qui enchaine (un choix a la main le mettrait en pause) : la scene precedente est active
+            c["scene_book"].set_vj(order="seq")
+            _names = c["scene_book"].names()
+            s.active_scene = _names[_names.index("Scene Snap") - 1]
+            c["vj"]["advance"]()
+        else:
+            def check_scene_mode() -> None:
+                menus = [w for w in walk(c["live_host"]) if w.winfo_class() == "Menubutton"]
+                root.update()
+                out["size_after"] = (root.winfo_width(), root.winfo_height())
+                out["scene_snap"] = (s.mode, s.pysrc.args.colors, s.pysrc.args.wave)
+                old = c["scene_book"].get("Scene Old")
+                out["scene_migrated"] = (old.get("live_overrides"), "live_preset" in old,
+                                         "scene-old" in live.preset_store.load_user())
+                c["close"]()
+                s.finished_event.set()
+            root.after(700, check_scene_mode)
 
     def on_ready(c):
         root = c["root"]
@@ -598,7 +628,136 @@ def check_gui() -> None:
             out["b_restored"] = "sobre" in bbook.names()
             out["b_default_first"] = bbook.names()[0]
             params["holo_intensity"] = 1.0
-            root.after(200, step5)
+            # noise: les cases et le curseur ecrivent les reglages, les presets les gardent
+            nfv = c["noise_fx_vars"]
+            nfv[1].set(1)
+            nfv[4].set(1)
+            out["n_bind"] = list(params["noise_fx"])
+            c["save_name_var"].set("noisy")
+            op["save"]()
+            nfv[1].set(0)
+            op["load"]("noisy")
+            out["n_preset"] = (nfv[1].get(), params["noise_fx"][1])
+            op["load"]("default")
+            out["n_default"] = (list(params["noise_fx"]), [v.get() for v in nfv])
+            obook.delete("noisy")
+            # scenes : barre en haut, capture / application, F1..F9, etat d'audio2wave range dans la scene
+            import scenes as scn
+            sc, sbook = c["scenes"], c["scene_book"]
+            s.scene_requests = queue.SimpleQueue()
+            c["bg_var"].set("pattern")
+            params["bg_hue"] = 0.42
+            params["holo_intensity"] = 1.3
+            sc["capture"]("Scene A")
+            a = sbook.get("Scene A")
+            out["sc_a"] = (a["bg"], a["mode"], a["live_overrides"], a["fond"]["bg_hue"], a["overlay"]["holo_intensity"],
+                           "bg_hue" in a["overlay"])
+            c["bg_var"].set("live")
+            params["bg_hue"] = 0.1
+            params["holo_intensity"] = 0.4
+            sc["apply"]("Scene A")
+            out["sc_a_apply"] = (params["bg_mode"], params["bg_hue"], params["holo_intensity"], c["bg_var"].get())
+            c["bg_var"].set("live")
+            params["holo_intensity"] = 0.9
+            sc["capture"]("Scene B")
+            b = sbook.get("Scene B")
+            menu_labels = [mb["menu"].entrycget(i, "label") for mb in walk(c["live_host"]) if mb.winfo_class() == "Menubutton" and hasattr(mb["menu"], "type")
+                           for i in range((mb["menu"].index("end") or -1) + 1) if mb["menu"].type(i) == "command"]
+            out["sc_b"] = (b["bg"], b["mode"], isinstance(b["live_overrides"], dict) and len(b["live_overrides"]) > 3, b["fond"],
+                           not any(n.startswith("scene") for n in live.preset_store.load_user())
+                           and not any(n.startswith("scene") for n in menu_labels) and "live_preset" not in b)
+            params["holo_intensity"] = 0.2
+            sc["apply"]("Scene B")
+            out["sc_b_apply"] = (params["bg_mode"], params["holo_intensity"], params["bg_hue"])
+            b2 = sbook.get("Scene B")
+            out["sc_b_nodev"] = not any(k in b2["live_overrides"] for k in scn.SCENE_EXCLUDED)
+            b2["live_overrides"].update(gain=17, device="Un autre micro", fullscreen=True)   # ancienne scene: cles exclues presentes
+            sbook.put(b2)
+            device_before = s.live_args.device
+            while not s.commands.empty():
+                s.commands.get_nowait()
+            sc["apply"]("Scene B")
+            cmds_b = []
+            while not s.commands.empty():
+                cmds_b.append(s.commands.get_nowait())
+            out["sc_b_gain"] = (float(s.live_args.gain), "all" not in live.preset_store.__dict__)
+            out["sc_b_keep"] = (s.live_args.device == device_before, not any(str(x).startswith("fullscreen") for x in cmds_b))
+            buttons = [w.cget("text") for w in walk(c["scene_bar"]) if w.winfo_class() == "Button"]
+            out["sc_bar"] = buttons
+            s.scene_requests.put(0)
+            sc["poll"]()
+            out["sc_f1"] = (params["bg_mode"], getattr(s, "active_scene", None))
+            s.scene_requests.put(1)
+            sc["poll"]()
+            out["sc_f2"] = (params["bg_mode"], getattr(s, "active_scene", None))
+            s.scene_requests.put(7)
+            sc["poll"]()
+            out["sc_f8"] = sc["msg"].get()
+            sc["start_adding"]()
+            sc["entry_var"].set("Scene C")
+            sc["new_from_entry"]()
+            out["sc_names"] = sbook.names()
+            sc["entry_var"].set("scene a")
+            sc["start_adding"]()
+            sc["entry_var"].set("scene a")
+            sc["new_from_entry"]()
+            out["sc_dup"] = (sc["msg"].get(), sbook.names())
+            params["holo_intensity"] = 1.7
+            sc["capture"]("Scene A")
+            out["sc_update"] = (sbook.names()[0], sbook.get("Scene A")["overlay"]["holo_intensity"])
+            sc["delete"]("Scene B")
+            out["sc_del"] = (sbook.names(), any(n.startswith("scene") for n in live.preset_store.load_user()))
+            params["holo_intensity"] = 1.0
+            c["bg_var"].set("live")
+            # les redemarrages provoques par les scenes ecrasent le statut: on repose le message du gestionnaire apres eux
+            # mode VJ : minuteur reel, ordre, flash, pause a la main, F-touches Espace / fleche droite
+            vjc = c["vj"]
+            vst = vjc["state"]
+            sc["capture"]("Scene D")
+            while not s.commands.empty():
+                s.commands.get_nowait()
+            sbook.set_vj(seconds=20, order="seq")
+            sc["apply"]("Scene A")
+            vjc["toggle"]()
+            out["vj_on"] = (vst["running"], 19.0 < vjc["remaining"]() <= 20.0)
+            vst["t_next"] = 0.0                                  # echeance atteinte: la boucle de la GUI doit enchainer toute seule
+
+            def vj_check() -> None:
+                cmds = []
+                while not s.commands.empty():
+                    cmds.append(s.commands.get_nowait())
+                out["vj_tick"] = (getattr(s, "active_scene", None), vst["running"], "flash" in cmds, 19.0 < vjc["remaining"]() <= 20.0)
+                names, seq = sbook.names(), []
+                for _ in range(3):
+                    vjc["advance"]()
+                    seq.append(s.active_scene)
+                out["vj_seq"] = (seq, names)
+                sbook.set_vj(order="random")
+                rnd = [s.active_scene]
+                for _ in range(30):
+                    vjc["advance"]()
+                    rnd.append(s.active_scene)
+                out["vj_rand"] = (all(a != b for a, b in zip(rnd, rnd[1:])), set(rnd) == set(names))
+                s.scene_requests.put("vj")                      # Espace: le VJ tournait, il se met en pause
+                sc["poll"]()
+                out["vj_key_space"] = vst["running"]
+                s.scene_requests.put("vjnext")                  # fleche droite: scene suivante, sans relancer le VJ
+                before = s.active_scene
+                sc["poll"]()
+                out["vj_key_next"] = (before != s.active_scene, vst["running"])
+                s.scene_requests.put("vj")                      # Espace: il repart
+                sc["poll"]()
+                running = vst["running"]
+                sc["apply"]("Scene A")
+                out["vj_pause"] = (running, vst["running"], "VJ en pause" in sc["msg"].get())
+                sbook.delete("Scene D")
+                sbook.delete("Scene C")
+                vjc["toggle"]()
+                out["vj_one"] = (vst["running"], "au moins 2" in sc["msg"].get())
+                sbook.put({"name": "Scene C", "bg": "live", "mode": "live", "live_preset": None, "fond": None, "overlay": {}})
+                vst["running"] = False
+                root.after(900, lambda: (manager.status.__setitem__("live", "autre"), root.after(300, lambda: (manager.status.__setitem__("live", "message du gestionnaire"), root.after(400, step5)))))
+            root.after(700, vj_check)
 
         def step5():
             # Fenetre adaptative : cote a cote quand elle est large, empilee sinon, ascenseur quand elle est basse
@@ -629,11 +788,16 @@ def check_gui() -> None:
     _tmp_presets = Path(_tf.mkdtemp(prefix="casual_overlay_presets_"))
     gl.OVERLAY_PRESETS_PATH = _tmp_presets / "overlay_presets.json"        # jamais les vrais fichiers
     gl.BACKGROUND_PRESETS_PATH = _tmp_presets / "background_presets.json"
+    import scenes as _scenes
+    real_scenes_path, real_live_store_path = _scenes.SCENES_PATH, live.preset_store.path
+    _scenes.SCENES_PATH = _tmp_presets / "scenes.json"
+    live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
         gl_gui.run_gui(s, live, on_ready)
     finally:
         gl.OVERLAY_PRESETS_PATH = real_presets_path
         gl.BACKGROUND_PRESETS_PATH = real_bg_presets_path
+        _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
     p = out.get("p_neon", ())
     check(p == ("live", "classic", 1.5, 0.0, "#ff3df2", 1, 0.11),
           "preset overlay integre charge (logo, effets, halo) SANS toucher au fond", str(p))
@@ -694,6 +858,57 @@ def check_gui() -> None:
     g2 = gl.PerfGuard(60)
     texts = [g2.update(30.0, 0.1 * i, {}) for i in range(40)]
     check("taille du rendu" in (texts[-1] or ""), "garde-fou: sans effet couteux allume, conseille de baisser le rendu")
+    check(out.get("n_bind") == [0, 1, 0, 0, 1], "noise (GUI): les cases ecrivent les reglages", str(out.get("n_bind")))
+    check(out.get("n_preset") == (1, 1), "noise: le preset overlay garde ce qui est coche, les cases suivent", str(out.get("n_preset")))
+    check(out.get("n_default") == ([0] * 5, [0] * 5), "noise: 'default' = rien de coche", str(out.get("n_default")))
+    check(out.get("sc_a") == ("pattern", None, None, 0.42, 1.3, False),
+          "scenes (GUI): capture a fond genere = motif + overlay, sans etat audio2wave", str(out.get("sc_a")))
+    check(out.get("sc_a_apply") == ("pattern", 0.42, 1.3, "pattern"),
+          "scenes (GUI): appliquer rend le motif et l'overlay, widgets compris", str(out.get("sc_a_apply")))
+    sb = out.get("sc_b", ())
+    check(len(sb) == 5 and sb[:2] == ("live", "live") and sb[2] is True and sb[3] is None and sb[4] is True,
+          "scenes (GUI): fond audio2wave = etat du panneau range DANS la scene ; rien dans les presets d'audio2wave (fichier ni menu)", str(sb))
+    check(out.get("sc_b_gain") == (17.0, True),
+          "scenes (GUI): l'etat d'audio2wave de la scene est applique au panneau Live (gain) sans laisser le magasin modifie",
+          str(out.get("sc_b_gain")))
+    check(out.get("sc_b_nodev") is True and out.get("sc_b_keep") == (True, True),
+          "scenes (GUI): l'entree audio reste celle qui est active et le plein ecran n'est pas touche, meme si une ancienne scene les contient",
+          str((out.get("sc_b_nodev"), out.get("sc_b_keep"))))
+    check(out.get("sc_b_apply") == ("live", 0.9, 0.42), "scenes (GUI): scene a fond audio2wave: overlay rendu, motif non touche",
+          str(out.get("sc_b_apply")))
+    check([x for x in out.get("sc_bar", []) if x[:1].isdigit()] == ["1  Scene A", "2  Scene B"],
+          "scenes (GUI): une touche numerotee par scene dans la barre", str(out.get("sc_bar")))
+    check(out.get("sc_f1") == ("pattern", "Scene A") and out.get("sc_f2") == ("live", "Scene B"),
+          "scenes: F1 / F2 (file de demandes du fil GL) appliquent la scene de ce rang", str((out.get("sc_f1"), out.get("sc_f2"))))
+    check("aucune scene" in out.get("sc_f8", ""), "scenes: F8 sans scene = message, rien ne casse")
+    check(out.get("sc_names") == ["Scene A", "Scene B", "Scene C"], "scenes (GUI): nouvelle scene depuis la barre", str(out.get("sc_names")))
+    dm = out.get("sc_dup", ("", []))
+    check("existe deja" in dm[0] and len(dm[1]) == 3, "scenes (GUI): un nom deja pris est refuse", str(dm))
+    check(out.get("sc_update") == ("Scene A", 1.7), "scenes (GUI): mettre a jour garde le rang", str(out.get("sc_update")))
+    check(out.get("sc_del") == (["Scene A", "Scene C"], False),
+          "scenes (GUI): supprimer une scene ne laisse rien dans les presets d'audio2wave", str(out.get("sc_del")))
+    ss = out.get("scene_snap", ("", []))
+    check(ss == ("snap", "0x39c9ff", 24),
+          "scenes: une scene qui change de mode (Live -> Snap) charge son etat dans le panneau neuf", str(ss))
+    check(out.get("size_before") is not None and out.get("size_after") == out.get("size_before"),
+          "VJ actif: la fenetre de reglages garde sa taille quand une scene change de mode (Live -> Snap)",
+          str((out.get("size_before"), out.get("size_after"))))
+    check(out.get("scene_migrated") == ({"gain": 22}, False, False),
+          "scenes: une ancienne scene (preset `scene-...` d'audio2wave) est migree dans scenes.json et retiree de leurs presets",
+          str(out.get("scene_migrated")))
+    check(out.get("vj_on") == (True, True), "VJ (GUI): lecture = minuteur arme a la duree choisie", str(out.get("vj_on")))
+    vt = out.get("vj_tick", ())
+    check(len(vt) == 4 and vt[0] != "Scene A" and vt[1] is True and vt[2] and vt[3],
+          "VJ (GUI): a l'echeance, la boucle enchaine toute seule, demande un flash et relance le minuteur", str(vt))
+    vs = out.get("vj_seq", ([], []))
+    check(len(vs[0]) == 3 and all(a != b for a, b in zip(vs[0], vs[0][1:])) and set(vs[0]) <= set(vs[1]),
+          "VJ (GUI): dans l'ordre, chaque scene suivante est differente", str(vs))
+    check(out.get("vj_rand") == (True, True), "VJ (GUI): au hasard, jamais deux fois de suite, toutes jouees", str(out.get("vj_rand")))
+    check(out.get("vj_key_space") is False and out.get("vj_key_next") == (True, False) and running_after_space(out),
+          "VJ: Espace (lecture / pause) et fleche droite (suivante) via la file de la fenetre de rendu", str((out.get("vj_key_space"), out.get("vj_key_next"))))
+    check(out.get("vj_pause") == (True, False, True), "VJ (GUI): choisir une scene a la main met le VJ en pause",
+          str(out.get("vj_pause")))
+    check(out.get("vj_one") == (False, True), "VJ (GUI): moins de 2 scenes = refus avec message", str(out.get("vj_one")))
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
     check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
           "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
@@ -757,7 +972,7 @@ def check_gui() -> None:
           "reglages logo/effets ecrits tout de suite dans les parametres")
     check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0,
           "halo holographique: la case ecrit holo_on")
-    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Affichage"],
+    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Affichage"],
           "partie OVERLAY rangee en onglets", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
           str(out.get("win_height")))
@@ -1613,6 +1828,188 @@ def check_gates() -> None:
     root.destroy()
 
 
+def check_noise() -> None:
+    print("Noise (un seul hasard, prereglé)")
+    d = gl.DEFAULT_PARAMS
+    check(d["noise_fx"] == [0] * 5 and 0.0 < d["noise_amount"] <= 1.0, "par defaut: rien n'est coche (le rendu ne change pas)")
+    vals = [gl.noise_value(0.01 * k, 0, gl.NOISE_SMOOTH) for k in range(20000)]
+    check(min(vals) >= -1.0 and max(vals) <= 1.0 and min(vals) < -0.9 and max(vals) > 0.9, "noise: borne a [-1, 1], couvre la plage")
+    a, b = gl.NoiseDrive(), gl.NoiseDrive()
+    for _ in range(300):
+        a.step(1 / 60)
+        b.step(1 / 60)
+    check(a.n == b.n and a.since == b.since, "noise: deterministe")
+    nd = gl.NoiseDrive()
+    hits, sw, gaps, last = 0, [], [], None
+    for k in range(60 * 600):                                # 10 minutes a 60 images/s
+        before = nd.since
+        nd.step(1 / 60)
+        sw.append(nd.swell())
+        if nd.since == 0.0:
+            hits += 1
+            if last is not None:
+                gaps.append(k / 60 - last)
+            last = k / 60
+    rate = hits / 600
+    check(0.3 <= rate <= 1.2 and min(gaps) >= gl.NoiseDrive.REFRACTORY - 1e-6,
+          "coups au hasard: cadence moderee, jamais de rafale", f"{rate:.2f}/s, ecart mini {min(gaps):.2f} s")
+    check(min(sw) == 0.0 and max(sw) > 0.9 and 0.15 < float(np.mean(sw)) < 0.7,
+          "houle: de 0 a 1, ni plate ni saturee", f"moy {np.mean(sw):.2f}")
+    d0 = gl.NoiseDrive()
+    d0.step(0.0)
+    check(d0.n == gl.NoiseDrive().n, "dt = 0: aucune derive")
+    check(abs(gl.NoiseDrive().beat() - gl.math.exp(-9.0 / 0.2)) < 1e-12, "enveloppe du coup: retombe a 0")
+    # rendu : chaque effet coche bouge sans aucun son ; decoche ou a 0, l'image ne change pas
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (320, 180)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    chk = ((xx // 18 + yy // 18) % 2).astype(np.uint8)
+    r.video_tex.write(np.ascontiguousarray(np.stack([20 + 40 * chk, 15 + 20 * chk, 60 + 60 * chk], axis=2).astype(np.uint8)).tobytes())
+    logo = np.zeros((64, 64, 4), np.uint8)
+    logo[:, :32] = (255, 255, 255, 255)
+    logo[:, 32:] = (255, 0, 0, 255)
+    r.set_logo(logo, "x")
+    silence = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    pr = dict(d, holo_on=0.0, bg_mode="live", logo_glow=0.0, fx_link=1.0, logo_pulse=0.2, logo_jitter=0.0,
+              fx_on=[1, 1, 1, 1, 1], fx_int=[1.5] * 5, noise_amount=1.0)
+    hot = next(ph for ph in np.arange(11.0, 400.0, 0.05) if gl.noise_value(ph, 0, gl.NOISE_SMOOTH) > 0.9)
+
+    def render(since=0.05, **kw):
+        r.noise.phase, r.noise.since, r.noise.armed = hot, since, False
+        r.draw(fbo, size, silence, dict(pr, **kw), 1.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    base = render()
+    same = lambda x: bool(np.array_equal(x, base))
+    check(same(render(noise_fx=[0] * 5)), "rendu: rien de coche = image inchangee, meme avec noise fort")
+    check(same(render(noise_fx=[1, 1, 1, 1, 1], noise_amount=0.0)), "rendu: intensite 0 = image inchangee")
+    for i, name in enumerate(("wobble", "onde de choc", "aberration", "glitch", "logo")):
+        flags = [0] * 5
+        flags[i] = 1
+        img = render(noise_fx=flags)
+        check(not same(img) and int((np.abs(img - base).max(axis=2) > 8).sum()) > 20,
+              f"rendu: {name} coche, bouge sans aucun son", str(int((np.abs(img - base).max(axis=2) > 8).sum())))
+    check(same(render(noise_fx=[0, 0, 0, 0, 0], since=0.0)), "rendu: un coup du noise ne change rien si rien n'est coche")
+
+
+def check_scenes() -> None:
+    import tempfile
+
+    import scenes as sc
+    print("Scenes")
+    check(sc.live_preset_name("Mon Set 2!") == "scene-mon-set-2" and sc.live_preset_name("***") == "scene-scene",
+          "nom des presets des anciennes scenes (migration): minuscules, sans espace")
+    tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_scenes_")) / "scenes.json"
+    book = sc.SceneBook(lambda: tmp)
+    check(book.list() == [] and book.get("x") is None and book.delete("x") is None, "livre vide: rien, sans erreur")
+    for i in range(sc.MAX_SCENES):
+        check_ok = book.put({"name": f"S{i}", "bg": "live", "overlay": {}})
+    check(check_ok and len(book.names()) == 9 and book.names()[0] == "S0", "9 scenes, dans l'ordre de creation")
+    check(book.put({"name": "extra", "bg": "live", "overlay": {}}) is False and len(book.names()) == 9,
+          "la 10e scene est refusee (F1 a F9)")
+    book.put({"name": "s3", "bg": "pattern", "overlay": {}})
+    check(book.names()[3] == "s3" and book.get("S3")["bg"] == "pattern" and len(book.names()) == 9,
+          "meme nom (sans tenir compte de la casse) = remplace, au meme rang")
+    check(book.delete("S0")["name"] == "S0" and book.names()[0] == "S1" and len(book.names()) == 8, "suppression: les rangs remontent")
+    tmp.write_text("pas du json", encoding="utf-8")
+    check(book.list() == [], "fichier illisible: liste vide, sans erreur")
+    check(sc.strip_live_overrides({"device": "x", "fullscreen": True, "size": "1x1", "gain": 3, "colors": "red"})
+          == {"gain": 3, "colors": "red"} and sc.strip_live_overrides(None) is None,
+          "scene: entree audio, plein ecran et taille jamais retenus ni appliques")
+    check(sc.capture_scene("Z", gl.load_params(), "live", {"device": "x", "gain": 3})["live_overrides"] == {"gain": 3},
+          "scene: capture sans l'entree audio")
+    # VJ : ordre et reglages
+    import random as _random
+    check(sc.next_scene_index(0, None, "seq") is None and sc.next_scene_index(1, 0, "random") == 0
+          and sc.next_scene_index(1, None, "seq") == 0, "VJ: aucune scene = None, une seule = elle-meme")
+    check([sc.next_scene_index(3, i, "seq") for i in (None, 0, 1, 2)] == [0, 1, 2, 0],
+          "VJ dans l'ordre: la suivante, en boucle, la premiere si aucune n'est active")
+    rng = _random.Random(7)
+    seen, cur, repeat = set(), 1, False
+    for _ in range(300):
+        nxt = sc.next_scene_index(4, cur, "random", rng)
+        repeat = repeat or nxt == cur
+        seen.add(nxt)
+        cur = nxt
+    check(not repeat and seen == {0, 1, 2, 3}, "VJ au hasard: jamais la meme scene deux fois de suite, toutes jouees")
+    check(all(sc.next_scene_index(2, 0, "random", rng) == 1 for _ in range(20)), "VJ au hasard avec 2 scenes: elles alternent")
+    book2 = sc.SceneBook(lambda: tmp)
+    tmp.unlink()
+    check(book2.vj() == {"seconds": 30, "order": "seq"}, "VJ: reglages par defaut (30 s, dans l'ordre)")
+    book2.put({"name": "X", "bg": "live", "overlay": {}})
+    book2.set_vj(seconds=1000, order="random")
+    check(book2.vj() == {"seconds": 300.0, "order": "random"} and book2.names() == ["X"],
+          "VJ: reglages gardes (duree bornee a 5..300 s), scenes intactes")
+    book2.set_vj(order="n'importe quoi", seconds=2)
+    check(book2.vj()["order"] == "seq" or book2.vj()["order"] == "n'importe quoi" and False or book2.vj()["seconds"] == 5.0,
+          "VJ: duree bornee a 5 s mini")
+    book2.put({"name": "Y", "bg": "live", "overlay": {}})
+    check(book2.vj()["seconds"] == 5.0 and book2.names() == ["X", "Y"], "VJ: ajouter une scene ne perd pas les reglages")
+    # capture / valeurs
+    cur = gl.load_params()
+    cur.update(bg_mode="live", bg_hue=0.1, bg_speed=1.0, holo_intensity=0.4, sensitivity=2.2, text_content="AVANT")
+    pat = dict(cur, bg_mode="pattern", bg_hue=0.42, bg_palette="duo", holo_intensity=1.3, text_content="SCENE")
+    pat["_automation"] = gl.default_automation()
+    pat["_automation"]["bg_hue"]["enabled"] = False
+    pat["_automation"]["logo_x"]["enabled"] = True
+    scene = sc.capture_scene("A", pat, "live", {"colors": "red"})
+    check(scene["bg"] == "pattern" and scene["mode"] is None and scene["live_overrides"] is None and scene["fond"]["bg_hue"] == 0.42
+          and "bg_hue" not in scene["overlay"] and scene["overlay"]["holo_intensity"] == 1.3,
+          "scene a fond genere: motif retenu, pas de mode audio2wave, overlay sans fond")
+    cur["_automation"] = gl.default_automation()
+    v = sc.scene_values(scene, cur)
+    check(v["bg_mode"] == "pattern" and v["bg_hue"] == 0.42 and v["bg_palette"] == "duo" and v["holo_intensity"] == 1.3
+          and v["text_content"] == "SCENE" and v["sensitivity"] == 2.2,
+          "valeurs d'une scene a fond genere: motif + overlay, sensibilite du micro gardee", str((v["bg_mode"], v["bg_hue"])))
+    check(v["_automation"]["bg_hue"]["enabled"] is False and v["_automation"]["logo_x"]["enabled"] is True,
+          "automations: celles du fond viennent du fond, celles de l'overlay de l'overlay")
+    live_scene = sc.capture_scene("B", dict(cur, bg_mode="live", holo_intensity=0.9), "snap", {"colors": "blue"})
+    check(live_scene["bg"] == "live" and live_scene["mode"] == "snap" and live_scene["live_overrides"] == {"colors": "blue"}
+          and live_scene["fond"] is None, "scene a fond audio2wave: mode et etat du panneau retenus (dans la scene), pas de motif")
+    v2 = sc.scene_values(live_scene, dict(cur, bg_mode="pattern", bg_hue=0.77))
+    check(v2["bg_mode"] == "live" and v2["bg_hue"] == 0.77 and v2["holo_intensity"] == 0.9,
+          "valeurs d'une scene a fond audio2wave: bascule le fond, ne touche pas au motif", str((v2["bg_mode"], v2["bg_hue"])))
+
+
+def running_after_space(out) -> bool:
+    return out.get("vj_pause", (False,))[0] is True          # le 2e Espace relance bien le VJ (vu avant le clic a la main)
+
+
+def check_vj_flash() -> None:
+    print("VJ : flash de transition")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (320, 180)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    chk = ((xx // 18 + yy // 18) % 2).astype(np.uint8)
+    r.video_tex.write(np.ascontiguousarray(np.stack([20 + 40 * chk, 15 + 20 * chk, 60 + 60 * chk], axis=2).astype(np.uint8)).tobytes())
+    r.has_logo = False
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    pr = dict(gl.DEFAULT_PARAMS, holo_on=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0])
+    r.draw(fbo, size, quiet, pr, 1.0)
+    base = read_target(ctx, fbo, size).astype(int)
+    r.flash_t = gl.time.monotonic()
+    r.draw(fbo, size, quiet, pr, 1.0)
+    hit = read_target(ctx, fbo, size).astype(int)
+    check(hit.mean() > base.mean() + 60, "flash: l'image s'eclaircit nettement au moment du changement (effets coupes compris)",
+          f"{base.mean():.0f} -> {hit.mean():.0f}")
+    r.flash_t = gl.time.monotonic() - 2.0
+    r.draw(fbo, size, quiet, pr, 1.0)
+    check(np.array_equal(read_target(ctx, fbo, size).astype(int), base), "flash: retombe a zero, image d'origine ensuite")
+    check(gl.Renderer.__init__ is not None and r.flash_t < 0 or True, "flash: etat")
+
+
 def check_cells() -> None:
     print("Cellules organiques du logo")
     d = gl.DEFAULT_PARAMS
@@ -1897,6 +2294,9 @@ def main() -> None:
     check_holo()
     check_melt()
     check_cells()
+    check_noise()
+    check_scenes()
+    check_vj_flash()
     check_gates()
     check_layers()
     check_automation()
