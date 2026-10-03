@@ -15,6 +15,15 @@ uniform float u_high;
 uniform float u_rms;
 uniform float u_beat;         // enveloppe 1 -> 0 apres chaque kick
 uniform float u_since_beat;   // secondes depuis le dernier kick
+// Noise : une "musique imaginaire" au hasard, ajoutee a l'audio reel pour les effets coches (u_nz_fx = wobble, onde,
+// aberration, glitch). u_nz = houle 0..1, u_nz_beat = enveloppe du dernier coup, u_nz_since = secondes depuis ce coup,
+// u_nz_amount = force (deja appliquee a u_nz / u_nz_beat).
+uniform float u_nz;
+uniform float u_nz_beat;
+uniform float u_nz_since;
+uniform float u_nz_amount;
+uniform vec4  u_nz_fx;
+uniform float u_flash;        // transition du VJ : 1 -> 0 en ~0,5 s (flash blanc + bandes de glitch)
 
 // Intensite effective de chaque effet (interrupteur x intensite x intensite globale), une fois par
 // couche : x = wobble, y = ripple, z = aberration chromatique, w = glitch. Avec des reglages identiques
@@ -54,21 +63,27 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp) {
     vec2 uv = v_uv;
 
     // 1. Wobble : ondulation sinusoidale des UV, amplitude = basses.
-    uv += fx.x * u_bass * 0.012 *
+    float bass_e = max(u_bass, u_nz * u_nz_fx.x);
+    uv += fx.x * bass_e * 0.012 *
           vec2(sin(uv.y * 18.0 + u_time * 2.3), cos(uv.x * 14.0 + u_time * 1.9));
 
     // 2. Ripple : onde de choc depuis le centre, rayon = temps ecoule depuis le kick.
     vec2 d = (uv - center) * vec2(aspect, 1.0);
     float dist = length(d);
-    float radius = u_since_beat * 0.9;
+    // Onde de choc: celle du dernier kick reel, ou du dernier coup du noise s'il est plus recent et coche.
+    bool by_noise = u_nz_fx.y > 0.5 && u_nz_amount > 0.001 && u_nz_since < u_since_beat;
+    float since = by_noise ? u_nz_since : u_since_beat;
+    float strength = by_noise ? u_nz_amount : 1.0;
+    float radius = since * 0.9;
     float w = (dist - radius) / 0.07;
     // L'onde s'eteint sur ~1 s (plus lentement que u_beat), donc visible pendant sa course.
-    float ring = exp(-w * w) * clamp(1.0 - u_since_beat, 0.0, 1.0);
-    uv += (d / max(dist, 1e-4)) / vec2(aspect, 1.0) * ring * 0.05 * fx.y;
+    float ring = exp(-w * w) * clamp(1.0 - since, 0.0, 1.0);
+    uv += (d / max(dist, 1e-4)) / vec2(aspect, 1.0) * ring * 0.05 * fx.y * strength;
 
     // 3. Glitch : bandes horizontales decalees, hash quantifie dans le temps, declenche par seuil.
     float trig = max(step(0.55, u_beat) * u_beat, step(0.85, u_high) * u_high * 0.6);
-    float g = trig * fx.w;
+    trig = max(trig, step(0.45, u_nz_beat) * u_nz_beat * u_nz_fx.w);          // coups du noise
+    float g = max(trig * fx.w, u_flash * 0.9);        // le flash du VJ declenche aussi des bandes de glitch
     if (g > 0.001) {
         float tq = floor(u_time * 14.0) + salt;
         float band = floor(uv.y * 26.0);
@@ -82,7 +97,8 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp) {
     // `disp` (halo holographique) deforme le fond avec une legere dispersion spectrale: le rouge est
     // pousse plus loin que le bleu, d'ou les franges irisees. Toujours le niveau 0 des mipmaps (la couche
     // logo en a pour le halo): rien n'est flou.
-    vec2 off = (uv - center) * 0.022 * u_beat * fx.z;
+    float beat_e = max(u_beat, u_nz_beat * u_nz_fx.z);
+    vec2 off = (uv - center) * 0.022 * beat_e * fx.z;
     vec4 sr = textureLod(tex, uv + off + disp * 1.35, 0.0);
     vec4 sg = textureLod(tex, uv + disp, 0.0);
     vec4 sb = textureLod(tex, uv - off + disp * 0.65, 0.0);
@@ -181,6 +197,8 @@ void main() {
         vec4 lg = layer_fx(u_logo, u_fx_logo, u_center_logo, u_salt_logo, vec2(0.0));
         col = lg.rgb + col * (1.0 - lg.a);
     }
+
+    col = mix(col, vec3(1.0), u_flash * 0.8);         // flash de transition du VJ
 
     // HUD : barres bass / mid / high / rms / beat en bas a gauche + 5 pastilles d'effets.
     if (u_hud > 0.5) {

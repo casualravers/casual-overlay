@@ -84,6 +84,11 @@ DEFAULT_PARAMS = {
     "fx_link": 1.0,
     "fxl_on": [1, 1, 1, 1],
     "fxl_int": [1.0, 1.0, 1.0, 1.0],
+    # Noise (hasard) : UN seul noise, prereglé. Il joue le role d'une musique imaginaire : des ondulations et des "coups"
+    # au hasard (comme des kicks) qui animent les effets coches dans `noise_fx` (wobble, onde de choc, aberration, glitch,
+    # reaction du logo), meme sans son. `noise_amount` = sa force (0 = aucun effet). Rien n'est coche par defaut.
+    "noise_amount": 0.6,
+    "noise_fx": [0, 0, 0, 0, 0],
     "master": 1.0,
     "sensitivity": 1.0,
     # Incrustation du logo (pilotee par la GUI ou --logo*, relue a chaque image)
@@ -262,6 +267,61 @@ def set_fx_link(params: dict, linked: bool) -> None:
             params["fxl_on"][i] = params["fx_on"][i]
             params["fxl_int"][i] = params["fx_int"][i]
     params["fx_link"] = 1.0 if linked else 0.0
+
+
+def _hash01(i: int, seed: int) -> float:
+    """Hachage entier -> [0, 1) (deterministe, sans etat)."""
+    h = (int(i) * 374761393 + (seed + 1) * 668265263) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
+    h ^= h >> 16
+    return (h & 0xFFFFFF) / float(0xFFFFFF)
+
+
+def noise_value(x: float, seed: int, smooth: float) -> float:
+    """Noise 1D de valeur dans [-1, 1] au point `x` (en valeurs de reseau) : `smooth` = 1 interpole en douceur entre deux
+    valeurs au hasard, 0 garde la valeur du reseau jusqu'au suivant (par a-coups)."""
+    i = math.floor(x)
+    f = x - i
+    a = _hash01(i, seed) * 2.0 - 1.0
+    b = _hash01(i + 1, seed) * 2.0 - 1.0
+    s = f * f * (3.0 - 2.0 * f)
+    return a + (b - a) * s * min(max(float(smooth), 0.0), 1.0)
+
+
+NOISE_SPEED = 3.0          # valeurs tirees par seconde (le noise n'est pas reglable : un seul comportement, prereglé)
+NOISE_SMOOTH = 0.8
+
+
+class NoiseDrive:
+    """Le noise unique. Une valeur continue au hasard (`n`, [-1, 1]) dont on tire deux signaux, comme une musique
+    imaginaire : `swell()` = houle douce 0..1 (comme les basses) et des COUPS au hasard (`beat()` = enveloppe 1 -> 0
+    apres chaque coup, `since` = secondes depuis le dernier, comme le kick). Un coup part quand le noise remonte
+    franchement (hysterese + delai minimum : jamais de rafale). La phase est integree image par image."""
+
+    HIT_ON, HIT_OFF, REFRACTORY = 0.30, -0.10, 0.45
+
+    def __init__(self) -> None:
+        self.phase = 11.0
+        self.n = noise_value(self.phase, 0, NOISE_SMOOTH)
+        self.since = 9.0
+        self.armed = True
+
+    def step(self, dt: float) -> None:
+        self.phase += max(dt, 0.0) * NOISE_SPEED
+        self.n = noise_value(self.phase, 0, NOISE_SMOOTH)
+        self.since += max(dt, 0.0)
+        if self.n < self.HIT_OFF:
+            self.armed = True
+        if self.armed and self.n > self.HIT_ON and self.since > self.REFRACTORY:
+            self.since = 0.0
+            self.armed = False
+
+    def swell(self) -> float:
+        x = min(max((self.n * 0.5 + 0.5 - 0.35) / 0.6, 0.0), 1.0)
+        return x * x * (3.0 - 2.0 * x)
+
+    def beat(self) -> float:
+        return math.exp(-self.since / 0.2)
 
 
 def layer_effects(params: dict) -> tuple[list[float], list[float]]:
@@ -951,6 +1011,9 @@ class Renderer:
         self._bg_scroll = 0.0
         self._bg_flip_t = 0.0
         self._bg_clock = 0.0
+        self.noise = NoiseDrive()
+        self.flash_t = -10.0              # instant (time.monotonic) du dernier flash de transition du VJ
+        self.noise_out = (0.0, 0.0)      # (houle, coup) x force, pour l'indicateur de la GUI
         self._melt_t = 0.0          # cycles de fonte ecoules (partie entiere = cycles complets)
         self._melt_clock = 0.0      # secondes (derive du bruit)
         self._cell_t = 0.0          # temps integre de la derive des cellules
@@ -1068,8 +1131,20 @@ class Renderer:
         width, height = size
         p = {**DEFAULT_PARAMS, **params}       # un dict partiel (tests) reste valide
         fx_on, fx_int, master = p["fx_on"], p["fx_int"], p["master"]
-        eff = [float(fx_on[i]) * float(fx_int[i]) * master for i in range(5)]
         bass, high, beat = state["bass"], state["high"], state["beat"]
+        dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
+        self._last_t = t
+        # Noise: houle et coups au hasard (x force) qui s'ajoutent a l'audio reel pour les effets coches.
+        self.noise.step(dt)
+        n_amount = min(max(float(p["noise_amount"]), 0.0), 1.0)
+        n_fx = p["noise_fx"]
+        nz, nzb = self.noise.swell() * n_amount, self.noise.beat() * n_amount
+        self.noise_out = (nz, nzb)
+        eff = [float(fx_on[i]) * float(fx_int[i]) * master for i in range(5)]
+        if int(n_fx[4]):                                   # reaction du logo (pulsation, tremblement, contour)
+            beat_l, high_l, bass_l = max(beat, nzb), max(high, nz), max(bass, nz)
+        else:
+            beat_l, high_l, bass_l = beat, high, bass
 
         self._ensure_scene(size)
 
@@ -1077,8 +1152,8 @@ class Renderer:
         # "logo" (effet 5) module les trois reactions a l'audio; position, taille et
         # opacite restent celles des reglages meme effet coupe.
         logo_fx = eff[4]
-        pulse = p["logo_pulse"] * beat * logo_fx
-        jit = p["logo_jitter"] * high * logo_fx
+        pulse = p["logo_pulse"] * beat_l * logo_fx
+        jit = p["logo_jitter"] * high_l * logo_fx
         jitter = (float(self.rng.uniform(-1, 1)) * jit, float(self.rng.uniform(-1, 1)) * jit)
         is_text = self.logo_kind == "text"
         rect = logo_layout(width, height, self.logo_aspect, p["text_scale"] if is_text else p["logo_scale"],
@@ -1093,7 +1168,7 @@ class Renderer:
         if self.logo_video is not None:
             self.logo_video.reader.upload_to(self.logo_tex)
         self._set(sp, "u_logo_opacity", min(max(float(p["logo_opacity"]), 0.0), 1.0))
-        self._set(sp, "u_bass", float(bass))
+        self._set(sp, "u_bass", float(bass_l))
         self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0))
         self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
         self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
@@ -1101,8 +1176,6 @@ class Renderer:
 
         # Fond: video ffmpeg ou motif genere. Les phases avancent meme quand le motif est cache,
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
-        dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
-        self._last_t = t
         # Halo holographique: phase integree (changer la vitesse ne fait pas sauter les reflets). Sans
         # holo_react (defaut), ni l'intensite ni la vitesse ne dependent de l'audio.
         h_react = max(float(p["holo_react"]), 0.0)
@@ -1203,6 +1276,13 @@ class Renderer:
         for name in ("bass", "mid", "high", "rms"):
             self._set(pp, f"u_{name}", float(state[name]))
         self._set(pp, "u_beat", float(beat))
+        flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
+        self._set(pp, "u_flash", flash * flash)
+        self._set(pp, "u_nz", float(nz))
+        self._set(pp, "u_nz_beat", float(nzb))
+        self._set(pp, "u_nz_since", float(self.noise.since))
+        self._set(pp, "u_nz_amount", float(n_amount))
+        self._set(pp, "u_nz_fx", tuple(float(int(n_fx[i])) for i in range(4)))
         self._set(pp, "u_since_beat", float(state["since_beat"]))
         self._set(pp, "u_holo", (1.0 + h_react * float(beat) * 1.5) if holo_on else 0.0)
         self._set(pp, "u_holo_light", float(p["holo_intensity"]))
@@ -2077,6 +2157,7 @@ class Session:
         self.mode = "live"                 # source du fond : "live" (ffmpeg), "snap" ou "ridge" (py_modes)
         self.pysrc = None                  # PyModeSource courant (modes snap / ridge)
         self.mode_args: dict = {}          # options de chaque mode Snap / Ridge, gardees entre deux bascules
+        self.scene_requests: queue.SimpleQueue = queue.SimpleQueue()   # F1..F9 (fil GL) -> la GUI applique la scene
 
 
 def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
@@ -2379,6 +2460,18 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         elif name == "cell":
             params["cell_on"] = 0.0 if float(params["cell_on"]) >= 0.5 else 1.0
             print(f"cellules du logo: {'on' if params['cell_on'] >= 0.5 else 'off'}")
+        elif name == "flash":
+            renderer.flash_t = time.monotonic()           # transition du VJ (demandee par la GUI)
+        elif name in ("vj", "vjnext"):
+            if args.gui:
+                s.scene_requests.put(name)                # Espace / fleche droite : la GUI pilote le VJ
+            else:
+                print("VJ: disponible avec --gui seulement", file=sys.stderr)
+        elif name.startswith("scene") and name[5:].isdigit():
+            if args.gui:
+                s.scene_requests.put(int(name[5:]))       # la GUI (fil principal) applique la scene
+            else:
+                print("Scenes: disponibles avec --gui seulement", file=sys.stderr)
         elif name == "link":
             set_fx_link(params, float(params["fx_link"]) < 0.5)
             print(f"effets fond/logo: {'lies' if params['fx_link'] >= 0.5 else 'separes'}")
@@ -2420,6 +2513,10 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     key_actions[glfw.KEY_C] = "holo"
     key_actions[glfw.KEY_M] = "melt"
     key_actions[glfw.KEY_V] = "cell"
+    key_actions[glfw.KEY_SPACE] = "vj"           # VJ : lecture / pause
+    key_actions[glfw.KEY_RIGHT] = "vjnext"       # VJ : scene suivante
+    for n in range(9):
+        key_actions[getattr(glfw, f"KEY_F{n + 1}")] = f"scene{n}"       # F1..F9 : scenes
 
     def on_key(win, key, scancode, action, mods):
         name = key_actions.get(key)
@@ -2430,7 +2527,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
     glfw.set_key_callback(handle, on_key)
     print("Echap quitte | F plein ecran | H barres debug | B fond live/motif | T automations | 1-5 effets (Maj+1-4: "
-          "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages")
+          "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante (avec --gui)")
     print(status_line())
 
     query = ctx.query(time=True)      # une image sur 8 (toutes avec --stats) : le garde-fou de charge et les mesures
@@ -2506,6 +2603,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             img.save(args.screenshot)
             print(f"Capture: {args.screenshot}")
             shot_done = True
+        s.status["noise"] = renderer.noise_out
         glfw.swap_buffers(handle)
         if period:
             # Le vsync n'est pas garanti en borderless plein ecran (mesure: 108 fps sur un

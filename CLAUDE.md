@@ -40,7 +40,7 @@ Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--s
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
 Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif, T automations, 1-5 effets
-(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, M fonte acide du logo, V cellules du logo, +/- ou PageUp/PageDown intensite globale, haut/bas
+(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, M fonte acide du logo, V cellules du logo, F1-F9 scenes, Espace VJ lecture/pause, fleche droite scene suivante (avec --gui), +/- ou PageUp/PageDown intensite globale, haut/bas
 sensibilite du kick, R recharge shaders + reglages, P sauve dans
 `~/.audio2wave/gl_params.json` (recharge au lancement).
 
@@ -238,6 +238,96 @@ Le logo **se decompose en cellules** (Voronoi + cell shading) ; il garde sa form
   (`check_cells`) : intact a 0, decompose, couleurs gardees, **les cellules ne couvrent que la forme du logo** (logo
   a moitie transparent), rien hors du rectangle, contour de la couleur choisie, derive, audio.
 
+### Noise : un hasard unique et prereglé (`noise_amount`, `noise_fx`)
+
+**Un seul noise, non parametrable** (`NoiseDrive`, audio2wave_gl.py) : une valeur continue au hasard (`noise_value`, noise de
+valeur 1D a hachage entier, deterministe ; `NOISE_SPEED` 3 valeurs/s, `NOISE_SMOOTH` 0,8, constantes en dur) dont on tire,
+comme d'une **musique imaginaire**, une **houle** douce 0..1 (`swell()`, comme les basses) et des **coups** au hasard
+(`beat()` = enveloppe 1 -> 0, `since` = secondes depuis le dernier ; un coup part quand le noise remonte franchement :
+hysterese + delai minimum 0,45 s, environ un coup toutes les 1,7 s). Phase integree image par image.
+- Deux reglages seulement : `noise_amount` (force 0..1, defaut 0,6 ; 0 = aucun effet) et `noise_fx` (5 cases : wobble, onde de
+  choc, aberration, glitch, reaction du logo). **Rien n'est coche par defaut : le rendu est celui d'avant.**
+- Il **s'ajoute a l'audio reel** (`max(reel, noise)`) pour les effets coches, donc il agit **meme sans aucun son** : une premiere
+  version multipliait seulement l'intensite des effets (x `1 + dosage x bruit`), ce qui ne se voyait pas puisque tous les effets
+  sont pilotes par l'audio (ondulation = basses, onde et aberration = kick, glitch = seuil) ; signale "je ne percois pas son effet".
+- Shader (`post.frag`, `layer_fx`, uniforms `u_nz`, `u_nz_beat`, `u_nz_since`, `u_nz_amount`, `u_nz_fx`) : wobble =
+  `max(basses, houle)`, aberration = `max(kick, coup)`, glitch declenche par un coup, onde de choc partant du dernier coup s'il
+  est plus recent que le dernier kick (force `u_nz_amount`). S'applique aux deux couches (fond et logo). La reaction du logo
+  (indice 4 : pulsation, tremblement, contour) est calculee cote CPU dans `Renderer.draw` (`beat_l`, `high_l`, `bass_l`). Seuls
+  les effets **allumes** dans l'onglet Effets bougent : cocher le noise sur un effet coupe ne l'allume pas.
+- Les cles sont dans `DEFAULT_PARAMS` (donc dans les presets overlay et la sauvegarde P, jamais dans les presets de fond).
+- GUI : onglet **Noise** : curseur Intensite, 5 cases "Le noise agit sur", et un indicateur (houle / coup, relu dans
+  `s.status["noise"]` que la boucle GL met a jour) qui montre ce que le noise envoie aux effets.
+- `check_gl.py` (`check_noise`) : plage, determinisme, cadence des coups et delai minimum, houle ni plate ni saturee, dt = 0,
+  rendu **sans aucun son** (chaque effet coche bouge ; rien de coche ou intensite 0 = image inchangee) et GUI (cases, preset).
+
+### Scenes (scenes.py, barre en haut de la GUI, F1 a F9)
+
+Une scene change tout le look d'un geste. **Scene = (fond audio2wave OU motif genere) + overlay** (le motif genere REMPLACE le
+visuel d'audio2wave, il ne le complete pas) :
+- `bg` = `"pattern"` : la scene retient `capture_background` (reglage du motif) ; le mode d'audio2wave n'est pas touche.
+- `bg` = `"live"` : la scene retient le **mode** (live / snap / ridge) et **l'etat de son panneau** (`live_overrides`, meme forme
+  qu'un preset d'audio2wave, automations comprises) **dans scenes.json : jamais dans les presets d'audio2wave** (une scene et un
+  preset sont deux choses differentes ; une premiere version rangeait un preset `scene-<nom>` chez eux, qui apparaissait dans
+  leurs menus). Capture (`capture_live_overrides`) : leur champ « Sauvegarder sous » sous un nom temporaire (`TEMP_LIVE_PRESET`,
+  Entry + bouton, **aucune modification de leur code**), on relit le resultat dans leur magasin, puis on le retire (fichier et
+  ligne du menu) et on remet l'affichage du menu comme avant. Application (`apply_live_overrides`) : pas d'ecriture du tout ;
+  le temps d'un clic sur la ligne `default` de leur menu, leur magasin renvoie `overrides` pour `default`
+  (`_ObjStore.override_default` : `preset_store.all` remplace sur l'instance pour Live et Ridge, `all_presets` pour Snap ; leur
+  fenetre relit le magasin au clic, donc charge cet etat), puis tout est remis. Leur menu affiche alors `default`. Pas d'etat
+  audio2wave pour une scene a motif.
+- **Exclusions** (`scenes.SCENE_EXCLUDED` = `device`, `fullscreen`, `size`, filtrees par `strip_live_overrides` a la capture, a
+  l'application et a la migration, donc aussi pour les scenes deja enregistrees) : une scene change le look, pas
+  l'installation. L'**entree audio** reste celle qui est active ; le **plein ecran** (case de leur panneau Live, qui commande
+  la fenetre GL par `fullscreen=0|1`, et que le preset `club` de Snap coche) n'est jamais touche par une scene.
+- **Fenetre de reglages gardee a sa taille pendant le VJ** : un changement de mode reconstruit la fenetre (panneaux de largeurs
+  differentes) et, sans geometrie imposee, Tk la redimensionne a la taille voulue par le contenu (vu : 1496 -> 1490 px).
+  `build_window` memorise `keep_size` en tete quand `s.vj_state["running"]` et la rejoue en fin de construction
+  (`root.geometry`). Piege de test : un choix **a la main** met le VJ en pause (donc pas de `keep_size`) ; il faut faire passer
+  la scene par `vj_advance`, et partir de `root.geometry("")` (une geometrie deja imposee par un test precedent masque le defaut).
+- **Migration** (`migrate_scene_presets`, au debut de chaque `build_window`, avant leur panneau pour que leurs menus soient
+  propres) : une scene qui porte encore `live_preset` (anciennes versions) recupere ce preset dans le magasin de son mode,
+  le range dans `live_overrides` et le supprime de leurs presets. Verifie sur une copie des vrais fichiers de l'utilisateur
+  (5 scenes migrees, magasins live / snap propres).
+- dans les deux cas : `capture_overlay` (jamais de `bg_*`). `scene_values(scene, current)` fabrique les reglages a poser
+  (overlay + soit le motif, soit seulement `bg_mode = live` ; automations `bg_*` du fond, les autres de l'overlay).
+- Stockage : `SceneBook` (`~/.audio2wave/scenes.json`, `{"scenes": [...]}`, **ordre = rang = touche F1..F9**, 9 maximum, meme nom
+  a la casse pres = remplace au meme rang).
+- **Changement de mode** (Live -> Snap...) : la fenetre est reconstruite par `request_mode` ; le preset est garde dans
+  `s.pending_live_overrides` et applique a la fin de `build_window` du panneau neuf (`after(150)`).
+- **Interface** : rangee ambre posee en ligne 0 de `root` (au-dessus de la page defilante : toujours visible), une touche par
+  scene (active = ambre), « + Nouvelle scene » (champ de nom + Enregistrer / Annuler, Entree / Echap), clic droit = mettre a
+  jour (capture l'etat actuel) / supprimer (confirmation). `refresh_scene_bar` reconstruit la rangee.
+- **F1..F9** : `key_actions` du fil GL -> `s.scene_requests` (file) -> `poll_scene_requests()` dans `refresh()` du fil tkinter
+  (la scene s'applique dans le fil de la GUI ; sans `--gui` : message). Un rang sans scene : message, rien ne casse.
+- Pieges : (1) la barre en ligne 0 faisait calculer a Tk une taille transitoire (largeur minimale) avant que la page ait la
+  sienne : la fenetre s'ouvrait empilee ; `layout["settled"]` interdit de passer en empile pendant les 400 premieres ms.
+  (2) la hauteur : +36 px de barre, d'ou `LIVE_MAX_HEIGHT` 640 -> 600 pour rester sous 700 px. (3) l'ecran de test ne doit
+  jamais ecrire dans les vrais fichiers : `scenes.SCENES_PATH` et `live.preset_store.path` sont remplaces le temps de
+  `run_gui` ; le message d'audio2wave affiche pourtant le chemin reel (constante), sans y ecrire.
+- **Mode VJ** (enchainement des scenes, dans le meme bloc de `build_window`) : decisions prises avec l'utilisateur : **duree fixe
+  en secondes** (pas en mesures), transition **flash / glitch court**, **dans l'ordre ou au hasard** avec toutes les scenes,
+  pilotage par **bouton dans la barre + touches**. `s.vj_state` = `{"running", "t_next"}` (survit aux reconstructions de la
+  fenetre ; chaque `build_window` relance sa boucle `vj_tick` toutes les 250 ms, garde par `alive`). Reglages (`seconds` 5..300,
+  `order` `seq` / `random`) dans le meme `scenes.json` (cle `vj`, `SceneBook.vj()` / `set_vj()`, gardes quand les scenes sont
+  ecrites et inversement). `scenes.next_scene_index(count, current, order, rng)` (pure) : `seq` = la suivante en boucle (la
+  premiere si aucune n'est active), `random` = une autre, jamais la meme deux fois de suite.
+  - `vj_advance` : scene suivante + `s.commands.put("flash")` + minuteur relance ; `vj_toggle` (refuse si < 2 scenes) ;
+    **choisir une scene a la main** (`apply_scene`, F1..F9 compris) **met le VJ en pause** (`apply_scene_core` est la version
+    que le VJ appelle). Espace / fleche droite : le fil GL met `"vj"` / `"vjnext"` dans `s.scene_requests`, la GUI les lit.
+  - **Flash** : `Renderer.flash_t` (instant monotonic), pose par la commande `"flash"` dans le fil GL ; `u_flash` = carre de
+    `1 - age / 0,55 s` dans `post.frag` : melange vers le blanc (0,8) + force des bandes de glitch (0,9) meme avec les effets
+    coupes. Ne passe pas par `params` (`save_params` ecrit tout `params` dans `gl_params.json`).
+  - Un changement de mode (Live -> Snap) reconstruit la fenetre : ~1 s, en partie masque par le flash.
+- Limites / suite : les medias (logo, texte, video) ne sont pas dans les scenes ; pas de changement en mesures (kicks), de
+  duree par scene ni de vraie transition (voir README, ameliorations futures : bouton « etendre » du VJ pour la granularite,
+  glisser-deposer de medias lies a l'overlay de la scene ou ajoutes aux parametres d'audio2wave en mode Snap).
+  Pistes aussi notees : des **sets** (enchainement de scenes enregistre sous un nom, exportable / importable, avec un moyen de
+  basculer d'un set a un autre) ; `scenes.json` deviendrait un conteneur de sets (migration de l'existant en un set principal).
+- `check_gl.py` (`check_scenes` + etape GUI) : stockage (ordre, 10e refusee, remplacement, fichier illisible), capture et
+  valeurs (motif / audio2wave, automations, micro intact), barre, F1/F2/F8, nom deja pris, mise a jour au meme rang, VJ (ordre, reglages persistants, minuteur reel, flash, Espace / fleche droite, pause a la main),
+  suppression du preset, **changement de mode Live -> Snap avec chargement du preset `club`**.
+
 ### Effets par couche (fond / logo decorreles)
 
 Le rendu a 3 passes : `scene.frag` tourne **deux fois** (`u_pass` 0 = fond opaque dans `scene_fbo`,
@@ -322,13 +412,13 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (**dans la partie LIVE**, sous le panneau d'audio2wave, dans le meme canvas defilant ; selecteur Audio2wave / Motif genere +
    reglages du motif), *Effets* (les 5 effets, intensite globale, sensibilite, effets propres au logo), *Logo*
    (source Image/Texte/Video, position, opacite), *Aura du logo* (halo holographique + reaction a l'audio :
-   pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
+   pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Noise* (hasard sur les effets coches), *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
    debug / recharger shaders / sauver, automations, mesures bass/mid/high/beat et statut fps/logo/messages).
    **Hauteur** : la fenetre depassait la hauteur d'un ecran (deux colonnes empilees : 850 px au repos, plus de
    1100 px avec le motif ouvert + les effets du logo delies + le halo deplie). Les onglets l'ont ramenee a
    **648 px au repos et 653 px dans le pire cas** (1300-1380 px de large) ; elle est maintenant dictee par le
    panneau LIVE d'audio2wave (763 px a l'origine), dont `build_window` **resserre les marges verticales** (x0,35 :
-   -115 px) sans toucher a son code. Le panneau d'audio2wave est dans un **canvas defilant** plafonne a 640 px
+   -115 px) sans toucher a son code. Le panneau d'audio2wave est dans un **canvas defilant** plafonne a 600 px
    (`LIVE_MAX_HEIGHT`, ascenseur + molette) : Snap (~950 px) et Ridge (~850 px) sont plus hauts que Live. `check_gl.py` verifie qu'elle reste sous 700 px. Pieges : (1) une cellule
    de grille qui s'etend sur plusieurs lignes (`rowspan`) etire les lignes voisines (la ligne 1 de la fenetre a
    maintenant trois cellules sans `rowspan` : panneau d'audio2wave | trait | partie OVERLAY) ; (2) `ttk.Notebook` ne prend pas le theme sombre tout seul (`theme_use("clam")` + couleurs
@@ -342,7 +432,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    LIVE | trait | OVERLAY, la hauteur et la largeur en plus vont aux panneaux (colonne OVERLAY et ligne 1 ont un poids) ;
    (2) **moyenne** : bandeau LIVE, panneau d'audio2wave a sa hauteur naturelle, bandeau OVERLAY, partie OVERLAY a toute
    la largeur ; (3) **basse** : meme chose, avec l'ascenseur de la page. En mode large le panneau d'audio2wave garde
-   son propre ascenseur (`cap_now`, 640 px au depart) ; empile il n'a plus de plafond et c'est la page qui defile.
+   son propre ascenseur (`cap_now`, 600 px au depart) ; empile il n'a plus de plafond et c'est la page qui defile.
    La molette defile d'abord le panneau d'audio2wave s'il est sous la souris, sinon la page.
    Pieges : la taille **voulue** du canvas de page suit celle du contenu (sinon `root.winfo_reqheight()` ne bouge plus et la
    fenetre ne s'ouvre pas a la bonne taille) ; changer de mise en page change les tailles voulues, d'ou un deuxieme
