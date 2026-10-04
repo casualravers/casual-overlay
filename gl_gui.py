@@ -28,12 +28,13 @@ scripts d'audio2wave): toute action qui doit s'executer dans le fil GL passe par
 from __future__ import annotations
 
 import copy
+import json
 import random
 import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import colorchooser, filedialog, ttk
+from tkinter import colorchooser, filedialog, simpledialog, ttk
 
 import audio2wave_gl as gl
 import gui_colors
@@ -283,6 +284,92 @@ def migrate_scene_presets(live) -> None:
         book.put(scene)
 
 
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".bmp")
+VIDEO_EXT = (".gif", ".webm", ".mp4", ".mov", ".mkv", ".avi", ".webp", ".apng")
+THUMB_W, THUMB_H = 56, 34
+
+
+def media_from_file(path: str) -> dict | None:
+    """Media d'entree pour un fichier depose : image (logo) ou video / animation ; None si le format n'est pas reconnu."""
+    ext = Path(path).suffix.lower()
+    if ext in IMAGE_EXT:
+        return {"logo_source": "image", "logo_path": str(Path(path))}
+    if ext in VIDEO_EXT:
+        return {"logo_source": "video", "logo_video": str(Path(path)), "logo_key": ""}
+    return None
+
+
+def a2w_from_file(path: str) -> str | None:
+    """Video d'audio2wave (Snap : video interieure / exterieure) pour un fichier depose ; None si ce n'est pas une video."""
+    return str(Path(path)) if Path(path).suffix.lower() in VIDEO_EXT + (".m4v",) else None
+
+
+def make_thumb(media: dict):
+    """Vignette PIL (THUMB_W x THUMB_H, fond sombre) d'un media image ou video, ou None. Sans Tk : appelable dans un fil.
+    Une video : premiere image (ffmpeg, 6 s maximum) ; texte : pas de vignette."""
+    import io
+    import shutil
+    import subprocess
+
+    from PIL import Image
+    source = media.get("logo_source", "image")
+    path = media.get("logo_video") if source == "video" else media.get("logo_path") if source == "image" else None
+    if not path or not Path(path).exists():
+        return None
+    img = None
+    try:
+        if source == "image" or Path(path).suffix.lower() == ".gif":
+            img = Image.open(path)
+            img.seek(0)
+            img = img.convert("RGBA")
+        else:
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg:
+                codecs = ([["-c:v", "libvpx-vp9"]] if Path(path).suffix.lower() == ".webm" else []) + [[]]
+                for codec in codecs:                       # webm VP9 : le decodeur natif ignore l'alpha
+                    out = subprocess.run([ffmpeg, "-v", "error", *codec, "-i", path, "-frames:v", "1", "-f", "image2pipe",
+                                          "-vcodec", "png", "-"], capture_output=True, timeout=6,
+                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    if out.returncode == 0 and out.stdout:
+                        img = Image.open(io.BytesIO(out.stdout)).convert("RGBA")
+                        break
+        if img is None:
+            return None
+        img.thumbnail((THUMB_W, THUMB_H))
+        back = Image.new("RGBA", (THUMB_W, THUMB_H), (28, 28, 34, 255))
+        back.alpha_composite(img, ((THUMB_W - img.width) // 2, (THUMB_H - img.height) // 2))
+        return back.convert("RGB")
+    except Exception:
+        return None
+
+
+def choice_dialog(parent, title: str, text: str, buttons: list[str]) -> str | None:
+    """Petite fenetre modale : un texte et des boutons ; renvoie le libelle du bouton choisi (None si on ferme)."""
+    top = tk.Toplevel(parent)
+    top.title(title)
+    top.configure(bg=a2w.GUI_BG)
+    top.transient(parent.winfo_toplevel())
+    top.resizable(False, False)
+    answer: list[str | None] = [None]
+    tk.Label(top, text=text, bg=a2w.GUI_BG, fg=a2w.GUI_FG, justify="left", wraplength=420, padx=18, pady=14).pack()
+    row = tk.Frame(top, bg=a2w.GUI_BG)
+    row.pack(pady=(0, 14))
+
+    def pick(label: str) -> None:
+        answer[0] = label
+        top.destroy()
+    for label in buttons:
+        tk.Button(row, text=label, command=lambda lb=label: pick(lb), padx=10).pack(side="left", padx=5)
+    top.protocol("WM_DELETE_WINDOW", top.destroy)
+    top.bind("<Escape>", lambda _e: top.destroy())
+    try:
+        top.grab_set()
+    except tk.TclError:
+        pass
+    parent.wait_window(top)
+    return answer[0]
+
+
 SHORTCUTS_HELP = (
     "Raccourcis (fenetre de rendu active) :\n"
     "Echap : quitter\n"
@@ -354,8 +441,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     # Barre des scenes (remplie plus bas par `refresh_scene_bar`) : posee tout de suite, avant la page, pour que la
     # geometrie de la fenetre se fixe dans le meme ordre qu'avant (sinon elle s'ouvrait a la largeur minimale, empilee).
-    scene_bar = tk.Frame(root, bg=a2w.GUI_PANEL_BG)
-    scene_bar.grid(row=0, column=0, columnspan=2, sticky="ew")
+    scene_top = tk.Frame(root, bg=a2w.GUI_PANEL_BG)           # la barre, et dessous le panneau etendu (si ouvert)
+    scene_top.grid(row=0, column=0, columnspan=2, sticky="ew")
+    scene_bar = tk.Frame(scene_top, bg=a2w.GUI_PANEL_BG)
+    scene_bar.pack(fill="x")
+    scene_panel = tk.Frame(scene_top, bg=a2w.GUI_BG)
 
     # Page: tout le contenu vit dans un canvas defilant (ascenseur vertical + molette) : jamais de contenu coupe quand la
     # fenetre est petite, et au-dela de la taille voulue le contenu s'etire. La mise en page (cote a cote / empilee)
@@ -388,7 +478,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     canvas.configure(yscrollcommand=vbar.set)
     canvas.pack(side="left", fill="both", expand=True)
     host = HostFrame(canvas)
-    canvas.create_window((0, 0), window=host, anchor="nw")
+    host_item = canvas.create_window((0, 0), window=host, anchor="nw")
+    # Le fond est EXCLUSIF : soit le visuel d'audio2wave (son panneau, `host`), soit le fond genere (`pattern_holder`). Les deux
+    # sont des fenetres du meme canvas, une seule est affichee (voir `show_bg`) ; le choix est en haut, hors du canvas.
+    pattern_holder = tk.Frame(canvas)
+    pattern_item = canvas.create_window((0, 0), window=pattern_holder, anchor="nw", state="hidden")
+    bg_state = {"pattern": False}
+
+    def active_panel() -> tk.Frame:
+        return pattern_holder if bg_state["pattern"] else host
 
     restart_event = threading.Event()
     live_status = {"text": ""}
@@ -433,7 +531,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return h if h > 50 else min(host.winfo_reqheight(), cap_now())
 
     def update_scrollbar(_e=None) -> None:
-        if host.winfo_reqheight() > visible_height() + 1:
+        if active_panel().winfo_reqheight() > visible_height() + 1:
             if not vbar.winfo_ismapped():
                 vbar.pack(side="right", fill="y")
         else:
@@ -444,19 +542,21 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def fit(_e=None) -> None:
         """Taille voulue du canvas = celle du panneau (plafonnee a l'ouverture) ; ensuite c'est la fenetre qui decide,
         et un ascenseur apparait des que le panneau est plus haut que la place disponible."""
-        w, h = host.winfo_reqwidth(), host.winfo_reqheight()
-        canvas.configure(width=w, height=min(h, cap_now()), scrollregion=(0, 0, w, h))
+        w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth())      # largeur et hauteur stables d'un fond a l'autre
+        h = active_panel().winfo_reqheight()
+        canvas.configure(width=w, height=min(host.winfo_reqheight(), cap_now()), scrollregion=(0, 0, w, h))
         update_scrollbar()
 
     def on_wheel(e) -> None:
         step = -1 if e.delta > 0 else 1
-        if str(e.widget).startswith(str(canvas)) and host.winfo_reqheight() > visible_height() + 1:
+        if str(e.widget).startswith(str(canvas)) and active_panel().winfo_reqheight() > visible_height() + 1:
             canvas.yview_scroll(step, "units")            # le panneau d'audio2wave defile d'abord...
         elif page_bar.winfo_ismapped():
             page_canvas.yview_scroll(step, "units")       # ...sinon c'est la page
 
     canvas.bind("<Configure>", update_scrollbar)
     host.bind("<Configure>", fit)
+    pattern_holder.bind("<Configure>", fit)
     root.bind_all("<MouseWheel>", on_wheel)
     host.update_idletasks()
     fit()
@@ -534,9 +634,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     # Le fond est un reglage de la partie LIVE (c'est la source du visuel d'audio2wave) : ce bloc est pose sous le
     # panneau du mode, dans le meme canvas defilant, et non dans les onglets OVERLAY.
-    host_cols, host_rows = host.grid_size()
-    tab_fond = tk.Frame(host)
-    tab_fond.grid(row=host_rows, column=0, columnspan=max(host_cols, 1), sticky="new")
+    tab_fond = tk.Frame(live_wrap)                 # en-tete : le choix Audio2wave / Fond genere (toujours visible)
+    tab_fond.pack(side="top", fill="x", before=canvas)
     tab_fx, tab_logo = new_tab("Effets"), new_tab("Logo")
     tab_aura, tab_melt = new_tab("Aura du logo"), new_tab("Fonte du logo")
     tab_cell, tab_noise, tab_aff = new_tab("Cellules"), new_tab("Noise"), new_tab("Affichage")
@@ -799,28 +898,31 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     load_overlay_preset, update_overlay_preset = overlay_presets["load"], overlay_presets["update"]
     save_overlay_preset = overlay_presets["save"]
 
-    # ---- colonne A : FOND (motif genere)
-    add_section_title(zone_f, "Fond de l'overlay")
-    bg_preset_bar = tk.Frame(tab_fond)
-    bg_preset_bar.grid(row=zone_f.next_row(), column=0, columnspan=3, sticky="new")
-    bg_presets = make_preset_bar(bg_preset_bar, "Presets fond", gl.BACKGROUND_BOOK, gl.capture_background,
-                                 gl.background_preset_values,
-                                 "Un preset de fond = la source et le motif (ni le logo, ni les effets).")
+    # ---- colonne A : FOND. Un choix en haut ; dessous, UNE des deux faces : le panneau d'audio2wave, ou le fond genere.
     bg_var = tk.StringVar(value=params["bg_mode"])
     r = zone_f.next_row()
-    add_label(zone_f, "Fond", r, "Audio2wave = le visuel du mode choisi dans le panneau de gauche (Live, Snap ou "
-                                 "Ridge). Motif genere = degrades et damier calcules par la carte graphique (touche B).")
+    bg_title = tk.Label(tab_fond, text="FOND")
+    bg_title.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    style_band(bg_title, a2w, color=OVERLAY_COLOR)
+    Tooltip(bg_title, "Audio2wave = le visuel du mode choisi dessous (Live, Snap ou Ridge). Fond genere = degrades et damier "
+                      "calcules par la carte graphique (touche B). Un seul des deux est affiche a la fois.")
     bg_frame = tk.Frame(tab_fond)
     bg_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    for text, value in (("Audio2wave", "live"), ("Motif genere", "pattern")):
+    for text, value in (("Audio2wave", "live"), ("Fond genere", "pattern")):
         tk.Radiobutton(bg_frame, text=text, variable=bg_var, value=value).pack(side="left")
     bind_param("bg_mode", bg_var, str)
 
-    pattern_box = tk.Frame(tab_fond)
-    pattern_box.grid(row=zone_f.next_row(), column=0, columnspan=3, sticky="new")
-    pattern_box.columnconfigure(2, weight=1)         # le bandeau "Motif genere" prend toute la largeur
+    bg_preset_bar = tk.Frame(pattern_holder)
+    bg_preset_bar.pack(fill="x")
+    bg_presets = make_preset_bar(bg_preset_bar, "Presets fond", gl.BACKGROUND_BOOK, gl.capture_background,
+                                 gl.background_preset_values,
+                                 "Un preset de fond = la source et le fond genere (ni le logo, ni les effets).")
+
+    pattern_box = tk.Frame(pattern_holder)
+    pattern_box.pack(fill="x")
+    pattern_box.columnconfigure(2, weight=1)         # le bandeau "Fond genere" prend toute la largeur
     pz = Zone(pattern_box)
-    add_section_title(pz, "Motif genere")
+    add_section_title(pz, "Fond genere")
     param_radio(pz, "Palette", "bg_palette", (("Arc-en-ciel", "classic"), ("Duo", "duo"), ("Banc de test", "test")),
                 tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
                         "Duo: degrade lisse entre deux couleurs. "
@@ -843,13 +945,19 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                  "Flash et bascule du damier a chaque kick, defilement accelere par les basses. 0 = aucune.")
 
     def show_bg(*_a) -> None:
-        if bg_var.get() == "pattern":
-            pattern_box.grid()
-        else:
-            pattern_box.grid_remove()
+        """Affiche le panneau d'audio2wave OU le fond genere, jamais les deux (deux fenetres du meme canvas)."""
+        bg_state["pattern"] = bg_var.get() == "pattern"
+        canvas.itemconfigure(host_item, state="hidden" if bg_state["pattern"] else "normal")
+        canvas.itemconfigure(pattern_item, state="normal" if bg_state["pattern"] else "hidden")
+        canvas.yview_moveto(0)
+        banner_live.config(text="LIVE  -  fond genere (casual-overlay)" if bg_state["pattern"] else MODE_BANNERS[mode])
+        fit()
 
     bg_var.trace_add("write", show_bg)
     show_bg()
+    tab_fond.update_idletasks()
+    cap = max(360, cap - tab_fond.winfo_reqheight())     # le choix du fond prend de la place au-dessus du panneau
+    fit()
 
     # ---- colonne A : EFFETS
     add_separator(zone_fx, "Effets")
@@ -1432,7 +1540,36 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return last is not None and any(menu.type(i) == "command" and menu.entrycget(i, "label") == name
                                         for i in range(last + 1))
 
+    def current_index(rows: list[dict]) -> int | None:
+        """Rang (dans le set actif) de la scene active ; le nom fait foi (une scene peut etre deplacee ou retiree)."""
+        active = getattr(s, "active_scene", None)
+        if not active:
+            return None
+        i = getattr(s, "active_entry", None)
+        if i is not None and 0 <= i < len(rows) and rows[i]["name"].lower() == active.lower():
+            return i
+        for row in rows:
+            if row["name"].lower() == active.lower():
+                return row["index"]
+        return None
+
+    def flush_pending_inputs() -> None:
+        """Valide ce qui a ete tape sans Entree : un champ de fichier ne s'applique qu'a Entree / perte du focus, et cliquer un
+        menu (+ Scene) ne fait pas perdre le focus : sans cela la scene capturait l'ancien media."""
+        for fn in (apply_logo_path, apply_video_path, apply_text):
+            try:
+                fn()
+            except tk.TclError:
+                pass
+        for w in gui_gates.leaves(host):
+            if w.winfo_class() == "Entry":
+                try:
+                    w.event_generate("<FocusOut>")
+                except tk.TclError:
+                    pass
+
     def capture_scene_now(name: str) -> None:
+        flush_pending_inputs()
         sync_automation_now()
         overrides = None
         note = ""
@@ -1441,14 +1578,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             if overrides is None:
                 note = " (reglages du panneau audio2wave non retenus)"
         scene = scenes.capture_scene(name, params, s.mode, overrides)
-        if not scene_book.put(scene):
-            scene_msg.set(f"{scenes.MAX_SCENES} scenes au maximum : supprime-en une (clic droit)")
-            return
+        scene_book.put(scene)                          # nouvelle : bibliotheque + fin du set actif ; sinon mise a jour partout
         s.active_scene = scene["name"]
+        s.active_entry = current_index(scene_book.rows())
         scene_msg.set(f"Scene '{name}' enregistree" + note)
         refresh_scene_bar()
 
-    # ---- Mode VJ : enchaine les scenes toutes les N secondes, avec un flash court a chaque changement.
+    # ---- Mode VJ : enchaine les scenes du set actif toutes les N secondes, avec un flash court a chaque changement.
     vj = getattr(s, "vj_state", None)
     if vj is None:
         vj = s.vj_state = {"running": False, "t_next": 0.0}
@@ -1470,28 +1606,26 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             vj_ui.clear()
 
     def vj_advance() -> None:
-        """Scene suivante (ordre choisi) + flash, et le minuteur repart."""
-        names = scene_book.names()
-        if len(names) < 2:
+        """Entree suivante du set (ordre choisi) + flash, et le minuteur repart."""
+        rows = scene_book.rows()
+        if sum(1 for r in rows if not r["skip"]) < 2:
             vj["running"] = False
-            scene_msg.set("Il faut au moins 2 scenes pour enchainer")
+            scene_msg.set("Il faut au moins 2 scenes actives dans le set pour enchainer")
             update_vj_button()
             return
         settings = scene_book.vj()
-        active = getattr(s, "active_scene", None)
-        current = scene_book.index_of(active) if active else None
-        index = scenes.next_scene_index(len(names), current, settings["order"], random)
+        index = scenes.next_entry_index(rows, current_index(rows), settings["order"], random)
         s.commands.put("flash")
-        apply_scene_core(names[index])
-        vj["t_next"] = time.monotonic() + settings["seconds"]
+        apply_entry_core(index)
+        vj["t_next"] = time.monotonic() + (rows[index]["seconds"] or settings["seconds"])     # duree propre a l'entree
         update_vj_button()
 
     def vj_toggle() -> None:
         if vj["running"]:
             vj["running"] = False
             scene_msg.set("VJ en pause")
-        elif len(scene_book.names()) < 2:
-            scene_msg.set("Il faut au moins 2 scenes pour enchainer")
+        elif sum(1 for r in scene_book.rows() if not r["skip"]) < 2:
+            scene_msg.set("Il faut au moins 2 scenes actives dans le set pour enchainer")
         else:
             vj["running"] = True
             vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
@@ -1501,29 +1635,65 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def vj_tick() -> None:
         if vj["running"] and time.monotonic() >= vj["t_next"]:
             vj_advance()
+        if getattr(s, "thumb_dirty", False):               # une vignette est prete (calculee dans un fil)
+            s.thumb_dirty = False
+            refresh_scene_panel()
         update_vj_button()
         after(250, vj_tick)
 
-    def apply_scene(name: str) -> None:
-        """Choix a la main : met le VJ en pause (on ne se bat pas avec le minuteur)."""
+    def apply_scene(name: str, index: int | None = None) -> None:
+        """Choix a la main (par nom, ou par rang dans le set) : met le VJ en pause (on ne se bat pas avec le minuteur)."""
+        rows = scene_book.rows()
+        if index is None:
+            index = next((r["index"] for r in rows if r["name"].lower() == name.lower()), None)
         paused = vj["running"]
         vj["running"] = False
-        apply_scene_core(name)
+        if index is not None and index < len(rows):
+            apply_entry_core(index)
+        else:
+            apply_scene_core(name)                         # scene de la bibliotheque absente du set : sans media
         if paused:
             scene_msg.set(scene_msg.get() + "  (VJ en pause)")
         update_vj_button()
 
-    def apply_scene_core(name: str) -> None:
+    def apply_entry(index: int) -> None:
+        rows = scene_book.rows()
+        if 0 <= index < len(rows):
+            apply_scene(rows[index]["name"], index)
+
+    def apply_entry_core(index: int) -> None:
+        row = scene_book.rows()[index]
+        apply_scene_core(row["name"], row["media"], index, row["a2w"])
+
+    def apply_scene_core(name: str, media: dict | None = None, index: int | None = None, a2w: dict | None = None) -> None:
         scene = scene_book.get(name)
         if scene is None:
             scene_msg.set(f"scene inconnue: {name}")
             return
         sync_automation_now()
-        apply_values(scenes.scene_values(scene, params))
+        values = scenes.scene_values(scene, params)
+        note = ""
+        if media:
+            missing = scenes.media_missing(media)
+            if missing:
+                note = f" (media introuvable: {Path(missing).name})"      # la scene garde son propre media
+            else:
+                values.update(scenes.media_values(media, params))
+        apply_values(values)
         s.active_scene = scene["name"]
-        scene_msg.set(f"Scene '{scene['name']}'")
+        s.active_entry = index
+        scene_msg.set(f"Scene '{scene['name']}'" + (f" + {scenes.media_label(media)}" if media and not note else "") + note)
         if scene["bg"] == "live" and scene.get("mode"):
             overrides = scene.get("live_overrides")
+            if a2w:                                        # videos d'audio2wave propres a l'entree : posees sur l'etat de la scene
+                if scene["mode"] == "snap":
+                    gone = scenes.a2w_missing(a2w)
+                    overrides = {**(overrides or {}), **{k: v for k, v in a2w.items() if v not in gone}}
+                    if gone:
+                        note = f" (video audio2wave introuvable: {Path(gone[0]).name})"
+                        scene_msg.set(scene_msg.get() + note)
+                else:
+                    scene_msg.set(scene_msg.get() + " (videos audio2wave: scene Snap seulement)")
             if scene["mode"] != s.mode:
                 s.pending_live_overrides = overrides
                 root.after(30, lambda: request_mode(scene["mode"]))      # reconstruit la fenetre, puis charge l'etat
@@ -1533,18 +1703,50 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         refresh_scene_bar()
 
     def delete_scene_now(name: str) -> None:
-        scene_book.delete(name)
+        scene_book.delete(name)                            # bibliotheque ET tous les sets
         if getattr(s, "active_scene", None) == name:
             s.active_scene = None
+            s.active_entry = None
         scene_msg.set(f"Scene '{name}' supprimee")
         refresh_scene_bar()
 
     def ask_delete_scene(name: str) -> None:
-        live.confirm_dialog(root, "Supprimer la scene", f"Supprimer la scene '{name}' ?\nCette action est irreversible.",
-                            lambda: delete_scene_now(name))
+        live.confirm_dialog(root, "Supprimer la scene",
+                            f"Supprimer la scene '{name}' de la bibliotheque ?\nElle disparait aussi de tous les sets qui "
+                            "l'utilisent. Cette action est irreversible.", lambda: delete_scene_now(name))
+
+    def remove_entry_now(index: int) -> None:
+        rows = scene_book.rows()
+        if 0 <= index < len(rows):
+            name = rows[index]["name"]
+            scene_book.remove_entry(index)
+            s.active_entry = None
+            scene_msg.set(f"'{name}' retiree du set (la scene reste dans la bibliotheque)")
+            refresh_scene_bar()
+
+    def move_entry_now(index: int, delta: int) -> None:
+        if scene_book.move_entry(index, delta) is not None:
+            s.active_entry = None
+        refresh_scene_bar()
+
+    def media_from_current(index: int) -> None:
+        media = scenes.capture_media(params)
+        if scene_book.set_entry_media(index, media):
+            scene_msg.set(f"Media de cette entree : {scenes.media_label(media)}")
+        refresh_scene_bar()
+
+    def media_clear(index: int) -> None:
+        if scene_book.set_entry_media(index, None):
+            scene_msg.set("Media retire : la scene garde le sien")
+        refresh_scene_bar()
+
+    def add_entry_now(name: str) -> None:
+        if scene_book.add_entry(name):
+            scene_msg.set(f"'{name}' ajoutee au set '{scene_book.active_set_name()}'")
+        refresh_scene_bar()
 
     def poll_scene_requests() -> None:
-        """F1..F9 de la fenetre de rendu (fil GL) -> la scene de ce rang."""
+        """F1..F9 de la fenetre de rendu (fil GL) -> l'entree de ce rang dans le set actif."""
         queue_ = getattr(s, "scene_requests", None)
         while queue_ is not None and not queue_.empty():
             index = queue_.get_nowait()
@@ -1554,9 +1756,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             if index == "vjnext":
                 vj_advance()
                 continue
-            names = scene_book.names()
-            if 0 <= index < len(names):
-                apply_scene(names[index])
+            if 0 <= index < len(scene_book.rows()):
+                apply_entry(index)
             else:
                 scene_msg.set(f"F{index + 1}: aucune scene a ce rang")
 
@@ -1566,31 +1767,482 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             scene_msg.set("Donne un nom a la scene")
             return
         if scene_book.index_of(name) is not None:
-            scene_msg.set(f"'{name}' existe deja : clic droit sur sa touche > Mettre a jour")
+            scene_msg.set(f"'{name}' existe deja dans la bibliotheque : '+ Scene' > Ajouter, ou clic droit > Mettre a jour")
             return
         scene_state["adding"] = False
         capture_scene_now(name)
         refresh_scene_bar()
 
     def start_adding() -> None:
-        if len(scene_book.names()) >= scenes.MAX_SCENES:
-            scene_msg.set(f"{scenes.MAX_SCENES} scenes au maximum : supprime-en une (clic droit)")
-            return
         scene_state["adding"] = True
-        scene_entry_var.set(f"Scene {len(scene_book.names()) + 1}")
+        scene_entry_var.set(scenes.unique_name(f"Scene {len(scene_book.names()) + 1}", scene_book.names()))
         refresh_scene_bar()
 
     def cancel_adding(_evt=None) -> None:
         scene_state["adding"] = False
         refresh_scene_bar()
 
+    # ---- SETS : un enchainement de scenes (de la bibliotheque) enregistre sous un nom, exportable / importable.
+    # Les dialogues sont dans `scene_ui` pour que les tests les remplacent (jamais de fenetre bloquante).
+    scene_ui = {
+        "chooser": lambda title, text, buttons: choice_dialog(root, title, text, buttons),
+        "ask_name": lambda title, prompt, initial="": simpledialog.askstring(title, prompt, parent=root, initialvalue=initial),
+        "ask_save": lambda initial: filedialog.asksaveasfilename(
+            parent=root, title="Exporter le set", initialfile=initial, defaultextension=".json",
+            filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+        "ask_open": lambda: filedialog.askopenfilename(
+            parent=root, title="Importer un set", filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+    }
+
+    def switch_set(name: str) -> bool:
+        """Change de set. Si le VJ tournait, il **redemarre** sur le nouveau set (premiere scene, ou une au hasard)."""
+        if not scene_book.set_active(name):
+            scene_msg.set(f"set inconnu: {name}")
+            return False
+        s.active_scene = None
+        s.active_entry = None
+        scene_msg.set(f"Set '{scene_book.active_set_name()}' ({len(scene_book.rows())} scenes)")
+        scene_state["adding"] = False
+        if vj["running"]:
+            vj_advance()
+            if vj["running"]:
+                scene_msg.set(f"Set '{scene_book.active_set_name()}' : VJ redemarre")
+        refresh_scene_bar()
+        return True
+
+    def create_set(name: str, copy_of: str | None = None) -> bool:
+        name = (name or "").strip()[:scenes.MAX_NAME]
+        if not name:
+            return False
+        if not scene_book.new_set(name, copy_of=copy_of):
+            scene_msg.set(f"Un set '{name}' existe deja" if scene_book.get_set(name) else "Donne un nom au set")
+            return False
+        return switch_set(name)
+
+    def new_set_dialog(copy: bool = False) -> None:
+        current = scene_book.active_set_name()
+        name = scene_ui["ask_name"]("Nouveau set", "Nom du set :", f"{current} (copie)" if copy else "")
+        if name:
+            create_set(name, current if copy else None)
+
+    def rename_set_now(new: str) -> bool:
+        old = scene_book.active_set_name()
+        if not scene_book.rename_set(old, new):
+            scene_msg.set("Nom de set vide ou deja pris")
+            return False
+        scene_msg.set(f"Set '{old}' renomme en '{scene_book.active_set_name()}'")
+        refresh_scene_bar()
+        return True
+
+    def rename_set_dialog() -> None:
+        name = scene_ui["ask_name"]("Renommer le set", "Nouveau nom :", scene_book.active_set_name())
+        if name:
+            rename_set_now(name)
+
+    def delete_set_now() -> bool:
+        name = scene_book.active_set_name()
+        if not scene_book.delete_set(name):
+            scene_msg.set("Impossible de supprimer le dernier set")
+            return False
+        switch_set(scene_book.active_set_name())
+        scene_msg.set(f"Set '{name}' supprime (ses scenes restent dans la bibliotheque)")
+        return True
+
+    def ask_delete_set() -> None:
+        name = scene_book.active_set_name()
+        if len(scene_book.set_names()) <= 1:
+            scene_msg.set("Impossible de supprimer le dernier set")
+            return
+        live.confirm_dialog(root, "Supprimer le set", f"Supprimer le set '{name}' ?\nSes scenes restent dans la bibliotheque.",
+                            delete_set_now)
+
+    def export_set_now(path: str | None = None) -> bool:
+        name = scene_book.active_set_name()
+        path = path or scene_ui["ask_save"](f"{name}.set.json")
+        if not path:
+            return False
+        try:
+            data = scenes.export_set(scene_book, name)
+            Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            scene_msg.set(f"Export impossible: {exc}")
+            return False
+        scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes) : {Path(path).name}")
+        return True
+
+    def resolve_conflict(title: str, text: str, what: str) -> str | None:
+        """Nom deja pris : renommer (garder les deux) ou remplacer (avec confirmation). None = annuler."""
+        choice = scene_ui["chooser"](title, text, ["Renommer (garder les deux)", "Remplacer", "Annuler"])
+        if choice == "Remplacer":
+            sure = scene_ui["chooser"]("Confirmer le remplacement",
+                                       f"Remplacer {what} existant(es) par celui du fichier ?\nL'ancienne version sera perdue.",
+                                       ["Remplacer", "Annuler"])
+            return "replace" if sure == "Remplacer" else None
+        return "rename" if choice and choice.startswith("Renommer") else None
+
+    def import_set_now(path: str | None = None) -> bool:
+        path = path or scene_ui["ask_open"]()
+        if not path:
+            return False
+        try:
+            parsed = scenes.parse_import(Path(path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            scene_msg.set(f"Import impossible: {exc}")
+            return False
+        except ValueError as exc:
+            scene_msg.set(f"Import impossible: {exc}")
+            return False
+        conflicts = scenes.import_conflicts(scene_book, parsed)
+        set_mode = scene_mode = "rename"
+        if conflicts["set"]:
+            set_mode = resolve_conflict("Set deja present", f"Un set nomme '{parsed['set']['name']}' existe deja.", "le set")
+        if set_mode and conflicts["scenes"]:
+            scene_mode = resolve_conflict(
+                "Scenes deja presentes",
+                f"{len(conflicts['scenes'])} scene(s) du fichier ont le nom d'une scene differente de ta bibliotheque :\n"
+                + ", ".join(conflicts["scenes"][:8]) + ("..." if len(conflicts["scenes"]) > 8 else "")
+                + "\n(remplacer les change aussi dans tes autres sets).", "ces scenes")
+        if not set_mode or not scene_mode:
+            scene_msg.set("Import annule")
+            return False
+        result = scenes.import_set(scene_book, parsed, set_mode, scene_mode)
+        switch_set(result["set"])
+        note = ""
+        if result["set_renamed"]:
+            note += f" (renomme '{result['set']}')"
+        if result["renamed"]:
+            note += f", {len(result['renamed'])} scene(s) renommee(s)"
+        if result["replaced"]:
+            note += f", {len(result['replaced'])} scene(s) remplacee(s)"
+        if result["missing"]:
+            note += f" - media introuvable: {', '.join(Path(m).name for m in result['missing'][:3])}"
+        scene_msg.set(f"Set '{result['set']}' importe{note}")
+        return True
+
+    def fill_entry_menu(menu, row: dict) -> None:
+        i = row["index"]
+        menu.add_command(label="Charger", command=lambda: apply_entry(i))
+        menu.add_command(label="Mettre a jour la scene avec l'etat actuel (dans tous les sets)",
+                         command=lambda n=row["name"]: capture_scene_now(n))
+        menu.add_command(label="Media de cette entree : utiliser le logo / texte actuel", command=lambda: media_from_current(i))
+        if row["media"]:
+            menu.add_command(label=f"Media de cette entree : retirer ({scenes.media_label(row['media'])})",
+                             command=lambda: media_clear(i))
+        menu.add_separator()
+        if i > 0:
+            menu.add_command(label="Monter", command=lambda: move_entry_now(i, -1))
+        if i < len(scene_book.rows()) - 1:
+            menu.add_command(label="Descendre", command=lambda: move_entry_now(i, 1))
+        menu.add_command(label="Retirer du set", command=lambda: remove_entry_now(i))
+        menu.add_command(label="Supprimer la scene de la bibliotheque...", command=lambda n=row["name"]: ask_delete_scene(n))
+
+    # ---- Glisser-deposer d'un fichier sur une scene (touche de la barre ou ligne du panneau etendu) : tkdnd via tkinterdnd2
+    # (facultatif : sans lui, tout marche sauf le glisser-deposer).
+    dnd = {"ok": False, "files": None}
+    try:
+        from tkinterdnd2 import DND_FILES, TkinterDnD
+        if not getattr(root, "_casual_dnd", False):
+            TkinterDnD._require(root)
+            root._casual_dnd = True
+        dnd.update(ok=True, files=DND_FILES)
+    except Exception:
+        pass
+
+    A2W_TARGETS = {"video": "video interieure", "video2": "video exterieure"}
+
+    def drop_media(index: int, data: str, target: str = "overlay") -> bool:
+        """Fichier(s) depose(s) sur l'entree `index` du set : le premier devient un de ses medias. `target` : `overlay` (logo /
+        texte / video du logo) ou `video` / `video2` (videos interieure / exterieure d'audio2wave, scenes Snap seulement)."""
+        files = [f for f in root.tk.splitlist(data) if f]
+        rows = scene_book.rows()
+        if not files or not 0 <= index < len(rows):
+            return False
+        name = rows[index]["name"]
+        extra = f" ({len(files) - 1} autre(s) fichier(s) ignore(s))" if len(files) > 1 else ""
+        if target == "overlay":
+            media = media_from_file(files[0])
+            if media is None:
+                scene_msg.set(f"Format non pris en charge: {Path(files[0]).name} (images png / jpg / bmp, videos gif / webm / mp4 / mov...)")
+                return False
+            scene_book.set_entry_media(index, media)
+            scene_msg.set(f"Overlay de '{name}' : {scenes.media_label(media)}{extra}")
+        else:
+            scene = rows[index]["scene"]
+            if not (scene.get("bg") == "live" and scene.get("mode") == "snap"):
+                scene_msg.set(f"'{name}' n'est pas une scene Snap : les videos d'audio2wave ne s'y appliquent pas")
+                return False
+            path = a2w_from_file(files[0])
+            if path is None:
+                scene_msg.set(f"audio2wave ne lit que des videos: {Path(files[0]).name}")
+                return False
+            scene_book.set_entry_a2w(index, target, path)
+            scene_msg.set(f"audio2wave de '{name}' : {A2W_TARGETS[target]} = {Path(path).name}{extra}")
+        if current_index(rows) == index:
+            apply_entry_core(index)                        # la scene est a l'ecran : on voit tout de suite le media
+        else:
+            refresh_scene_bar()
+        return True
+
+    def a2w_clear(index: int, key: str) -> None:
+        if scene_book.set_entry_a2w(index, key, None):
+            scene_msg.set(f"{A2W_TARGETS[key].capitalize()} retiree : la scene garde la sienne")
+        refresh_scene_bar()
+
+    def drop_on_button(index: int, data: str, x: int, y: int) -> None:
+        """Depot sur une touche de la barre : un menu demande la destination (overlay, video interieure / exterieure)."""
+        rows = scene_book.rows()
+        if not 0 <= index < len(rows):
+            return
+        menu = tk.Menu(root, tearoff=0)
+        scene = rows[index]["scene"]
+        snap = scene.get("bg") == "live" and scene.get("mode") == "snap"
+        menu.add_command(label="Overlay (logo / texte / video du logo)", command=lambda: drop_media(index, data, "overlay"))
+        for key, label in A2W_TARGETS.items():
+            menu.add_command(label=f"audio2wave : {label}" + ("" if snap else "  (scene Snap seulement)"),
+                             state="normal" if snap else "disabled", command=lambda k=key: drop_media(index, data, k))
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def register_drop(widget, index: int, target: str = "choose") -> None:
+        """Cible de depot : `target` = `overlay` / `video` / `video2` (destination fixe) ou `choose` (menu au depot)."""
+        if not dnd["ok"]:
+            return
+        try:
+            widget.drop_target_register(dnd["files"])
+            if target == "choose":
+                widget.dnd_bind("<<Drop>>", lambda e, k=index: drop_on_button(k, e.data, e.x_root, e.y_root) or "copy")
+            else:
+                widget.dnd_bind("<<Drop>>", lambda e, k=index, tg=target: drop_media(k, e.data, tg) or "copy")
+        except Exception:
+            pass
+
+    def register_tree(widget, index: int, target: str = "choose") -> None:
+        register_drop(widget, index, target)
+        for child in widget.winfo_children():
+            register_tree(child, index, target)
+
+    # ---- Vignettes des medias : calculees dans un fil (ffmpeg pour une video), affichees quand elles sont pretes
+    if not hasattr(s, "thumb_cache"):
+        s.thumb_cache, s.thumb_photos, s.thumb_dirty = {}, {}, False
+
+    def thumb_photo(media: dict):
+        from PIL import ImageTk
+        key = json.dumps(media, sort_keys=True)
+        if key in s.thumb_photos:
+            return s.thumb_photos[key]
+        state = s.thumb_cache.get(key)
+        if state is None:
+            s.thumb_cache[key] = "pending"
+
+            def work(m=dict(media), k=key) -> None:
+                s.thumb_cache[k] = make_thumb(m) or "none"
+                s.thumb_dirty = True
+            threading.Thread(target=work, daemon=True).start()
+            return None
+        if state in ("pending", "none"):
+            return None
+        s.thumb_photos[key] = ImageTk.PhotoImage(state)
+        return s.thumb_photos[key]
+
+    # ---- Edition d'une entree : renommer la scene, duree et exclusion du VJ
+    def rename_scene_now(old: str, new: str) -> bool:
+        if not scene_book.rename_scene(old, new):
+            scene_msg.set("Nom de scene vide ou deja pris")
+            return False
+        if getattr(s, "active_scene", None) == old:
+            s.active_scene = new.strip()[:scenes.MAX_NAME]
+        scene_msg.set(f"Scene '{old}' renommee en '{new.strip()[:scenes.MAX_NAME]}' (dans tous les sets)")
+        refresh_scene_bar()
+        return True
+
+    def rename_scene_dialog(old: str) -> None:
+        new = scene_ui["ask_name"]("Renommer la scene", "Nouveau nom :", old)
+        if new:
+            rename_scene_now(old, new)
+
+    def set_entry_vj(index: int, **kw) -> None:
+        scene_book.set_entry_vj(index, **kw)
+        refresh_scene_bar()
+
+    def set_vj_option(**kw) -> None:
+        scene_book.set_vj(**kw)
+        refresh_scene_bar()
+
+    # ---- Panneau etendu : le set en detail (media lie, duree et participation au VJ de chaque entree, ordre, renommer)
+    PANEL_BODY_H = 200
+    BOLD = ("Segoe UI", 9, "bold")
+
+    def build_panel_row(parent, row: dict, active: bool) -> None:
+        bg = "#3b3320" if active else a2w.GUI_BG
+        i = row["index"]
+        fr = tk.Frame(parent, bg=bg)
+        fr.pack(fill="x", pady=1, padx=2)
+        tk.Label(fr, text=str(i + 1), width=3, bg=bg, fg=SCENE_COLOR, font=BOLD).pack(side="left")
+        name_btn = tk.Button(fr, text=row["name"] if len(row["name"]) <= 16 else row["name"][:15] + ".", width=16, anchor="w",
+                  command=lambda k=i: apply_entry(k), relief="flat", bd=0, cursor="hand2", font=BOLD,
+                  bg=SCENE_COLOR if active else a2w.GUI_PANEL_BG, fg=BANNER_FG if active else a2w.GUI_FG,
+                  activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+        name_btn.pack(side="left", padx=4)
+        scene = row["scene"]
+        snap = scene.get("bg") == "live" and scene.get("mode") == "snap"
+        own_a2w = row["a2w"] or {}
+        scene_a2w = scenes.scene_a2w_media(scene)
+
+        def zone(title: str, width: int, own: dict | None, inherited: dict | None, clear, target: str, enabled: bool = True) -> None:
+            """Une zone de depot : media propre a l'entree (vif, avec sa croix), sinon celui que la scene a capture (en sourdine)."""
+            z = tk.Frame(fr, bg=bg, width=width, height=THUMB_H + 16, highlightthickness=1, highlightbackground=a2w.GUI_PANEL_BG)
+            z.pack(side="left", padx=3)
+            z.pack_propagate(False)
+            tk.Label(z, text=title, bg=bg, fg=SCENE_COLOR if enabled else a2w.GUI_MUTED_FG, font=("Segoe UI", 7, "bold"),
+                     anchor="w").pack(fill="x")
+            inner = tk.Frame(z, bg=bg)
+            inner.pack(fill="both", expand=True)
+            shown = own or inherited
+            if not enabled:
+                tk.Label(inner, text="scene Snap seulement", bg=bg, fg=a2w.GUI_MUTED_FG, anchor="w").pack(side="left")
+            elif shown:
+                missing = bool(scenes.a2w_missing({"v": shown["logo_video"]})) if target != "overlay" else scenes.media_missing(shown)
+                if own:
+                    tk.Button(inner, text="\u2715", command=clear, relief="flat", bd=0, cursor="hand2", bg=bg,
+                              fg=a2w.GUI_MUTED_FG).pack(side="right")
+                photo = thumb_photo(shown)
+                thumb = tk.Label(inner, image=photo, bg=bg) if photo else tk.Label(
+                    inner, text="T" if shown.get("logo_source") == "text" else "\u25a0", width=5, bg="#1c1c22", fg=a2w.GUI_MUTED_FG)
+                thumb.image = photo
+                thumb.pack(side="left")
+                label = scenes.media_label(shown) + ("  (introuvable)" if missing else "")
+                tk.Label(inner, text=label if len(label) <= 22 else label[:21] + ".", anchor="w", bg=bg,
+                         fg="#ff8a8a" if missing else (a2w.GUI_FG if own else a2w.GUI_MUTED_FG)).pack(side="left", padx=4)
+            else:
+                tk.Label(inner, text="glisse un fichier ici", bg=bg, fg=a2w.GUI_MUTED_FG, anchor="w").pack(side="left")
+            if enabled:
+                register_tree(z, i, target)
+
+        def as_video(path: str | None) -> dict | None:
+            return {"logo_source": "video", "logo_video": path} if path else None
+        media = row["media"]
+        own_media = scenes.capture_media(scene.get("overlay") or {})
+        if own_media.get("logo_source", "image") == "image" and not own_media.get("logo_path"):
+            own_media = None                               # la scene n'a pas de logo
+        zone("OVERLAY", 215, media, own_media, lambda k=i: media_clear(k), "overlay")
+        zone("AUDIO2WAVE  video int.", 165, as_video(own_a2w.get("video")), as_video(scene_a2w.get("video")),
+             lambda k=i: a2w_clear(k, "video"), "video", snap)
+        zone("AUDIO2WAVE  video ext.", 165, as_video(own_a2w.get("video2")), as_video(scene_a2w.get("video2")),
+             lambda k=i: a2w_clear(k, "video2"), "video2", snap)
+        dur = tk.Menubutton(fr, text="duree " + ("du set" if row["seconds"] is None else f"{row['seconds']:.0f} s") + " \u25be",
+                            relief="flat", bd=0, padx=6, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG,
+                            activebackground=a2w.GUI_BG, activeforeground=a2w.GUI_FG)
+        dur.pack(side="left", padx=4)
+        dmenu = tk.Menu(dur, tearoff=0)
+        dmenu.add_command(label="Duree du set", command=lambda k=i: set_entry_vj(k, seconds=None))
+        for value in scenes.VJ_SECONDS:
+            dmenu.add_command(label=f"{value} s" if value < 60 else f"{value // 60} min",
+                              command=lambda k=i, v=value: set_entry_vj(k, seconds=float(v)))
+        dur["menu"] = dmenu
+        var = tk.IntVar(value=0 if row["skip"] else 1)
+        cb = tk.Checkbutton(fr, text="VJ", variable=var, bg=bg, fg=a2w.GUI_FG, selectcolor=a2w.GUI_PANEL_BG, bd=0,
+                            activebackground=bg, activeforeground=a2w.GUI_FG,
+                            command=lambda k=i, v=var: set_entry_vj(k, skip=not v.get()))
+        cb.var = var
+        cb.pack(side="left", padx=4)
+        Tooltip(cb, "Coche : le VJ joue cette entree. Decoche : elle reste chargeable a la main (clic, F-touche) mais le VJ la saute.")
+        n = len(scene_book.rows())
+        for text, cmd, ok in (("\u25b2", lambda k=i: move_entry_now(k, -1), i > 0),
+                              ("\u25bc", lambda k=i: move_entry_now(k, 1), i < n - 1),
+                              ("Renommer", lambda nm=row["name"]: rename_scene_dialog(nm), True),
+                              ("Retirer", lambda k=i: remove_entry_now(k), True)):
+            tk.Button(fr, text=text, command=cmd, state="normal" if ok else "disabled", relief="flat", bd=0, padx=6,
+                      cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, disabledforeground=a2w.GUI_MUTED_FG,
+                      activebackground=SCENE_COLOR, activeforeground=BANNER_FG).pack(side="left", padx=1)
+        register_drop(fr, i)
+        register_drop(name_btn, i)
+
+    def refresh_scene_panel() -> None:
+        for child in scene_panel.winfo_children():
+            child.destroy()
+        if not getattr(s, "scenes_expanded", False):
+            scene_panel.pack_forget()
+            return
+        scene_panel.pack(fill="x")
+        rows = scene_book.rows()
+        settings = scene_book.vj()
+        head = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)
+        head.pack(fill="x")
+        tk.Label(head, text=f" SET  {scene_book.active_set_name()}", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=BOLD).pack(
+            side="left", padx=(6, 12), pady=4)
+        order = tk.Menubutton(head, text="ordre : " + ("dans l'ordre" if settings["order"] == "seq" else "au hasard") + " \u25be",
+                              relief="flat", bd=0, padx=8, cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG,
+                              activebackground=a2w.GUI_PANEL_BG, activeforeground=a2w.GUI_FG)
+        order.pack(side="left", padx=2)
+        om = tk.Menu(order, tearoff=0)
+        om.add_command(label="Dans l'ordre", command=lambda: set_vj_option(order="seq"))
+        om.add_command(label="Au hasard (jamais la meme deux fois)", command=lambda: set_vj_option(order="random"))
+        order["menu"] = om
+        secs = settings["seconds"]
+        default = tk.Menubutton(head, text=f"duree par defaut : {secs:.0f} s \u25be", relief="flat", bd=0, padx=8, cursor="hand2",
+                                bg=a2w.GUI_BG, fg=a2w.GUI_FG, activebackground=a2w.GUI_PANEL_BG, activeforeground=a2w.GUI_FG)
+        default.pack(side="left", padx=2)
+        dm = tk.Menu(default, tearoff=0)
+        for value in scenes.VJ_SECONDS:
+            dm.add_command(label=f"{value} s" if value < 60 else f"{value // 60} min",
+                           command=lambda v=value: set_vj_option(seconds=float(v)))
+        default["menu"] = dm
+        played = [r for r in rows if not r["skip"]]
+        loop = sum(r["seconds"] or secs for r in played)
+        tk.Label(head, text=f"{len(played)}/{len(rows)} scenes dans le VJ, boucle ~ "
+                 + (f"{loop / 60:.1f} min" if loop >= 90 else f"{loop:.0f} s"), bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(
+            side="left", padx=10)
+        tk.Label(head, text="glisser-deposer d'un fichier sur une zone (overlay / audio2wave) = lier ce media"
+                 if dnd["ok"] else "glisser-deposer indisponible (pip install tkinterdnd2)", bg=a2w.GUI_PANEL_BG,
+                 fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
+        body = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=PANEL_BODY_H)
+        body.pack(fill="x")
+        body.pack_propagate(False)
+        bar = tk.Scrollbar(body, orient="vertical")
+        cv = tk.Canvas(body, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollcommand=bar.set)
+        bar.config(command=cv.yview)
+        bar.pack(side="right", fill="y")
+        cv.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(cv, bg=a2w.GUI_BG)
+        item = cv.create_window((0, 0), window=inner, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfigure(item, width=e.width))
+        inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        if not rows:
+            tk.Label(inner, text="Ce set est vide : '+ Scene' pour en ajouter.", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG).pack(pady=20)
+        current = current_index(rows)
+        for row in rows:
+            build_panel_row(inner, row, row["index"] == current)
+
+    def set_expanded(flag: bool) -> None:
+        """Ouvre / ferme le panneau etendu : la fenetre grandit (ou reprend sa taille) de la hauteur du panneau."""
+        if bool(getattr(s, "scenes_expanded", False)) == bool(flag):
+            return
+        s.scenes_expanded = bool(flag)
+        refresh_scene_bar()
+        if root.winfo_ismapped():
+            root.update_idletasks()
+            if flag:
+                s.scene_panel_h = scene_panel.winfo_reqheight()
+            delta = getattr(s, "scene_panel_h", 0) * (1 if flag else -1)
+            height = max(MIN_WIN_H, min(root.winfo_height() + delta, root.winfo_screenheight() - 80))
+            root.geometry(f"{root.winfo_width()}x{height}")
+
     def refresh_scene_bar() -> None:
         for child in scene_bar.winfo_children():
             child.destroy()
         tk.Label(scene_bar, text=" SCENES ", bg=SCENE_COLOR, fg=BANNER_FG, font=("Segoe UI", 10, "bold")).pack(
-            side="left", padx=(6, 8), pady=5)
+            side="left", padx=(6, 6), pady=5)
         # Mode VJ (a droite) : reglages, scene suivante, lecture / pause. Pose AVANT les touches des scenes : en pack, le
         # premier arrive est le premier servi, donc 9 scenes aux noms longs ne repoussent jamais le bouton hors de la fenetre.
+        expanded = bool(getattr(s, "scenes_expanded", False))
+        expand = tk.Button(scene_bar, text="\u25b4 Reduire" if expanded else "\u25be Etendre", command=lambda: set_expanded(not expanded),
+                           relief="flat", bd=0, padx=8, pady=3, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR,
+                           activebackground=a2w.GUI_BG, activeforeground=SCENE_COLOR, font=("Segoe UI", 9, "bold"))
+        expand.pack(side="right", padx=(0, 4), pady=5)
+        Tooltip(expand, "Etendre : le set en detail (medias lies avec leur vignette, duree et participation au VJ de chaque scene, "
+                        "ordre, renommer). La fenetre grandit, et reprend sa taille quand on reduit.")
         opts = tk.Menubutton(scene_bar, text="reglages VJ \u25be", relief="flat", bd=0, padx=8, pady=3, cursor="hand2",
                              bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, activebackground=a2w.GUI_BG,
                              activeforeground=a2w.GUI_FG, font=("Segoe UI", 9))
@@ -1600,13 +2252,14 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         secs_var = tk.IntVar(value=int(scene_book.vj()["seconds"]))
         for label, value in (("Dans l'ordre", "seq"), ("Au hasard (jamais la meme deux fois)", "random")):
             menu.add_radiobutton(label=label, variable=order_var, value=value,
-                                 command=lambda: scene_book.set_vj(order=order_var.get()))
+                                 command=lambda: set_vj_option(order=order_var.get()))
         menu.add_separator()
         for value in scenes.VJ_SECONDS:
             label = f"Toutes les {value} s" if value < 60 else f"Toutes les {value // 60} min"
             menu.add_radiobutton(label=label, variable=secs_var, value=value,
-                                 command=lambda: scene_book.set_vj(seconds=secs_var.get()))
+                                 command=lambda: set_vj_option(seconds=float(secs_var.get())))
         opts["menu"] = menu
+        Tooltip(opts, "Ordre et duree du VJ : propres a chaque set.")
         nxt = tk.Button(scene_bar, text="\u25b6\u25b6", command=vj_advance, relief="flat", bd=0, padx=8, pady=3,
                         cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG, activebackground=SCENE_COLOR,
                         activeforeground=BANNER_FG, font=("Segoe UI", 9, "bold"))
@@ -1616,27 +2269,69 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                            cursor="hand2", font=("Segoe UI", 9, "bold"), bg=a2w.GUI_BG, fg=a2w.GUI_FG,
                            activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
         toggle.pack(side="right", padx=2, pady=5)
-        Tooltip(toggle, "Mode VJ : enchaine tes scenes tout seul (Espace dans la fenetre de rendu), avec un flash court a "
-                        "chaque changement. Le chiffre est le temps avant la prochaine scene. Choisir une scene a la main "
-                        "met le VJ en pause. Ordre et duree : 'reglages VJ'.")
+        Tooltip(toggle, "Mode VJ : enchaine les scenes du set tout seul (Espace dans la fenetre de rendu), avec un flash court "
+                        "a chaque changement. Le chiffre est le temps avant la prochaine scene. Choisir une scene a la main "
+                        "met le VJ en pause ; changer de set le redemarre. Ordre et duree : 'reglages VJ'.")
         vj_ui["toggle"] = toggle
         update_vj_button()
-        active = getattr(s, "active_scene", None)
-        for i, scene in enumerate(scene_book.list()):
-            name = scene["name"]
-            on = name == active
-            btn = tk.Button(scene_bar, text=f"{i + 1}  {name if len(name) <= 14 else name[:13] + '.'}", command=lambda n=name: apply_scene(n), relief="flat", bd=0,
+        # Set actif : menu pour en changer, creer, renommer, supprimer, exporter, importer
+        current_set = scene_book.active_set_name()
+        set_btn = tk.Menubutton(scene_bar, text=f"SET  {current_set if len(current_set) <= 16 else current_set[:15] + '.'} \u25be",
+                                relief="flat", bd=0, padx=10, pady=3, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR,
+                                activebackground=a2w.GUI_BG, activeforeground=SCENE_COLOR, font=("Segoe UI", 9, "bold"))
+        set_btn.pack(side="left", padx=(0, 8), pady=5)
+        set_menu = tk.Menu(set_btn, tearoff=0)
+        set_var = tk.StringVar(value=current_set)
+        for name in scene_book.set_names():
+            n_rows = len(scene_book.get_set(name)["entries"])
+            set_menu.add_radiobutton(label=f"{name}  ({n_rows})", variable=set_var, value=name,
+                                     command=lambda n=name: switch_set(n))
+        set_menu.add_separator()
+        set_menu.add_command(label="Nouveau set vide...", command=new_set_dialog)
+        set_menu.add_command(label="Dupliquer ce set...", command=lambda: new_set_dialog(copy=True))
+        set_menu.add_command(label="Renommer ce set...", command=rename_set_dialog)
+        set_menu.add_command(label="Supprimer ce set...", command=ask_delete_set)
+        set_menu.add_separator()
+        set_menu.add_command(label="Exporter ce set (fichier)...", command=export_set_now)
+        set_menu.add_command(label="Importer un set (fichier)...", command=import_set_now)
+        set_btn["menu"] = set_menu
+        Tooltip(set_btn, "Set = un enchainement de scenes (les memes scenes peuvent servir dans plusieurs sets, chacune avec son "
+                         "propre media). Changer de set change la rangee, F1..F9 et le VJ (qui redemarre). "
+                         "Exporter / importer : un seul fichier a partager.")
+        rows = scene_book.rows()
+        current = current_index(rows)
+        for row in rows[:scenes.KEYS]:
+            i = row["index"]
+            name = row["name"]
+            on = i == current
+            btn = tk.Button(scene_bar, text=f"{i + 1}  {name if len(name) <= 14 else name[:13] + '.'}"
+                            + (" \u25cf" if row["media"] else ""), command=lambda k=i: apply_entry(k), relief="flat", bd=0,
                             padx=12, pady=3, cursor="hand2", font=("Segoe UI", 9, "bold"),
                             bg=SCENE_COLOR if on else a2w.GUI_BG, fg=BANNER_FG if on else a2w.GUI_FG,
                             activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
             btn.pack(side="left", padx=2, pady=5)
+            register_drop(btn, i)                                      # un fichier depose sur la touche = media de la scene
             menu = tk.Menu(btn, tearoff=0)
-            menu.add_command(label="Mettre a jour avec l'etat actuel", command=lambda n=name: capture_scene_now(n))
-            menu.add_command(label="Supprimer", command=lambda n=name: ask_delete_scene(n))
+            fill_entry_menu(menu, row)
             btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
+            scene = row["scene"]
             Tooltip(btn, f"{name} - clic: charger la scene (F{i + 1} dans la fenetre de rendu). "
                          f"{'Fond: motif genere. ' if scene['bg'] == 'pattern' else 'Fond: audio2wave (' + str(scene.get('mode')) + '). '}"
-                         "Clic droit: mettre a jour avec l'etat actuel, supprimer.")
+                         + (f"Media: {scenes.media_label(row['media'])}. " if row["media"] else "")
+                         + "Glisse un fichier (image / video) dessus pour lui lier un media. "
+                         + "Clic droit: mettre a jour, media, deplacer, retirer, supprimer.")
+        if len(rows) > scenes.KEYS:                    # au-dela de F9 : un menu (le VJ les joue toutes)
+            more = tk.Menubutton(scene_bar, text=f"+{len(rows) - scenes.KEYS} \u25be", relief="flat", bd=0, padx=8, pady=3,
+                                 cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, activebackground=a2w.GUI_BG,
+                                 activeforeground=a2w.GUI_FG, font=("Segoe UI", 9, "bold"))
+            more.pack(side="left", padx=2, pady=5)
+            more_menu = tk.Menu(more, tearoff=0)
+            for row in rows[scenes.KEYS:]:
+                sub = tk.Menu(more_menu, tearoff=0)
+                fill_entry_menu(sub, row)
+                more_menu.add_cascade(label=f"{row['index'] + 1}  {row['name']}" + (" \u25cf" if row["media"] else ""), menu=sub)
+            more["menu"] = more_menu
+            Tooltip(more, "Les scenes du set au-dela de F9 : accessibles ici et par le VJ.")
         if scene_state["adding"]:
             entry = tk.Entry(scene_bar, textvariable=scene_entry_var, width=16)
             entry.pack(side="left", padx=(6, 2), pady=5)
@@ -1647,14 +2342,24 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             tk.Button(scene_bar, text="Enregistrer", command=new_scene_from_entry, padx=8).pack(side="left", padx=2)
             tk.Button(scene_bar, text="Annuler", command=cancel_adding, padx=8).pack(side="left", padx=2)
         else:
-            add = tk.Button(scene_bar, text="+ Nouvelle scene", command=start_adding, relief="flat", bd=0, padx=10, pady=3,
-                            cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, activebackground=a2w.GUI_BG,
-                            activeforeground=SCENE_COLOR, font=("Segoe UI", 9, "bold"))
+            add = tk.Menubutton(scene_bar, text="+ Scene \u25be", relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+                                bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, activebackground=a2w.GUI_BG,
+                                activeforeground=SCENE_COLOR, font=("Segoe UI", 9, "bold"))
             add.pack(side="left", padx=6, pady=5)
-            Tooltip(add, "Enregistre l'etat actuel (fond audio2wave ou motif genere + overlay) comme une scene. "
-                         "Reglages a part des presets : retouche d'abord ce que tu veux, puis clique ici.")
+            add_menu = tk.Menu(add, tearoff=0)
+            add_menu.add_command(label="Nouvelle scene depuis l'etat actuel...", command=start_adding)
+            library = scene_book.names()
+            if library:
+                add_menu.add_separator()
+                for name in library:
+                    add_menu.add_command(label=f"Ajouter au set : {name}", command=lambda n=name: add_entry_now(n))
+            add["menu"] = add_menu
+            Tooltip(add, "Nouvelle scene = l'etat actuel (fond audio2wave ou motif genere + overlay), ajoute au set. "
+                         "Ou ajoute au set une scene deja enregistree (autant de fois que tu veux, par exemple avec un autre "
+                         "media). Reglages a part des presets : retouche d'abord ce que tu veux.")
         tk.Label(scene_bar, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="e").pack(
             side="right", padx=10)
+        refresh_scene_panel()
 
     refresh_scene_bar()
     after(250, vj_tick)
@@ -1796,7 +2501,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     if on_ready is not None:
         root.after(50, lambda: on_ready({
             "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close,
-            "logo_var": logo_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
+            "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
             "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,
             "live_wrap": live_wrap, "right_panel": right, "overlay_var": overlay_var,
@@ -1805,9 +2510,14 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
             "vj": {"state": vj, "toggle": vj_toggle, "advance": vj_advance, "tick": vj_tick, "remaining": vj_remaining},
-            "scenes": {"capture": capture_scene_now, "apply": apply_scene, "delete": delete_scene_now, "poll": poll_scene_requests,
-                       "msg": scene_msg, "start_adding": start_adding, "entry_var": scene_entry_var,
-                       "new_from_entry": new_scene_from_entry},
+            "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,
+                       "poll": poll_scene_requests, "msg": scene_msg, "start_adding": start_adding, "entry_var": scene_entry_var,
+                       "new_from_entry": new_scene_from_entry, "switch_set": switch_set, "create_set": create_set,
+                       "rename_set": rename_set_now, "delete_set": delete_set_now, "export": export_set_now,
+                       "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel,
+                       "drop": drop_media, "a2w_clear": a2w_clear, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
+                       "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
+                       "move_entry": move_entry_now, "media_current": media_from_current, "media_clear": media_clear},
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,

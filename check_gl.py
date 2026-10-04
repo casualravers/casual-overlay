@@ -372,6 +372,11 @@ def check_gui() -> None:
                 old = c["scene_book"].get("Scene Old")
                 out["scene_migrated"] = (old.get("live_overrides"), "live_preset" in old,
                                          "scene-old" in live.preset_store.load_user())
+                try:
+                    gui_a2w_steps(c, s, out)
+                except Exception:
+                    import traceback
+                    out["a2w_error"] = traceback.format_exc()
                 c["close"]()
                 s.finished_event.set()
             root.after(700, check_scene_mode)
@@ -484,10 +489,12 @@ def check_gui() -> None:
             c["bg_var"].set("live")
             root.update_idletasks()
             out["logo"] = params["logo_path"]
-            out["pattern_hidden"] = c["pattern_box"].winfo_manager()
+            root.update()
+            out["bg_live"] = (c["pattern_box"].winfo_ismapped(), c["live_host"].winfo_ismapped())
             c["bg_var"].set("pattern")
             out["bg_param"] = params["bg_mode"]
-            out["pattern_shown"] = c["pattern_box"].winfo_manager()
+            root.update()
+            out["bg_pat"] = (c["pattern_box"].winfo_ismapped(), c["live_host"].winfo_ismapped())
             c["bg_color1_var"].set("#102030")
             out["bg_c1"] = params["bg_color1"]
             out["image_shown"] = c["image_box"].winfo_manager()
@@ -756,6 +763,12 @@ def check_gui() -> None:
                 out["vj_one"] = (vst["running"], "au moins 2" in sc["msg"].get())
                 sbook.put({"name": "Scene C", "bg": "live", "mode": "live", "live_preset": None, "fond": None, "overlay": {}})
                 vst["running"] = False
+                try:
+                    gui_sets_steps(c, s, out)
+                    gui_expand_steps(c, s, out)
+                except Exception:
+                    import traceback
+                    out["sets_error"] = traceback.format_exc()
                 root.after(900, lambda: (manager.status.__setitem__("live", "autre"), root.after(300, lambda: (manager.status.__setitem__("live", "message du gestionnaire"), root.after(400, step5)))))
             root.after(700, vj_check)
 
@@ -909,6 +922,80 @@ def check_gui() -> None:
     check(out.get("vj_pause") == (True, False, True), "VJ (GUI): choisir une scene a la main met le VJ en pause",
           str(out.get("vj_pause")))
     check(out.get("vj_one") == (False, True), "VJ (GUI): moins de 2 scenes = refus avec message", str(out.get("vj_one")))
+    check("sets_error" not in out, "sets (GUI): aucune erreur", out.get("sets_error", ""))
+    check(out.get("set_new") == ("Soiree", []), "sets (GUI): creer un set (vide), il devient le set actif", str(out.get("set_new")))
+    check(isinstance(out.get("set_media"), dict) and out["set_media"].get("text_content") == "HELLO",
+          "sets (GUI): media de l'entree = le texte actuel", str(out.get("set_media")))
+    check(out.get("set_media_on", ("",))[:3] == ("HELLO", "text", 1) and out["set_media_on"][3]
+          and out.get("set_media_off") is True,
+          "sets (GUI): la meme scene deux fois, l'entree avec media pose son media, l'autre rend celui de la scene", str(out.get("set_media_on")))
+    check(out.get("set_media_missing") == (True, True),
+          "sets (GUI): media introuvable = message, la scene s'applique avec son propre media", str(out.get("set_media_missing")))
+    check(out.get("set_switch_vj") == (True, True, True, True),
+          "sets (GUI): changer de set avec le VJ en marche le redemarre (flash, premiere scene du nouveau set)", str(out.get("set_switch_vj")))
+    check(out.get("set_switch_idle") == (False, True, "Soiree"), "sets (GUI): changer de set sans VJ ne le lance pas", str(out.get("set_switch_idle")))
+    sm = out.get("set_many", (0, 0, []))
+    check(sm[0] >= 10 and sm[1] == 9 and len(sm[2]) == 1 and sm[2][0].startswith("+"),
+          "sets (GUI): plus de 9 scenes : 9 touches F1..F9 + un menu '+N' pour la suite", str(sm))
+    check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
+    check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
+    ir = out.get("set_import_rename", ())
+    check(len(ir) == 4 and ir[0].startswith("Soiree (2)") and ir[1] == "Set deja present" and ir[2] == 1 and ir[3] == 4,
+          "sets (GUI): import d'un nom de set deja pris -> choix, renommer garde les deux (une seule question : scenes identiques)",
+          str(ir))
+    check(out.get("set_import_cancel") == (True, True), "sets (GUI): annuler l'import ne change rien", str(out.get("set_import_cancel")))
+    irp = out.get("set_import_replace", ([], 0, ""))
+    check(irp[0] == ["Set deja present", "Confirmer le remplacement", "Scenes deja presentes", "Confirmer le remplacement"]
+          and irp[1] == 0.123 and irp[2] == "Soiree",
+          "sets (GUI): import avec remplacement du set et des scenes, chacun avec confirmation", str(irp))
+    check(out.get("set_import_noconfirm") == (2, True), "sets (GUI): refuser la confirmation annule l'import",
+          str(out.get("set_import_noconfirm")))
+    check(out.get("set_import_bad") == (False, True), "sets (GUI): fichier illisible = message, rien ne casse", str(out.get("set_import_bad")))
+    check(out.get("set_last", (None,))[0] is False and out["set_last"][1:] == (True, out.get("set_base", ("",))[0])
+          and out.get("set_end") == (True, True),
+          "sets (GUI): supprimer des sets garde les scenes ; le dernier set ne se supprime pas", str((out.get("set_last"), out.get("set_end"))))
+    check("sets_error" not in out, "etendu (GUI): aucune erreur", out.get("sets_error", ""))
+    xo = out.get("x_open", ())
+    check(len(xo) == 4 and all(v for v in xo[:2]) and xo[2] == 3 and xo[3],
+          "etendu (GUI): le bouton agrandit la fenetre, le panneau montre une ligne par entree, le bouton devient Reduire", str(xo))
+    check(out.get("x_drop_dnd") is True, "etendu (GUI): glisser-deposer disponible (tkinterdnd2 charge dans la fenetre)")
+    xd = out.get("x_drop", ())
+    check(len(xd) == 3 and xd[0] is True and xd[1] == {"logo_source": "image", "logo_path": xd[1].get("logo_path", "") if xd[1] else ""}
+          and xd[1]["logo_path"].endswith("logo test.png") and xd[2],
+          "etendu (GUI): fichier depose (chemin avec espace) = media image de l'entree", str(xd))
+    check(out.get("x_drop_bad", ())[:2] == (False, True) and out["x_drop_bad"][2] is None,
+          "etendu (GUI): fichier d'un format inconnu = message, aucun media lie", str(out.get("x_drop_bad")))
+    check(out.get("x_drop_two") == (True, True), "etendu (GUI): plusieurs fichiers deposes = le premier, les autres signales",
+          str(out.get("x_drop_two")))
+    check(out.get("x_drop_active") == ("image", True), "etendu (GUI): deposer sur la scene a l'ecran applique le media tout de suite",
+          str(out.get("x_drop_active")))
+    check(out.get("x_thumb") is True, "etendu (GUI): vignette du media (calculee dans un fil) disponible", str(out.get("x_thumb")))
+    xv = out.get("x_vj", ((), (), set()))
+    check(xv[0] == (0, True) and xv[1] == 2 and xv[2] == {0, 2},
+          "etendu (GUI): VJ = duree propre a l'entree, entrees exclues sautees (dans l'ordre et au hasard)", str(xv))
+    check(out.get("x_vj_none") == (False, True), "etendu (GUI): moins de 2 entrees jouables = le VJ s'arrete avec un message",
+          str(out.get("x_vj_none")))
+    check(out.get("x_rename") == (True, True, True), "etendu (GUI): renommer une scene depuis le panneau", str(out.get("x_rename")))
+    check(out.get("x_close") == (True, False) and out.get("x_end") is True,
+          "etendu (GUI): reduire rend sa taille d'origine a la fenetre et cache le panneau", str((out.get("x_close"), out.get("x_end"))))
+    check("a2w_error" not in out, "medias audio2wave (GUI): aucune erreur", out.get("a2w_error", ""))
+    check(out.get("a2w_cap") == ("snap", True, "video", True),
+          "medias (GUI): a l'enregistrement d'une scene, une video audio2wave et un media d'overlay tapes sans Entree sont retenus",
+          str(out.get("a2w_cap")))
+    ad = out.get("a2w_drop", ())
+    check(len(ad) == 3 and ad[0] is True and ad[1] and ad[1].get("video", "").endswith("clip.mp4"),
+          "medias (GUI): fichier depose sur 'video interieure' = video d'audio2wave de l'entree", str(ad))
+    ab = out.get("a2w_drop_bad", ())
+    check(len(ab) == 5 and ab[:4] == (False, True, False, True) and ab[4] is None,
+          "medias (GUI): une image n'est pas une video d'audio2wave, une scene non Snap refuse leurs videos", str(ab))
+    check(out.get("a2w_drop_overlay") == (True, "video"), "medias (GUI): le meme fichier peut aller a l'overlay (video du logo)",
+          str(out.get("a2w_drop_overlay")))
+    ap = out.get("a2w_panel", ())
+    check(len(ap) == 4 and ap[0] == ap[2] and ap[1] == 2 * ap[2] and ap[3] >= 2,
+          "medias (GUI): panneau etendu = une zone OVERLAY et deux zones AUDIO2WAVE par entree (grisees hors Snap)", str(ap))
+    check(out.get("a2w_apply") == (True, True) and out.get("a2w_clear") is None,
+          "medias (GUI): appliquer l'entree pose ses videos dans le panneau Snap (celles de la scene gardees) ; retirer la rend",
+          str((out.get("a2w_apply"), out.get("a2w_clear"))))
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
     check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
           "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
@@ -979,8 +1066,9 @@ def check_gui() -> None:
     check(out.get("logo") == "", "logo vide = aucun logo")
     check(out.get("color_bad") == gl.DEFAULT_PARAMS["logo_glow_color"] and out.get("color_ok") == "#ff0000",
           "couleur du contour: invalide ignoree, valide appliquee")
-    check(out.get("pattern_hidden") == "" and out.get("bg_param") == "pattern" and out.get("pattern_shown") == "grid",
-          "selecteur Fond: le bloc motif apparait et ecrit bg_mode")
+    check(out.get("bg_live") == (False, True) and out.get("bg_pat") == (True, False) and out.get("bg_param") == "pattern",
+          "selecteur Fond: audio2wave OU fond genere, jamais les deux a la fois ; le choix ecrit bg_mode",
+          str((out.get("bg_live"), out.get("bg_pat"))))
     check(out.get("bg_c1") == "#102030", "couleur 1 du motif ecrite dans les parametres")
     check(out.get("image_shown") == "grid" and out.get("source_param") == "text"
           and out.get("text_shown") == "grid" and out.get("image_hidden") == "",
@@ -1908,15 +1996,16 @@ def check_scenes() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_scenes_")) / "scenes.json"
     book = sc.SceneBook(lambda: tmp)
     check(book.list() == [] and book.get("x") is None and book.delete("x") is None, "livre vide: rien, sans erreur")
-    for i in range(sc.MAX_SCENES):
-        check_ok = book.put({"name": f"S{i}", "bg": "live", "overlay": {}})
-    check(check_ok and len(book.names()) == 9 and book.names()[0] == "S0", "9 scenes, dans l'ordre de creation")
-    check(book.put({"name": "extra", "bg": "live", "overlay": {}}) is False and len(book.names()) == 9,
-          "la 10e scene est refusee (F1 a F9)")
+    for i in range(9):
+        book.put({"name": f"S{i}", "bg": "live", "overlay": {}})
+    check(len(book.names()) == 9 and book.names()[0] == "S0", "9 scenes, dans l'ordre de creation")
+    check(book.put({"name": "extra", "bg": "live", "overlay": {}}) is True and len(book.names()) == 10
+          and book.row_names()[-1] == "extra", "plus de limite de scenes : la 10e est acceptee et rejoint le set")
     book.put({"name": "s3", "bg": "pattern", "overlay": {}})
-    check(book.names()[3] == "s3" and book.get("S3")["bg"] == "pattern" and len(book.names()) == 9,
+    check(book.names()[3] == "s3" and book.get("S3")["bg"] == "pattern" and len(book.names()) == 10,
           "meme nom (sans tenir compte de la casse) = remplace, au meme rang")
-    check(book.delete("S0")["name"] == "S0" and book.names()[0] == "S1" and len(book.names()) == 8, "suppression: les rangs remontent")
+    check(book.delete("S0")["name"] == "S0" and book.names()[0] == "S1" and len(book.names()) == 9, "suppression: les rangs remontent")
+    book.delete("extra")
     tmp.write_text("pas du json", encoding="utf-8")
     check(book.list() == [], "fichier illisible: liste vide, sans erreur")
     check(sc.strip_live_overrides({"device": "x", "fullscreen": True, "size": "1x1", "gain": 3, "colors": "red"})
@@ -1951,6 +2040,7 @@ def check_scenes() -> None:
           "VJ: duree bornee a 5 s mini")
     book2.put({"name": "Y", "bg": "live", "overlay": {}})
     check(book2.vj()["seconds"] == 5.0 and book2.names() == ["X", "Y"], "VJ: ajouter une scene ne perd pas les reglages")
+    check_sets_pure(sc, tmp)
     # capture / valeurs
     cur = gl.load_params()
     cur.update(bg_mode="live", bg_hue=0.1, bg_speed=1.0, holo_intensity=0.4, sensitivity=2.2, text_content="AVANT")
@@ -1975,6 +2065,403 @@ def check_scenes() -> None:
     v2 = sc.scene_values(live_scene, dict(cur, bg_mode="pattern", bg_hue=0.77))
     check(v2["bg_mode"] == "live" and v2["bg_hue"] == 0.77 and v2["holo_intensity"] == 0.9,
           "valeurs d'une scene a fond audio2wave: bascule le fond, ne touche pas au motif", str((v2["bg_mode"], v2["bg_hue"])))
+
+
+def check_sets_pure(sc, tmp) -> None:
+    import json as _json
+    print("Sets (stockage, media, export / import)")
+    # ancien format (scenes + vj au premier niveau) : un set `principal` qui les contient toutes
+    tmp.write_text(_json.dumps({"scenes": [{"name": "A", "bg": "live", "overlay": {}}, {"name": "B", "bg": "live", "overlay": {}}],
+                                "vj": {"seconds": 45, "order": "random"}}), encoding="utf-8")
+    bk = sc.SceneBook(lambda: tmp)
+    check(bk.set_names() == ["principal"] and bk.row_names() == ["A", "B"] and bk.vj() == {"seconds": 45.0, "order": "random"},
+          "ancien scenes.json: lu comme un set `principal` avec toutes les scenes et ses reglages VJ")
+    bk.put({"name": "C", "bg": "live", "overlay": {}})
+    check(_json.loads(tmp.read_text(encoding="utf-8")).get("version") == 2 and "sets" in _json.loads(tmp.read_text(encoding="utf-8")),
+          "ecriture au format a sets (migration a la premiere ecriture)")
+    # sets : creation, scenes reutilisees, doublons, ordre, media
+    check(bk.new_set("Soiree") and not bk.new_set("soiree") and not bk.new_set("  "), "set: nom unique (casse ignoree), jamais vide")
+    check(bk.set_active("Soiree") and bk.row_names() == [] and bk.vj() == sc.VJ_DEFAULTS, "set neuf: vide, reglages VJ par defaut")
+    for n in ("A", "A", "C", "B"):
+        bk.add_entry(n)
+    check(bk.row_names() == ["A", "A", "C", "B"] and not bk.add_entry("inconnue"),
+          "une scene peut etre utilisee plusieurs fois dans un set ; une scene inconnue est refusee")
+    bk.set_active("principal")
+    check(bk.row_names() == ["A", "B", "C"], "la scene est une brique : le set principal est inchange")
+    bk.set_active("Soiree")
+    bk.set_vj(seconds=10, order="seq")
+    check(bk.set_entry_media(1, {"logo_source": "text", "text_content": "X"}) and bk.rows()[1]["media"]["text_content"] == "X"
+          and bk.rows()[0]["media"] is None, "media propre a une entree (pas a la scene)")
+    bk.set_active("principal")
+    check(bk.vj()["seconds"] == 45.0 and bk.rows()[0]["media"] is None, "reglages VJ et medias propres a chaque set")
+    bk.set_active("Soiree")
+    check(bk.move_entry(0, 1) == 1 and bk.row_names() == ["A", "A", "C", "B"] and bk.rows()[0]["media"]["text_content"] == "X"
+          and bk.move_entry(0, -1) is None, "deplacer une entree : le media suit")
+    check(bk.remove_entry(0) and bk.row_names() == ["A", "C", "B"] and not bk.remove_entry(9), "retirer une entree du set")
+    bk.add_entry("A")
+    gone = bk.delete("A")
+    check(gone["name"] == "A" and bk.row_names() == ["C", "B"] and "A" not in bk.names()
+          and [e["scene"] for e in bk.get_set("principal")["entries"]] == ["B", "C"],
+          "supprimer une scene la retire de la bibliotheque ET de tous les sets")
+    bk.put({"name": "A", "bg": "live", "overlay": {}}, add_to_set=False)
+    check(bk.row_names() == ["C", "B"], "ajouter une scene sans l'ajouter au set")
+    check(bk.rename_set("Soiree", "Club") and bk.active_set_name() == "Club" and not bk.rename_set("Club", "PRINCIPAL"),
+          "renommer un set (le set actif suit), nom pris refuse")
+    check(bk.delete_set("Club") and bk.active_set_name() == "principal" and not bk.delete_set("principal"),
+          "supprimer un set (les scenes restent), jamais le dernier")
+    check(set(bk.names()) == {"A", "B", "C"}, "supprimer un set ne supprime aucune scene")
+    # options d'entree : duree propre, exclusion du VJ, renommer une scene, prochaine entree du VJ
+    bk.set_active("principal")
+    check(bk.set_entry_vj(0, seconds=1000.0, skip=True) and bk.rows()[0]["seconds"] == 300.0 and bk.rows()[0]["skip"] is True
+          and bk.set_entry_vj(0, seconds=None) and bk.rows()[0]["seconds"] is None and bk.rows()[0]["skip"] is True
+          and bk.set_entry_vj(0, skip=False) and bk.rows()[0]["skip"] is False and not bk.set_entry_vj(9, skip=True),
+          "entree: duree propre (bornee 5..300), exclusion du VJ, retour a la duree du set")
+    rws = [{"skip": False}, {"skip": True}, {"skip": False}, {"skip": False}]
+    check([sc.next_entry_index(rws, cur, "seq") for cur in (None, 0, 2, 3)] == [0, 2, 3, 0],
+          "VJ: la suivante en sautant les entrees exclues, en boucle")
+    import random as _r
+    rng = _r.Random(3)
+    got = {sc.next_entry_index(rws, 0, "random", rng) for _ in range(60)}
+    check(got == {2, 3} and sc.next_entry_index([{"skip": True}], None, "seq") is None
+          and sc.next_entry_index([{"skip": False}, {"skip": True}], 0, "random") == 0,
+          "VJ au hasard: jamais une entree exclue ni la meme deux fois de suite ; aucune entree jouable = None")
+    bk.put({"name": "Z", "bg": "live", "overlay": {}}, add_to_set=False)
+    bk.add_entry("Z")
+    bk.new_set("Autre")
+    bk.set_active("Autre")
+    bk.add_entry("Z")
+    bk.set_active("principal")
+    check(bk.rename_scene("Z", "Zed") and "Zed" in bk.names() and "Z" not in bk.names()
+          and bk.row_names()[-1] == "Zed" and bk.get_set("Autre")["entries"][0]["scene"] == "Zed"
+          and not bk.rename_scene("Zed", "b") and not bk.rename_scene("Zed", " "),
+          "renommer une scene: tous les sets suivent, nom pris ou vide refuse")
+    bk.set_active("Autre")
+    bk.delete_set("Autre")
+    bk.delete("Zed")
+    # medias d'audio2wave (videos Snap) propres a une entree
+    bk.set_active("principal")
+    check(bk.set_entry_a2w(0, "video", "C:/x/a.mp4") and bk.set_entry_a2w(0, "video2", "C:/x/b.mp4")
+          and bk.rows()[0]["a2w"] == {"video": "C:/x/a.mp4", "video2": "C:/x/b.mp4"}
+          and bk.set_entry_a2w(0, "video", None) and bk.rows()[0]["a2w"] == {"video2": "C:/x/b.mp4"}
+          and bk.set_entry_a2w(0, "video2", None) and bk.rows()[0]["a2w"] is None
+          and not bk.set_entry_a2w(0, "autre", "x") and not bk.set_entry_a2w(99, "video", "x"),
+          "entree: videos d'audio2wave (interieure / exterieure) posees et retirees, cles et rang valides")
+    check(sc.scene_a2w_media({"live_overrides": {"video": "C:/v.mp4", "video2": None, "gain": 3}}) == {"video": "C:/v.mp4"}
+          and sc.scene_a2w_media({"live_overrides": None}) == {}, "videos d'audio2wave que la scene a capturees")
+    check(sc.a2w_missing({"video": "Z:/nulle/part.mp4", "video2": "relatif.mp4"}) == ["Z:/nulle/part.mp4"],
+          "video d'audio2wave introuvable: seul un chemin absolu absent est signale")
+    # une entree qui reference une scene disparue du fichier est ignoree
+    data = _json.loads(tmp.read_text(encoding="utf-8"))
+    data["sets"][0]["entries"].append({"scene": "fantome", "media": None})
+    tmp.write_text(_json.dumps(data), encoding="utf-8")
+    check(bk.row_names() == ["B", "C"], "entree orpheline ignoree sans erreur")
+    # media
+    check(sc.capture_media({"logo_source": "text", "text_content": "HI", "text_font": "auto", "logo_path": "x.png"})
+          == {"logo_source": "text", "text_content": "HI", "text_font": "auto"}, "media capture: la source courante seulement")
+    check(sc.media_values({"logo_source": "video", "logo_video": "v.webm", "logo_key": "#00ff00", "bg_hue": 0.9}, gl.load_params())
+          == {"logo_source": "video", "logo_video": "v.webm", "logo_key": "#00ff00"} and sc.media_values(None, {}) == {},
+          "media: seulement les cles du logo / texte / video")
+    check(sc.media_missing({"logo_source": "image", "logo_path": "Z:/nulle/part.png"}) == "Z:/nulle/part.png"
+          and sc.media_missing({"logo_source": "text"}) is None and sc.media_missing({"logo_source": "image", "logo_path": ""}) is None,
+          "media: fichier introuvable detecte, texte et logo vide jamais")
+    # export / import
+    book = sc.SceneBook(lambda: tmp.with_name("export_src.json"))
+    for n in ("A", "B"):
+        book.put({"name": n, "bg": "live", "overlay": {"holo_intensity": 1.1 if n == "A" else 0.5}})
+    book.new_set("Mon set")
+    book.set_active("Mon set")
+    for n, m in (("A", None), ("B", {"logo_source": "image", "logo_path": "Z:/absent.png"}), ("A", {"logo_source": "text", "text_content": "T"})):
+        book.add_entry(n, m)
+    book.set_vj(seconds=60, order="random")
+    book.set_entry_a2w(0, "video", "Z:/absent/clip.mp4")
+    book.set_entry_vj(0, seconds=45.0, skip=False)
+    book.set_entry_vj(2, skip=True)
+    exp = sc.export_set(book)
+    check(exp["format"] == sc.EXPORT_FORMAT and [x["name"] for x in exp["scenes"]] == ["A", "B"] and len(exp["set"]["entries"]) == 3,
+          "export: un seul fichier, le set et chaque scene utilisee une seule fois")
+    dest = sc.SceneBook(lambda: tmp.with_name("import_dst.json"))
+    parsed = sc.parse_import(_json.dumps(exp))
+    check(sc.import_conflicts(dest, parsed) == {"set": False, "scenes": []}, "import dans un livre vide: aucun conflit")
+    res = sc.import_set(dest, parsed)
+    check(res["set"] == "Mon set" and dest.get_set("Mon set")["entries"][1]["media"]["logo_path"] == "Z:/absent.png"
+          and dest.get_set("Mon set")["vj"] == {"seconds": 60.0, "order": "random"} and set(dest.names()) == {"A", "B"}
+          and res["missing"] == ["Z:/absent.png", "Z:/absent/clip.mp4"], "import: set, scenes, medias et reglages VJ retrouves ; media absent signale",
+          str(res))
+    imp = dest.get_set("Mon set")["entries"]
+    check(imp[0]["seconds"] == 45.0 and imp[2]["skip"] is True and imp[1]["skip"] is False
+          and imp[0]["a2w"] == {"video": "Z:/absent/clip.mp4"},
+          "import: la duree propre et l'exclusion du VJ de chaque entree sont gardees")
+    dest.set_active("Mon set")
+    check(sc.import_conflicts(dest, parsed) == {"set": True, "scenes": []},
+          "import: meme nom de set = conflit ; scenes strictement identiques = pas de conflit (reutilisees)")
+    r2 = sc.import_set(dest, parsed, set_mode="rename")
+    check(r2["set"] == "Mon set (2)" and r2["set_renamed"] == ("Mon set", "Mon set (2)") and len(dest.names()) == 2
+          and len(dest.get_set("Mon set (2)")["entries"]) == 3, "import: nom de set pris -> renomme, scenes reutilisees (pas de doublon)")
+    exp2 = _json.loads(_json.dumps(exp))
+    exp2["scenes"][0]["overlay"]["holo_intensity"] = 0.1
+    parsed2 = sc.parse_import(exp2)
+    check(sc.import_conflicts(dest, parsed2)["scenes"] == ["A"], "import: meme nom de scene avec un autre contenu = conflit")
+    r3 = sc.import_set(dest, parsed2, set_mode="rename", scene_mode="rename")
+    check(r3["renamed"].get("A") == "A (2)" and dest.get("A (2)")["overlay"]["holo_intensity"] == 0.1
+          and dest.get("A")["overlay"]["holo_intensity"] == 1.1
+          and [e["scene"] for e in dest.get_set(r3["set"])["entries"]] == ["A (2)", "B", "A (2)"],
+          "import: scene en conflit renommee, l'ancienne intacte, les entrees du set suivent", str(r3))
+    r4 = sc.import_set(dest, parsed2, set_mode="replace", scene_mode="replace")
+    check(r4["set"] == "Mon set" and r4["replaced"] == ["A"] and dest.get("A")["overlay"]["holo_intensity"] == 0.1
+          and len([n for n in dest.set_names() if n.lower() == "mon set"]) == 1,
+          "import: remplacer ecrase le set et la scene du meme nom", str(r4))
+    bad = [("pas du json", "illisible"), ('{"format": "autre"}', "pas un set"),
+           (_json.dumps({**exp, "version": 99}), "plus recente"), (_json.dumps({**exp, "set": {"entries": []}}), "sans nom")]
+    for raw, word in bad:
+        try:
+            sc.parse_import(raw)
+            check(False, f"import refuse: {word}")
+        except ValueError as exc:
+            check(word in str(exc), f"import refuse avec un message clair: {word}", str(exc))
+    check(sc.unique_name("X" * 24, ["x" * 24]).endswith("(2)") and len(sc.unique_name("X" * 24, ["x" * 24])) <= 24
+          and sc.unique_name("Libre", ["autre"]) == "Libre", "noms uniques bornes a la longueur maximale")
+
+
+def gui_sets_steps(c, s, out) -> None:
+    """Sets dans la vraie GUI : changement (VJ redemarre), media, au-dela de F9, export / import avec conflits."""
+    import tempfile
+    sc, book, vj = c["scenes"], c["scene_book"], c["vj"]
+    params, vst = s.params, vj["state"]
+    ui = sc["ui"]
+    tmpd = Path(tempfile.mkdtemp(prefix="casual_overlay_sets_"))
+    base_set = book.active_set_name()
+    base_text = book.get("Scene A")["overlay"]["text_content"]
+    out["set_base"] = (base_set, len(book.rows()))
+    # creer un set, y mettre deux fois la meme scene (avec un media sur l'une) et une autre
+    sc["create_set"]("Soiree")
+    out["set_new"] = (book.active_set_name(), book.row_names())
+    sc["add_entry"]("Scene A")
+    sc["add_entry"]("Scene A")
+    sc["add_entry"]("Scene C")
+    params["logo_source"], params["text_content"] = "text", "HELLO"
+    sc["media_current"](1)
+    out["set_media"] = book.rows()[1]["media"]
+    sc["apply_entry"](1)
+    out["set_media_on"] = (params["text_content"], params["logo_source"], s.active_entry, "HELLO" in sc["msg"].get())
+    sc["apply_entry"](0)
+    out["set_media_off"] = params["text_content"] == base_text
+    book.set_entry_media(1, {"logo_source": "image", "logo_path": "Z:/absent/logo.png"})
+    sc["apply_entry"](1)
+    out["set_media_missing"] = ("introuvable" in sc["msg"].get(), params["text_content"] == base_text)
+    book.set_entry_media(1, {"logo_source": "text", "text_content": "HELLO"})
+    # changer de set avec le VJ en marche : il redemarre
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    vst["running"] = True
+    sc["switch_set"](base_set)
+    cmds = []
+    while not s.commands.empty():
+        cmds.append(s.commands.get_nowait())
+    out["set_switch_vj"] = (vst["running"], "flash" in cmds, s.active_scene is not None, book.active_set_name() == base_set)
+    vst["running"] = False
+    sc["switch_set"]("Soiree")
+    out["set_switch_idle"] = (vst["running"], s.active_scene is None, book.active_set_name())
+    # au-dela de F9 : 9 touches, un menu pour le reste, F-touches sur les 9 premieres
+    for _ in range(8):
+        sc["add_entry"]("Scene C")
+    def _walk(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from _walk(ch)
+    widgets = list(_walk(c["scene_bar"]))
+    out["set_many"] = (len(book.rows()), [w.cget("text") for w in widgets if w.winfo_class() == "Button" and w.cget("text")[:1].isdigit()].__len__(),
+                       [w.cget("text") for w in widgets if w.winfo_class() == "Menubutton" and w.cget("text")[1:2].isdigit()])
+    s.scene_requests.put(8)
+    sc["poll"]()
+    out["set_f9"] = (s.active_entry, s.active_scene)
+    for i in range(len(book.rows()) - 1, 3, -1):
+        sc["remove_entry"](i)
+    # export / import
+    path = tmpd / "soiree.set.json"
+    out["set_export"] = (sc["export"](str(path)), path.exists())
+    calls = []
+
+    def stub(answers):
+        def chooser(title, text, buttons):
+            calls.append((title, tuple(buttons)))
+            return answers.pop(0) if answers else None
+        return chooser
+    ui["chooser"] = stub(["Renommer (garder les deux)"])
+    sc["import"](str(path))
+    out["set_import_rename"] = (book.active_set_name(), calls[0][0] if calls else None, len(calls), len(book.rows()))
+    calls.clear()
+    ui["chooser"] = stub(["Annuler"])
+    before = book.set_names()
+    sc["import"](str(path))
+    out["set_import_cancel"] = (book.set_names() == before, "annule" in sc["msg"].get())
+    calls.clear()
+    # une scene du fichier differe de celle de la bibliotheque, le set aussi existe : remplacer, avec confirmation
+    import json as _json
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    for scene in data["scenes"]:
+        if scene["name"] == "Scene A":
+            scene["overlay"]["holo_intensity"] = 0.123
+    path2 = tmpd / "soiree2.set.json"
+    path2.write_text(_json.dumps(data), encoding="utf-8")
+    ui["chooser"] = stub(["Remplacer", "Remplacer", "Remplacer", "Remplacer"])
+    sc["import"](str(path2))
+    out["set_import_replace"] = ([t for t, _ in calls], book.get("Scene A")["overlay"]["holo_intensity"], book.active_set_name())
+    calls.clear()
+    ui["chooser"] = stub(["Remplacer", "Annuler"])           # remplacer demande une confirmation : la refuser annule tout
+    sc["import"](str(path2))
+    out["set_import_noconfirm"] = (len(calls), "annule" in sc["msg"].get())
+    ui["chooser"] = stub([])
+    (tmpd / "mauvais.json").write_text("pas du json", encoding="utf-8")
+    out["set_import_bad"] = (sc["import"](str(tmpd / "mauvais.json")), "Import impossible" in sc["msg"].get())
+    # nettoyage : renommer, supprimer les sets de test, retour au set de depart (ses scenes restent)
+    out["set_rename"] = (sc["rename_set"]("Final"), book.active_set_name(), sc["rename_set"](base_set))
+    for name in [n for n in book.set_names() if n != base_set]:
+        sc["switch_set"](name)
+        sc["delete_set"]()
+    out["set_last"] = (sc["delete_set"](), book.set_names() == [base_set], book.active_set_name())
+    book.get("Scene A")
+    sc["switch_set"](base_set)
+    out["set_end"] = (len(book.rows()) == out["set_base"][1], "Scene A" in book.names())
+
+
+def gui_a2w_steps(c, s, out) -> None:
+    """Medias d'audio2wave (videos Snap) et d'overlay : capture sans Entree, depot sur la bonne fonction, application."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    import gui_gates
+    sc, book, root, params = c["scenes"], c["scene_book"], c["root"], s.params
+    vid = Path(tempfile.mkdtemp(prefix="casual_overlay_a2w_")) / "clip.mp4"
+    subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x36:rate=10", "-t", "1",
+                    "-pix_fmt", "yuv420p", str(vid)], check=True)
+    host = c["live_host"]
+    # 1. capture : champs tapes sans Entree (ni perte du focus) = quand meme retenus
+    label = gui_gates.find(host, "Label", "Video exterieure")
+    entry = next(x for w in gui_gates.row_widgets(host, label) for x in gui_gates.leaves(w) if x.winfo_class() == "Entry")
+    entry.delete(0, "end")
+    entry.insert(0, str(vid))
+    c["video_var"].set(str(vid))
+    params["logo_source"] = "video"
+    sc["capture"]("Snap video")
+    scene = book.get("Snap video")
+    out["a2w_cap"] = (scene["mode"], str(scene["live_overrides"].get("video2", "")).endswith("clip.mp4"),
+                      scene["overlay"]["logo_source"], scene["overlay"]["logo_video"] == str(vid))
+    params["logo_source"] = "image"
+    c["video_var"].set("")
+    params["logo_video"] = ""
+    # 2. depot sur la fonction voulue
+    names = book.row_names()
+    snap_i, old_i = names.index("Snap video"), names.index("Scene Old")
+    out["a2w_drop"] = (sc["drop"](snap_i, "{" + str(vid) + "}", "video"), book.rows()[snap_i]["a2w"],
+                       "video interieure" in sc["msg"].get())
+    out["a2w_drop_bad"] = (sc["drop"](snap_i, "{" + str(vid.with_suffix(".png")) + "}", "video2"), "que des videos" in sc["msg"].get(),
+                           sc["drop"](old_i, "{" + str(vid) + "}", "video"), "pas une scene Snap" in sc["msg"].get(),
+                           book.rows()[old_i]["a2w"])
+    out["a2w_drop_overlay"] = (sc["drop"](snap_i, "{" + str(vid) + "}", "overlay"), book.rows()[snap_i]["media"]["logo_source"])
+    # 3. panneau : zones OVERLAY + 2 zones AUDIO2WAVE par entree
+    sc["expand"](True)
+    root.update()
+
+    def walk_(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_(ch)
+    texts = [w.cget("text") for w in walk_(sc["panel"]) if w.winfo_class() == "Label"]
+    n = len(book.rows())
+    out["a2w_panel"] = (sum(1 for x in texts if x == "OVERLAY"), sum(1 for x in texts if x.startswith("AUDIO2WAVE")), n,
+                        sum(1 for x in texts if x == "scene Snap seulement"))
+    sc["expand"](False)
+    # 4. application : les videos de l'entree sont posees dans le panneau Snap, celles de la scene gardees
+    s.pysrc.args.video = None
+    s.pysrc.args.video2 = None
+    sc["apply_entry"](snap_i)
+    out["a2w_apply"] = (str(s.pysrc.args.video).endswith("clip.mp4"), str(s.pysrc.args.video2).endswith("clip.mp4"))
+    sc["a2w_clear"](snap_i, "video")
+    out["a2w_clear"] = book.rows()[snap_i]["a2w"]
+
+
+def gui_expand_steps(c, s, out) -> None:
+    """Panneau etendu : agrandit la fenetre, medias avec vignettes, glisser-deposer (le handler), duree / exclusion du VJ."""
+    import tempfile
+
+    from PIL import Image
+    sc, book, vj = c["scenes"], c["scene_book"], c["vj"]
+    root, params, vst = c["root"], s.params, vj["state"]
+    tmpd = Path(tempfile.mkdtemp(prefix="casual_overlay_expand_"))
+    png = tmpd / "dossier avec espace" / "logo test.png"
+    png.parent.mkdir()
+    Image.new("RGBA", (120, 60), (255, 40, 40, 255)).save(png)
+    base_set = book.active_set_name()
+    sc["create_set"]("Etendu")
+    for n in ("Scene A", "Scene C", "Scene A"):
+        sc["add_entry"](n)
+    root.geometry("1333x641")
+    root.update()
+    h0 = root.winfo_height()
+    sc["expand"](True)
+    root.update()
+    panel = sc["panel"]
+
+    def walk_(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_(ch)
+    h1 = root.winfo_height()
+    out["x_open"] = (h1 > h0 + 150, panel.winfo_ismapped(),
+                     sum(1 for w in walk_(panel) if w.winfo_class() == "Button" and w.cget("text") == "Retirer"),
+                     any(w.winfo_class() == "Button" and w.cget("text") == "\u25b4 Reduire" for w in walk_(c["scene_bar"])))
+    # drop d'un fichier sur une entree (chemin avec espace, comme le fait tkdnd : entre accolades)
+    out["x_drop_dnd"] = sc["dnd"]["ok"]
+    out["x_drop"] = (sc["drop"](1, "{" + str(png) + "}"), book.rows()[1]["media"], "logo test.png" in sc["msg"].get())
+    out["x_drop_bad"] = (sc["drop"](0, "{" + str(tmpd / "note.txt") + "}"), "non pris en charge" in sc["msg"].get(),
+                         book.rows()[0]["media"])
+    out["x_drop_two"] = (sc["drop"](2, "{" + str(png) + "} {" + str(tmpd / "x.png") + "}"), "ignore" in sc["msg"].get())
+    sc["apply_entry"](0)
+    sc["drop"](0, "{" + str(png) + "}")                                  # entree active : le media est pose tout de suite
+    out["x_drop_active"] = (params["logo_source"], params["logo_path"] == str(png))
+    # vignette : calculee dans un fil, prete peu apres
+    media = book.rows()[1]["media"]
+    photo = sc["thumb"](media)
+    deadline = gl.time.monotonic() + 5
+    while photo is None and gl.time.monotonic() < deadline:
+        gl.time.sleep(0.05)
+        photo = sc["thumb"](media)
+    out["x_thumb"] = (photo is not None and photo.width() == 56 and photo.height() == 34)
+    s.thumb_dirty = True
+    c["vj"]["tick"].__call__ if False else None
+    # duree propre et exclusion du VJ
+    sc["entry_vj"](1, skip=True)
+    sc["entry_vj"](0, seconds=7.0)
+    book.set_vj(seconds=30, order="seq")
+    s.active_scene, s.active_entry = None, None
+    vj["advance"]()
+    first = (s.active_entry, 6.0 < vj["remaining"]() <= 7.0)
+    vj["advance"]()
+    second = s.active_entry                                              # l'entree 1 est exclue : on passe a la 2
+    book.set_vj(order="random")
+    seen = set()
+    for _ in range(20):
+        vj["advance"]()
+        seen.add(s.active_entry)
+    out["x_vj"] = (first, second, seen)
+    sc["entry_vj"](2, skip=True)
+    vst["running"] = True
+    vj["advance"]()
+    out["x_vj_none"] = (vst["running"], "au moins 2" in sc["msg"].get())
+    sc["entry_vj"](1, skip=False)
+    sc["entry_vj"](2, skip=False)
+    vst["running"] = False
+    # renommer depuis le panneau
+    out["x_rename"] = (sc["rename_scene"]("Scene C", "Scene Zed"), "Scene Zed" in book.row_names(), sc["rename_scene"]("Scene Zed", "Scene C"))
+    # reduire : la fenetre reprend sa taille
+    sc["expand"](False)
+    root.update()
+    out["x_close"] = (root.winfo_height() == h0, panel.winfo_ismapped())
+    sc["switch_set"](base_set)
+    sc["switch_set"]("Etendu")
+    sc["delete_set"]()
+    out["x_end"] = book.active_set_name() == base_set
 
 
 def running_after_space(out) -> bool:

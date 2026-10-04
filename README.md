@@ -56,10 +56,42 @@ et des bandes de glitch d'une demi-seconde** a chaque changement (le chiffre sur
 *▶▶* passe tout de suite a la suivante. *reglages VJ* : **dans l'ordre** ou **au hasard** (jamais la meme scene deux fois
 de suite), et la duree (10 s, 20 s, 30 s, 1 min, 2 min, 5 min). Choisir une scene a la main met le VJ en pause, pour qu'il ne
 se batte pas avec toi. Dans la fenetre de rendu : **Espace** = lecture / pause, **fleche droite** = scene suivante. Il faut
-au moins 2 scenes. Un changement de mode (Live, Snap, Ridge) prend environ une seconde : le flash le masque en partie.
+au moins 2 scenes dans le set. Un changement de mode (Live, Snap, Ridge) prend environ une seconde : le flash le masque en partie.
 **Une scene ne change ni l'entree audio (elle reste celle qui est active), ni le plein ecran / la taille de la fenetre de
 rendu**, et quand le VJ tourne la fenetre de reglages garde sa taille meme si une scene change de mode.
-9 scenes au maximum, dans `~/.audio2wave/scenes.json`, **tout y compris l'etat du panneau d'audio2wave** : les scenes
+**Sets** : un set est un enchainement de scenes enregistre sous un nom. Les scenes sont des **briques** (une
+bibliotheque, sans limite) : un set les **reference**, autant de fois qu'on veut et dans plusieurs sets ; modifier une scene
+la modifie partout. Chaque entree d'un set peut porter son **propre media** (logo image, texte ou video : clic droit >
+*Media de cette entree : utiliser le logo / texte actuel*, pastille ● sur la touche) : la meme scene peut passer deux fois,
+avec deux logos differents. Le menu **SET** (a gauche de la rangee) change de set, en cree (vide ou copie), renomme,
+supprime (les scenes restent), **exporte** le set dans un fichier `.json` autonome (le set et les scenes qu'il utilise ;
+les medias restent des chemins, un media absent sur l'autre machine est signale) et **importe** un set. A l'import, un nom de
+set ou de scene deja pris : *Renommer* (on garde les deux : `nom (2)`) ou *Remplacer* (avec confirmation) ; un fichier illisible
+ou d'une version plus recente donne un message, sans rien effacer. **Changer de set redemarre le VJ** s'il tournait (premiere
+scene du nouveau set), et chaque set a son ordre et sa duree de VJ. F1..F9 sont les 9 premieres entrees du set actif ; au-dela,
+un menu *+N* les liste (le VJ les joue toutes). *+ Scene* : nouvelle scene depuis l'etat actuel, ou ajout d'une scene deja
+enregistree. Clic droit sur une touche : mettre a jour la scene, media, monter / descendre, retirer du set, supprimer
+de la bibliotheque.
+**Bouton *Etendre*** (a droite de la barre) : un panneau sous la barre montre le set en detail, et la fenetre grandit de sa
+hauteur (elle reprend sa taille quand on *Reduit*). Une ligne par entree : sa scene (clic = la charger), son **media lie avec
+sa vignette** (image, premiere image d'une video ; pour un texte, le texte ; en rouge si le fichier est introuvable), la
+**duree propre** a l'entree dans le VJ (ou celle du set), une case **VJ** (decochee : le VJ la saute, mais elle reste
+chargeable a la main), monter / descendre, *Renommer* (la scene, dans tous les sets) et *Retirer*. En tete : l'ordre et la
+duree par defaut du set, et la duree d'une boucle.
+**Deux familles de medias** : ceux de l'**overlay** (logo image, texte, video du logo) et ceux d'**audio2wave** (en mode
+Snap, style pencil : *video interieure* et *video exterieure*). Une scene capture les siens a l'enregistrement (ceux de
+l'overlay, et ceux du panneau Snap) ; chaque entree d'un set peut en plus en **remplacer** (pose par-dessus ceux de la
+scene). Le panneau etendu montre, pour chaque entree, trois zones : OVERLAY, AUDIO2WAVE video int., AUDIO2WAVE video ext.
+(media propre a l'entree en couleur avec sa croix, media capture par la scene en gris ; les zones audio2wave sont grisees
+si la scene n'est pas une scene Snap).
+**Glisser-deposer** : depose un fichier **sur la zone voulue** du panneau : la video interieure ou exterieure d'audio2wave (une
+video seulement) ou l'overlay (image png / jpg / bmp, video ou animation gif / webm / mp4 / mov / mkv / avi / webp). Depose
+sur une **touche de la barre**, un petit menu demande la destination. Si la scene est a l'ecran, le media s'affiche tout de
+suite. Plusieurs fichiers : le premier est pris. Demande le paquet `tkinterdnd2` (dans `requirements-gl.txt` ; s'il manque,
+tout marche sauf le glisser-deposer).
+**Enregistrement** : les champs de fichier tapes a la main sans Entree (logo, video du logo, videos d'audio2wave, texte)
+sont valides juste avant la capture : une scene retient toujours ce qui est a l'ecran.
+Tout est dans `~/.audio2wave/scenes.json` (un ancien fichier est lu comme un set `principal`), **tout y compris l'etat du panneau d'audio2wave** : les scenes
 n'ajoutent rien aux presets d'audio2wave (une scene et un preset sont deux choses differentes). Les scenes creees avec
 une ancienne version (elles rangeaient un preset `scene-<nom>` chez audio2wave) sont migrees toutes seules au
 lancement suivant, et ces presets sont retires de leurs listes.
@@ -94,7 +126,8 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
 (environ 650 px de haut) : *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
 *Fonte du logo*, *Cellules*, *Noise*, *Affichage*.
 
-- **Fond** (dans la partie LIVE, sous le panneau du mode, car c'est la source du visuel d'audio2wave) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Motif genere* (degrades + damier animes par la
+- **Fond** (en tete de la partie LIVE : un choix *Audio2wave* / *Fond genere*, et **un seul des deux est affiche a la fois** : le
+  panneau d'audio2wave, ou les reglages du fond genere avec leurs presets) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Fond genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel, Duo ou Banc de test (copie exacte du motif de test, sans reglage), couleurs, angle, teinte, vitesse, taille des
   carreaux, contraste, cadence, reaction au kick ; effet immediat).
 - **Noise** : un seul hasard, prereglé, qui joue le role d'une musique imaginaire : des ondulations et des coups au hasard,
@@ -183,23 +216,11 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   - **Une vraie transition** (fondu des reglages numeriques ; un changement de mode Live -> Snap coupe la source, donc
     plutot un fondu enchaine d'image a image).
   L'interface doit rester simple et agreable : les options avancees vivent dans le panneau deplie, jamais dans la barre.
-- **Sets : enregistrer, exporter, importer et changer d'enchainement de scenes** : un **set** = un enchainement de scenes
-  (leur liste, l'ordre, les reglages du VJ, plus tard les durees par scene et les medias), enregistre sous un nom. A
-  reflechir puis a travailler :
-  - **Exporter / importer** un set dans **un seul fichier** pour le partager ou le sauvegarder (un set prepare pour un
-    evenement, un autre pour un club, un set d'un autre VJ). Le fichier doit etre autonome : les scenes et l'etat
-    d'audio2wave qu'elles contiennent y sont inclus ; les medias (logo, video, animations) sont le point delicat
-    (embarquer les fichiers dans une archive, ou garder des chemins et prevenir quand un media manque).
-  - **Basculer d'un set a un autre**, vite et sans risque en soiree : un selecteur de set (a cote de la rangee des scenes,
-    ou dans le panneau « etendre » du VJ) ; la rangee et F1..F9 montrent alors les scenes du set choisi. A trancher : un
-    set est-il actif seul (les scenes d'un autre set sont cachees), les scenes peuvent-elles etre partagees entre sets
-    (references plutot que copies), que devient le VJ en cours au moment du changement (pause, ou repart au debut du
-    nouveau set), et la limite de 9 scenes (une par touche F1..F9) : par set plutot que globale.
-  - **Import sans surprise** : nom deja pris (renommer ou remplacer, avec confirmation), fichier illisible ou d'une
-    version plus recente (message clair, jamais d'effacement), et scenes qui reposent sur une entree audio ou un
-    plein ecran propres a la machine d'origine (deja exclus des scenes : voir `scenes.SCENE_EXCLUDED`).
-  - Aujourd'hui il n'y a qu'un seul ensemble de scenes (`~/.audio2wave/scenes.json`) ; le passage a plusieurs sets demande
-    de faire de ce fichier un conteneur de sets (avec migration de l'existant en un set « principal »).
+- **Sets plus riches** : la base est faite (bibliotheque de scenes, sets, media par entree, export / import, changement de
+  set qui redemarre le VJ, panneau etendu, glisser-deposer, duree et exclusion par entree). Pistes : medias embarques dans
+  le fichier exporte (archive avec les images et videos plutot que des chemins), glisser-deposer pour reordonner les
+  lignes, depot sur les parametres Snap (`video` / `video2`), raccourci clavier pour changer de set en soiree, et un acces
+  plus rapide aux scenes au-dela de F9 (pages).
 - **Halo holographique plus riche** : automations de l'intensite et de la portee, teinte reglable, forme de
   la poussiere (etoiles a branches, comete), trainee directionnelle (vent) plutot que radiale, et mode
   « ombre » (soustractif) pour assombrir aussi le fond.
