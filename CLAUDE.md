@@ -18,7 +18,7 @@ fichier** ; on importe `audio2wave_live` (`parse_args`, `producer_command`,
 accents** (meme convention qu'audio2wave, compatibilite console Windows).
 
 Contrairement a audio2wave (stdlib seulement), ce depot a des dependances :
-`requirements-gl.txt` (moderngl, glfw, numpy, sounddevice, Pillow). **Python 3.12
+`requirements-gl.txt` (moderngl, glfw, numpy, sounddevice, Pillow, tkinterdnd2 : ce dernier facultatif, pour le glisser-deposer des scenes). **Python 3.12
 recommande** : `moderngl`/`glcontext` n'ont pas de wheel pour Python 3.14 et leur
 compilation exige MSVC. Environnement de dev : `py -3.12 -m venv .venv` puis
 `.venv\Scripts\python.exe -m pip install -r requirements-gl.txt`.
@@ -291,8 +291,9 @@ visuel d'audio2wave, il ne le complete pas) :
   (5 scenes migrees, magasins live / snap propres).
 - dans les deux cas : `capture_overlay` (jamais de `bg_*`). `scene_values(scene, current)` fabrique les reglages a poser
   (overlay + soit le motif, soit seulement `bg_mode = live` ; automations `bg_*` du fond, les autres de l'overlay).
-- Stockage : `SceneBook` (`~/.audio2wave/scenes.json`, `{"scenes": [...]}`, **ordre = rang = touche F1..F9**, 9 maximum, meme nom
-  a la casse pres = remplace au meme rang).
+- Stockage : `SceneBook` (`~/.audio2wave/scenes.json`) : **bibliotheque de scenes** (sans limite, meme nom a la casse pres =
+  remplace) + **sets** (voir plus bas). Le rang d'une entree dans le set actif donne la touche F1..F9 (`scenes.KEYS` = 9
+  premieres ; la suite dans un menu `+N`).
 - **Changement de mode** (Live -> Snap...) : la fenetre est reconstruite par `request_mode` ; le preset est garde dans
   `s.pending_live_overrides` et applique a la fin de `build_window` du panneau neuf (`after(150)`).
 - **Interface** : rangee ambre posee en ligne 0 de `root` (au-dessus de la page defilante : toujours visible), une touche par
@@ -309,22 +310,73 @@ visuel d'audio2wave, il ne le complete pas) :
   en secondes** (pas en mesures), transition **flash / glitch court**, **dans l'ordre ou au hasard** avec toutes les scenes,
   pilotage par **bouton dans la barre + touches**. `s.vj_state` = `{"running", "t_next"}` (survit aux reconstructions de la
   fenetre ; chaque `build_window` relance sa boucle `vj_tick` toutes les 250 ms, garde par `alive`). Reglages (`seconds` 5..300,
-  `order` `seq` / `random`) dans le meme `scenes.json` (cle `vj`, `SceneBook.vj()` / `set_vj()`, gardes quand les scenes sont
-  ecrites et inversement). `scenes.next_scene_index(count, current, order, rng)` (pure) : `seq` = la suivante en boucle (la
+  `order` `seq` / `random`) **propres a chaque set** (`SceneBook.vj()` / `set_vj()` lisent et ecrivent ceux du set actif). `scenes.next_scene_index(count, current, order, rng)` (pure) : `seq` = la suivante en boucle (la
   premiere si aucune n'est active), `random` = une autre, jamais la meme deux fois de suite.
   - `vj_advance` : scene suivante + `s.commands.put("flash")` + minuteur relance ; `vj_toggle` (refuse si < 2 scenes) ;
-    **choisir une scene a la main** (`apply_scene`, F1..F9 compris) **met le VJ en pause** (`apply_scene_core` est la version
-    que le VJ appelle). Espace / fleche droite : le fil GL met `"vj"` / `"vjnext"` dans `s.scene_requests`, la GUI les lit.
+    **choisir une scene a la main** (`apply_scene`, `apply_entry`, F1..F9 compris) **met le VJ en pause** (`apply_entry_core` /
+    `apply_scene_core` sont les versions que le VJ appelle). Espace / fleche droite : le fil GL met `"vj"` / `"vjnext"` dans `s.scene_requests`, la GUI les lit.
   - **Flash** : `Renderer.flash_t` (instant monotonic), pose par la commande `"flash"` dans le fil GL ; `u_flash` = carre de
     `1 - age / 0,55 s` dans `post.frag` : melange vers le blanc (0,8) + force des bandes de glitch (0,9) meme avec les effets
     coupes. Ne passe pas par `params` (`save_params` ecrit tout `params` dans `gl_params.json`).
   - Un changement de mode (Live -> Snap) reconstruit la fenetre : ~1 s, en partie masque par le flash.
-- Limites / suite : les medias (logo, texte, video) ne sont pas dans les scenes ; pas de changement en mesures (kicks), de
-  duree par scene ni de vraie transition (voir README, ameliorations futures : bouton « etendre » du VJ pour la granularite,
-  glisser-deposer de medias lies a l'overlay de la scene ou ajoutes aux parametres d'audio2wave en mode Snap).
-  Pistes aussi notees : des **sets** (enchainement de scenes enregistre sous un nom, exportable / importable, avec un moyen de
-  basculer d'un set a un autre) ; `scenes.json` deviendrait un conteneur de sets (migration de l'existant en un set principal).
-- `check_gl.py` (`check_scenes` + etape GUI) : stockage (ordre, 10e refusee, remplacement, fichier illisible), capture et
+- **Sets** (scenes.py `SceneBook`, GUI : menu `SET` de la barre) : `scenes.json` = `{"version": 2, "scenes": [...], "sets": [{"name",
+  "entries": [{"scene", "media"}], "vj"}], "active_set"}`. Un set **reference** les scenes par nom (les scenes sont des briques,
+  partagees ; une meme scene peut figurer plusieurs fois dans un set, chaque entree avec son `media`) ; `put` d'une scene
+  nouvelle l'ajoute aussi a la fin du set actif, `delete` la retire de la bibliotheque **et de tous les sets** ; une entree
+  orpheline (scene absente du fichier) est ignoree a la lecture. Un **ancien fichier** (`{"scenes", "vj"}`) est lu comme un set
+  `principal` qui les contient toutes (reecrit au format 2 a la premiere ecriture). `rows()` = entrees du set actif
+  (`index`, `name`, `scene`, `media`) ; la GUI suit l'entree active par `s.active_entry` **et** `s.active_scene` (`current_index` :
+  le nom fait foi si l'entree a ete deplacee ou retiree).
+  - **Media par entree** (`capture_media` / `media_values` / `media_missing`, `MEDIA_KEYS`) : la source courante (image, texte
+    ou video) posee **par-dessus** les valeurs de la scene a l'application ; fichier introuvable = message, la scene garde son
+    propre media. La scene elle-meme contient toujours le sien (overlay).
+  - **Changer de set** (`switch_set`) : si le VJ tournait, `vj_advance` le **redemarre** (flash, premiere scene du nouveau set ou
+    une au hasard) ; un set de moins de 2 entrees arrete le VJ avec un message. Au moins un set existe toujours.
+  - **Export / import** (`export_set`, `parse_import`, `import_conflicts`, `import_set`, fonctions pures) : un fichier
+    `{"format": "casual-overlay-set", "version": 1, "set", "scenes"}` autonome (le set + les scenes utilisees ; medias = chemins,
+    signales s'ils manquent a l'import). `parse_import` refuse sans rien modifier un JSON illisible, un autre format, une
+    version plus recente (`EXPORT_VERSION`). Conflits : nom de set deja pris, nom de scene deja pris **avec un autre contenu**
+    (une scene identique est reutilisee) ; `rename` (`nom (2)`, `unique_name`) ou `replace` ; l'ecriture est faite en une fois.
+    La GUI (`import_set_now`, `resolve_conflict`) pose la question puis **demande confirmation avant de remplacer**.
+  - Dialogues dans `scene_ui` (`chooser`, `ask_name`, `ask_save`, `ask_open`) : les tests les remplacent, jamais de fenetre
+    bloquante. `choice_dialog` (module) = fenetre modale a boutons.
+- **Panneau etendu** (`scene_top` = barre + `scene_panel`, `set_expanded`, `refresh_scene_panel`, `build_panel_row`) : bouton
+  `Etendre` / `Reduire` dans la barre ; l'etat est `s.scenes_expanded` (survit aux reconstructions de la fenetre). La fenetre
+  grandit de `scene_panel.winfo_reqheight()` (memorise dans `s.scene_panel_h`, plafonne a la hauteur de l'ecran - 80) et la
+  reprend a la fermeture ; le corps du panneau a une hauteur fixe (190 px) avec son ascenseur. Une ligne par entree du set :
+  scene, **media avec vignette**, duree propre, case VJ, monter / descendre, renommer, retirer. `refresh_scene_bar` appelle
+  `refresh_scene_panel` : le panneau est reconstruit a chaque changement (scene active surlignee).
+  - **Entrees** : `{"scene", "media", "seconds", "skip"}` (`SceneBook._entry` valide ; `set_entry_vj`). `seconds` (5..300, ou None =
+    duree du set) arme le minuteur du VJ a `vj_advance` ; `skip` fait sauter l'entree par `scenes.next_entry_index` (pure, meme
+    regles que `next_scene_index`, plusieurs fois la meme scene possible) ; moins de 2 entrees jouables = le VJ s'arrete avec un
+    message. `rename_scene` renomme dans la bibliotheque et dans tous les sets. Export / import gardent `seconds` et `skip`.
+  - **Deux familles de medias** : `media` (overlay : `capture_media` / `media_values`, cles `MEDIA_KEYS`) et `a2w` (audio2wave :
+    `A2W_MEDIA_KEYS` = `video` / `video2`, les controles « Video interieure / exterieure » du panneau **Snap**, pencil seul ; chemins
+    texte). Une scene retient ceux de l'overlay dans `overlay` et ceux de Snap dans `live_overrides` (`scene_a2w_media`) ; une
+    entree peut les **remplacer** : a l'application `apply_scene_core(..., a2w)` fusionne `a2w` dans `live_overrides` avant de
+    passer par la ligne `default` du menu des presets (aucun code d'audio2wave touche) ; scene non Snap = message ; chemin absolu
+    absent (`a2w_missing`) = message. `set_entry_a2w`, `a2w_clear`. Export / import les gardent (`missing` les signale).
+  - **Capture** : `flush_pending_inputs` (appelee par `capture_scene_now`) applique les champs de fichier / texte tapes sans
+    Entree ni perte de focus (`apply_logo_path`, `apply_video_path`, `apply_text`, et `<FocusOut>` genere sur les `Entry` du
+    panneau d'audio2wave, dont leurs champs video) : cliquer un menu ne fait pas perdre le focus, la scene capturait sinon
+    l'ancienne valeur (`gui_a2w_steps` le verifie sur la video exterieure de Snap et la video du logo).
+  - **Cibles de depot** : `drop_media(index, data, target)` avec `target` = `overlay` / `video` / `video2` ; `register_drop(widget, index,
+    target)` ; une zone du panneau = une cible fixe, une touche de la barre = `drop_on_button` (menu au pointeur : overlay /
+    video int. / video ext., ces deux dernieres grisees hors scene Snap). Une image est refusee pour audio2wave.
+  - **Glisser-deposer** (`dnd`, `register_drop`, `register_tree`, `drop_media`, `media_from_file`) : `tkinterdnd2`, charge dans le
+    Tk **existant** par `TkinterDnD._require(root)` (une fois par racine, marque `root._casual_dnd`) ; chaque widget cible est
+    enregistre (`drop_target_register(DND_FILES)`, `<<Drop>>`), **y compris tous les enfants d'une ligne** (tkdnd ne propage pas a
+    l'enfant). `e.data` = noms separes par des espaces, ceux qui en contiennent entre accolades : `root.tk.splitlist`. Image
+    (`.png .jpg .jpeg .bmp`) -> `{"logo_source": "image", "logo_path"}`, video / animation (`.gif .webm .mp4 .mov .mkv .avi .webp
+    .apng`) -> `{"logo_source": "video", "logo_video", "logo_key": ""}` ; autre format = message. Si l'entree deposee est a
+    l'ecran, `apply_entry_core` repose le media tout de suite. Sans le paquet : `dnd["ok"]` False, le reste marche. Le test
+    appelle `drop_media` (un vrai glisser depuis l'Explorateur n'est pas automatisable).
+  - **Vignettes** (`make_thumb`, `thumb_photo`) : calculees dans un **fil** (PIL pour une image / un GIF, `ffmpeg -frames:v 1` pour
+    une video, 6 s maximum, `libvpx-vp9` d'abord pour garder l'alpha d'un webm), cachees dans `s.thumb_cache` / `s.thumb_photos` ;
+    quand une est prete le fil leve `s.thumb_dirty` et `vj_tick` (fil Tk) rafraichit le panneau (jamais d'appel Tk depuis le fil).
+- Limites / suite : pas de changement en mesures (kicks) ni de vraie transition (voir README, ameliorations
+  futures : bouton « etendre » du VJ pour la granularite, glisser-deposer de medias, medias embarques dans l'export).
+- `check_gl.py` (`check_scenes` + etape GUI) : stockage (ordre, bibliotheque sans limite, remplacement, fichier illisible), sets (ancien format migre, scenes partagees, doublons, media par entree, VJ par set, export / import et conflits, GUI : changement de set avec VJ qui redemarre, plus de 9 scenes), capture et
   valeurs (motif / audio2wave, automations, micro intact), barre, F1/F2/F8, nom deja pris, mise a jour au meme rang, VJ (ordre, reglages persistants, minuteur reel, flash, Espace / fleche droite, pause a la main),
   suppression du preset, **changement de mode Live -> Snap avec chargement du preset `club`**.
 
@@ -409,7 +461,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    leur ligne de statut ;
 4. accroche a droite, dans la meme fenetre, la partie OVERLAY : les **presets overlay** toujours visibles en haut
    (`preset_bar`), puis un `ttk.Notebook` en **onglets** (chaque curseur automatisable porte sa case `~` et son
-   bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (**dans la partie LIVE**, sous le panneau d'audio2wave, dans le meme canvas defilant ; selecteur Audio2wave / Motif genere +
+   bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (**en tete de la partie LIVE** : un choix Audio2wave / Fond genere (`tab_fond`, hors du canvas) ; dessous, **exclusivement** l'un des deux, deux fenetres du meme canvas defilant (`host_item` = panneau d'audio2wave, `pattern_item` = `pattern_holder` avec presets fond + reglages), basculees par `show_bg` (`state` hidden / normal : le panneau masque n'est pas detruit, les scenes et les tests continuent de l'actionner) ; la taille du canvas ne depend pas du fond affiche (la fenetre ne saute pas) et `cap` en retire la hauteur de l'en-tete ; reglages du fond genere +
    reglages du motif), *Effets* (les 5 effets, intensite globale, sensibilite, effets propres au logo), *Logo*
    (source Image/Texte/Video, position, opacite), *Aura du logo* (halo holographique + reaction a l'audio :
    pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Noise* (hasard sur les effets coches), *Affichage* (entree d'analyse sounddevice, boutons plein ecran / barres
