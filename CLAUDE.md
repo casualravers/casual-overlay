@@ -23,6 +23,47 @@ recommande** : `moderngl`/`glcontext` n'ont pas de wheel pour Python 3.14 et leu
 compilation exige MSVC. Environnement de dev : `py -3.12 -m venv .venv` puis
 `.venv\Scripts\python.exe -m pip install -r requirements-gl.txt`.
 
+## Design de la fenetre de reglages (`theme.py`, `skin.py`)
+
+Direction : **sombre sobre, un accent fin par partie** (LIVE bleu `#3b82f6`, OVERLAY violet, SCENES ambre), boutons arrondis, radios en
+anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de section a repere colore.
+- **`theme.py`** (stdlib) : jetons (surfaces `BG` / `PANEL` / `CARD` / `HOVER` / `LINE` / `TROUGH`, texte, accents, rayons, polices) et
+  `mix` / `lighten` / `darken`. `BG` et `PANEL` sont ceux d'audio2wave (`common.GUI_*`) : ses panneaux se fondent avec les notres.
+- **`skin.py`** : habille les VRAIS widgets Tk (classe, `invoke()`, `state`, variables inchanges : `gui_gates`, `gui_colors`, les tests
+  et le code d'audio2wave marchent tels quels) avec des **images arrondies Pillow** (dessinees a 4x, reduites ; coins transparents sur le
+  fond du parent). `skin.apply(racine)` parcourt l'arbre **apres la construction**, y compris les panneaux d'audio2wave (aucun de leurs
+  fichiers touche) ; idempotent. Appelee dans `build_window` **avant de mesurer `layout["wide_need"]`** (les images changent la largeur
+  naturelle : apres, la fenetre se croyait trop etroite et passait en mise en page empilee, 1013 px de haut), par `refresh_scene_bar`
+  (barre + panneau etendu) et `choice_dialog`. Un widget habille a une `_sk` ; `configure` / `cget` des classes Button, Radiobutton,
+  Checkbutton, Menubutton, Scale sont interceptes **seulement pour lui** (`bg` = couleur de remplissage voulue, le vrai fond du widget
+  est celui du parent ; `text`, `width`, `state` re-dessinent ; le `vj_tick` qui reecrit le bouton VJ toutes les 250 ms ne
+  redessine que si la cle change).
+  - Boutons : neutres (`CARD`) par defaut, **accent de la zone (`skin.zone(conteneur, couleur)`) seulement pour les actions principales**
+    (`PRIMARY` : Sauvegarder, Enregistrer) ; le fond d'accent plein d'audio2wave (`option_add`, = `theme.LIVE`) devient neutre ; une couleur propre
+    (touche de scene active en ambre) est respectee ; fond = fond du parent -> bouton « fantome » (survol `CARD`). Survol / appui /
+    desactive = variantes. Un widget qui a deja une image (vignette, icone) n'est pas touche.
+  - Radio (anneau + point) et case (carre arrondi + coche) : `indicatoron=0`, `image` / `selectimage`, a l'accent de la zone.
+    OptionMenu : champ arrondi a chevron, largeur = la plus longue entree du menu. Menubutton « ghost » (fleche dans le texte) : survol.
+  - Curseur (`tk.Scale`) : le `bg` d'un Scale est la couleur de sa poignee ; un Scale **sans valeur affichee** (les notres) a donc une
+    poignee d'accent sur piste sombre ; un Scale **a valeur affichee** (audio2wave : `bg` en est aussi le fond du texte) garde `bg` et
+    prend une poignee en relief, accent au survol. Gris (`gui_gates`) = poignee eteinte, **un seul `configure`** (piege de la valeur perimee).
+  - Champs (`Entry`) : fond `PANEL`, filet `LINE`, accent au focus, lecture seule sombre (pas de blanc). Titres : `skin.title`
+    (repere d'accent + texte, `style_band` et les deux bandeaux de partie l'utilisent) ; **le texte des titres n'est jamais modifie**
+    (`presets_to_top`, `tidy_mode_gui` et les tests le retrouvent par leur texte). Onglets ttk : selectionne = `CARD` + texte d'accent.
+  - Couleurs lues sur un widget : `_norm` (nom Tk / systeme -> `#rrggbb`). Les `PhotoImage` sont gardees par racine Tk (`root._skin_photos`,
+    plusieurs racines dans les tests). Hauteur : boutons ~24 px, champs 1 px de bord (la fenetre reste sous 700 px).
+- **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) est remplace par `theme.LIVE` **dans ce processus** par `apply_a2w_palette()`
+  (modules `common`, `audio2wave`, `audio2wave_live`, `_snap`, `_ridge`, avant `live.style_gui` : leurs widgets le lisent a la creation ;
+  Snap / Ridge, importes plus tard, heritent de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`. Aucun fichier touche.
+- **Fenetre « courbe »** (`AutomationManager.open_editor`, audio2wave) : `install_curve_skin` enveloppe la methode (idempotent) : a la
+  creation de la fenetre, `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour celui d'audio2wave), canvas sombre,
+  `Label` remis au fond du panneau, `skin.apply`.
+- **Boutons jamais colles** : `BTN_MARGIN` = 3 x 1 px transparents autour de l'image d'un bouton (a hauteur totale constante : la forme
+  est plus basse d'autant), meme dans les conteneurs d'audio2wave qui n'ont pas d'espacement.
+- `check_gl.py` (`check_skin`) : classe / texte / `invoke` conserves, neutre / accent / couleur propre, desactive et cache d'images,
+  redimensionnement, radio / case / curseur / champ / liste / titre, idempotence, widget a image, deuxieme racine Tk, fichiers embarques
+  dans le portable ; le reste de la suite (hauteur sous 700 px, info-bulles, mise en page, gates) verifie que rien n'a casse.
+
 ## Diagnostic de demarrage et version portable
 
 - **`diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
@@ -552,7 +593,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   qu'elle est dans la fenetre (large, 940 px, 420 px de haut, panneau etendu, panneau Snap). Seuil de la mise en page empilee
   (`layout["wide_need"]`) : sans la largeur de l'ascenseur du panneau d'audio2wave, qui apparait ou disparait selon la hauteur (une
   fenetre a sa taille naturelle sans ascenseur passait en empile ; course avec la minuterie `settled`, vue par le test de taille VJ).
-- **Structure visible** : deux grandes parties, LIVE (bandeau turquoise, fenetre d'audio2wave) et OVERLAY
+- **Structure visible** : deux grandes parties, LIVE (titre bleu, fenetre d'audio2wave) et OVERLAY
   (bandeau violet), separees par un trait violet de 3 px ; le titre d'audio2wave est retire de la ligne 0
   pour y poser les bandeaux. Toutes les sections sont des **bandeaux** (`style_band`, fond `GUI_PANEL_BG`, texte
   gras colore) : ceux d'audio2wave (SOURCE, SPECTRE, COULEURS, SORTIE, PRESETS -> "PRESETS LIVE") sont

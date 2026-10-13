@@ -30,6 +30,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import sys
 import threading
 import time
 import tkinter as tk
@@ -38,6 +39,8 @@ from tkinter import colorchooser, filedialog, simpledialog, ttk
 
 import audio2wave_gl as gl
 import diagnostics
+import skin
+import theme
 import gui_colors
 import gui_gates
 import scenes
@@ -63,7 +66,7 @@ class Zone:
 
 # Couleurs des deux grandes parties de la fenetre (le theme sombre d'audio2wave reste le fond) :
 # LIVE (spectre ffmpeg, fenetre d'audio2wave) en turquoise, OVERLAY (casual-overlay) en violet.
-LIVE_COLOR = "#5fd4c8"
+LIVE_COLOR = theme.LIVE
 OVERLAY_COLOR = "#b392ff"
 SCENE_COLOR = "#ffcf6b"          # barre des scenes (ambre)
 BANNER_FG = "#0b1018"
@@ -76,9 +79,9 @@ LIVE_SECTIONS = {"SOURCE": "SOURCE", "SPECTRE": "SPECTRE", "COULEURS": "COULEURS
 def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> None:
     """Petit titre de section -> bandeau pleine largeur : fond du theme (plus clair que la fenetre), texte
     en gras a la couleur de la partie a laquelle il appartient."""
-    label.config(text=text or label.cget("text"), bg=a2w.GUI_PANEL_BG, fg=color,
-                 font=("Segoe UI", 9, "bold"), anchor="w", padx=8, pady=2)
-    label.grid_configure(sticky="ew", pady=(6, 3))
+    label.config(text=text or label.cget("text"))
+    skin.title(label, color)
+    label.grid_configure(sticky="ew", pady=(8, 3))
 
 
 class HostFrame(tk.Frame):
@@ -120,6 +123,49 @@ def tooltip_position(widget: tuple, tip: tuple, bounds: tuple, gap: int = 4) -> 
         y = above if above >= top + gap else max(top + gap, bottom - th - gap)
     y = max(top + gap, min(y, bottom - th - gap))      # widget lui-meme hors de la fenetre (defile hors de vue) : on reste dedans
     return x, y
+
+
+def apply_a2w_palette() -> None:
+    """Accent d'audio2wave (`GUI_ACCENT`, turquoise) -> bleu du theme, dans CE processus seulement et sans toucher a leurs fichiers :
+    leurs modules lisent ces constantes a la creation de leurs widgets (`option_add` de style_gui, labels, curseurs). A appeler
+    avant de les construire ; `common` d'abord (Snap et Ridge, importes plus tard, en heritent)."""
+    for name in ("common", "audio2wave", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "GUI_ACCENT"):
+            module.GUI_ACCENT = theme.LIVE
+            if hasattr(module, "GUI_ACCENT_FG"):
+                module.GUI_ACCENT_FG = theme.ON_ACCENT
+
+
+def install_curve_skin(live) -> None:
+    """Fenetre « courbe » (editeur de variation automatique d'audio2wave, `AutomationManager.open_editor`) : habillee comme le
+    reste a son ouverture (accent du gestionnaire : violet cote overlay, bleu cote LIVE), sans toucher a leur fichier. Idempotent."""
+    cls = live.AutomationManager
+    if getattr(cls, "_skinned", False):
+        return
+    original = cls.open_editor
+
+    def open_editor(self, attr: str) -> None:
+        before = self.state[attr]["editor"]
+        original(self, attr)
+        win = self.state[attr]["editor"]
+        if win is not None and win is not before:
+            skin.zone(win, self.accent)
+            canvas = self.state[attr]["canvas"]
+            if canvas is not None:
+                canvas.configure(bg=theme.TROUGH, highlightbackground=theme.LINE)
+                canvas.pack_configure(padx=18, pady=(18, 14))
+            stack = [win]
+            while stack:                                  # leurs Label n'ont pas le fond du panneau (palette de la fenetre)
+                node = stack.pop()
+                for child in node.winfo_children():
+                    if child.winfo_class() == "Label":
+                        child.configure(bg=str(node.cget("bg")))
+                    stack.append(child)
+            skin.apply(win)
+
+    cls.open_editor = open_editor
+    cls._skinned = True
 
 
 def install_tooltip_clamp(live) -> None:
@@ -436,6 +482,7 @@ def choice_dialog(parent, title: str, text: str, buttons: list[str]) -> str | No
         tk.Button(row, text=label, command=lambda lb=label: pick(lb), padx=10).pack(side="left", padx=5)
     top.protocol("WM_DELETE_WINDOW", top.destroy)
     top.bind("<Escape>", lambda _e: top.destroy())
+    skin.apply(top)
     try:
         top.grab_set()
     except tk.TclError:
@@ -507,6 +554,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         keep_size = (root.winfo_width(), root.winfo_height())
     for child in list(root.winfo_children()):
         child.destroy()
+    apply_a2w_palette()
+    install_curve_skin(live)
     live.style_gui(root)
     root.title("casual-overlay GL - reglages")
     root.resizable(True, True)
@@ -518,6 +567,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # geometrie de la fenetre se fixe dans le meme ordre qu'avant (sinon elle s'ouvrait a la largeur minimale, empilee).
     scene_top = tk.Frame(root, bg=a2w.GUI_PANEL_BG)           # la barre, et dessous le panneau etendu (si ouvert)
     scene_top.grid(row=0, column=0, columnspan=2, sticky="ew")
+    skin.zone(scene_top, SCENE_COLOR)
     scene_bar = tk.Frame(scene_top, bg=a2w.GUI_PANEL_BG)
     scene_bar.pack(fill="x")
     scene_panel = tk.Frame(scene_top, bg=a2w.GUI_BG)
@@ -638,10 +688,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     fit()
 
     # Deux grandes parties, bien distinctes : bandeaux de couleur en haut et gros trait vertical entre les deux.
-    banner_live = tk.Label(page, text=MODE_BANNERS[mode], bg=LIVE_COLOR, fg=BANNER_FG,
-                           font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5)
-    banner_overlay = tk.Label(page, text="OVERLAY  -  logo, effets (casual-overlay)", bg=OVERLAY_COLOR, fg=BANNER_FG,
-                              font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=5)
+    banner_live = tk.Label(page, text=MODE_BANNERS[mode])
+    skin.title(banner_live, LIVE_COLOR, kicker=False)
+    banner_overlay = tk.Label(page, text="OVERLAY  -  logo, effets (casual-overlay)")
+    skin.title(banner_overlay, OVERLAY_COLOR, kicker=False)
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
     # ------------------------------------------------ 2. pont restart_event -> ProducerManager (mode Live)
@@ -697,9 +747,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     style.theme_use("clam")
     edge = {"bordercolor": a2w.GUI_BG, "lightcolor": a2w.GUI_BG, "darkcolor": a2w.GUI_BG}   # pas de filets clairs
     style.configure("TNotebook", background=a2w.GUI_BG, borderwidth=0, tabmargins=(0, 0, 0, 0), **edge)
-    style.configure("TNotebook.Tab", background=a2w.GUI_PANEL_BG, foreground=a2w.GUI_MUTED_FG,
-                    padding=(14, 5), borderwidth=0, font=("Segoe UI", 9, "bold"), **edge)
-    style.map("TNotebook.Tab", background=[("selected", OVERLAY_COLOR)], foreground=[("selected", BANNER_FG)])
+    style.configure("TNotebook.Tab", background=a2w.GUI_BG, foreground=a2w.GUI_MUTED_FG,
+                    padding=(14, 6), borderwidth=0, font=("Segoe UI", 9, "bold"), **edge)
+    style.map("TNotebook.Tab", background=[("selected", theme.CARD), ("active", theme.PANEL)],
+              foreground=[("selected", OVERLAY_COLOR), ("active", a2w.GUI_FG)])
     notebook = ttk.Notebook(right)
     notebook.pack(fill="both", expand=True, pady=(6, 0))
 
@@ -758,7 +809,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # audio2wave_gl (AutomationEngine, fil de rendu): ici on ne fait qu'editer l'etat (copie dans
     # params["_automation"]) et faire suivre les curseurs.
     params["_automation"] = gl.merge_automation(params.get("_automation"))
-    automation = live.AutomationManager(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, a2w.GUI_ACCENT)
+    automation = live.AutomationManager(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, OVERLAY_COLOR)
     auto_vars: dict[str, tk.Variable] = {}
 
     def add_auto(z: Zone, r: int, key: str, var: tk.Variable) -> None:
@@ -2260,31 +2311,32 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
         def zone(title: str, width: int, own: dict | None, inherited: dict | None, clear, target: str, enabled: bool = True) -> None:
             """Une zone de depot : media propre a l'entree (vif, avec sa croix), sinon celui que la scene a capture (en sourdine)."""
-            z = tk.Frame(fr, bg=bg, width=width, height=THUMB_H + 16, highlightthickness=1, highlightbackground=a2w.GUI_PANEL_BG)
+            cbg = "#4a3f26" if active else a2w.GUI_PANEL_BG            # carte de la zone
+            z = tk.Frame(fr, bg=cbg, width=width, height=THUMB_H + 16, highlightthickness=0)
             z.pack(side="left", padx=3)
             z.pack_propagate(False)
-            tk.Label(z, text=title, bg=bg, fg=SCENE_COLOR if enabled else a2w.GUI_MUTED_FG, font=("Segoe UI", 7, "bold"),
-                     anchor="w").pack(fill="x")
-            inner = tk.Frame(z, bg=bg)
+            tk.Label(z, text=title, bg=cbg, fg=SCENE_COLOR if enabled else a2w.GUI_MUTED_FG, font=("Segoe UI", 7, "bold"),
+                     anchor="w", padx=4).pack(fill="x")
+            inner = tk.Frame(z, bg=cbg)
             inner.pack(fill="both", expand=True)
             shown = own or inherited
             if not enabled:
-                tk.Label(inner, text="scene Snap seulement", bg=bg, fg=a2w.GUI_MUTED_FG, anchor="w").pack(side="left")
+                tk.Label(inner, text="scene Snap seulement", bg=cbg, fg=a2w.GUI_MUTED_FG, anchor="w").pack(side="left")
             elif shown:
                 missing = bool(scenes.a2w_missing({"v": shown["logo_video"]})) if target != "overlay" else scenes.media_missing(shown)
                 if own:
-                    tk.Button(inner, text="\u2715", command=clear, relief="flat", bd=0, cursor="hand2", bg=bg,
+                    tk.Button(inner, text="\u2715", command=clear, relief="flat", bd=0, cursor="hand2", bg=cbg,
                               fg=a2w.GUI_MUTED_FG).pack(side="right")
                 photo = thumb_photo(shown)
-                thumb = tk.Label(inner, image=photo, bg=bg) if photo else tk.Label(
-                    inner, text="T" if shown.get("logo_source") == "text" else "\u25a0", width=5, bg="#1c1c22", fg=a2w.GUI_MUTED_FG)
+                thumb = tk.Label(inner, image=photo, bg=cbg) if photo else tk.Label(
+                    inner, text="T" if shown.get("logo_source") == "text" else "\u25a0", width=5, bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG)
                 thumb.image = photo
                 thumb.pack(side="left")
                 label = scenes.media_label(shown) + ("  (introuvable)" if missing else "")
-                tk.Label(inner, text=label if len(label) <= 22 else label[:21] + ".", anchor="w", bg=bg,
+                tk.Label(inner, text=label if len(label) <= 22 else label[:21] + ".", anchor="w", bg=cbg,
                          fg="#ff8a8a" if missing else (a2w.GUI_FG if own else a2w.GUI_MUTED_FG)).pack(side="left", padx=4)
             else:
-                tk.Label(inner, text="glisse un fichier ici", bg=bg, fg=a2w.GUI_MUTED_FG, anchor="w").pack(side="left")
+                tk.Label(inner, text="glisse un fichier ici", bg=cbg, fg=a2w.GUI_MUTED_FG, anchor="w").pack(side="left")
             if enabled:
                 register_tree(z, i, target)
 
@@ -2400,8 +2452,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def refresh_scene_bar() -> None:
         for child in scene_bar.winfo_children():
             child.destroy()
-        tk.Label(scene_bar, text=" SCENES ", bg=SCENE_COLOR, fg=BANNER_FG, font=("Segoe UI", 10, "bold")).pack(
-            side="left", padx=(6, 6), pady=5)
+        scenes_title = tk.Label(scene_bar, text="SCENES")
+        skin.title(scenes_title, SCENE_COLOR)
+        scenes_title.pack(side="left", padx=(8, 6), pady=5)
         # Mode VJ (a droite) : reglages, scene suivante, lecture / pause. Pose AVANT les touches des scenes : en pack, le
         # premier arrive est le premier servi, donc 9 scenes aux noms longs ne repoussent jamais le bouton hors de la fenetre.
         expanded = bool(getattr(s, "scenes_expanded", False))
@@ -2528,6 +2581,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         tk.Label(scene_bar, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="e").pack(
             side="right", padx=10)
         refresh_scene_panel()
+        skin.apply(scene_top)
 
     refresh_scene_bar()
     after(250, vj_tick)
@@ -2646,6 +2700,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             page_bar.grid_remove()
             page_canvas.yview_moveto(0)
 
+    skin.zone(right, OVERLAY_COLOR)
+    skin.apply(root)                   # avant de mesurer la largeur naturelle : les images changent la taille des widgets
     set_layout("wide")
     page.update_idletasks()
     # largeur naturelle cote a cote : en dessous, on empile. L'ascenseur du panneau d'audio2wave (17 px) apparait ou disparait
