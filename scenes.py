@@ -371,13 +371,14 @@ def strip_live_overrides(overrides: dict | None) -> dict | None:
 
 def capture_scene(name: str, params: dict, mode: str, live_overrides: dict | None) -> dict:
     """Instantane de l'etat courant. `live_overrides` : etat du panneau d'audio2wave (fond audio2wave seulement)."""
-    pattern = params.get("bg_mode") == "pattern"
+    bg_mode = params.get("bg_mode")
+    own = bg_mode in ("pattern", "video")       # fond genere / fond video : ni mode ni etat d'audio2wave
     return {
         "name": name,
-        "bg": "pattern" if pattern else "live",
-        "mode": None if pattern else mode,
-        "live_overrides": None if pattern else strip_live_overrides(live_overrides),
-        "fond": gl.capture_background(params) if pattern else None,
+        "bg": bg_mode if own else "live",
+        "mode": None if own else mode,
+        "live_overrides": None if own else strip_live_overrides(live_overrides),
+        "fond": gl.capture_background(params) if own else None,
         "overlay": gl.capture_overlay(params),
     }
 
@@ -387,7 +388,7 @@ def scene_values(scene: dict, current: dict) -> dict:
     seulement `bg_mode = live` (le visuel d'audio2wave est regle a part, par son propre preset). Meme forme que
     `gl.overlay_preset_values` (`_automation` complet si la scene en a)."""
     values = gl.overlay_preset_values(scene.get("overlay") or {}, current)
-    if scene.get("bg") == "pattern" and isinstance(scene.get("fond"), dict):
+    if scene.get("bg") in ("pattern", "video") and isinstance(scene.get("fond"), dict):
         bg = gl.background_preset_values(scene["fond"], current)
         bg_auto = bg.pop("_automation", None)
         values.update(bg)
@@ -396,7 +397,7 @@ def scene_values(scene: dict, current: dict) -> dict:
             for key in gl.BG_AUTOMATION_KEYS:
                 merged[key] = bg_auto[key]
             values["_automation"] = merged
-        values["bg_mode"] = "pattern"
+        values["bg_mode"] = scene["bg"]           # "pattern" ou "video"
     else:
         values["bg_mode"] = "live"
     return values

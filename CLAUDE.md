@@ -23,6 +23,36 @@ recommande** : `moderngl`/`glcontext` n'ont pas de wheel pour Python 3.14 et leu
 compilation exige MSVC. Environnement de dev : `py -3.12 -m venv .venv` puis
 `.venv\Scripts\python.exe -m pip install -r requirements-gl.txt`.
 
+## Diagnostic de demarrage et version portable
+
+- **`diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
+  `Check(name, level, detail, hint)` (`ok` / `warn` / `fail`) : Python (>= 3.10), modules (obligatoires = fail ; tkinter fail avec
+  `--gui` sinon warn ; tkinterdnd2 warn ; sounddevice warn en `--synthetic`), ffmpeg / DirectShow / ffprobe (fail sauf
+  `--synthetic`), audio2wave (fail sauf synthetique sans GUI, comme `load_live`), **OpenGL** (`moderngl.create_standalone_context()`,
+  `version_code` >= 330 ; rendu logiciel = warn, sauté si moderngl manque), micro (`sounddevice.query_devices`), dossier des reglages
+  inscriptible. **Tout est injectable** (`import_module`, `which`, `run`, `create_context`, `sd`, `settings_dir`, `python_version`) :
+  les tests simulent un PC sans ffmpeg / OpenGL / micro. `format_report` (rapport, `only_problems` pour les manques), `summary_line`
+  (une ligne pour la GUI), `preflight` (`(checks, ok)`), `run_cli` (`--diagnostic`, code 0 / 1).
+- **Au lancement** (`main`) : `--diagnostic` rapporte et quitte ; sinon (hors `--dry-run` / `--list-*`) `preflight` s'execute, les
+  manques sont imprimes sur stderr, **une erreur arrete le programme (code 1) avec un message clair au lieu d'une trace**,
+  `args.diag_checks` garde le resultat. GUI : `scene_msg` affiche une fois `summary_line` ; bouton **Diagnostic** (onglet Affichage,
+  `diagnostic_report`) = verifications refaites sauf OpenGL (resultat du demarrage : pas de second contexte GL pendant le rendu),
+  dans `choice_dialog`.
+- **Version portable** (`build_portable.py`, stdlib, Windows) : un dossier `dist/casual-overlay-portable/` = `python/` (copie de
+  l'installation Python de base du venv, sans Doc / tests / pip, avec tcl/tk, + `site-packages` du `.venv`), les `.py`, `gl_shaders/`,
+  `asset/` (fichiers du dossier, pas les animations perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
+  ffprobe.exe), `start.bat`, `LISEZMOI.txt`. **Pas de gel (PyInstaller)** : audio2wave est importe dynamiquement et tkinter /
+  modules varient selon le mode. `audio2wave_gl.bundled_paths(script_dir, path)` : `audio2wave/` a cote du programme l'emporte sur le
+  depot voisin (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
+  trouvent). `start.bat` prend `python\python.exe` puis `.venv\Scripts\python.exe`. Le script **verifie le dossier fabrique** avec
+  son propre Python (diagnostic + rendu synthetique de 3 s). Verifie a la main : lance avec un PATH reduit a `C:\Windows\System32`,
+  tout est trouve dans le dossier (python, modules, ffmpeg, audio2wave), OpenGL et micro detectes. Taille ~520 Mo dont 424 Mo de
+  ffmpeg « full » (un build « essentials » est plus leger ; licence GPL du build : ne pas redistribuer publiquement sans la respecter).
+  Les reglages restent dans `~/.audio2wave` (pas dans le dossier). `dist/` est dans `.gitignore`.
+- `check_gl.py` (`check_diagnostics`) : chaque verification avec des fausses sources, rapport, resume, `preflight`, `--diagnostic`
+  en vrai (ce PC, PC sans ffmpeg = code 1, synthetique = avertissement, audio2wave absent), demarrage sans ffmpeg = arret propre sans
+  trace, `bundled_paths`, assemblage du dossier portable (sans les animations perso), `copy_tree`.
+
 ## Commandes
 
 ```bash
@@ -32,6 +62,8 @@ python audio2wave_gl.py -d "<entree>" --dry-run        # meme commande ffmpeg qu
 python audio2wave_gl.py -d "<entree>"                  # live (plein ecran auto seulement avec un 2e moniteur)
 python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
 python check_gl.py                                     # verifications hors materiel
+python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ffmpeg, OpenGL, micro...)
+python build_portable.py --zip                         # dossier portable (Python + ffmpeg + audio2wave dedans)
 ```
 
 Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--style radio
@@ -39,7 +71,7 @@ Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--s
 `--render-size`, `--logo`, `--logo-video anim.webm [--logo-key #00ff00]`, `--text "LIGNE 1\nLIGNE 2"`, `--logo-scale`, `--logo-pos`, `--monitor`, `--hud`, `--stats`,
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
-Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif, T automations, 1-5 effets
+Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif/video, T automations, 1-5 effets
 (wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, M fonte acide du logo, V cellules du logo, F1-F9 scenes, Espace VJ lecture/pause, fleche droite scene suivante (avec --gui), +/- ou PageUp/PageDown intensite globale, haut/bas
 sensibilite du kick, R recharge shaders + reglages, P sauve dans
 `~/.audio2wave/gl_params.json` (recharge au lancement).
@@ -124,9 +156,27 @@ Tout est dans [audio2wave_gl.py](audio2wave_gl.py) ; les GLSL sont dans `gl_shad
 - `spawn_producer()` : meme commande que `live.producer_command()`, mais stdout est un pipe
   Windows a **gros tampon** (16 Mo via `CreatePipe`), voir Pieges.
 
+### Fond video (`bg_mode` = `video`, `--bg-video`, `--background video`)
+
+Troisieme fond : un **fichier video brut** lu en boucle plein cadre, a la place du visuel d'audio2wave. Reglages `bg_video` (chemin, "" =
+aucun) et `bg_video_fit` (`cover` = remplit en recadrant, ratio garde ; `stretch`), cles `bg_*` donc dans les presets de fond et dans
+`capture_background`. Le shader ne change pas (`u_bg_mode` = 1 seulement pour le motif) : la video arrive par la meme texture que le flux
+d'audio2wave. `BgVideoManager` (audio2wave_gl.py, instancie dans `loop`, `s.bgvideo`) lance / arrete le decodage quand mode, fichier ou
+cadrage changent : `BgVideo` = `bg_video_command` (ffmpeg `-re -stream_loop -1`, `scale` + `crop` ou `scale`, rgb24 a la taille du rendu,
+meme format que le producteur) + `FrameReader` (latest wins, pipe a gros tampon, sous-classe de `LogoVideo` pour `error()` / `stop()`).
+`reader_for(params)` rend le lecteur a utiliser, **None tant que la premiere image n'est pas arrivee** (on garde le fond d'avant, jamais
+d'ecran noir) ; messages dans `s.status["bgvideo"]` (introuvable, illisible avec le message d'ffmpeg, "choisis un fichier"), affiches
+dans le bloc de la GUI. Quitter le mode arrete ffmpeg (aucun processus residuel). Touche B : live -> motif -> video (seulement si un fichier
+est choisi). Scenes : `capture_scene` range un fond video comme un fond genere (`bg` = `"video"`, `fond` = `capture_background`, pas
+d'etat audio2wave) et `scene_values` rend le mode, le fichier et le cadrage. GUI : bloc `bgvid_box` dans le meme `pattern_holder` que le
+fond genere (un seul des trois contenus visible, `show_bg`), fichier tape sans Entree valide avant une capture (`flush_pending_inputs`),
+glisser-deposer d'un fichier sur le bloc (`drop_bg_video`, `a2w_from_file` : une video seulement) qui passe le fond en mode video.
+`check_gl.py` (`check_bg_video`, `gui_bgvideo_steps`) : commande, cover / stretch, decodage reel en boucle, relance au changement,
+arret propre, fichier absent / vide / corrompu, scenes, trois modes exclusifs, depot.
+
 ### Fond genere (`--background pattern`, touche B)
 
-Second mode de fond, a cote du spectre ffmpeg (`bg_mode` = `live` | `pattern`) : le motif
+Second mode de fond, a cote du spectre ffmpeg (`bg_mode` = `live` | `pattern` | `video`) : le motif
 du banc de test (degrades qui defilent + damier qui bascule), calcule **dans `scene.frag`**
 (`background_pattern()`), donc sans flux video ni limite de numpy. Palette `classic` = le
 visuel d'origine (canaux R/V/B en dents de scie, damier de 80 px a 720 p, valeurs reprises
@@ -491,6 +541,17 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    passage de `on_page_config` (`after_idle`), sans quoi la page garde la hauteur de l'etat precedent (vu : 1250 px de
    haut en revenant en large).
    Les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px par ligne).
+- **Presets en tete de chaque bloc** : presets overlay (`preset_bar`), presets fond (haut du fond genere) et presets d'audio2wave
+  (`presets_to_top` : le bandeau `PRESETS ...`, `Charger`, `Sauvegarder sous` et `Mode VJ` de Snap remontent sur les premieres lignes
+  de la grille de leur panneau, la ligne de statut reste en bas ; seuls les widgets directement poses dans la grille de l'hote sont
+  deplaces : les champs couleur sont re-grilles dans un conteneur, `grid_info()["in"]`). `check_gl.py` (`presets_top_state`).
+- **Info-bulles dans la fenetre** : `live.Tooltip` (audio2wave, aussi pour Snap, Ridge et nos panneaux) se posait sous le widget sans
+  regarder le bord. `install_tooltip_clamp` remplace sa methode `_show` au lancement (sans toucher a leur fichier) : l'info-bulle est
+  mesuree puis placee par `tooltip_position` (pure : decalee a gauche si elle depasse a droite, au-dessus du widget si elle depasse en
+  bas, toujours dans la fenetre). `check_gl.py` (`tooltip_violations`) survole chaque widget qui porte une info-bulle et verifie
+  qu'elle est dans la fenetre (large, 940 px, 420 px de haut, panneau etendu, panneau Snap). Seuil de la mise en page empilee
+  (`layout["wide_need"]`) : sans la largeur de l'ascenseur du panneau d'audio2wave, qui apparait ou disparait selon la hauteur (une
+  fenetre a sa taille naturelle sans ascenseur passait en empile ; course avec la minuterie `settled`, vue par le test de taille VJ).
 - **Structure visible** : deux grandes parties, LIVE (bandeau turquoise, fenetre d'audio2wave) et OVERLAY
   (bandeau violet), separees par un trait violet de 3 px ; le titre d'audio2wave est retire de la ligne 0
   pour y poser les bandeaux. Toutes les sections sont des **bandeaux** (`style_band`, fond `GUI_PANEL_BG`, texte

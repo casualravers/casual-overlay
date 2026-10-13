@@ -6,7 +6,25 @@ chromatique, glitch, pulsation du logo) pilotees en temps reel par les basses et
 
 Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`).
 
-## Installation
+## Version portable (rien a installer)
+
+Pour un PC de salle ou de scene : `python build_portable.py --zip` (sur ta machine de dev) fabrique `dist/casual-overlay-portable/`
+(+ un `.zip`) avec **son Python 3.12, ffmpeg et audio2wave dedans**. Copie le dossier sur le PC cible, double-clic sur `start.bat` :
+c'est tout. Le dossier fait environ 500 Mo (surtout ffmpeg : un build « essentials » est plus leger, `--ffmpeg-dir`). Le script
+verifie le dossier fabrique en le lancant avec SON Python (diagnostic + un rendu synthetique) ; `--no-ffmpeg` pour ne pas embarquer
+ffmpeg, `--no-verify` pour sauter la verification. Tes scenes, sets et presets restent dans le dossier de l'utilisateur
+(`.audio2wave`) : remplacer le dossier par une version plus recente ne perd rien.
+
+## Diagnostic : ce PC est-il pret ?
+
+`python audio2wave_gl.py --diagnostic` (ou `start.bat --diagnostic`) verifie : Python, modules (numpy, glfw, moderngl, Pillow,
+sounddevice, tkinter, tkinterdnd2), ffmpeg / ffprobe (et DirectShow, pour le micro), audio2wave, **OpenGL 3.3** (et refuse de
+confondre un GPU avec un rendu logiciel, tres lent), un **micro**, le dossier des reglages. Chaque manque est dit clairement avec
+son remede (`[ERREUR]` : le programme ne peut pas demarrer ; `[ATTENTION]` : il demarre sans une fonction). Le meme controle
+tourne au lancement : une erreur arrete le programme avec ce message au lieu d'une trace d'erreur, les avertissements sont
+resumes dans la fenetre de reglages (ligne des scenes) et le rapport complet est dans **Affichage > Diagnostic**.
+
+## Installation (developpement)
 
 Prerequis : Python 3.12 (3.14 n'a pas encore de wheel `moderngl`), `ffmpeg` dans le PATH,
 depot `audio2wave` a cote de celui-ci.
@@ -30,6 +48,7 @@ python audio2wave_gl.py -d "Microphone (Realtek(R) Audio)"
 python audio2wave_gl.py -d "Microphone (Realtek(R) Audio)" --gui   # avec la fenetre de reglages
 python audio2wave_gl.py --gui --no-fullscreen             # GUI seule: choisir l'entree dans la fenetre
 python audio2wave_gl.py --background pattern --gui        # fond en motif genere (pas besoin de -d)
+python audio2wave_gl.py --bg-video clip.mp4 --gui         # fond = un fichier video brut en boucle (pas besoin de -d)
 python audio2wave_gl.py --synthetic --no-fullscreen       # essai sans micro ni ffmpeg
 python check_gl.py                                        # verifications hors materiel
 ```
@@ -126,8 +145,12 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
 (environ 650 px de haut) : *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
 *Fonte du logo*, *Cellules*, *Noise*, *Affichage*.
 
-- **Fond** (en tete de la partie LIVE : un choix *Audio2wave* / *Fond genere*, et **un seul des deux est affiche a la fois** : le
-  panneau d'audio2wave, ou les reglages du fond genere avec leurs presets) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Fond genere* (degrades + damier animes par la
+- **Fond video** : un fichier video ou une animation (mp4, mov, mkv, webm, avi, gif...) lu **en boucle, plein cadre, a sa cadence**, a la place
+  du visuel d'audio2wave ; le logo et tous les effets s'appliquent par-dessus. Reglages : le fichier (champ, *...*, *Aucune*, ou **glisser un
+  fichier sur le bloc**) et le cadrage (*Remplir* : couvre le cadre et recadre le debordement, ratio garde ; *Etirer*). Une scene retient
+  son fond video (fichier + cadrage) comme un fond genere, et les presets de fond le contiennent. En ligne de commande : `--bg-video FICHIER`.
+- **Fond** (en tete de la partie LIVE : un choix *Audio2wave* / *Fond genere* / *Video*, et **un seul des trois est affiche a la fois** :
+  le panneau d'audio2wave, les reglages du fond genere, ou ceux du **fond video**, avec les presets de fond) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Fond genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel, Duo ou Banc de test (copie exacte du motif de test, sans reglage), couleurs, angle, teinte, vitesse, taille des
   carreaux, contraste, cadence, reaction au kick ; effet immediat).
 - **Noise** : un seul hasard, prereglé, qui joue le role d'une musique imaginaire : des ondulations et des coups au hasard,
@@ -177,7 +200,7 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 |---|---|
 | Echap | quitter |
 | F | fenetre / plein ecran (plein ecran au lancement seulement s'il y a un 2e ecran) |
-| B | fond : spectre audio / motif genere |
+| B | fond : spectre audio / motif genere / video (si un fichier est choisi) |
 | T | automations : actives / figees |
 | H | barres de debug (basses, mediums, aigus, RMS, kick + etat des effets) |
 | 1 a 5 | wobble, ripple, aberration chromatique, glitch (fond), effets du logo (pulsation, contour) |

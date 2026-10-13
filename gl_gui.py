@@ -37,6 +37,7 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, simpledialog, ttk
 
 import audio2wave_gl as gl
+import diagnostics
 import gui_colors
 import gui_gates
 import scenes
@@ -102,6 +103,79 @@ LIVE_MAX_HEIGHT = 600            # hauteur maxi du panneau d'audio2wave avant d'
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "snap": "SNAP  -  photo de l'onde (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
+
+
+def tooltip_position(widget: tuple, tip: tuple, bounds: tuple, gap: int = 4) -> tuple:
+    """Coin haut-gauche d'une info-bulle qui reste dans `bounds` (gauche, haut, droite, bas). `widget` = (x, y, largeur,
+    hauteur) du widget survole, `tip` = (largeur, hauteur) de l'info-bulle. Par defaut sous le widget, alignee a gauche (comme
+    audio2wave) ; decalee vers la gauche si elle depasse a droite, passee AU-DESSUS du widget si elle depasse en bas."""
+    wx, wy, ww, wh = widget
+    tw, th = tip
+    left, top, right, bottom = bounds
+    x = min(wx + gap, right - tw - gap)
+    x = max(x, left + gap)
+    y = wy + wh + gap
+    if y + th > bottom - gap:
+        above = wy - th - gap
+        y = above if above >= top + gap else max(top + gap, bottom - th - gap)
+    y = max(top + gap, min(y, bottom - th - gap))      # widget lui-meme hors de la fenetre (defile hors de vue) : on reste dedans
+    return x, y
+
+
+def install_tooltip_clamp(live) -> None:
+    """Les info-bulles d'audio2wave (`live.Tooltip`, aussi utilisee par Snap, Ridge et par nos panneaux) se posent sous le
+    widget sans regarder ou est le bord : a droite ou en bas de la fenetre elles sortaient. On remplace, au lancement et sans
+    toucher a leur fichier, la methode qui les place (`_show`) par une version qui mesure l'info-bulle puis la garde dans la
+    fenetre de reglages. Idempotent."""
+    cls = live.Tooltip
+    if getattr(cls, "_clamped", False):
+        return
+
+    def show(self, _evt=None) -> None:
+        if self.tip is not None:
+            return
+        w = self.widget
+        self.tip = tk.Toplevel(w)
+        self.tip.wm_overrideredirect(True)
+        self.tip.withdraw()
+        tk.Label(self.tip, text=self.text, justify="left", bg=live.GUI_PANEL_BG, fg=live.GUI_FG, font=live.GUI_FONT,
+                 relief="solid", borderwidth=1, padx=6, pady=4, wraplength=260).pack()
+        self.tip.update_idletasks()
+        win = w.winfo_toplevel()
+        left, top = win.winfo_rootx(), win.winfo_rooty()
+        x, y = tooltip_position((w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height()),
+                                (self.tip.winfo_reqwidth(), self.tip.winfo_reqheight()),
+                                (left, top, left + win.winfo_width(), top + win.winfo_height()))
+        self.tip.wm_geometry(f"+{x}+{y}")
+        self.tip.deiconify()
+
+    cls._show = show
+    cls._clamped = True
+
+
+def presets_to_top(host) -> None:
+    """Remonte les PRESETS du panneau d'audio2wave en tete (comme les presets overlay et fond) : le bandeau, `Charger`,
+    `Sauvegarder sous` (et `Mode VJ` de Snap) passent sur les premieres lignes de la grille, le reste descend ; la ligne de
+    statut du bas reste en bas. Pure remise en page : aucun widget n'est cree ni modifie."""
+    band = next((w for w in host.winfo_children() if w.grid_info() and w.winfo_class() == "Label"
+                 and str(w.cget("text")).startswith("PRESETS")), None)
+    if band is None:
+        return
+    top = int(band.grid_info()["row"])
+    last = top
+    names = ("Charger", "Sauvegarder sous", "Mode VJ")
+    while any(w.winfo_class() == "Label" and w.cget("text") in names for w in host.grid_slaves(row=last + 1)):
+        last += 1
+    height = last - top + 1                          # lignes du bloc des presets
+    spacer = top - 1                                 # filet au-dessus du bandeau : il passe sous le bloc
+    for w in [w for w in host.winfo_children() if w.grid_info() and str(w.grid_info().get("in")) == str(host)]:   # pas ceux ranges dans un conteneur (pastilles de couleur)
+        row = int(w.grid_info()["row"])
+        if row == spacer:
+            w.grid_configure(row=height)
+        elif row < spacer:
+            w.grid_configure(row=row + height + 1)
+        elif top <= row <= last:
+            w.grid_configure(row=row - top)
 
 
 def tidy_mode_gui(host, mode: str) -> None:
@@ -413,6 +487,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     le relisent a leur creation."""
     import audio2wave as a2w
 
+    install_tooltip_clamp(live)          # info-bulles toujours dans la fenetre
     Tooltip = live.Tooltip
     params = s.params
     manager = s.manager
@@ -483,10 +558,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # sont des fenetres du meme canvas, une seule est affichee (voir `show_bg`) ; le choix est en haut, hors du canvas.
     pattern_holder = tk.Frame(canvas)
     pattern_item = canvas.create_window((0, 0), window=pattern_holder, anchor="nw", state="hidden")
-    bg_state = {"pattern": False}
+    bg_state = {"mode": "live"}
 
     def active_panel() -> tk.Frame:
-        return pattern_holder if bg_state["pattern"] else host
+        return host if bg_state["mode"] == "live" else pattern_holder      # fond genere ET fond video partagent le meme bloc
 
     restart_event = threading.Event()
     live_status = {"text": ""}
@@ -518,6 +593,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         tight = tuple(max(1, round(float(v) * 0.35)) for v in values)
         w.grid_configure(pady=tight[0] if len(tight) == 1 else tight)
 
+    presets_to_top(host)             # PRESETS LIVE / SNAP / RIDGE en tete, comme les presets overlay et fond
     cap = max(420, min(LIVE_MAX_HEIGHT, root.winfo_screenheight() - 200))
 
     def cap_now() -> int:
@@ -905,10 +981,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     bg_title.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     style_band(bg_title, a2w, color=OVERLAY_COLOR)
     Tooltip(bg_title, "Audio2wave = le visuel du mode choisi dessous (Live, Snap ou Ridge). Fond genere = degrades et damier "
-                      "calcules par la carte graphique (touche B). Un seul des deux est affiche a la fois.")
+                      "calcules par la carte graphique. Video = un fichier video brut lu en boucle plein cadre. Touche B : "
+                      "passe de l'un a l'autre. Un seul des trois est affiche a la fois.")
     bg_frame = tk.Frame(tab_fond)
     bg_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    for text, value in (("Audio2wave", "live"), ("Fond genere", "pattern")):
+    for text, value in (("Audio2wave", "live"), ("Fond genere", "pattern"), ("Video", "video")):
         tk.Radiobutton(bg_frame, text=text, variable=bg_var, value=value).pack(side="left")
     bind_param("bg_mode", bg_var, str)
 
@@ -944,13 +1021,62 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     param_slider(pz, "Reaction a l'audio", "bg_react", 0.0, 2.0, 0.1,
                  "Flash et bascule du damier a chaque kick, defilement accelere par les basses. 0 = aucune.")
 
+    # ---- fond VIDEO : un fichier brut lu en boucle plein cadre (le decodage est dans le fil GL : BgVideoManager)
+    bgvid_box = tk.Frame(pattern_holder)
+    bgvid_box.columnconfigure(2, weight=1)
+    bz = Zone(bgvid_box)
+    add_section_title(bz, "Fond video")
+    r = bz.next_row()
+    add_label(bz, "Fichier", r, "Video ou animation lue en boucle, plein cadre, a sa cadence. Formats : mp4, mov, mkv, webm, "
+                                "avi, gif... Tu peux aussi glisser un fichier sur ce bloc.")
+    bgv_frame = tk.Frame(bgvid_box)
+    bgv_frame.grid(row=r, column=1, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    bgv_var = tk.StringVar(value=params["bg_video"])
+    bgv_entry = tk.Entry(bgv_frame, textvariable=bgv_var, width=26)
+    bgv_entry.pack(side="left")
+
+    def apply_bgv(_evt=None) -> None:
+        params["bg_video"] = bgv_var.get().strip()
+
+    bgv_entry.bind("<Return>", apply_bgv)
+    bgv_entry.bind("<FocusOut>", apply_bgv)
+
+    def browse_bgv() -> None:
+        initial = Path(bgv_var.get()).parent if bgv_var.get() else gl.SCRIPT_DIR / "asset"
+        chosen = filedialog.askopenfilename(
+            title="Choisir la video du fond", initialdir=str(initial if initial.is_dir() else gl.SCRIPT_DIR),
+            filetypes=[("Videos et animations", gl.LOGO_VIDEO_EXTENSIONS + " *.m4v"), ("Tous les fichiers", "*.*")])
+        if chosen:
+            bgv_var.set(chosen)
+            apply_bgv()
+
+    bgv_browse = tk.Button(bgv_frame, text="...", command=browse_bgv, padx=6)
+    bgv_browse.pack(side="left", padx=(6, 0))
+    Tooltip(bgv_browse, "Parcourir...")
+    tk.Button(bgv_frame, text="Aucune", command=lambda: (bgv_var.set(""), apply_bgv())).pack(side="left", padx=(4, 0))
+    param_radio(bz, "Cadrage", "bg_video_fit", (("Remplir (recadre)", "cover"), ("Etirer", "stretch")),
+                tooltip="Remplir : la video couvre tout le cadre, le debordement est recadre (le ratio est garde). "
+                        "Etirer : la video est etiree aux proportions du rendu.")
+    bgv_status = tk.StringVar(value="")
+    r = bz.next_row()
+    tk.Label(bgvid_box, textvariable=bgv_status, anchor="w", justify="left", wraplength=360, fg=a2w.GUI_MUTED_FG).grid(
+        row=r, column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+
     def show_bg(*_a) -> None:
-        """Affiche le panneau d'audio2wave OU le fond genere, jamais les deux (deux fenetres du meme canvas)."""
-        bg_state["pattern"] = bg_var.get() == "pattern"
-        canvas.itemconfigure(host_item, state="hidden" if bg_state["pattern"] else "normal")
-        canvas.itemconfigure(pattern_item, state="normal" if bg_state["pattern"] else "hidden")
+        """Affiche le panneau d'audio2wave, le fond genere OU le fond video : un seul des trois (fenetres du meme canvas)."""
+        bg_state["mode"] = bg_var.get() if bg_var.get() in ("pattern", "video") else "live"
+        own = bg_state["mode"] != "live"
+        canvas.itemconfigure(host_item, state="hidden" if own else "normal")
+        canvas.itemconfigure(pattern_item, state="normal" if own else "hidden")
+        pattern_box.pack_forget()
+        bgvid_box.pack_forget()
+        if bg_state["mode"] == "pattern":
+            pattern_box.pack(fill="x", after=bg_preset_bar)
+        elif bg_state["mode"] == "video":
+            bgvid_box.pack(fill="x", after=bg_preset_bar)
         canvas.yview_moveto(0)
-        banner_live.config(text="LIVE  -  fond genere (casual-overlay)" if bg_state["pattern"] else MODE_BANNERS[mode])
+        banner_live.config(text={"pattern": "LIVE  -  fond genere (casual-overlay)",
+                                 "video": "LIVE  -  fond video (casual-overlay)"}.get(bg_state["mode"], MODE_BANNERS[mode]))
         fit()
 
     bg_var.trace_add("write", show_bg)
@@ -1360,6 +1486,23 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         for text, cmd in row_buttons:
             tk.Button(frame, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
 
+    def diagnostic_report() -> str:
+        """Rapport du diagnostic : verifications refaites maintenant, sauf OpenGL (resultat du demarrage : on n'ouvre pas un
+        second contexte GL pendant que le rendu tourne)."""
+        a = getattr(s, "args", None)
+        startup = getattr(a, "diag_checks", None) or []
+        checks = diagnostics.run_checks(Path(getattr(a, "a2w_dir", gl.DEFAULT_A2W_DIR)), bool(getattr(a, "synthetic", False)),
+                                        True, opengl=False)
+        gl_check = next((x for x in startup if x.name == "OpenGL"), None)
+        if gl_check is not None:
+            checks.insert(next((i for i, x in enumerate(checks) if x.name == "Micro"), len(checks)), gl_check)
+        return diagnostics.format_report(checks)
+
+    diag_btn = tk.Button(tab_aff, text="Diagnostic",
+                         command=lambda: choice_dialog(root, "Diagnostic", diagnostic_report(), ["Fermer"]))
+    diag_btn.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    Tooltip(diag_btn, "Verifie ce PC : ffmpeg, OpenGL, micro, modules Python (glisser-deposer...), audio2wave, dossier des reglages.")
+
     auto_master_var = tk.IntVar(value=int(float(params["auto_master"]) >= 0.5))
     bind_param("auto_master", auto_master_var, float)
     frame = tk.Frame(tab_aff)
@@ -1453,6 +1596,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         cell_var.set(int(float(params["cell_on"]) >= 0.5))
         logo_var.set(params["logo_path"])
         video_var.set(params["logo_video"])
+        bgv_var.set(params["bg_video"])
         key_var.set(params["logo_key"])
         text_widget.delete("1.0", "end")
         text_widget.insert("1.0", params["text_content"])
@@ -1461,6 +1605,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # rendu). Une scene = (fond audio2wave OU motif genere) + overlay, voir scenes.py.
     scene_book = scenes.SceneBook(lambda: scenes.SCENES_PATH)
     scene_msg = tk.StringVar(value="")
+    if not getattr(s, "diag_shown", False):       # une fois : ce que le diagnostic de demarrage a signale
+        s.diag_shown = True
+        scene_msg.set(diagnostics.summary_line(getattr(getattr(s, "args", None), "diag_checks", None) or []))
     scene_state = {"adding": False}
     scene_entry_var = tk.StringVar(value="")
 
@@ -1556,7 +1703,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def flush_pending_inputs() -> None:
         """Valide ce qui a ete tape sans Entree : un champ de fichier ne s'applique qu'a Entree / perte du focus, et cliquer un
         menu (+ Scene) ne fait pas perdre le focus : sans cela la scene capturait l'ancien media."""
-        for fn in (apply_logo_path, apply_video_path, apply_text):
+        for fn in (apply_logo_path, apply_video_path, apply_bgv, apply_text):
             try:
                 fn()
             except tk.TclError:
@@ -1573,7 +1720,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         sync_automation_now()
         overrides = None
         note = ""
-        if params["bg_mode"] != "pattern":
+        if params["bg_mode"] not in ("pattern", "video"):
             overrides = capture_live_overrides()
             if overrides is None:
                 note = " (reglages du panneau audio2wave non retenus)"
@@ -2018,6 +2165,27 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         except Exception:
             pass
 
+    def drop_bg_video(data: str) -> bool:
+        """Fichier depose sur le bloc du fond video : il devient la video du fond, et le fond passe en mode video."""
+        files = [f for f in root.tk.splitlist(data) if f]
+        path = a2w_from_file(files[0]) if files else None
+        if path is None:
+            scene_msg.set("Fond video : il faut un fichier video" + (f" ({Path(files[0]).name})" if files else ""))
+            return False
+        bgv_var.set(path)
+        apply_bgv()
+        bg_var.set("video")
+        scene_msg.set(f"Fond video : {Path(path).name}")
+        return True
+
+    if dnd["ok"]:
+        for w in gui_gates.leaves(bgvid_box):
+            try:
+                w.drop_target_register(dnd["files"])
+                w.dnd_bind("<<Drop>>", lambda e: drop_bg_video(e.data) and "copy")
+            except Exception:
+                pass
+
     def register_tree(widget, index: int, target: str = "choose") -> None:
         register_drop(widget, index, target)
         for child in widget.winfo_children():
@@ -2316,7 +2484,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
             scene = row["scene"]
             Tooltip(btn, f"{name} - clic: charger la scene (F{i + 1} dans la fenetre de rendu). "
-                         f"{'Fond: motif genere. ' if scene['bg'] == 'pattern' else 'Fond: audio2wave (' + str(scene.get('mode')) + '). '}"
+                         f"{ {'pattern': 'Fond: fond genere. ', 'video': 'Fond: video. '}.get(scene['bg']) or 'Fond: audio2wave (' + str(scene.get('mode')) + '). '}"
                          + (f"Media: {scenes.media_label(row['media'])}. " if row["media"] else "")
                          + "Glisse un fichier (image / video) dessus pour lui lier un media. "
                          + "Clic droit: mettre a jour, media, deplacer, retirer, supprimer.")
@@ -2417,6 +2585,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         for name, item in bars.items():
             meter.coords(item, 52, meter.coords(item)[1], 52 + 200 * min(max(state[name], 0.0), 1.0),
                          meter.coords(item)[3])
+        bgv_status.set(s.status.get("bgvideo", ""))
         nz_swell, nz_hit = s.status.get("noise", (0.0, 0.0))
         for name, level in (("houle", nz_swell), ("coup", nz_hit)):
             item = noise_bars[name]
@@ -2479,7 +2648,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     set_layout("wide")
     page.update_idletasks()
-    layout["wide_need"] = page.winfo_reqwidth()          # largeur naturelle cote a cote : en dessous, on empile
+    # largeur naturelle cote a cote : en dessous, on empile. L'ascenseur du panneau d'audio2wave (17 px) apparait ou disparait
+    # selon la hauteur de la fenetre : il ne compte pas, sinon une fenetre a sa taille naturelle SANS ascenseur etait jugee trop
+    # etroite et passait en mise en page empilee alors que tout tenait.
+    layout["wide_need"] = page.winfo_reqwidth() - (vbar.winfo_reqwidth() if vbar.winfo_ismapped() else 0)
     page.bind("<Configure>", on_page_config)
     page_canvas.bind("<Configure>", on_page_config)
     on_page_config()
@@ -2518,7 +2690,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "drop": drop_media, "a2w_clear": a2w_clear, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
                        "move_entry": move_entry_now, "media_current": media_from_current, "media_clear": media_clear},
-            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "pattern_box": pattern_box,
+            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
