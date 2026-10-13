@@ -20,7 +20,7 @@ MUTED = "#8993a8"
 FAINT = "#5d667b"       # desactive
 
 # Accents, un par partie, et le texte lisible dessus
-LIVE = "#5fd4c8"
+LIVE = "#3b82f6"
 OVERLAY = "#b392ff"
 SCENE = "#ffcf6b"
 ON_ACCENT = "#0b1018"

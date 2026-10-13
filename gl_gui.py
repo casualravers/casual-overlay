@@ -30,6 +30,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import sys
 import threading
 import time
 import tkinter as tk
@@ -65,7 +66,7 @@ class Zone:
 
 # Couleurs des deux grandes parties de la fenetre (le theme sombre d'audio2wave reste le fond) :
 # LIVE (spectre ffmpeg, fenetre d'audio2wave) en turquoise, OVERLAY (casual-overlay) en violet.
-LIVE_COLOR = "#5fd4c8"
+LIVE_COLOR = theme.LIVE
 OVERLAY_COLOR = "#b392ff"
 SCENE_COLOR = "#ffcf6b"          # barre des scenes (ambre)
 BANNER_FG = "#0b1018"
@@ -122,6 +123,49 @@ def tooltip_position(widget: tuple, tip: tuple, bounds: tuple, gap: int = 4) -> 
         y = above if above >= top + gap else max(top + gap, bottom - th - gap)
     y = max(top + gap, min(y, bottom - th - gap))      # widget lui-meme hors de la fenetre (defile hors de vue) : on reste dedans
     return x, y
+
+
+def apply_a2w_palette() -> None:
+    """Accent d'audio2wave (`GUI_ACCENT`, turquoise) -> bleu du theme, dans CE processus seulement et sans toucher a leurs fichiers :
+    leurs modules lisent ces constantes a la creation de leurs widgets (`option_add` de style_gui, labels, curseurs). A appeler
+    avant de les construire ; `common` d'abord (Snap et Ridge, importes plus tard, en heritent)."""
+    for name in ("common", "audio2wave", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "GUI_ACCENT"):
+            module.GUI_ACCENT = theme.LIVE
+            if hasattr(module, "GUI_ACCENT_FG"):
+                module.GUI_ACCENT_FG = theme.ON_ACCENT
+
+
+def install_curve_skin(live) -> None:
+    """Fenetre « courbe » (editeur de variation automatique d'audio2wave, `AutomationManager.open_editor`) : habillee comme le
+    reste a son ouverture (accent du gestionnaire : violet cote overlay, bleu cote LIVE), sans toucher a leur fichier. Idempotent."""
+    cls = live.AutomationManager
+    if getattr(cls, "_skinned", False):
+        return
+    original = cls.open_editor
+
+    def open_editor(self, attr: str) -> None:
+        before = self.state[attr]["editor"]
+        original(self, attr)
+        win = self.state[attr]["editor"]
+        if win is not None and win is not before:
+            skin.zone(win, self.accent)
+            canvas = self.state[attr]["canvas"]
+            if canvas is not None:
+                canvas.configure(bg=theme.TROUGH, highlightbackground=theme.LINE)
+                canvas.pack_configure(padx=18, pady=(18, 14))
+            stack = [win]
+            while stack:                                  # leurs Label n'ont pas le fond du panneau (palette de la fenetre)
+                node = stack.pop()
+                for child in node.winfo_children():
+                    if child.winfo_class() == "Label":
+                        child.configure(bg=str(node.cget("bg")))
+                    stack.append(child)
+            skin.apply(win)
+
+    cls.open_editor = open_editor
+    cls._skinned = True
 
 
 def install_tooltip_clamp(live) -> None:
@@ -510,6 +554,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         keep_size = (root.winfo_width(), root.winfo_height())
     for child in list(root.winfo_children()):
         child.destroy()
+    apply_a2w_palette()
+    install_curve_skin(live)
     live.style_gui(root)
     root.title("casual-overlay GL - reglages")
     root.resizable(True, True)
@@ -763,7 +809,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # audio2wave_gl (AutomationEngine, fil de rendu): ici on ne fait qu'editer l'etat (copie dans
     # params["_automation"]) et faire suivre les curseurs.
     params["_automation"] = gl.merge_automation(params.get("_automation"))
-    automation = live.AutomationManager(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, a2w.GUI_ACCENT)
+    automation = live.AutomationManager(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, OVERLAY_COLOR)
     auto_vars: dict[str, tk.Variable] = {}
 
     def add_auto(z: Zone, r: int, key: str, var: tk.Variable) -> None:

@@ -25,6 +25,7 @@ import theme as T
 
 SS = 4                                   # sur-echantillonnage du dessin
 PRIMARY = {"Sauvegarder", "Enregistrer"}      # textes des boutons a l'accent (les autres sont neutres)
+BTN_MARGIN = (3, 1)                      # transparent autour d'un bouton : jamais colle a son voisin
 GAP = 6                                  # espace image / texte des radios et cases
 _pil_cache: dict = {}
 _installed = False
@@ -44,17 +45,22 @@ def _finish(big: Image.Image, w: int, h: int) -> Image.Image:
     return big.resize((w, h), Image.LANCZOS)
 
 
-def round_rect_image(w: int, h: int, fill: str, radius: int = T.RADIUS, outline: str | None = None) -> Image.Image:
-    key = ("rr", w, h, fill, radius, outline)
+def round_rect_image(w: int, h: int, fill: str, radius: int = T.RADIUS, outline: str | None = None,
+                     margin: tuple = (0, 0)) -> Image.Image:
+    """Rectangle arrondi de w x h ; `margin` = (mx, my) pixels transparents autour (l'image fait w + 2 mx x h + 2 my) :
+    des boutons voisins ne se touchent jamais, meme dans un conteneur sans espacement."""
+    key = ("rr", w, h, fill, radius, outline, margin)
     if key not in _pil_cache:
-        big, d = _canvas(w, h, fill)
-        box = (0, 0, w * SS - 1, h * SS - 1)
+        mx, my = margin
+        big, d = _canvas(w + 2 * mx, h + 2 * my, fill)
+        box = (mx * SS, my * SS, (mx + w) * SS - 1, (my + h) * SS - 1)
         if outline:
             d.rounded_rectangle(box, radius * SS, fill=_rgb(outline) + (255,))
-            d.rounded_rectangle((SS, SS, w * SS - 1 - SS, h * SS - 1 - SS), max(0, (radius - 1) * SS), fill=_rgb(fill) + (255,))
+            d.rounded_rectangle((box[0] + SS, box[1] + SS, box[2] - SS, box[3] - SS), max(0, (radius - 1) * SS),
+                                fill=_rgb(fill) + (255,))
         else:
             d.rounded_rectangle(box, radius * SS, fill=_rgb(fill) + (255,))
-        _pil_cache[key] = _finish(big, w, h)
+        _pil_cache[key] = _finish(big, w + 2 * mx, h + 2 * my)
     return _pil_cache[key]
 
 
@@ -215,14 +221,14 @@ def _render_button(w: tk.Misc) -> None:
         text_w = max((font.measure(line) for line in text.split("\n")), default=0)
     lines = max(1, text.count("\n") + 1)
     width = text_w + 2 * sk["padx"]
-    height = max(22, font.metrics("linespace") * lines + 2 * sk["pady"] + 2)
+    height = max(21, font.metrics("linespace") * lines + 2 * sk["pady"])
     state = _state(w)
     fill, fg = _button_colors(w, state)
     key = (width, height, fill, fg, state)
     if sk.get("key") == key:
         return
     sk["key"] = key
-    img = photo(w, round_rect_image(width, height, fill, T.RADIUS))
+    img = photo(w, round_rect_image(width, height, fill, T.RADIUS, margin=BTN_MARGIN))
     sk["img"] = img
     _orig_configure(w, image=img, fg=fg, activeforeground=fg, activebackground=sk["parent"], width=0, height=0)
 

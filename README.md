@@ -62,8 +62,11 @@ Options principales : `--logo`, `--logo-video`, `--logo-key`, `--text "LIGNE 1\n
 
 ## Fenetre de reglages (`--gui`)
 
-La fenetre a **deux grandes parties**, separees par un trait violet et chacune coiffee d'un bandeau
-de couleur ; chaque section porte aussi son bandeau.
+La fenetre a **deux grandes parties**, separees par un trait violet et chacune coiffee d'un titre
+de sa couleur (bleu LIVE, violet OVERLAY, ambre SCENES) ; chaque section porte son repere colore. Style sombre et sobre :
+boutons arrondis (l'accent est reserve aux actions principales, comme *Sauvegarder*), radios en anneau, cases a coche, listes
+deroulantes a chevron, curseurs a poignee d'accent, fenetre *courbe* comprise. Cet habillage s'applique aussi aux panneaux
+d'audio2wave (Live, Snap, Ridge).
 
 **SCENES (rangee ambre, tout en haut, toujours visible)** : une scene change **tout le look d'un clic** (ou F1 a F9 dans la
 fenetre de rendu, avec `--gui`). Une scene = **le fond (audio2wave OU motif genere) + l'overlay**, car le motif genere
@@ -115,7 +118,7 @@ n'ajoutent rien aux presets d'audio2wave (une scene et un preset sont deux chose
 une ancienne version (elles rangeaient un preset `scene-<nom>` chez audio2wave) sont migrees toutes seules au
 lancement suivant, et ces presets sont retires de leurs listes.
 
-**LIVE (bandeau turquoise, a gauche)** : **la fenetre de reglages d'`audio2wave_live.py --gui`, reprise telle
+**LIVE (titre bleu, a gauche)** : **la fenetre de reglages d'`audio2wave_live.py --gui`, reprise telle
 quelle** du depot audio2wave (meme theme, automations de courbes, info-bulles) pour le visuel de fond
 ffmpeg : chaque reglage remplace le flux a chaud (environ 0,4 s apres le dernier), sans que la
 fenetre video ne bouge. La taille de fenetre n'y est pas reprise ; la case *Plein ecran* commande la fenetre
