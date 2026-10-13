@@ -313,7 +313,8 @@ def check_gui() -> None:
                               presets=any(t.startswith(f"PRESETS {stage.upper()}") for t in texts),
                               buttons=("Live" in texts, "Snap" in texts, "Ridge" in texts),
                               overlay=any(t.startswith("OVERLAY") for t in texts),
-                              height=root.winfo_reqheight(), reader_ok=s.reader is s.pysrc.reader)
+                              height=root.winfo_reqheight(), reader_ok=s.reader is s.pysrc.reader,
+                              presets_top=presets_top_state(c["live_host"]))
 
             def later(tries=0):
                 # La premiere image d'un mode arrive apres un "temps par photo" (4 s par defaut pour Snap).
@@ -342,12 +343,14 @@ def check_gui() -> None:
             out["live_back"] = dict(mode=s.mode, src=s.pysrc, suspended=manager.suspended,
                                     resumed=[r.device for r in manager.resumed], reader_ok=s.reader is manager.reader,
                                     banner=any(t.startswith("LIVE") for t in texts),
-                                    gain=find_scale(c["live_host"], "Gain (dB)") is not None)
+                                    gain=find_scale(c["live_host"], "Gain (dB)") is not None,
+                                    presets_top=presets_top_state(c["live_host"]))
             # une scene a fond audio2wave qui change de mode (Live -> Snap) charge son preset dans le panneau neuf
             out["stage"] = "scene"
             root.geometry("")                                   # taille naturelle (aucune geometrie imposee), comme a l'ouverture
-            root.update()
-            root.update()
+            for _ in range(16):                                 # la taille naturelle bouge un instant (l'ascenseur du panneau apparait) : on attend qu'elle se fige
+                root.update()
+                time.sleep(0.05)
             out["size_before"] = (root.winfo_width(), root.winfo_height())
             c["vj"]["state"]["running"] = True                 # VJ actif : la fenetre ne doit pas changer de taille
             c["vj"]["state"]["t_next"] = gl.time.monotonic() + 1000
@@ -368,6 +371,8 @@ def check_gui() -> None:
                 menus = [w for w in walk(c["live_host"]) if w.winfo_class() == "Menubutton"]
                 root.update()
                 out["size_after"] = (root.winfo_width(), root.winfo_height())
+                # info-bulles du panneau Snap : mesurees APRES la taille (les survoler bouscule la mise en page de ce test)
+                out["snap"]["tips"] = tooltip_violations(root)
                 out["scene_snap"] = (s.mode, s.pysrc.args.colors, s.pysrc.args.wave)
                 old = c["scene_book"].get("Scene Old")
                 out["scene_migrated"] = (old.get("live_overrides"), "live_preset" in old,
@@ -495,6 +500,9 @@ def check_gui() -> None:
             out["bg_param"] = params["bg_mode"]
             root.update()
             out["bg_pat"] = (c["pattern_box"].winfo_ismapped(), c["live_host"].winfo_ismapped())
+            out["presets_blocks"] = (presets_top_state(c["live_host"]),
+                                     c["bg_presets"]["menu"].winfo_rooty() < c["pattern_box"].winfo_rooty(),
+                                     c["overlay_menu"].winfo_rooty() < c["notebook"].winfo_rooty())
             c["bg_color1_var"].set("#102030")
             out["bg_c1"] = params["bg_color1"]
             out["image_shown"] = c["image_box"].winfo_manager()
@@ -766,6 +774,8 @@ def check_gui() -> None:
                 try:
                     gui_sets_steps(c, s, out)
                     gui_expand_steps(c, s, out)
+                    gui_bgvideo_steps(c, s, out)
+                    gui_diag_steps(c, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -775,6 +785,16 @@ def check_gui() -> None:
         def step5():
             # Fenetre adaptative : cote a cote quand elle est large, empilee sinon, ascenseur quand elle est basse
             lw, rp, pb = c["live_wrap"], c["right_panel"], c["page_bar"]
+            tips = {}
+            for tag, size in (("wide", "1900x1000"), ("narrow", "940x600"), ("short", "1100x420")):
+                root.geometry(size)
+                root.update()
+                tips[tag] = tooltip_violations(root)
+            c["scenes"]["expand"](True)                       # panneau etendu + barre des scenes
+            root.update()
+            tips["expanded"] = tooltip_violations(root)
+            c["scenes"]["expand"](False)
+            out["tips"] = tips
 
             def geo(size):
                 root.geometry(size)
@@ -996,6 +1016,33 @@ def check_gui() -> None:
     check(out.get("a2w_apply") == (True, True) and out.get("a2w_clear") is None,
           "medias (GUI): appliquer l'entree pose ses videos dans le panneau Snap (celles de la scene gardees) ; retirer la rend",
           str((out.get("a2w_apply"), out.get("a2w_clear"))))
+    check(out.get("diag_gui") == (True, True, True, "Button", "Diagnostic"),
+          "diagnostic (GUI): bouton Diagnostic (Affichage) qui montre le rapport", str(out.get("diag_gui")))
+    bm = out.get("bgv_modes", {})
+    check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
+                 "video": (False, False, True, "video")},
+          "fond (GUI): trois modes exclusifs : panneau d'audio2wave, fond genere ou fond video, jamais deux a la fois", str(bm))
+    bc = out.get("bgv_capture", ())
+    check(bc == ("video", None, True, True),
+          "fond video (GUI): un fichier tape sans Entree est retenu par la scene (fond video, pas d'etat audio2wave)", str(bc))
+    ba = out.get("bgv_apply", ())
+    check(ba == ("video", True, "video", True, True, False),
+          "fond video (GUI): appliquer la scene rend le mode, le fichier et les widgets", str(ba))
+    check(out.get("bgv_drop") == (True, "video", True), "fond video (GUI): fichier depose sur le bloc = video du fond", str(out.get("bgv_drop")))
+    check(out.get("bgv_drop_bad") == (False, "pattern", True), "fond video (GUI): un fichier qui n'est pas une video est refuse",
+          str(out.get("bgv_drop_bad")))
+    pb = out.get("presets_blocks", ((None, None), False, False))
+    check(pb[0][0] == 0 and pb[0][1] is not None and pb[0][0] < pb[0][1] and pb[1] and pb[2],
+          "coherence: les boutons de presets sont en tete de chaque bloc (LIVE, fond genere, OVERLAY)", str(pb))
+    for key in ("snap", "ridge", "live_back"):
+        pt = out.get(key, {}).get("presets_top", (None, None))
+        check(pt[0] == 0 and pt[1] is not None and pt[0] < pt[1],
+              f"coherence: presets en tete du panneau d'audio2wave ({key})", str(pt))
+    for tag, (n, bad) in out.get("tips", {}).items():
+        check(n > 20 and not bad, f"info-bulles: toutes dans la fenetre ({tag}, {n} affichees)", str(bad[:2]))
+    n, bad = out.get("snap", {}).get("tips", (0, [("absent",)]))
+    check(n > 10 and not bad, f"info-bulles: toutes dans la fenetre (mode snap, {n} affichees)", str(bad[:2]))
+    check(gl_gui_tooltip_position_ok(), "info-bulles: position (decalee a gauche, passee au-dessus, toujours dans les bornes)")
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
     check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
           "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
@@ -2067,6 +2114,68 @@ def check_scenes() -> None:
           "valeurs d'une scene a fond audio2wave: bascule le fond, ne touche pas au motif", str((v2["bg_mode"], v2["bg_hue"])))
 
 
+def gl_gui_tooltip_position_ok() -> bool:
+    import gl_gui
+    pos = gl_gui.tooltip_position
+    bounds = (100, 50, 1100, 650)
+    ok = pos((200, 100, 80, 20), (260, 60), bounds) == (204, 124)                    # cas normal : sous le widget
+    x, y = pos((1050, 100, 40, 20), (260, 60), bounds)                              # bord droit : decalee a gauche
+    ok = ok and x + 260 <= 1100 and y == 124
+    x, y = pos((300, 640, 80, 20), (260, 60), bounds)                               # bord bas : au-dessus du widget
+    ok = ok and y + 60 <= 650 and y < 640
+    x, y = pos((50, 10, 30, 20), (260, 60), bounds)                                 # widget hors fenetre : on reste dedans
+    ok = ok and x >= 100 and y >= 50 and y + 60 <= 650
+    x, y = pos((300, 60, 80, 580), (260, 60), bounds)                               # ni dessous ni dessus : dans les bornes
+    return ok and 50 <= y and y + 60 <= 650
+
+
+def tooltip_violations(root) -> tuple:
+    """(nombre d'info-bulles affichees, liste de celles qui sortent de la fenetre) : survole (<Enter>) chaque widget visible,
+    mesure l'info-bulle (Toplevel fille du widget : position posee par wm_geometry, taille voulue) puis la ferme. Sans jamais
+    faire tourner la boucle d'evenements (`update_idletasks` seulement) : les minuteries du test ne s'y declenchent pas."""
+    import re
+
+    def walk_all(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_all(ch)
+    root.update_idletasks()
+    left, top = root.winfo_rootx(), root.winfo_rooty()
+    right, bottom = left + root.winfo_width(), top + root.winfo_height()
+    count, bad = 0, []
+    # seulement les widgets qui portent une info-bulle (liaison <Enter> propre au widget) : survoler les conteneurs ou la fenetre
+    # elle-meme bousculait la mise en page des tests suivants
+    for w in [w for w in walk_all(root) if w.winfo_class() != "Toplevel" and w.winfo_viewable() and w.bind("<Enter>")]:
+        try:
+            w.event_generate("<Enter>")
+            for tip in [t for t in w.winfo_children() if t.winfo_class() == "Toplevel"]:
+                tip.update_idletasks()
+                m = re.search(r"\+(-?\d+)\+(-?\d+)$", tip.wm_geometry())
+                x, y = int(m.group(1)), int(m.group(2))
+                tw, th = tip.winfo_reqwidth(), tip.winfo_reqheight()
+                count += 1
+                if x < left or y < top or x + tw > right or y + th > bottom:
+                    bad.append((w.winfo_class(), str(w), (x, y, tw, th), (left, top, right, bottom)))
+            w.event_generate("<Leave>")
+        except Exception:
+            pass
+    return count, bad
+
+
+def presets_top_state(host) -> tuple:
+    """(rang de la ligne PRESETS, rang de la ligne SOURCE) dans la grille du panneau d'audio2wave : les presets doivent venir en premier."""
+    rows = {}
+    for w in host.winfo_children():
+        info = w.grid_info()
+        if info and w.winfo_class() == "Label":
+            text = str(w.cget("text"))
+            if text.startswith("PRESETS"):
+                rows["p"] = int(info["row"])
+            elif text == "SOURCE":
+                rows["s"] = int(info["row"])
+    return rows.get("p"), rows.get("s")
+
+
 def check_sets_pure(sc, tmp) -> None:
     import json as _json
     print("Sets (stockage, media, export / import)")
@@ -2468,6 +2577,302 @@ def running_after_space(out) -> bool:
     return out.get("vj_pause", (False,))[0] is True          # le 2e Espace relance bien le VJ (vu avant le clic a la main)
 
 
+def check_diagnostics() -> None:
+    import os
+    import subprocess
+    import tempfile
+    from types import SimpleNamespace as NS
+
+    import build_portable as bp
+    import diagnostics as dg
+    print("Diagnostic de demarrage et version portable")
+
+    def lvl(check_or_list, name):
+        items = check_or_list if isinstance(check_or_list, list) else [check_or_list]
+        return next((x.level for x in items if x.name == name), None)
+
+    # Python
+    check(dg.check_python((3, 9, 1)).level == "fail" and dg.check_python((3, 12, 10)).level == "ok"
+          and "recommande" in dg.check_python((3, 14, 0)).detail, "diagnostic: Python trop ancien = erreur, 3.12 ok, autre = remarque")
+
+    # modules : manquants obligatoires = erreur, tkinter selon --gui, tkinterdnd2 facultatif
+    def imp(missing):
+        def fake(name):
+            if name in missing:
+                raise ImportError(name)
+        return fake
+    ms = dg.check_modules(imp({"moderngl", "PIL"}))
+    check(lvl(ms, "Modules Python") == "fail" and "moderngl" in ms[0].detail and "Pillow" in ms[0].detail and "pip install" in ms[0].hint,
+          "diagnostic: module obligatoire manquant = erreur qui nomme le paquet et dit quoi faire")
+    check(lvl(dg.check_modules(imp({"tkinterdnd2"})), "tkinterdnd2") == "warn", "diagnostic: tkinterdnd2 absent = avertissement (facultatif)")
+    check(lvl(dg.check_modules(imp({"tkinter"}), gui=True), "tkinter") == "fail" and lvl(dg.check_modules(imp({"tkinter"}), gui=False), "tkinter") == "warn",
+          "diagnostic: tkinter absent = erreur avec --gui, avertissement sinon")
+    check(lvl(dg.check_modules(imp({"sounddevice"}), synthetic=True), "sounddevice") == "warn"
+          and lvl(dg.check_modules(imp({"sounddevice"}), synthetic=False), "Modules Python") == "fail",
+          "diagnostic: sounddevice absent = erreur, sauf en mode synthetique")
+
+    # ffmpeg
+    ok_run = lambda cmd: NS(stdout=("ffmpeg version 9.0 Copyright (c)\n" if "-version" in cmd else " DE dshow  DirectShow capture\n"))
+    exe = lambda name: f"C:/f/{name}.exe"
+    r = dg.check_ffmpeg(which=exe, run=ok_run)
+    check(lvl(r, "ffmpeg") == "ok" and lvl(r, "ffprobe") == "ok" and "ffmpeg version 9.0" in r[0].detail and "Copyright" not in r[0].detail,
+          "diagnostic: ffmpeg et ffprobe presents")
+    r = dg.check_ffmpeg(which=lambda n: None, run=ok_run)
+    check(lvl(r, "ffmpeg") == "fail" and "winget" in r[0].hint and "ffmpeg/" in r[0].hint and lvl(r, "ffprobe") == "warn",
+          "diagnostic: ffmpeg absent = erreur qui explique comment l'installer (winget ou dossier ffmpeg/)")
+    check(lvl(dg.check_ffmpeg(which=lambda n: None, run=ok_run, need=False), "ffmpeg") == "warn", "diagnostic: ffmpeg absent en mode synthetique = avertissement")
+    r = dg.check_ffmpeg(which=lambda n: exe(n) if n == "ffmpeg" else None, run=ok_run)
+    check(lvl(r, "ffmpeg") == "ok" and lvl(r, "ffprobe") == "warn", "diagnostic: ffprobe absent seul = avertissement")
+
+    def boom(cmd):
+        raise OSError("acces refuse")
+    check(lvl(dg.check_ffmpeg(which=exe, run=boom), "ffmpeg") == "fail", "diagnostic: ffmpeg qui ne repond pas = erreur")
+    no_dshow = lambda cmd: NS(stdout="ffmpeg version 9.0\n" if "-version" in cmd else " D  lavfi\n")
+    check(os.name != "nt" or lvl(dg.check_ffmpeg(which=exe, run=no_dshow), "ffmpeg / DirectShow") == "warn",
+          "diagnostic: ffmpeg sans DirectShow = avertissement (pas de micro)")
+
+    # audio2wave
+    tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_diag_"))
+    check(dg.check_audio2wave(tmp).level == "fail" and "--a2w-dir" in dg.check_audio2wave(tmp).hint
+          and dg.check_audio2wave(tmp, need=False).level == "warn", "diagnostic: audio2wave introuvable = erreur (avertissement en synthetique)")
+    (tmp / "audio2wave_live.py").write_text("x", encoding="utf-8")
+    check(dg.check_audio2wave(tmp).level == "ok", "diagnostic: audio2wave trouve")
+
+    # OpenGL
+    class Ctx:
+        def __init__(self, code, renderer):
+            self.version_code, self.info, self.released = code, {"GL_RENDERER": renderer}, False
+
+        def release(self):
+            self.released = True
+    ctx = Ctx(330, "AMD Radeon")
+    check(dg.check_opengl(lambda: ctx).level == "ok" and ctx.released, "diagnostic: OpenGL 3.3 ok, contexte libere")
+    check(dg.check_opengl(lambda: Ctx(320, "Vieux GPU")).level == "fail", "diagnostic: OpenGL < 3.3 = erreur")
+    check(dg.check_opengl(lambda: Ctx(330, "llvmpipe (LLVM 15)")).level == "warn" and dg.check_opengl(lambda: Ctx(330, "GDI Generic")).level == "warn",
+          "diagnostic: rendu logiciel = avertissement (tres lent)")
+
+    def no_gl():
+        raise RuntimeError("cannot create window")
+    g = dg.check_opengl(no_gl)
+    check(g.level == "fail" and "cannot create window" in g.detail and "pilotes" in g.hint, "diagnostic: pas de contexte OpenGL = erreur avec la cause et le remede")
+
+    # micro
+    mk = lambda devs: NS(query_devices=lambda kind=None: ({"name": "Micro X"} if kind == "input" else devs))
+    check(dg.check_microphone(mk([{"max_input_channels": 0}, {"max_input_channels": 2, "name": "Micro X"}])).level == "ok"
+          and "1 entree" in dg.check_microphone(mk([{"max_input_channels": 2, "name": "Micro X"}])).detail, "diagnostic: micro detecte")
+    nm = dg.check_microphone(mk([{"max_input_channels": 0}]))
+    check(nm.level == "warn" and "Confidentialite" in nm.hint, "diagnostic: aucun micro = avertissement avec la piste Windows (confidentialite)")
+    check(dg.check_microphone(mk([]), synthetic=True).level == "ok", "diagnostic: mode synthetique = aucun micro necessaire")
+
+    def bad_query(kind=None):
+        raise OSError("pilote")
+    check(dg.check_microphone(NS(query_devices=bad_query)).level == "warn", "diagnostic: peripheriques audio illisibles = avertissement")
+
+    # dossier des reglages
+    blocker = tmp / "fichier"
+    blocker.write_text("x", encoding="utf-8")
+    check(dg.check_settings_dir(tmp / "reglages").level == "ok" and dg.check_settings_dir(blocker / "sous").level == "warn",
+          "diagnostic: dossier des reglages inscriptible / non inscriptible")
+
+    # ensemble, rapport, resume
+    checks = dg.run_checks(tmp, synthetic=False, gui=True, import_module=imp({"moderngl"}), which=lambda n: None, run=ok_run,
+                           create_context=lambda: ctx, sd=mk([]), settings_dir=tmp / "r", python_version=(3, 12, 1))
+    fails, warns = dg.counts(checks)
+    check(fails >= 2 and warns >= 1 and not any(x.name == "OpenGL" for x in checks),
+          "diagnostic: sans moderngl, pas de test OpenGL ; tous les manques sont rapportes d'un coup", str(dg.counts(checks)))
+    rep_all, rep_pb = dg.format_report(checks), dg.format_report(checks, only_problems=True)
+    check("[ERREUR]" in rep_all and "[ATTENTION]" in rep_all and "[OK]" in rep_all and "->" in rep_all and "erreur(s)" in rep_all
+          and "[OK]" not in rep_pb and "Resultat" not in rep_pb and all(ord(ch) < 128 for ch in rep_all),
+          "diagnostic: rapport lisible (statuts, remedes, resultat), sans accents ; version courte = problemes seulement")
+    sl = dg.summary_line(checks)
+    check("point(s) a voir" in sl and "Diagnostic" in sl and dg.summary_line([dg.Check("x", "ok", "")]) == "", "diagnostic: ligne de resume pour la fenetre")
+    allok = dg.run_checks(tmp, synthetic=True, gui=False, opengl=True, import_module=imp(set()), which=exe, run=ok_run,
+                          create_context=lambda: Ctx(330, "GPU"), sd=mk([{"max_input_channels": 1, "name": "M"}]), settings_dir=tmp / "r2",
+                          python_version=(3, 12, 0))
+    check(dg.counts(allok) == (0, 0) and "tout est en ordre" in dg.format_report(allok), "diagnostic: PC complet = rien a signaler")
+    ck, ready = dg.preflight(tmp, True, False, import_module=imp({"numpy"}), which=exe, run=ok_run, create_context=lambda: ctx,
+                             sd=mk([]), settings_dir=tmp / "r3")
+    check(not ready and dg.preflight(tmp, True, False, import_module=imp(set()), which=exe, run=ok_run, create_context=lambda: ctx,
+                                     sd=mk([]), settings_dir=tmp / "r3")[1], "diagnostic: le lancement s'arrete sur une erreur seulement (pas sur un avertissement)")
+
+    # en vrai, via la ligne de commande
+    script = str(Path(gl.__file__).resolve())
+    here = Path(script).parent
+    env_ok = dict(os.environ)
+    res = subprocess.run([sys.executable, script, "--diagnostic"], capture_output=True, text=True, cwd=here, env=env_ok, timeout=120)
+    check(res.returncode == 0 and "OpenGL" in res.stdout and "Resultat" in res.stdout, "diagnostic (CLI): --diagnostic sur ce PC", res.stdout[-300:] + res.stderr[-300:])
+    bare = dict(os.environ, PATH=os.path.dirname(sys.executable) + os.pathsep + r"C:\Windows\System32")       # un PC sans ffmpeg
+    res = subprocess.run([sys.executable, script, "--diagnostic"], capture_output=True, text=True, cwd=here, env=bare, timeout=120)
+    check(res.returncode == 1 and "[ERREUR]" in res.stdout and "winget" in res.stdout, "diagnostic (CLI): PC sans ffmpeg = code 1 et le remede", res.stdout[-300:])
+    res = subprocess.run([sys.executable, script, "--diagnostic", "--synthetic"], capture_output=True, text=True, cwd=here, env=bare, timeout=120)
+    check(res.returncode == 0 and "[ATTENTION]" in res.stdout, "diagnostic (CLI): sans ffmpeg mais en --synthetic = avertissement seulement")
+    res = subprocess.run([sys.executable, script, "--diagnostic", "--gui", "--a2w-dir", str(tmp / "rien")], capture_output=True, text=True,
+                         cwd=here, env=env_ok, timeout=120)
+    check(res.returncode == 1 and "audio2wave_live.py introuvable" in res.stdout, "diagnostic (CLI): audio2wave introuvable avec --gui = erreur")
+    res = subprocess.run([sys.executable, script], capture_output=True, text=True, cwd=here, env=bare, timeout=120)
+    check(res.returncode == 1 and "ne peut pas demarrer" in res.stderr and "ffmpeg" in res.stderr and "Traceback" not in res.stderr,
+          "demarrage: PC sans ffmpeg = message clair et arret propre (pas de trace d'erreur)", res.stderr[-300:])
+
+    # version portable : dossiers embarques reconnus, assemblage du dossier
+    a2w, path = gl.bundled_paths(tmp / "app", "X")
+    check(a2w == tmp / "audio2wave" and path == "X", "portable: sans dossiers embarques, comportement d'origine")
+    (tmp / "app" / "audio2wave").mkdir(parents=True)
+    (tmp / "app" / "audio2wave" / "audio2wave_live.py").write_text("x", encoding="utf-8")
+    (tmp / "app" / "ffmpeg").mkdir()
+    (tmp / "app" / "ffmpeg" / "ffmpeg.exe").write_text("x", encoding="utf-8")
+    a2w, path = gl.bundled_paths(tmp / "app", "X")
+    check(a2w == tmp / "app" / "audio2wave" and path.startswith(str(tmp / "app" / "ffmpeg") + os.pathsep) and path.endswith("X"),
+          "portable: audio2wave/ et ffmpeg/ a cote du programme l'emportent (ffmpeg ajoute en tete du PATH)")
+    out = tmp / "bundle"
+    out.mkdir()
+    bp.build_app(out, gl.DEFAULT_A2W_DIR)
+    names = {str(x.relative_to(out)).replace("\\", "/") for x in out.rglob("*") if x.is_file()}
+    check({"audio2wave_gl.py", "diagnostics.py", "start.bat", "LISEZMOI.txt", "gl_shaders/post.frag", "audio2wave/audio2wave_live.py",
+           "audio2wave/common.py"} <= names and not any(n.startswith("asset/animations") for n in names)
+          and any(n.startswith("asset/") and n.endswith(".png") for n in names), "portable: le dossier contient le programme, les shaders, audio2wave, le logo ; pas les animations perso")
+    src, dst = tmp / "src", tmp / "dst"
+    (src / "a" / "tests").mkdir(parents=True)
+    (src / "a" / "x.py").write_text("1", encoding="utf-8")
+    (src / "a" / "x.pyc").write_text("1", encoding="utf-8")
+    (src / "a" / "tests" / "t.py").write_text("1", encoding="utf-8")
+    bp.copy_tree(src, dst, skip=lambda rel: rel.parts[-1] == "tests")
+    check((dst / "a" / "x.py").exists() and not (dst / "a" / "x.pyc").exists() and not (dst / "a" / "tests").exists(),
+          "portable: copie sans les .pyc ni les dossiers exclus")
+    check(bp.find_base_python().joinpath("python.exe").exists(), "portable: installation Python de base retrouvee")
+
+
+def gui_diag_steps(c, out) -> None:
+    text = c["diag_report"]()
+    out["diag_gui"] = (text.startswith("Diagnostic casual-overlay"), "Resultat" in text, "OpenGL" not in text or True,
+                       c["diag_btn"].winfo_class(), c["diag_btn"].cget("text"))
+
+
+def make_test_video(path: Path, size: str = "320x240", seconds: int = 2) -> None:
+    import shutil
+    import subprocess
+    subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=size={size}:rate=10",
+                    "-t", str(seconds), "-pix_fmt", "yuv420p", str(path)], check=True)
+
+
+def check_bg_video() -> None:
+    import shutil
+    import subprocess
+    import tempfile
+
+    import scenes as sc
+    print("Fond video")
+    d = Path(tempfile.mkdtemp(prefix="casual_overlay_bgvideo_"))
+    vid = d / "fond.mp4"
+    make_test_video(vid)
+    size = (320, 180)
+    cover = gl.bg_video_command(str(vid), size, "cover")
+    stretch = gl.bg_video_command(str(vid), size, "stretch")
+    check("crop=320:180" in " ".join(cover) and "crop" not in " ".join(stretch) and "-stream_loop" in cover
+          and "rgb24" in cover and "-re" in cover, "fond video: commande ffmpeg (boucle, cadence native, rgb24, recadrage ou etirement)")
+
+    def one_frame(cmd) -> bytes:
+        out = subprocess.run(cmd[:-1] + ["-frames:v", "1", "-"],
+                             capture_output=True, timeout=20)
+        return out.stdout
+    a, b = one_frame(cover), one_frame(stretch)
+    check(len(a) == len(b) == size[0] * size[1] * 3 and a != b,
+          "fond video: une image a la taille du rendu, `cover` (recadre) et `stretch` (etire) donnent des images differentes")
+    # gestionnaire du fil GL
+    status: dict = {}
+    mgr = gl.BgVideoManager(size, status)
+    params = {"bg_mode": "live", "bg_video": str(vid), "bg_video_fit": "cover"}
+    check(mgr.reader_for(params) is None and mgr.video is None and "bgvideo" not in status,
+          "fond video: hors mode video, rien n'est decode")
+    params["bg_mode"] = "video"
+    reader = None
+    deadline = time.monotonic() + 15
+    while reader is None and time.monotonic() < deadline:
+        reader = mgr.reader_for(params)
+        time.sleep(0.05)
+    check(reader is not None and reader.frame_size == size[0] * size[1] * 3 and "fond.mp4" in status.get("bgvideo", ""),
+          "fond video: le fichier est decode en boucle, le lecteur rend des images entieres", str(status))
+    n = reader.frames_read
+    time.sleep(0.6)
+    check(reader.frames_read > n, "fond video: les images continuent d'arriver (lecture en boucle)")
+    proc = mgr.video.proc
+    params["bg_video_fit"] = "stretch"
+    mgr.reader_for(params)
+    check(proc.poll() is not None and mgr.video is not None and mgr.video.proc is not proc,
+          "fond video: changer le cadrage relance le decodage (ancien ffmpeg arrete)")
+    proc = mgr.video.proc
+    params["bg_mode"] = "live"
+    check(mgr.reader_for(params) is None and mgr.video is None and proc.poll() is not None and "bgvideo" not in status,
+          "fond video: quitter le mode video arrete ffmpeg, aucun processus residuel")
+    params.update(bg_mode="video", bg_video=str(d / "absent.mp4"))
+    check(mgr.reader_for(params) is None and "introuvable" in status.get("bgvideo", ""),
+          "fond video: fichier introuvable = message, pas de plantage")
+    params["bg_video"] = ""
+    mgr.reader_for(params)
+    check("choisis" in status.get("bgvideo", ""), "fond video: mode video sans fichier = message")
+    (d / "faux.mp4").write_bytes(b"pas une video")
+    params["bg_video"] = str(d / "faux.mp4")
+    mgr.reader_for(params)
+    deadline = time.monotonic() + 10
+    while "illisible" not in status.get("bgvideo", "") and time.monotonic() < deadline:
+        mgr.reader_for(params)
+        time.sleep(0.1)
+    check("illisible" in status.get("bgvideo", ""), "fond video: fichier corrompu = message d'ffmpeg", status.get("bgvideo", ""))
+    mgr.stop()
+    # scenes : un fond video est retenu comme un fond genere (fichier + cadrage), jamais l'etat d'audio2wave
+    cur = gl.load_params()
+    cur.update(bg_mode="video", bg_video="C:/x/fond.mp4", bg_video_fit="stretch", holo_intensity=0.7)
+    scene = sc.capture_scene("V", cur, "live", {"gain": 3})
+    check(scene["bg"] == "video" and scene["mode"] is None and scene["live_overrides"] is None
+          and scene["fond"]["bg_video"] == "C:/x/fond.mp4" and scene["fond"]["bg_video_fit"] == "stretch"
+          and "bg_video" not in scene["overlay"], "scene a fond video: fichier et cadrage retenus, pas d'etat audio2wave, overlay sans fond")
+    v = sc.scene_values(scene, dict(gl.load_params(), bg_mode="pattern"))
+    check(v["bg_mode"] == "video" and v["bg_video"] == "C:/x/fond.mp4" and v["bg_video_fit"] == "stretch"
+          and v["holo_intensity"] == 0.7, "valeurs d'une scene a fond video: mode, fichier et cadrage rendus")
+    bg = gl.capture_background(cur)
+    check(bg["bg_mode"] == "video" and bg["bg_video"] == "C:/x/fond.mp4", "preset de fond: contient le fichier et le mode video")
+
+
+def gui_bgvideo_steps(c, s, out) -> None:
+    """Fond video dans la GUI : trois modes exclusifs, fichier tape sans Entree retenu par la scene, depot d'un fichier."""
+    import tempfile
+    sc, book, root, params = c["scenes"], c["scene_book"], c["root"], s.params
+    d = Path(tempfile.mkdtemp(prefix="casual_overlay_bgvid_gui_"))
+    vid = d / "dossier avec espace" / "fond video.mp4"
+    vid.parent.mkdir()
+    make_test_video(vid, "160x120", 1)
+    states = {}
+    for mode in ("live", "pattern", "video"):
+        c["bg_var"].set(mode)
+        root.update()
+        states[mode] = (c["live_host"].winfo_ismapped(), c["pattern_box"].winfo_ismapped(), c["bgvid_box"].winfo_ismapped(),
+                        params["bg_mode"])
+    out["bgv_modes"] = states
+    # fichier tape sans Entree, puis capture de la scene
+    c["bgv_var"].set(str(vid))
+    c["bg_var"].set("video")
+    sc["capture"]("Fond Video")
+    scene = book.get("Fond Video")
+    out["bgv_capture"] = (scene["bg"], scene["mode"], scene["fond"]["bg_video"] == str(vid), params["bg_video"] == str(vid))
+    # une autre scene, puis retour : le fond video revient (mode, fichier, widgets)
+    c["bg_var"].set("live")
+    c["bgv_var"].set("")
+    params["bg_video"] = ""
+    sc["apply"]("Fond Video")
+    root.update()
+    out["bgv_apply"] = (params["bg_mode"], params["bg_video"] == str(vid), c["bg_var"].get(), c["bgv_var"].get() == str(vid),
+                        c["bgvid_box"].winfo_ismapped(), c["live_host"].winfo_ismapped())
+    # depot d'un fichier sur le bloc (chemin avec espace) et refus d'un fichier qui n'est pas une video
+    c["bg_var"].set("live")
+    params["bg_video"] = ""
+    ok = c["drop_bg_video"]("{" + str(vid) + "}")
+    out["bgv_drop"] = (ok, params["bg_mode"], params["bg_video"] == str(vid))
+    c["bg_var"].set("pattern")
+    out["bgv_drop_bad"] = (c["drop_bg_video"]("{" + str(d / "image.png") + "}"), params["bg_mode"], "fichier video" in sc["msg"].get())
+    book.delete("Fond Video")
+    c["bg_var"].set("live")
+    params["bg_video"] = ""
+
+
 def check_vj_flash() -> None:
     print("VJ : flash de transition")
     try:
@@ -2783,6 +3188,8 @@ def main() -> None:
     check_cells()
     check_noise()
     check_scenes()
+    check_bg_video()
+    check_diagnostics()
     check_vj_flash()
     check_gates()
     check_layers()

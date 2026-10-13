@@ -60,6 +60,9 @@ PIL_ImageDraw = _optional_import("PIL.ImageDraw", "Pillow")
 PIL_ImageFont = _optional_import("PIL.ImageFont", "Pillow")
 
 
+import diagnostics  # noqa: E402  (stdlib seulement : sans dependance a installer)
+
+
 def require_deps() -> None:
     if MISSING:
         print(f"Dependances manquantes: {', '.join(dict.fromkeys(MISSING))}.\n"
@@ -70,7 +73,22 @@ def require_deps() -> None:
 SCRIPT_DIR = Path(__file__).resolve().parent
 SHADER_DIR = SCRIPT_DIR / "gl_shaders"
 DEFAULT_LOGO = SCRIPT_DIR / "asset" / "Casual Ravers - Kit_Sigle - Blanc.png"
-DEFAULT_A2W_DIR = SCRIPT_DIR.parent / "audio2wave"
+
+
+def bundled_paths(script_dir: Path, env_path: str = "") -> tuple[Path, str]:
+    """Version portable : (dossier d'audio2wave, PATH) quand le programme est livre avec ses dependances. audio2wave/ a cote du
+    programme l'emporte sur le depot voisin ; ffmpeg/ (ffmpeg.exe, ffprobe.exe) est ajoute en tete du PATH, donc `shutil.which`,
+    audio2wave et nos sous-processus le trouvent sans installation. Sans ces dossiers : comportement d'origine."""
+    a2w = script_dir / "audio2wave"
+    a2w_dir = a2w if (a2w / "audio2wave_live.py").is_file() else script_dir.parent / "audio2wave"
+    ffmpeg = script_dir / "ffmpeg"
+    if (ffmpeg / "ffmpeg.exe").is_file() or (ffmpeg / "ffmpeg").is_file():
+        env_path = str(ffmpeg) + os.pathsep + env_path
+    return a2w_dir, env_path
+
+
+DEFAULT_A2W_DIR, _bundled_path = bundled_paths(SCRIPT_DIR, os.environ.get("PATH", ""))
+os.environ["PATH"] = _bundled_path
 PARAMS_PATH = Path.home() / ".audio2wave" / "gl_params.json"
 
 FX_NAMES = ["wobble", "ripple", "chroma", "glitch", "logo"]
@@ -139,8 +157,11 @@ DEFAULT_PARAMS = {
     "cell_flat": 0.85,                # 0 = couleurs d'origine, 1 = aplat de la couleur au centre de la cellule
     "cell_ink": "#14103a",            # contour des cellules
     "cell_react": 0.0,                # 0 = pas audioreactif; >0: derive acceleree par les basses, fusion pulsee au kick
-    # Fond: "live" = spectre ffmpeg, "pattern" = motif genere dans le shader (degrades + damier)
+    # Fond: "live" = spectre ffmpeg, "pattern" = motif genere dans le shader (degrades + damier),
+    # "video" = un fichier video brut lu en boucle plein cadre (bg_video, bg_video_fit)
     "bg_mode": "live",
+    "bg_video": "",                   # fichier video / animation du fond "video" ("" = aucun)
+    "bg_video_fit": "cover",          # "cover" = remplit le cadre en recadrant, "stretch" = etire a la taille du rendu
     "bg_palette": "classic",          # "classic" (arc-en-ciel), "duo" (color1 -> color2) ou "test" (copie exacte du banc de test)
     "bg_color1": "#3a1cff",           # palette duo
     "bg_color2": "#14f0d8",
@@ -1708,6 +1729,85 @@ class LogoVideo:
                 pass
 
 
+# --- Fond video (un fichier brut, en boucle, plein cadre) -------------------------------------
+
+BG_VIDEO_FITS = ("cover", "stretch")
+
+
+def bg_video_command(path: str, size: tuple[int, int], fit: str = "cover") -> list[str]:
+    """Commande ffmpeg : decode `path` en boucle, a sa cadence native (-re), a la taille du rendu, en rawvideo rgb24 (meme
+    format que le producteur d'audio2wave : la texture du fond la lit telle quelle). `cover` remplit le cadre en recadrant
+    le debordement (le ratio du fichier est garde), `stretch` etire."""
+    w, h = size
+    if fit == "stretch":
+        vf = f"scale={w}:{h}:flags=bilinear"
+    else:
+        vf = f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=bilinear,crop={w}:{h}"
+    return [shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",
+            "-i", path, "-an", "-vf", vf + ",setsar=1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+
+
+class BgVideo(LogoVideo):
+    """Fond video : un ffmpeg qui boucle sur le fichier + un FrameReader (latest wins), comme le logo anime mais en rgb24 a
+    la taille du rendu."""
+
+    def __init__(self, path: str, size: tuple[int, int], fit: str = "cover"):
+        self.size = size
+        cmd = bg_video_command(path, size, fit)
+        self.proc = spawn_big_pipe(cmd, stderr=subprocess.PIPE) or subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.reader = FrameReader(self.proc.stdout, size[0] * size[1] * 3)
+        self.reader.start()
+
+
+class BgVideoManager:
+    """Fond video du fil GL : lance / arrete le decodage quand `bg_mode`, `bg_video` ou `bg_video_fit` changent et rend le
+    lecteur a utiliser (None tant que la mode n'est pas "video" ou que la premiere image n'est pas arrivee : on garde alors le
+    fond d'avant, jamais d'ecran noir). Message dans `status["bgvideo"]`."""
+
+    def __init__(self, size: tuple[int, int], status: dict):
+        self.size, self.status = size, status
+        self.video: BgVideo | None = None
+        self.key: tuple | None = None
+        self._err = ""
+
+    def reader_for(self, params: dict):
+        mode = params.get("bg_mode")
+        path = str(params.get("bg_video") or "")
+        want = (path, params.get("bg_video_fit", "cover")) if mode == "video" and path else None
+        if want != self.key:
+            self.stop()
+            self.key = want
+            self._err = ""
+            if want is not None:
+                if not Path(path).is_file():
+                    self.status["bgvideo"] = f"Fond video introuvable: {path}"
+                else:
+                    try:
+                        self.video = BgVideo(path, self.size, want[1])
+                        self.status["bgvideo"] = f"Fond video: {Path(path).name}"
+                    except OSError as exc:
+                        self.status["bgvideo"] = f"Fond video illisible: {exc}"
+            elif mode == "video":
+                self.status["bgvideo"] = "Fond video: choisis un fichier"
+            else:
+                self.status.pop("bgvideo", None)
+        if self.video is not None:
+            err = self.video.error()
+            if err and err != self._err:
+                self._err = err
+                self.status["bgvideo"] = f"Fond video illisible: {err}"
+                print(self.status["bgvideo"], file=sys.stderr)
+            if self.video.reader.frames_read:
+                return self.video.reader
+        return None
+
+    def stop(self) -> None:
+        if self.video is not None:
+            self.video.stop()
+            self.video = None
+
+
 def stop_process(proc: subprocess.Popen | None) -> None:
     if proc is None or proc.poll() is not None:
         return
@@ -1955,8 +2055,11 @@ def parse_args() -> argparse.Namespace:
                    "(voir --list-audio-devices). Defaut: meme nom que --device si trouve, sinon defaut systeme")
     p.add_argument("--gui", action="store_true",
                    help="Ouvre la fenetre de reglages (tkinter): visuel live, logo et effets en direct")
-    p.add_argument("--background", choices=["live", "pattern"], default=None,
-                   help="Fond: live = spectre ffmpeg, pattern = motif genere (defaut: reglage sauve, sinon live)")
+    p.add_argument("--background", choices=["live", "pattern", "video"], default=None,
+                   help="Fond: live = spectre ffmpeg, pattern = motif genere, video = fichier video brut (--bg-video) "
+                        "(defaut: reglage sauve, sinon live)")
+    p.add_argument("--bg-video", default=None, metavar="FICHIER",
+                   help="Fond video : fichier video ou animation lu en boucle plein cadre (active --background video)")
     p.add_argument("--text", default=None,
                    help='Incruste ce texte a la place du logo PNG (ex. --text "CASUAL RAVERS"; "\\n" = retour '
                         "a la ligne). Police, couleur, alignement et taille se reglent dans la GUI")
@@ -1999,6 +2102,8 @@ def parse_args() -> argparse.Namespace:
                    help='Options transmises a audio2wave_live.py, ex: "--style radio --gain 20"')
     p.add_argument("--a2w-dir", default=os.environ.get("AUDIO2WAVE_DIR", str(DEFAULT_A2W_DIR)),
                    help=f"Depot audio2wave (defaut: {DEFAULT_A2W_DIR})")
+    p.add_argument("--diagnostic", action="store_true",
+                   help="Verifie ce PC (ffmpeg, OpenGL, micro, modules...) et quitte : code 1 s'il y a une erreur")
     p.add_argument("--list-devices", action="store_true", help="Liste les entrees DirectShow et quitte")
     p.add_argument("--list-audio-devices", action="store_true", help="Liste les entrees sounddevice et quitte")
     p.add_argument("--dry-run", action="store_true", help="Affiche la commande ffmpeg sans rien lancer")
@@ -2019,6 +2124,18 @@ def parse_pair(text: str, what: str, sep: str) -> tuple[float, float]:
 
 def main() -> None:
     args = parse_args()
+    if args.diagnostic:
+        sys.exit(diagnostics.run_cli(Path(args.a2w_dir), args.synthetic, args.gui))
+    if not (args.list_audio_devices or args.list_devices or args.dry_run):
+        # Ce PC est-il pret ? Une erreur arrete le programme avec un message clair, les manques moins graves sont signales.
+        args.diag_checks, ready = diagnostics.preflight(Path(args.a2w_dir), args.synthetic, args.gui)
+        problems = diagnostics.format_report(args.diag_checks, only_problems=True)
+        if problems:
+            print(problems, file=sys.stderr)
+        if not ready:
+            print("Le programme ne peut pas demarrer : corrige les erreurs ci-dessus "
+                  "(python audio2wave_gl.py --diagnostic donne le rapport complet).", file=sys.stderr)
+            sys.exit(1)
     args.fullscreen = resolve_fullscreen(args.fullscreen, args.monitor, has_secondary_monitor())
 
     if args.list_audio_devices:
@@ -2167,6 +2284,12 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
     params["_automation"] = merge_automation(params.get("_automation"))
     if args.automation is not None:
         params["auto_master"] = 1.0 if args.automation else 0.0
+    if args.bg_video is not None:
+        if not Path(args.bg_video).is_file():
+            print(f"Video introuvable: {args.bg_video}", file=sys.stderr)
+            sys.exit(2)
+        params["bg_video"] = str(Path(args.bg_video).resolve())
+        params["bg_mode"] = "video"
     if args.background is not None:
         params["bg_mode"] = args.background
     if args.text is not None:
@@ -2396,6 +2519,8 @@ def gl_main(s: Session) -> None:
         s.renderer, s.window = renderer, window
         loop(s, window, ctx, renderer)
     finally:
+        if getattr(s, "bgvideo", None) is not None:
+            s.bgvideo.stop()
         if s.renderer is not None:
             s.renderer.release_logo_video()
         s.renderer = None
@@ -2431,7 +2556,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         elif name == "hud":
             renderer.hud = not renderer.hud
         elif name == "bg":
-            params["bg_mode"] = "live" if params["bg_mode"] == "pattern" else "pattern"
+            modes = ["live", "pattern"] + (["video"] if params.get("bg_video") else [])     # video seulement si un fichier est choisi
+            params["bg_mode"] = modes[(modes.index(params["bg_mode"]) + 1) % len(modes)] if params["bg_mode"] in modes else "live"
             print(f"fond: {params['bg_mode']}")
         elif name == "auto":
             params["auto_master"] = 0.0 if params["auto_master"] >= 0.5 else 1.0
@@ -2530,6 +2656,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
           "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante (avec --gui)")
     print(status_line())
 
+    bgvideo = s.bgvideo = BgVideoManager(s.render_size, s.status)     # fond "video" : decodage lance / arrete selon les reglages
     query = ctx.query(time=True)      # une image sur 8 (toutes avec --stats) : le garde-fou de charge et les mesures
     guard = PerfGuard(glfw.get_video_mode(window.monitor).refresh_rate or 60)
     frame_i = 0
@@ -2574,6 +2701,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
         u0 = time.perf_counter()
         reader = s.reader                       # change quand on bascule Live / Snap / Ridge
+        bg_reader = bgvideo.reader_for(params)
+        if bg_reader is not None:               # fond "video" pret : son flux remplace celui d'audio2wave
+            reader = bg_reader
         if reader.upload_to(renderer.video_tex):
             up_ms += (time.perf_counter() - u0) * 1000.0
             up_n += 1

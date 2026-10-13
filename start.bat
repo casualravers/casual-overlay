@@ -9,10 +9,12 @@ rem Sans -d, choisis l'entree audio dans la fenetre de reglages.
 setlocal
 cd /d "%~dp0"
 
-set "PY=%~dp0.venv\Scripts\python.exe"
+rem Python embarque (version portable : dossier python\) ou environnement de developpement (.venv).
+set "PY=%~dp0python\python.exe"
+if not exist "%PY%" set "PY=%~dp0.venv\Scripts\python.exe"
 if not exist "%PY%" (
-    echo Environnement Python introuvable : %PY%
-    echo Cree-le avec :
+    echo Python introuvable. Version portable : le dossier python\ doit etre a cote de ce fichier.
+    echo Environnement de developpement : cree-le avec
     echo     py -3.12 -m venv .venv
     echo     .venv\Scripts\python.exe -m pip install -r requirements-gl.txt
     pause
