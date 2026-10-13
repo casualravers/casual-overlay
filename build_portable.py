@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "gui_colors.py", "gui_gates.py", "py_modes.py", "scenes.py", "diagnostics.py",
+APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "gui_colors.py", "gui_gates.py", "py_modes.py", "scenes.py", "diagnostics.py", "skin.py", "theme.py",
              "check_gl.py", "requirements-gl.txt", "start.bat", "README.md")
 APP_DIRS = ("gl_shaders",)
 PY_SKIP_DIRS = {"Doc", "include", "libs", "Scripts", "__pycache__"}            # a la racine de l'installation Python

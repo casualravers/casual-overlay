@@ -490,6 +490,7 @@ def check_gui() -> None:
             c["link_var"].set(0)
             root.update_idletasks()
             out["win_height"] = root.winfo_reqheight()
+            out["win_dbg"] = (c["layout"]["name"], root.winfo_width(), root.winfo_reqwidth(), [(w.winfo_class(), w.winfo_reqheight()) for w in root.winfo_children()], [(w.winfo_class(), w.winfo_reqheight()) for w in c["live_wrap"].master.winfo_children()])
             c["link_var"].set(1)
             c["bg_var"].set("live")
             root.update_idletasks()
@@ -1109,7 +1110,7 @@ def check_gui() -> None:
     check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Affichage"],
           "partie OVERLAY rangee en onglets", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
-          str(out.get("win_height")))
+          str(out.get("win_height")) + " " + str(out.get("win_dbg")))
     check(out.get("logo") == "", "logo vide = aucun logo")
     check(out.get("color_bad") == gl.DEFAULT_PARAMS["logo_glow_color"] and out.get("color_ok") == "#ff0000",
           "couleur du contour: invalide ignoree, valide appliquee")
@@ -3178,6 +3179,95 @@ def check_params() -> None:
         gl.PARAMS_PATH = original
 
 
+def check_skin() -> None:
+    """Habillage (skin.py / theme.py) : les widgets gardent leur comportement, seules leurs images changent."""
+    print("habillage de la fenetre (skin.py)")
+    import tkinter as tk
+    import skin
+    import theme
+    check(theme.mix("#000000", "#ffffff", 0.5) == "#808080" and theme.lighten("#000000", 1) == "#ffffff"
+          and theme.darken("#ffffff", 1) == "#000000" and theme.hex_to_rgb("#0af") == (0, 170, 255), "theme: melange / eclaircir / assombrir")
+    root = tk.Tk()
+    try:
+        root.configure(bg=theme.BG)
+        root.option_add("*Button.Background", theme.LIVE)
+        frame = tk.Frame(root, bg=theme.BG)
+        frame.pack()
+        skin.zone(frame, theme.OVERLAY)
+        hit = []
+        btn = tk.Button(frame, text="Mettre a jour", command=lambda: hit.append(1))
+        main = tk.Button(frame, text="Sauvegarder", command=lambda: None)
+        custom = tk.Button(frame, text="3 scene", bg=theme.SCENE, fg=theme.ON_ACCENT)
+        var = tk.StringVar(value="a")
+        rad = tk.Radiobutton(frame, text="un", variable=var, value="a")
+        rad2 = tk.Radiobutton(frame, text="deux", variable=var, value="b")
+        ivar = tk.IntVar(value=0)
+        chk = tk.Checkbutton(frame, text="case", variable=ivar)
+        scale = tk.Scale(frame, from_=0, to=1, resolution=0.1, orient="horizontal", showvalue=False)
+        ent = tk.Entry(frame)
+        opt_var = tk.StringVar(value="log")
+        opt = tk.OptionMenu(frame, opt_var, "log", "lineaire", "une valeur longue")
+        for w in (btn, main, custom, rad, rad2, chk, scale, ent, opt):
+            w.pack()
+        done = skin.apply(root)
+        root.update()
+        check(done == 9 and skin.apply(root) == 0, "habillage: tous les widgets, une seule fois", str(done))
+        check(btn.winfo_class() == "Button" and btn.cget("text") == "Mettre a jour" and btn.cget("command") != "",
+              "bouton habille: meme classe, meme texte")
+        btn.invoke()
+        check(hit == [1], "bouton habille: invoke() appelle sa commande")
+        check(btn.cget("bg") == theme.CARD and main.cget("bg") == theme.OVERLAY and custom.cget("bg") == theme.SCENE,
+              "boutons: neutre par defaut, accent de la zone pour l'action principale, couleur propre respectee",
+              f"{btn.cget('bg')} {main.cget('bg')} {custom.cget('bg')}")
+        check(btn.cget("image") != "" and btn.winfo_reqheight() <= 30, "bouton: image arrondie posee, hauteur contenue",
+              str(btn.winfo_reqheight()))
+        before = str(btn.cget("image"))
+        btn.configure(state="disabled")
+        check(str(btn.cget("image")) != before and str(btn.cget("state")) == "disabled", "bouton desactive: autre image, etat conserve")
+        btn.configure(state="normal")
+        check(str(btn.cget("image")) == before, "bouton reactive: image d'origine (cache)")
+        width = btn.winfo_reqwidth()
+        btn.configure(text="Un texte nettement plus long")
+        root.update_idletasks()
+        check(btn.winfo_reqwidth() > width, "changer le texte redimensionne l'image")
+        custom.configure(bg=theme.OVERLAY)
+        check(custom.cget("bg") == theme.OVERLAY, "configure(bg=) change la couleur de remplissage voulue (cget la rend)")
+        rad2.invoke()
+        check(var.get() == "b" and rad2.cget("indicatoron") in (0, "0") and rad.cget("selectimage") != "",
+              "radio habille: variable pilotee par invoke(), images normal / selectionne")
+        chk.invoke()
+        check(ivar.get() == 1, "case habillee: invoke() change la variable")
+        rad.configure(state="disabled")
+        check(str(rad.cget("state")) == "disabled", "radio desactive (gui_gates)")
+        value_before = None
+        scale.set(0.5)
+        scale.configure(state="disabled")
+        faint = scale.cget("bg")
+        scale.configure(state="normal")
+        check(faint == theme.FAINT and scale.cget("bg") == theme.OVERLAY and abs(scale.get() - 0.5) < 1e-9,
+              "curseur: poignee a l'accent, eteinte quand grise, valeur conservee", f"{faint} {scale.cget('bg')}")
+        check(str(ent.cget("highlightcolor")) == theme.OVERLAY and str(ent.cget("bg")) == theme.PANEL, "champ: fond sombre, focus a l'accent")
+        check(opt.cget("indicatoron") in (0, "0") and str(opt.cget("image")) != "" and opt.winfo_reqwidth() > 70,
+              "liste deroulante: champ arrondi assez large pour la plus longue valeur", str(opt.winfo_reqwidth()))
+        tick = tk.Label(frame, text="TITRE")
+        skin.title(tick, theme.LIVE)
+        check(str(tick.cget("image")) != "" and tick.cget("text") == "TITRE", "titre de section: repere a l'accent, texte inchange")
+        fresh = tk.Button(frame, text="Image", image=tk.PhotoImage(width=4, height=4))
+        check(skin.skin_widget(fresh) is False, "un bouton qui a deja une image n'est pas touche")
+        r2 = tk.Tk()
+        try:
+            b2 = tk.Button(r2, text="Autre racine")
+            b2.pack()
+            check(skin.apply(r2) == 1 and b2.cget("image") != "", "deuxieme racine Tk: ses propres images (cache par interpreteur)")
+        finally:
+            r2.destroy()
+    finally:
+        root.destroy()
+    import build_portable
+    check("skin.py" in build_portable.APP_FILES and "theme.py" in build_portable.APP_FILES,
+          "version portable: skin.py et theme.py embarques")
+
+
 def main() -> None:
     check_reader()
     check_features()
@@ -3190,6 +3280,7 @@ def main() -> None:
     check_scenes()
     check_bg_video()
     check_diagnostics()
+    check_skin()
     check_vj_flash()
     check_gates()
     check_layers()

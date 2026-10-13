@@ -194,6 +194,7 @@ Trois sauvegardes distinctes : les presets live (audio2wave), les presets overla
 le bouton *Sauver reglages* (ou la touche P) qui enregistre les reglages courants de l'overlay dans
 `gl_params.json`, rechargee au lancement.
 Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leurs changements.
+
 ## Touches
 
 | Touche | Action |
@@ -226,23 +227,16 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   couches. Suppose des enveloppes `bass/mid/high/beat` par couche dans le shader et un choix de source
   dans la GUI.
 - **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre ou au hasard, flash a
-  chaque changement, Espace et fleche droite). Le developpement prevu :
-  - **Bouton « etendre » (expand)** sur le VJ : un panneau deplie qui donne plus de granularite sans alourdir la barre
-    (qui reste « une scene = une touche, un bouton VJ ») : liste des scenes dans l'ordre de passage, duree propre a chaque
-    scene, scenes a exclure du VJ, ordre libre (programme a composer), reglages de transition.
-  - **Glisser-deposer d'images ou d'animations** (PNG, GIF, WebM...) sur le panneau : soit **liees a l'overlay de la scene**
-    (logo, texte ou video qui font partie de la scene : aujourd'hui ces medias restent a part des presets), soit **ajoutees
-    en parametre d'audio2wave (mode Snap)**, qui sait deja jouer des videos / images dans son trace (reglages `video` et
-    `video2`). A trancher : copier le fichier dans un dossier de medias du depot ou garder le chemin d'origine, et que faire
-    d'un media introuvable au chargement d'une scene (repli sans erreur, message).
+  chaque changement, Espace et fleche droite, panneau « Etendre » avec duree propre et exclusion par scene, ordre libre,
+  medias lies aux scenes par glisser-deposer). Reste a faire :
   - **Changer en rythme** (toutes les N mesures, en comptant les kicks detectes) plutot qu'a la seconde.
   - **Une vraie transition** (fondu des reglages numeriques ; un changement de mode Live -> Snap coupe la source, donc
     plutot un fondu enchaine d'image a image).
+  - Reglages de transition (type, duree du flash) dans le panneau etendu.
   L'interface doit rester simple et agreable : les options avancees vivent dans le panneau deplie, jamais dans la barre.
 - **Sets plus riches** : la base est faite (bibliotheque de scenes, sets, media par entree, export / import, changement de
   set qui redemarre le VJ, panneau etendu, glisser-deposer, duree et exclusion par entree). Pistes : medias embarques dans
-  le fichier exporte (archive avec les images et videos plutot que des chemins), glisser-deposer pour reordonner les
-  lignes, depot sur les parametres Snap (`video` / `video2`), raccourci clavier pour changer de set en soiree, et un acces
+  le fichier exporte (archive avec les images et videos plutot que des chemins), raccourci clavier pour changer de set en soiree, et un acces
   plus rapide aux scenes au-dela de F9 (pages).
 - **Halo holographique plus riche** : automations de l'intensite et de la portee, teinte reglable, forme de
   la poussiere (etoiles a branches, comete), trainee directionnelle (vent) plutot que radiale, et mode
@@ -265,6 +259,8 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 - **Plusieurs logos ou textes a la fois**, chacun avec sa couche d'effets.
 - **Latence audio -> image** : mesuree seulement par estimation (~45-65 ms) ; mesure acoustique de bout
   en bout et leviers (bloc de capture plus petit, fenetre d'analyse plus courte).
+- **Version portable** : essai sur un PC vierge ou une machine virtuelle (prerequis Visual C++ de numpy), build ffmpeg
+  « essentials » plus leger par defaut, et un vrai installateur ou un `.exe` si le dossier ne suffit plus.
 - **Sortie Spout/NDI** vers un logiciel de VJing, et entree MIDI pour piloter les reglages.
 
 Details d'architecture, pieges et mesures : [CLAUDE.md](CLAUDE.md).

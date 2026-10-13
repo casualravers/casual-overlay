@@ -23,6 +23,39 @@ recommande** : `moderngl`/`glcontext` n'ont pas de wheel pour Python 3.14 et leu
 compilation exige MSVC. Environnement de dev : `py -3.12 -m venv .venv` puis
 `.venv\Scripts\python.exe -m pip install -r requirements-gl.txt`.
 
+## Design de la fenetre de reglages (`theme.py`, `skin.py`)
+
+Direction : **sombre sobre, un accent fin par partie** (LIVE turquoise, OVERLAY violet, SCENES ambre), boutons arrondis, radios en
+anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de section a repere colore.
+- **`theme.py`** (stdlib) : jetons (surfaces `BG` / `PANEL` / `CARD` / `HOVER` / `LINE` / `TROUGH`, texte, accents, rayons, polices) et
+  `mix` / `lighten` / `darken`. `BG` et `PANEL` sont ceux d'audio2wave (`common.GUI_*`) : ses panneaux se fondent avec les notres.
+- **`skin.py`** : habille les VRAIS widgets Tk (classe, `invoke()`, `state`, variables inchanges : `gui_gates`, `gui_colors`, les tests
+  et le code d'audio2wave marchent tels quels) avec des **images arrondies Pillow** (dessinees a 4x, reduites ; coins transparents sur le
+  fond du parent). `skin.apply(racine)` parcourt l'arbre **apres la construction**, y compris les panneaux d'audio2wave (aucun de leurs
+  fichiers touche) ; idempotent. Appelee dans `build_window` **avant de mesurer `layout["wide_need"]`** (les images changent la largeur
+  naturelle : apres, la fenetre se croyait trop etroite et passait en mise en page empilee, 1013 px de haut), par `refresh_scene_bar`
+  (barre + panneau etendu) et `choice_dialog`. Un widget habille a une `_sk` ; `configure` / `cget` des classes Button, Radiobutton,
+  Checkbutton, Menubutton, Scale sont interceptes **seulement pour lui** (`bg` = couleur de remplissage voulue, le vrai fond du widget
+  est celui du parent ; `text`, `width`, `state` re-dessinent ; le `vj_tick` qui reecrit le bouton VJ toutes les 250 ms ne
+  redessine que si la cle change).
+  - Boutons : neutres (`CARD`) par defaut, **accent de la zone (`skin.zone(conteneur, couleur)`) seulement pour les actions principales**
+    (`PRIMARY` : Sauvegarder, Enregistrer) ; le fond turquoise plein d'audio2wave (`option_add`) devient neutre ; une couleur propre
+    (touche de scene active en ambre) est respectee ; fond = fond du parent -> bouton « fantome » (survol `CARD`). Survol / appui /
+    desactive = variantes. Un widget qui a deja une image (vignette, icone) n'est pas touche.
+  - Radio (anneau + point) et case (carre arrondi + coche) : `indicatoron=0`, `image` / `selectimage`, a l'accent de la zone.
+    OptionMenu : champ arrondi a chevron, largeur = la plus longue entree du menu. Menubutton « ghost » (fleche dans le texte) : survol.
+  - Curseur (`tk.Scale`) : le `bg` d'un Scale est la couleur de sa poignee ; un Scale **sans valeur affichee** (les notres) a donc une
+    poignee d'accent sur piste sombre ; un Scale **a valeur affichee** (audio2wave : `bg` en est aussi le fond du texte) garde `bg` et
+    prend une poignee en relief, accent au survol. Gris (`gui_gates`) = poignee eteinte, **un seul `configure`** (piege de la valeur perimee).
+  - Champs (`Entry`) : fond `PANEL`, filet `LINE`, accent au focus, lecture seule sombre (pas de blanc). Titres : `skin.title`
+    (repere d'accent + texte, `style_band` et les deux bandeaux de partie l'utilisent) ; **le texte des titres n'est jamais modifie**
+    (`presets_to_top`, `tidy_mode_gui` et les tests le retrouvent par leur texte). Onglets ttk : selectionne = `CARD` + texte d'accent.
+  - Couleurs lues sur un widget : `_norm` (nom Tk / systeme -> `#rrggbb`). Les `PhotoImage` sont gardees par racine Tk (`root._skin_photos`,
+    plusieurs racines dans les tests). Hauteur : boutons ~24 px, champs 1 px de bord (la fenetre reste sous 700 px).
+- `check_gl.py` (`check_skin`) : classe / texte / `invoke` conserves, neutre / accent / couleur propre, desactive et cache d'images,
+  redimensionnement, radio / case / curseur / champ / liste / titre, idempotence, widget a image, deuxieme racine Tk, fichiers embarques
+  dans le portable ; le reste de la suite (hauteur sous 700 px, info-bulles, mise en page, gates) verifie que rien n'a casse.
+
 ## Diagnostic de demarrage et version portable
 
 - **`diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
