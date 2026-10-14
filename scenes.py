@@ -23,7 +23,7 @@ import randomizer
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
-MAX_NAME = 24
+MAX_NAME = 200                    # pas de limite pratique : les noms longs sont affiches en entier ou raccourcis a l'ecran
 VJ_SECONDS = (10, 20, 30, 60, 120, 300)          # durees proposees dans le menu du VJ
 VJ_DEFAULTS = {"seconds": 30, "order": "seq"}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
                                                  # "alea" = Full Randomizer (scene tiree a chaque changement, voir randomizer.py)
@@ -34,7 +34,6 @@ VJ_DEFAULTS["random"] = randomizer.clean_settings(None)       # reglages du hasa
 # Reglages d'audio2wave qu'une scene ne retient ni n'applique jamais : l'entree audio reste celle qui est active, et la
 # fenetre de rendu garde son etat (plein ecran, taille) : une scene change le look, pas l'installation.
 SCENE_EXCLUDED = ("device", "fullscreen", "size")
-TEMP_LIVE_PRESET = "scene-tmp"      # nom d'un preset d'audio2wave le temps d'une capture (retire tout de suite)
 
 
 def live_preset_name(name: str) -> str:
@@ -81,14 +80,17 @@ class SceneBook:
     def _entry(e: dict, scene_name: str) -> dict:
         """Entree de set validee : `media` (overlay : logo / texte / video du logo, dict ou None), `a2w` (medias d'audio2wave :
         videos `video` interieure et `video2` exterieure du mode Snap, dict de chemins ou None), `seconds` (duree propre au VJ, 5..300, ou None = celle du set),
-        `skip` (True = le VJ ne la joue pas ; on peut toujours la charger a la main)."""
+        `skip` (True = le VJ ne la joue pas ; on peut toujours la charger a la main), `bg_video` (video de fond propre a l'entree : remplace le
+        fond de la scene, chemin ou None)."""
         media = e.get("media")
         a2w = e.get("a2w")
         a2w = {k: a2w[k] for k in A2W_MEDIA_KEYS if isinstance(a2w.get(k), str) and a2w[k].strip()} if isinstance(a2w, dict) else {}
+        bgv = e.get("bg_video")
+        bgv = bgv.strip() if isinstance(bgv, str) and bgv.strip() else None
         sec = e.get("seconds")
         seconds = min(max(float(sec), 5.0), 300.0) if isinstance(sec, (int, float)) and not isinstance(sec, bool) else None
         return {"scene": scene_name, "media": media if isinstance(media, dict) and media else None,
-                "a2w": a2w or None, "seconds": seconds, "skip": e.get("skip") is True}
+                "a2w": a2w or None, "bg_video": bgv, "seconds": seconds, "skip": e.get("skip") is True}
 
     def _load(self) -> dict:
         """Contenu valide et complet (ancien format migre, entrees orphelines retirees, toujours au moins un set)."""
@@ -238,7 +240,7 @@ class SceneBook:
         data = self._load()
         lib = {x["name"].lower(): x for x in data["scenes"]}
         return [{"index": i, "name": e["scene"], "scene": lib[e["scene"].lower()], "media": e["media"],
-                 "a2w": e["a2w"], "seconds": e["seconds"], "skip": e["skip"]} for i, e in enumerate(self._active(data)["entries"])]
+                 "a2w": e["a2w"], "bg_video": e.get("bg_video"), "seconds": e["seconds"], "skip": e["skip"]} for i, e in enumerate(self._active(data)["entries"])]
 
     def row_names(self) -> list[str]:
         return [r["name"] for r in self.rows()]
@@ -293,6 +295,17 @@ class SceneBook:
         else:
             a2w.pop(key, None)
         entries[index]["a2w"] = a2w or None
+        self._save(data)
+        return True
+
+    def set_entry_bg_video(self, index: int, path: str | None) -> bool:
+        """Pose (ou retire, `path` None) la video de fond propre a l'entree : a l'application elle remplace le fond de la scene."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        if not 0 <= index < len(entries):
+            return False
+        entries[index]["bg_video"] = str(path) if path else None
+        entries[index] = self._entry(entries[index], entries[index]["scene"])
         self._save(data)
         return True
 
@@ -446,6 +459,26 @@ def scene_a2w_media(scene: dict) -> dict:
     return {k: str(over[k]) for k in A2W_MEDIA_KEYS if isinstance(over.get(k), (str, Path)) and str(over[k]).strip()}
 
 
+def scene_bg_video(scene: dict) -> str | None:
+    """Video de fond que la scene a capturee elle-meme (fond `video`), sinon None."""
+    fond = scene.get("fond") if isinstance(scene, dict) and scene.get("bg") == "video" else None
+    path = fond.get("bg_video") if isinstance(fond, dict) else None
+    return str(path) if path else None
+
+
+def scene_with_bg_video(scene: dict, path: str) -> dict:
+    """Copie de la scene dont le fond est la video `path` (cadrage de la scene s'il existe, sinon `cover`) : ni motif ni etat
+    audio2wave. Le meme fichier d'une scene a l'autre ne relance pas le decodage."""
+    fond = dict(scene.get("fond") or {}) if scene.get("bg") == "video" else {}
+    fond.update(bg_mode="video", bg_video=str(path), bg_video_fit=fond.get("bg_video_fit", "cover"))
+    return {**scene, "bg": "video", "mode": None, "live_overrides": None, "fond": fond}
+
+
+def bg_video_missing(path: str | None) -> str | None:
+    """Le chemin absolu de la video de fond s'il n'existe pas (sinon None)."""
+    return path if path and Path(path).is_absolute() and not Path(path).exists() else None
+
+
 def a2w_missing(a2w: dict | None) -> list[str]:
     """Videos d'audio2wave a chemin absolu qui n'existent pas (un chemin relatif est cherche par audio2wave dans son dossier
     d'assets : on ne peut pas le savoir ici)."""
@@ -592,6 +625,6 @@ def import_set(book: SceneBook, parsed: dict, set_mode: str = "rename", scene_mo
     else:
         data["sets"].append(st)
     book._save(data)
-    missing = sorted({m for e in entries for m in [media_missing(e["media"]), *a2w_missing(e.get("a2w"))] if m})
+    missing = sorted({m for e in entries for m in [media_missing(e["media"]), *a2w_missing(e.get("a2w")), bg_video_missing(e.get("bg_video"))] if m})
     return {"set": st["name"], "set_renamed": set_renamed, "renamed": renamed, "replaced": replaced, "added": added,
             "missing": missing}

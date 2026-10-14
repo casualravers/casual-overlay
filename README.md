@@ -5,7 +5,7 @@ micro), un logo PNG, un texte tape a la main ou une animation video detouree inc
 chromatique, glitch, pulsation du logo) pilotees en temps reel par les basses et le kick.
 
 Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`), a jour : branche `add-snap-waveform-photo`,
-commit `3bf25c9` ou plus recent (sinon le programme s'arrete avec un message qui dit de mettre a jour ce depot).
+commit `86e0458` ou plus recent, c'est-a-dire `common.API_VERSION` >= 2 (sinon le programme s'arrete avec un message qui dit de mettre a jour ce depot).
 
 ## Version portable (rien a installer)
 
@@ -23,7 +23,7 @@ sounddevice, tkinter, tkinterdnd2), ffmpeg / ffprobe (et DirectShow, pour le mic
 confondre un GPU avec un rendu logiciel, tres lent), un **micro**, le dossier des reglages. Chaque manque est dit clairement avec
 son remede (`[ERREUR]` : le programme ne peut pas demarrer ; `[ATTENTION]` : il demarre sans une fonction). Le meme controle
 tourne au lancement : une erreur arrete le programme avec ce message au lieu d'une trace d'erreur, les avertissements sont
-resumes dans la fenetre de reglages (ligne des scenes) et le rapport complet est dans **Affichage > Diagnostic**.
+resumes dans la fenetre de reglages (ligne des scenes) et le rapport complet est dans **Affichage et analyse > Diagnostic**.
 
 ## Installation (developpement)
 
@@ -38,11 +38,11 @@ py -3.12 -m venv .venv
 ## Lancement
 
 **Double-clic sur [start.bat](start.bat)** : ouvre **la fenetre de reglages seule** (choisis l'entree audio, prepare tes scenes).
-Le bouton **Demarrer la projection** (en haut a gauche) ouvre la fenetre video : **en plein ecran sur le second ecran** (le
-videoprojecteur) ; sans second ecran detecte, en fenetre (un plein ecran sur le poste de travail le recouvrirait, souris comprise).
+Le bouton **Demarrer la projection** (en haut a gauche) ouvre la fenetre video : **en fenetre**, sur un autre ecran que les reglages s'il y en a un
+(la case *Plein ecran* demarre decochee ; --fullscreen ou F pour passer en plein ecran).
 Echap dans la projection la ferme sans fermer les reglages, le meme bouton (*Arreter la projection*) aussi, et on la rouvre quand on
 veut. Si le projecteur est branche apres le lancement, F (ou la case *Plein ecran*) le trouve a ce moment-la ; le plein ecran
-demande par la case ou par un preset est **refuse sur l'ecran principal** (sauf `--fullscreen`). `start.bat --projeter` ouvre aussi
+demande par la case ou par un preset est **refuse sur l'ecran des reglages** (sauf `--fullscreen`). `start.bat --projeter` ouvre aussi
 la projection tout de suite. Il accepte les memes options que le script, par exemple
 `start.bat -d "Microphone (Realtek(R) Audio)"` ou `start.bat --text "CASUAL RAVERS"`.
 
@@ -168,7 +168,7 @@ Audio2wave / motif genere, palette, couleurs, reglages du motif et leurs automat
 
 Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour que la fenetre reste courte
 (environ 650 px de haut) : *Effets*, *Logo*, *Aura du logo* (halo holographique et reaction du logo a l'audio),
-*Fonte du logo*, *Cellules*, *Noise*, *Affichage*.
+*Fonte du logo*, *Cellules*, *Noise* ; *Affichage et analyse* est une section repliable sous les onglets.
 
 - **Fond video** : un fichier video ou une animation (mp4, mov, mkv, webm, avi, gif...) lu **en boucle, plein cadre, a sa cadence**, a la place
   du visuel d'audio2wave ; le logo et tous les effets s'appliquent par-dessus. Reglages : le fichier (champ, *...*, *Aucune*, ou **glisser un

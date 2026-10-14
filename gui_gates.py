@@ -128,9 +128,18 @@ class Gates:
             self._apply(w, enabled)
 
 
-def install_mode_gates(host, mode: str, muted_fg: str) -> Gates:
-    """Grise les reglages sans objet dans le mode `mode` ("live", "snap" ou "ridge") du panneau `host`."""
+def install_mode_gates(host, mode: str, muted_fg: str, widgets: dict | None = None) -> Gates:
+    """Grise les reglages sans objet dans le mode `mode` ("live", "snap" ou "ridge") du panneau `host`.
+
+    `widgets` = `GuiController.widgets` d'audio2wave : un widget par attribut d'`args` (`bar_gap`, `averaging`...), la ligne se
+    retrouve par lui et non par le texte de son libelle. Ce que le dict n'a pas (boutons radio et cases : style, forme, halo...,
+    crossover de Snap, gain de Snap) reste cherche par son texte."""
     gates = Gates(muted_fg)
+    widgets = widgets or {}
+
+    def row(attr: str, label: str) -> list:
+        w = widgets.get(attr)
+        return row_widgets(host, w) if w is not None else row_of_label(host, label)
 
     def rb(text):                                   # variable Tcl d'un groupe de boutons radio, via l'un d'eux
         w = find(host, "Radiobutton", text)
@@ -153,10 +162,10 @@ def install_mode_gates(host, mode: str, muted_fg: str) -> Gates:
         watched += [style_v, shape_v]
         analyzer = lambda: value(style_v) == "analyzer"
         # Forme, lissage et echelle des frequences n'existent que pour l'analyseur (la radio est une onde, sans FFT)
-        for label in ("Forme", "Lissage", "Echelle frequences"):
-            gates.add(row_of_label(host, label), analyzer)
+        for attr, label in (("shape", "Forme"), ("averaging", "Lissage"), ("freq_scale", "Echelle frequences")):
+            gates.add(row(attr, label), analyzer)
         # L'espace entre barres n'a de sens qu'en barres
-        gates.add(row_of_label(host, "Espace entre barres"), lambda: analyzer() and value(shape_v) == "bar")
+        gates.add(row("bar_gap", "Espace entre barres"), lambda: analyzer() and value(shape_v) == "bar")
 
     elif mode == "snap":
         style_v = rb("pencil")
@@ -165,15 +174,16 @@ def install_mode_gates(host, mode: str, muted_fg: str) -> Gates:
         pencil = lambda: value(style_v) == "pencil"
         not_pencil = lambda: value(style_v) != "pencil"
         # Trait, sinusoide, halo des kicks et videos: crayon seulement
-        for label in ("Epaisseur du trait", "Rayon du halo", "Video interieure", "Video exterieure", "VIDEO"):
-            gates.add(row_of_label(host, label), pencil)
+        for attr, label in (("line_width", "Epaisseur du trait"), ("kick_glow_size", "Rayon du halo"), ("video", "Video interieure"),
+                            ("video2", "Video exterieure"), ("", "VIDEO")):
+            gates.add(row(attr, label), pencil)
         for text in ("Sinusoide", "Halo sur les kicks"):
             w = find(host, "Checkbutton", text)
             if w is not None:
                 gates.add(row_widgets(host, w), pencil)
         # Echelle, filtre de colonne: rekordbox / simple. Crossover: rekordbox seul.
-        for label in ("Echelle", "Filtre colonne", "REKORDBOX / SIMPLE"):
-            gates.add(row_of_label(host, label), not_pencil)
+        for attr, label in (("scale", "Echelle"), ("filter_mode", "Filtre colonne"), ("", "REKORDBOX / SIMPLE")):
+            gates.add(row(attr, label), not_pencil)
         gates.add(row_of_label(host, "Crossover Hz"), lambda: value(style_v) == "rekordbox")
         # Dependances internes
         w = find(host, "Checkbutton", "Sinusoide")
@@ -182,13 +192,13 @@ def install_mode_gates(host, mode: str, muted_fg: str) -> Gates:
         w = find(host, "Checkbutton", "Temps reel")
         if w is not None:
             gates.add([w], lambda: checked(glow_v))
-        gates.add(row_of_label(host, "Rayon du halo"), lambda: checked(glow_v))
+        gates.add(row("kick_glow_size", "Rayon du halo"), lambda: checked(glow_v))
         gates.add(row_of_label(host, "Gain manuel"), lambda: not checked(auto_v))
 
     elif mode == "ridge":
         auto_v = cb_var("Gain automatique")
         watched.append(auto_v)
-        gates.add(row_of_label(host, "Gain manuel (dB)"), lambda: not checked(auto_v))
+        gates.add(row("gain", "Gain manuel (dB)"), lambda: not checked(auto_v))
 
     for name in watched:
         if name:
