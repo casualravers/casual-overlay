@@ -72,7 +72,19 @@ def require_deps() -> None:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SHADER_DIR = SCRIPT_DIR / "gl_shaders"
-DEFAULT_LOGO = SCRIPT_DIR / "asset" / "Casual Ravers - Kit_Sigle - Blanc.png"
+DEFAULT_LOGO_NAME = "Casual Ravers - Kit_Sigle - Blanc.png"
+
+
+def default_logo(script_dir: Path) -> Path:
+    """Logo par defaut : `asset/images/` (rangement actuel des assets), sinon `asset/` (ancien emplacement)."""
+    for sub in ("images", ""):
+        path = script_dir / "asset" / sub / DEFAULT_LOGO_NAME
+        if path.is_file():
+            return path
+    return script_dir / "asset" / "images" / DEFAULT_LOGO_NAME
+
+
+DEFAULT_LOGO = default_logo(SCRIPT_DIR)
 
 
 def bundled_paths(script_dir: Path, env_path: str = "") -> tuple[Path, str]:
@@ -2065,7 +2077,7 @@ def parse_args() -> argparse.Namespace:
                         "a la ligne). Police, couleur, alignement et taille se reglent dans la GUI")
     p.add_argument("--logo", default=None,
                    help="PNG RGBA a incruster, ou 'none' (defaut: reglage sauve, sinon "
-                        "asset/Casual Ravers - Kit_Sigle - Blanc.png)")
+                        "asset/images/Casual Ravers - Kit_Sigle - Blanc.png)")
     p.add_argument("--logo-video", default=None,
                    help="Logo anime: video ou GIF en boucle (WebM VP9 / MOV ProRes 4444 / GIF / APNG avec alpha "
                         "pour un logo detoure). Remplace le PNG et le texte")

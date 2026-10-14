@@ -96,7 +96,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   dans `choice_dialog`.
 - **Version portable** (`build_portable.py`, stdlib, Windows) : un dossier `dist/casual-overlay-portable/` = `python/` (copie de
   l'installation Python de base du venv, sans Doc / tests / pip, avec tcl/tk, + `site-packages` du `.venv`), les `.py`, `gl_shaders/`,
-  `asset/` (fichiers du dossier, pas les animations perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
+  `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
   ffprobe.exe), `start.bat`, `LISEZMOI.txt`. **Pas de gel (PyInstaller)** : audio2wave est importe dynamiquement et tkinter /
   modules varient selon le mode. `audio2wave_gl.bundled_paths(script_dir, path)` : `audio2wave/` a cote du programme l'emporte sur le
   depot voisin (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
@@ -446,6 +446,51 @@ visuel d'audio2wave, il ne le complete pas) :
     La GUI (`import_set_now`, `resolve_conflict`) pose la question puis **demande confirmation avant de remplacer**.
   - Dialogues dans `scene_ui` (`chooser`, `ask_name`, `ask_save`, `ask_open`) : les tests les remplacent, jamais de fenetre
     bloquante. `choice_dialog` (module) = fenetre modale a boutons.
+- **Full Randomizer** (`randomizer.py`, ordre VJ `alea`, `scenes.VJ_ORDERS`, libelle « Full Randomizer » partout dans la GUI) : a chaque changement `vj_advance` appelle `random_draw()`
+  au lieu de lire une entree : `randomizer.draw_scene(rng, settings, Context)` (pur, graine injectable) rend une **scene temporaire**
+  (meme format que `capture_scene`, nom `Full Randomizer`), appliquee par `apply_scene_dict` (extrait de `apply_scene_core`, qui lui
+  passe la scene de la bibliotheque) : flash, minuteur = `duree` du set, `s.active_scene` = `Full Randomizer`, `s.rnd` = etat (`last`,
+  `scene`, `info`, `bank` = `{"fond", "overlay"}`, `rng`). **Marche avec un set vide** (`vj_toggle` ne demande 2 scenes que hors `alea`).
+  - Reglages dans `vj["random"]` **du set** (validation `randomizer.clean_settings` appelee par `SceneBook._clean_vj`, donc aussi a
+    la copie, l'export et l'import) : `folders_fond` / `folders_overlay`, `categories_fond` / `categories_overlay` ([] = toutes), `bg_sources` (`preset` / `a2w` / `video` / `params`),
+    `overlay` (`overlay_preset` / `params` / `fx` / `media`), `lock_bg` / `lock_media` / `lock_fx`. Un ordre inconnu revient a `seq`.
+  - **Deux banques**, autant de dossiers que l'on veut : **FOND** (videos plein cadre : le fond) et **OVERLAY** (images, animations,
+    videos : le logo). **Le dossier classe, jamais l'extension** (un .mov peut etre une animation a fond transparent) ; pour qu'une
+    video serve aux deux, son dossier est declare dans les deux. `scan_bank(dossiers, "fond" | "overlay")` (os.walk, 4 niveaux, 5000
+    fichiers, caches ignores, doublons de chemins ecartes ; FOND = videos seulement), `Asset(path, kind, category)` (`kind` image /
+    video = la source du logo a utiliser), categorie = premier sous-dossier (`ROOT_CATEGORY` a la racine) ; `Context.bank_fond` /
+    `bank_overlay` ; `random_bank()` (GUI, `{"fond", "overlay"}`) garde le scan tant que les dossiers ne changent pas (Rescanner).
+    Un fichier disparu depuis le scan est ecarte au tirage (`usable(bank, categories, kind)`).
+  - Fond : `preset` -> `BACKGROUND_BOOK.all()` (scene `pattern`, ou `live` sans toucher au panneau si le preset est en mode live),
+    `a2w` -> presets du mode courant (`mode_store(...).all()`, **jamais `default` vide**, jamais un autre mode : pas de reconstruction de la fenetre),
+    `video` -> video de la banque FOND (`bg_video_fit` cover / stretch), `params` = **config aleatoire** -> soit `random_background_params` (plages des curseurs, jamais
+    la palette banc de test), soit un **visuel audio2wave** : mode (`modes` du set, `Context.a2w_modes` = presets de chaque mode, charges par
+    `random_draw` seulement si `params` est coche) et preset de ce mode au hasard (`default` vide = `live_overrides` None) ; changer de mode
+    reconstruit la fenetre (~1 s, masque par le flash) via `apply_scene_dict` ; `record["bg"]` = `params:gen` ou `params:a2w:<mode>:<nom>`. Une source cochee mais indisponible est ignoree ; aucune = le fond ne change pas (message).
+  - Overlay : une base, **preset overlay** ou **config entierement nouvelle** (`params`, `random_overlay_params` : disposition et contour du
+    logo dans des valeurs sures, effets du fond et de la couche logo, `fx_link` 0 / 1, halo / fonte / cellules, noise ; ni media ni
+    automation ; les deux bases alternent si les deux sont cochees ; `record["overlay"]` = `preset:<nom>` ou `params`) ; `fx` ajoute
+    `random_effects` par-dessus un preset (inutile avec `params`, qui en contient deja) ; `random_effects` (halo / fonte / cellules, **`MAX_COSTLY` = 2** pour ne pas declencher le
+    garde-fou GPU ; les effets non tires sont coupes explicitement, le tirage ne depend pas de l'etat d'avant) + media de la banque OVERLAY
+    (`media_for`). **Sans media a tirer (banque vide, non coche) le media courant reste** : un preset applique les valeurs par
+    defaut et remettrait sinon le logo par defaut. La video du fond n'est pas aussi le logo (sauf si c'est la seule).
+  - **Overlay toujours centre et statique** : `randomizer.centered(overlay, overlay_du_moment)` est applique a **tout** tirage (preset, config,
+    verrou des effets compris) : `logo_x` = `logo_y` = 0,5 (`CENTER`) et automation de position coupee (`_automation` de l'overlay, sinon
+    celle du moment ; rien n'est ajoute si aucune n'est allumee : fournir `_automation` reinitialiserait les autres automations).
+  - Verrous : le fond verrouille reprend `current_scene["bg"]` / `fond` (jamais d'etat audio2wave), le media et les effets reprennent
+    l'overlay courant (`capture_scene`). Pas de repetition immediate (`last`).
+  - GUI : le panneau etendu affiche `build_random_body` a la place des lignes d'entrees (banques FOND et OVERLAY avec leurs dossiers, categories + sources + verrous +
+    *Tirer maintenant* / *Garder cette scene* + le resume du dernier tirage) ; **`Garder ce tirage...`** ouvre `keep_dialog` (modale, `scene_ui["ask_keep"]`, remplacable par les
+    tests) : trois noms, preset de fond (`BACKGROUND_BOOK.save` de `scene["fond"]`, seulement si le fond est genere ou video), preset
+    overlay (`OVERLAY_BOOK.save` de `scene["overlay"]`) et scene (`scene_book.put`), un champ vide = pas enregistre ; defauts uniques
+    (`Tirage fond`, `Tirage overlay`, `Tirage`) ; `random_keep_check(noms)` valide (un nom deja pris ou `default` est refuse, la modale
+    reste ouverte avec le message ; rien n'est ecrit en cas d'erreur) ; `random_save(noms)` ecrit puis rafraichit les menus de presets. `scene_ui["ask_dir"]` (remplacable par les tests). Controles : `c["random"]` (`draw`, `draw_now`, `keep`, `bank`, `option`, `state`).
+  - **Piege (modales)** : `a2w` (palette d'audio2wave) n'est pas un nom du module `gl_gui`, seulement un import local de `build_window` : une
+    modale de niveau module (`choice_dialog`, `keep_dialog`) qui l'utilise doit faire `import audio2wave as a2w` elle-meme. `choice_dialog`
+    plantait ainsi sans qu'aucun test le voie (ils remplacent les dialogues par `scene_ui`) ; `check_dialogs` ouvre les vraies modales.
+  - `check_gl.py` (`check_randomizer`, `gui_random_steps`) : banque, reglages, plages, effets, determinisme, sources, verrous, banque
+    vide, scene applicable (`scene_values`), reglages par set / copie / export, puis dans la fenetre : panneau, tirage + flash, VJ sur set
+    vide, Garder + rejouer, verrou, categories, dossier, retour a l'ordre normal.
 - **Panneau etendu** (`scene_top` = barre + `scene_panel`, `set_expanded`, `refresh_scene_panel`, `build_panel_row`) : bouton
   `Etendre` / `Reduire` dans la barre ; l'etat est `s.scenes_expanded` (survit aux reconstructions de la fenetre). La fenetre
   grandit de `scene_panel.winfo_reqheight()` (memorise dans `s.scene_panel_h`, plafonne a la hauteur de l'ecran - 80) et la

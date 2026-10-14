@@ -8,7 +8,7 @@ Contenu du dossier :
     python/        un Python 3.12 complet (copie de l'installation locale : tkinter compris) + les modules de requirements-gl.txt
     audio2wave/    les scripts du depot audio2wave (dependance, jamais modifies)
     ffmpeg/        ffmpeg.exe et ffprobe.exe (ajoutes au PATH par le programme, aucune installation)
-    *.py, gl_shaders/, asset/, start.bat, LISEZMOI.txt
+    *.py, gl_shaders/, asset/ (+ asset/images/, sans animations ni videos), start.bat, LISEZMOI.txt
 
 On ne gele PAS le programme (PyInstaller) : audio2wave est importe dynamiquement, tkinter et les modules de calcul changent selon
 le mode, et un Python complet reste le plus fiable. Fichier stdlib seulement, Windows seulement.
@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "gui_colors.py", "gui_gates.py", "py_modes.py", "scenes.py", "diagnostics.py", "skin.py", "theme.py",
+APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "gui_colors.py", "gui_gates.py", "py_modes.py", "scenes.py", "diagnostics.py", "skin.py", "theme.py", "randomizer.py",
              "check_gl.py", "requirements-gl.txt", "start.bat", "README.md")
 APP_DIRS = ("gl_shaders",)
 PY_SKIP_DIRS = {"Doc", "include", "libs", "Scripts", "__pycache__"}            # a la racine de l'installation Python
@@ -124,9 +124,14 @@ def build_app(out: Path, a2w_dir: Path) -> None:
         copy_tree(HERE / name, out / name)
     asset = out / "asset"
     asset.mkdir(exist_ok=True)
-    for f in (HERE / "asset").iterdir():                     # les fichiers du dossier, pas ses sous-dossiers (animations perso)
-        if f.is_file():
-            shutil.copy2(f, asset / f.name)
+    for sub in ("", "images"):                              # les fichiers de asset/ et de asset/images/ (logos), pas les animations ni les videos perso
+        src_dir = HERE / "asset" / sub
+        if not src_dir.is_dir():
+            continue
+        (asset / sub).mkdir(exist_ok=True)
+        for f in src_dir.iterdir():
+            if f.is_file():
+                shutil.copy2(f, asset / sub / f.name)
     if not (a2w_dir / "audio2wave_live.py").is_file():
         raise SystemExit(f"audio2wave introuvable ({a2w_dir}) : indique-le avec --a2w-dir.")
     dst = out / "audio2wave"
