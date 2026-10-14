@@ -1099,6 +1099,8 @@ def check_gui() -> None:
     check(out.get("x_thumb") is True, "etendu (GUI): vignette du media (calculee dans un fil) disponible", str(out.get("x_thumb")))
     check(out.get("x_bg_bad", (True, 0))[0] is False and out.get("x_bg_bad", (True, 0))[1] is None and out.get("x_bg") == (True,) * 4,
           "etendu (GUI): colonne FOND video : une image est refusee, une video deposee remplace le fond de l'entree (meme fichier d'une entree a l'autre), retrait", str((out.get("x_bg_bad"), out.get("x_bg"))))
+    check(out.get("x_dup") == (True,) * 5,
+          "etendu (GUI): Dupliquer la derniere ajoute une copie de la scene (nom inedit) avec les medias, la duree et le VJ de l'entree", str(out.get("x_dup")))
     check(out.get("x_plus") == (True,) * 6,
           "etendu (GUI): le bouton + ajoute au set une scene aleatoire (nom aleatoire inedit, aucun preset enregistre, rien d'applique, overlay centre)", str(out.get("x_plus")))
     check(out.get("x_thumb_shown") is True, "etendu (GUI): une vignette prete s'affiche sans autre changement (la signature en tient compte)",
@@ -2784,6 +2786,19 @@ def gui_expand_steps(c, s, out) -> None:
                      (s.active_scene, s.active_entry) == applied_before, book.rows()[-1]["scene"]["overlay"].get("logo_x") == 0.5)
     book.remove_entry(len(book.rows()) - 1)
     book.delete(new_name)
+    # bouton Dupliquer la derniere : copie de la scene et des reglages de l'entree, a la suite
+    sc["entry_vj"](len(book.rows()) - 1, seconds=42.0)
+    last_row = book.rows()[-1]
+    n_rows = len(book.rows())
+    dup_name = sc["duplicate"](False)
+    new_row = book.rows()[-1]
+    out["x_dup"] = (len(book.rows()) == n_rows + 1, dup_name == new_row["name"] and dup_name != last_row["name"] and dup_name.startswith(last_row["name"]),
+                    new_row["scene"]["overlay"] == last_row["scene"]["overlay"] and new_row["scene"]["bg"] == last_row["scene"]["bg"],
+                    (new_row["media"], new_row["a2w"], new_row["seconds"], new_row["skip"]) == (last_row["media"], last_row["a2w"], 42.0, last_row["skip"]),
+                    book.get(last_row["name"]) is not None)
+    book.remove_entry(len(book.rows()) - 1)
+    book.delete(dup_name)
+    sc["entry_vj"](len(book.rows()) - 1, seconds=None)
     # duree propre et exclusion du VJ
     sc["entry_vj"](1, skip=True)
     sc["entry_vj"](0, seconds=7.0)

@@ -1808,6 +1808,38 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         refresh_scene_bar()
         return name
 
+    def duplicate_last_scene(ask: bool = True) -> str | None:
+        """Bouton « Dupliquer la derniere » : copie de la derniere scene du set (scene + media, videos, duree, VJ de l'entree) sous un nom
+        inedit, ajoutee a la suite. Rend le nouveau nom (None : set vide). `ask` : propose ensuite de la renommer."""
+        rows = scene_book.rows()
+        if not rows:
+            scene_msg.set("Le set est vide : rien a dupliquer (utilise + ou Nouvelle scene)")
+            return None
+        last = rows[-1]
+        name = scenes.unique_name(f"{last['name']} (2)", scene_book.names())
+        scene_book.put(dict(json.loads(json.dumps(last["scene"])), name=name))
+        index = len(scene_book.rows()) - 1
+        if last["media"]:
+            scene_book.set_entry_media(index, dict(last["media"]))
+        for key, path in (last["a2w"] or {}).items():
+            scene_book.set_entry_a2w(index, key, path)
+        if last.get("bg_video"):
+            scene_book.set_entry_bg_video(index, last["bg_video"])
+        scene_book.set_entry_vj(index, seconds=last["seconds"], skip=last["skip"])
+        scene_msg.set(f"Scene '{last['name']}' dupliquee en '{name}' : change ses medias, sa duree ou son nom")
+        refresh_scene_bar()
+        def show_last() -> None:                                       # la nouvelle ligne est visible
+            cv = panel_state.get("cv")                                 # (le panneau a pu etre reconstruit entre-temps)
+            try:
+                if cv is not None:
+                    cv.yview_moveto(1.0)
+            except tk.TclError:
+                pass
+        after(80, show_last)
+        if ask:
+            rename_scene_dialog(name)
+        return name
+
     def random_draw_now() -> None:
         """Bouton « Tirer maintenant » : un tirage tout de suite (le VJ, s'il tourne, repart pour une duree pleine)."""
         s.commands.put("flash")
@@ -2768,12 +2800,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         head = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)
         head.pack(fill="x")
         tk.Label(head, text=f" SET  {scene_book.active_set_name()}", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=BOLD).pack(
-            side="left", padx=(6, 6), pady=4)
-        plus = tk.Button(head, text="+", command=add_random_scene, relief="flat", bd=0, padx=8, cursor="hand2", bg=SCENE_COLOR,
-                         fg=BANNER_FG, font=BOLD, activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
-        plus.pack(side="left", padx=(0, 12), pady=2)
-        Tooltip(plus, "Ajoute au set une scene tiree au hasard (reglages du Full Randomizer), sous un nom aleatoire. "
-                      "Aucun preset n'est enregistre et la scene n'est pas appliquee.")
+            side="left", padx=(6, 12), pady=4)
         order = tk.Menubutton(head, text="ordre : " + {"seq": "dans l'ordre", "random": "au hasard", "alea": "Full Randomizer"}[settings["order"]] + " \u25be",
                               relief="flat", bd=0, padx=8, cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG,
                               activebackground=a2w.GUI_PANEL_BG, activeforeground=a2w.GUI_FG)
@@ -2801,6 +2828,18 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         body = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=getattr(s, "panel_body_h", PANEL_BODY_H))
         body.pack(fill="x")
         body.pack_propagate(False)
+        foot = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)           # sous la liste : ajouter a la suite
+        foot.pack(fill="x")
+        plus = tk.Button(foot, text="+", command=add_random_scene, relief="flat", bd=0, padx=14, cursor="hand2", bg=SCENE_COLOR,
+                         fg=BANNER_FG, font=BOLD, activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+        plus.pack(side="left", padx=(8, 4), pady=3)
+        Tooltip(plus, "Ajoute a la suite du set une scene tiree au hasard (reglages du Full Randomizer), sous un nom aleatoire. "
+                      "Aucun preset n'est enregistre et la scene n'est pas appliquee.")
+        dup = tk.Button(foot, text="Dupliquer la derniere", command=duplicate_last_scene, relief="flat", bd=0, padx=10, cursor="hand2",
+                        bg=a2w.GUI_BG, fg=a2w.GUI_FG)
+        dup.pack(side="left", padx=4, pady=3)
+        Tooltip(dup, "Ajoute a la suite une copie de la derniere scene (meme fond, overlay, medias, duree) puis propose de la renommer. "
+                     "Change ensuite ses medias en glissant un fichier sur sa ligne, sa duree ou sa case VJ.")
         grip = tk.Label(scene_panel, text="⋯", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, cursor="sb_v_double_arrow", pady=0)
         grip.pack(fill="x")
         Tooltip(grip, "Glisse vers le haut ou le bas pour agrandir ou reduire la liste (la fenetre suit).")
@@ -3238,7 +3277,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "new_from_entry": new_scene_from_entry, "switch_set": switch_set, "create_set": create_set,
                        "rename_set": rename_set_now, "delete_set": delete_set_now, "export": export_set_now,
                        "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel, "refresh_panel": refresh_scene_panel, "panel_state": panel_state,
-                       "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
+                       "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
                        "move_entry": move_entry_now, "media_current": media_from_current, "media_clear": media_clear},
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
