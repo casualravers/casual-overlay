@@ -417,6 +417,12 @@ def check_gui() -> None:
                                  if w.winfo_class() == "Entry" and int(w.cget("width")) == 6)
             out["presets"] = any(w.winfo_class() == "Label" and w.cget("text").startswith("PRESETS LIVE")
                                  for w in walk(root))
+            out["scrollbars"] = (sum(1 for w in walk(root) if w.winfo_class() == "Scrollbar"),
+                                 sum(1 for w in walk(root) if w.winfo_class() == "TScrollbar"
+                                     and str(w.cget("style")) == "Casual.Vertical.TScrollbar"))
+            menus = [w for w in walk(root) if w.winfo_class() == "Menu"]
+            out["menus"] = (len(menus), sum(1 for m in menus if str(m.cget("activeforeground")).lower() != "#e7e9ee"
+                                            or str(m.cget("background")).lower() != "#242835"))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
                                     and w.cget("text") == "∿")
             proj_btn = c["projection"]["button"]()
@@ -1080,6 +1086,9 @@ def check_gui() -> None:
     check(out.get("r_keep3") == (True, True, True, True, True, True),
           "Full Randomizer (GUI): la modale propose trois noms ; preset fond, preset overlay et scene enregistres, menus de presets a jour",
           str(out.get("r_keep3")))
+    check(out.get("r_keep_a2w") == (True, True, True, True, True, True, True),
+          "Full Randomizer (GUI): garder un tirage audio2wave enregistre le preset du mode et l'etat reel du panneau dans la scene ; "
+          "un fond video sans fichier n'est pas propose en preset", f"{out.get('r_keep_a2w')} {out.get('r_keep_a2w_err')}")
     check(out.get("r_keep_err") == (True, True, True, True, True, 1),
           "Full Randomizer (GUI): nom deja pris ou 'default' refuse, annuler n'ecrit rien, un seul champ rempli = seulement celui-la, "
           "pas de preset de fond sans fond genere", str(out.get("r_keep_err")))
@@ -1157,6 +1166,10 @@ def check_gui() -> None:
     check(b.get("mode") == "live" and b.get("src") is None and b.get("suspended") is False
           and b.get("resumed") == ["Micro"] and b.get("reader_ok") and b.get("banner") and b.get("gain"),
           "retour au mode Live : ffmpeg relance sur l'entree courante, lecteur d'origine, panneau Live reconstruit", str(b))
+    sb = out.get("scrollbars", (-1, 0))
+    check(sb[0] == 0 and sb[1] >= 2, "GUI: les ascenseurs de la fenetre sont aux couleurs de la GUI (aucun ascenseur Windows clair)", str(sb))
+    mn = out.get("menus", (0, -1))
+    check(mn[0] >= 3 and mn[1] == 0, "GUI: les listes deroulantes gardent un texte clair au survol (pas le texte sombre d'audio2wave sur l'accent)", str(mn))
     pj = out.get("proj", {})
     check(pj.get("text0") == "Demarrer la projection" and pj.get("text1") == "Arreter la projection"
           and pj.get("text2") == "Demarrer la projection" and pj.get("started") == 1 and pj.get("stopped") == 1,
@@ -3239,6 +3252,24 @@ def _plain_vj(vj: dict) -> dict:
     return {k: vj[k] for k in ("seconds", "order")}
 
 
+def check_fond_saveable() -> None:
+    """Un fond n'est propose en preset que s'il y a quelque chose a enregistrer."""
+    import tempfile
+    import randomizer as rz
+    print("fond enregistrable en preset")
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "v.mp4"
+        video.write_bytes(b"x")
+        check(rz.fond_saveable({"bg": "pattern", "fond": {"bg_mode": "pattern"}}) is True
+              and rz.fond_saveable({"bg": "video", "fond": {"bg_mode": "video", "bg_video": str(video)}}) is True,
+              "fond genere et video existante: enregistrables")
+        check(rz.fond_saveable({"bg": "video", "fond": {"bg_mode": "video", "bg_video": ""}}) is False
+              and rz.fond_saveable({"bg": "video", "fond": {"bg_mode": "video", "bg_video": str(Path(tmp) / "absente.mp4")}}) is False,
+              "fond video sans fichier choisi (noir) ou fichier absent: rien a enregistrer")
+        check(rz.fond_saveable({"bg": "live", "fond": None}) is False and rz.fond_saveable(None) is False
+              and rz.fond_saveable({"bg": "pattern", "fond": None}) is False, "fond audio2wave ou vide: pas de preset de fond")
+
+
 def check_randomizer() -> None:
     """Full Randomizer (randomizer.py) : banque, tirage, verrous, plages, reglages du set. Sans fenetre."""
     print("Full Randomizer (randomizer.py)")
@@ -3523,8 +3554,8 @@ def gui_random_steps(c, s, out) -> None:
     kept_scene = rd["state"]["scene"]
     asked: dict = {}
 
-    def ask_keep(defaults, fond_ok, validate):
-        asked.update(defaults=dict(defaults), fond_ok=fond_ok, empty=validate({"fond": "", "overlay": "", "scene": ""}))
+    def ask_keep(defaults, fond_ok, validate, a2w_mode=None):
+        asked.update(defaults=dict(defaults), fond_ok=fond_ok, empty=validate({"fond": "", "overlay": "", "scene": ""}), a2w_mode=a2w_mode)
         return {"fond": "Tirage fond", "overlay": "Tirage overlay", "scene": "Tirage"}
     sc["ui"]["ask_keep"] = ask_keep
     widgets("Button", "Garder ce tirage...")[0].invoke()
@@ -3541,7 +3572,7 @@ def gui_random_steps(c, s, out) -> None:
     n_scenes = len(book.names())
     err_dup = rd["save"]({"fond": "Tirage fond", "overlay": "", "scene": ""})
     err_default = rd["save"]({"fond": "", "overlay": "default", "scene": ""})
-    sc["ui"]["ask_keep"] = lambda defaults, fond_ok, validate: None
+    sc["ui"]["ask_keep"] = lambda defaults, fond_ok, validate, a2w_mode=None: None
     widgets("Button", "Garder ce tirage...")[0].invoke()
     err_solo = rd["save"]({"fond": "", "overlay": "", "scene": "Solo"})
     real_scene = rd["state"]["scene"]
@@ -3552,6 +3583,21 @@ def gui_random_steps(c, s, out) -> None:
                          len(book.names()) == n_scenes + 1, "pas de fond genere" in str(err_nofond),
                          sorted(gl.BACKGROUND_BOOK.names()).count("Tirage fond"))
     book.delete("Solo")
+    # fond « video » sans fichier choisi (ecran noir) : pas de preset de fond ; fond audio2wave : preset du mode + etat reel du panneau
+    rd["state"]["scene"] = {"bg": "video", "mode": None, "live_overrides": None, "fond": {"bg_mode": "video", "bg_video": ""}, "overlay": {}}
+    err_black = rd["check"]({"fond": "Noir", "overlay": "", "a2w": "", "scene": ""})
+    rd["state"]["scene"] = {"bg": "live", "mode": s.mode, "live_overrides": None, "fond": None, "overlay": {"logo_glow": 1.0}}
+    import preset_registry
+    store = preset_registry.store_for(s.mode)
+    err_a2w_dup = rd["check"]({"fond": "", "overlay": "", "a2w": "default", "scene": ""})
+    err_a2w = rd["save"]({"fond": "", "overlay": "", "a2w": "Mon live", "scene": "Scene live"})
+    live_scene = book.get("Scene live")
+    out["r_keep_a2w_err"] = err_a2w; out["r_keep_a2w"] = ("pas de fond genere" in str(err_black), "existe deja" in str(err_a2w_dup), err_a2w is None,
+                         "mon live" in store.user(), bool(live_scene) and bool(live_scene.get("live_overrides")),
+                         bool(live_scene) and live_scene.get("mode") == s.mode, sc["msg"].get().startswith("Enregistre"))
+    store.delete("mon live")
+    book.delete("Scene live")
+    rd["state"]["scene"] = real_scene
     out["r_keep"] = (kept is not None, kept is not None and kept["bg"] == kept_scene["bg"] and kept["overlay"] == kept_scene["overlay"],
                      [r["name"] for r in book.rows()] == ["Tirage"], active_kept == "Tirage")
     sc["apply"]("Tirage")                                                # la scene gardee se rejoue comme les autres
@@ -3660,7 +3706,7 @@ def check_dialogs() -> None:
         got = gl_gui.keep_dialog(root, {"fond": "A", "overlay": "B", "scene": "C"}, True,
                                  lambda n: "fond 'pris' existe deja" if n["fond"] == "pris" else None)
         check(seen.get("values") == ["A", "B", "C"] and seen.get("open_after_error") and seen.get("error")
-              and got == {"fond": "libre", "overlay": "B", "scene": ""},
+              and got == {"fond": "libre", "overlay": "B", "a2w": "", "scene": ""},
               "keep_dialog: trois noms proposes, un nom refuse laisse la fenetre ouverte avec le message, un champ vide = pas enregistre",
               f"{seen} {got}")
 
@@ -3762,6 +3808,57 @@ def check_projection() -> None:
     check(not p.running() and "pilote" in s.status.get("msg", ""), "projection: une erreur du rendu est signalee, la GUI continue")
 
 
+def check_bar_gap() -> None:
+    """Analyzer en barres : un espace entre barres trop grand efface tout (separateur noir plus large que la barre)."""
+    import types
+    print("espace entre barres (analyzer)")
+    a = types.SimpleNamespace(style="analyzer", shape="bar", bar_gap=1.4)
+    note = gl.limit_bar_gap(a)
+    check(a.bar_gap == gl.BAR_GAP_MAX and note is not None and "1.40" in note, "analyzer en barres a 1,4 : plafonne, avec un message", str(note))
+    for style, shape, gap in (("analyzer", "bar", 0.25), ("analyzer", "line", 1.4), ("radio", "line", 1.4), ("radio", "bar", 1.4)):
+        b = types.SimpleNamespace(style=style, shape=shape, bar_gap=gap)
+        check(gl.limit_bar_gap(b) is None and b.bar_gap == gap, f"{style} / {shape} / {gap}: rien a plafonner (l'espace n'agit qu'en analyzer + barres)")
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    import copy
+    base = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
+    base.style, base.shape, base.bar_gap = "analyzer", "bar", 1.4
+    cmd_raw = " ".join(live.producer_command(base))
+    fixed = copy.copy(base)
+    gl.limit_bar_gap(fixed)
+    cmd_fixed = " ".join(live.producer_command(fixed))
+    import re
+    t_raw = int(re.search(r"drawgrid=[^:]*:h=ih:t=(\d+)", cmd_raw).group(1))
+    t_fixed = int(re.search(r"drawgrid=[^:]*:h=ih:t=(\d+)", cmd_fixed).group(1))
+    cell = 1280 // 128
+    check(t_raw >= cell and t_fixed < cell, "analyzer en barres: le separateur est plus large que la barre a 1,4, plus etroit apres plafonnement",
+          f"cellule {cell} px : {t_raw} -> {t_fixed}")
+
+
+def check_line_resolution() -> None:
+    """Analyzer en courbe : assez de points et de frequences pour une courbe nette."""
+    import copy
+    import re
+    import types
+    print("resolution de l'analyzer en courbe")
+    a = types.SimpleNamespace(style="analyzer", shape="line", bars=128, win_size=None)
+    check(gl.sharpen_line(a) is True and a.bars == gl.LINE_MIN_POINTS and a.win_size == gl.LINE_MIN_WIN,
+          "courbe a 128 points / fenetre auto: portee a 400 points et fenetre de 2048")
+    fine = types.SimpleNamespace(style="analyzer", shape="line", bars=400, win_size=4096)
+    check(gl.sharpen_line(fine) is False and fine.win_size == 4096, "courbe deja fine: rien ne change (on ne reduit jamais)")
+    for style, shape in (("analyzer", "bar"), ("radio", "line")):
+        o = types.SimpleNamespace(style=style, shape=shape, bars=128, win_size=None)
+        check(gl.sharpen_line(o) is False and o.bars == 128 and o.win_size is None, f"{style} / {shape}: inchange")
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    base = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
+    base.style, base.shape = "analyzer", "line"
+    before = " ".join(live.producer_command(base))
+    sharp = copy.copy(base)
+    gl.sharpen_line(sharp)
+    after = " ".join(live.producer_command(sharp))
+    pick = lambda cmd: (int(re.search(r"showfreqs=s=(\d+)x", cmd).group(1)), int(re.search(r"win_size=(\d+)", cmd).group(1)))
+    check(pick(before)[0] < 400 and pick(after) == (400, 2048), "commande ffmpeg: courbe de 400 points sur une fenetre de 2048", f"{pick(before)} -> {pick(after)}")
+
+
 def check_contract() -> None:
     """Test de contrat d'audio2wave (`check_contract.py` du depot voisin : noms et signatures dont depend casual-overlay) :
     un code de sortie non nul fait echouer la suite. Si c'est un nom dont on depend qui est casse, c'est cote audio2wave
@@ -3776,6 +3873,69 @@ def check_contract() -> None:
     lines = [ln for ln in (res.stdout + res.stderr).splitlines() if "ECHEC" in ln or "Traceback" in ln or "Error" in ln]
     check(res.returncode == 0, "contrat d'audio2wave: check_contract.py sort avec le code 0 (tous les noms et signatures dont on depend)",
           f"code {res.returncode} : " + " | ".join(lines[:6]))
+
+
+def check_menu_style() -> None:
+    """Menus deroulants : texte clair au survol, fond teinte de l'accent de la zone (le texte noir sur le bleu se lisait mal)."""
+    import tkinter as tk
+    import skin
+    import theme
+    print("menus deroulants (skin.style_menu)")
+    root = tk.Tk()
+    try:
+        root.option_add("*Menu.activeBackground", theme.LIVE)          # ce que pose audio2wave (accent plein)
+        root.option_add("*Menu.activeForeground", theme.ON_ACCENT)     # ... et son texte sombre
+        frame = tk.Frame(root)
+        frame.pack()
+        skin.zone(frame, theme.OVERLAY)
+        var = tk.StringVar(value="a")
+        option = tk.OptionMenu(frame, var, "a", "b")
+        option.configure(activeforeground=theme.ON_ACCENT)             # ce que pose audio2wave.style_option_menu
+        plain = tk.Menu(frame, tearoff=0)
+        plain.add_command(label="x", background="#ff0000", foreground="#ffffff")
+        skin.apply(root)
+        menu = option["menu"]
+        check(str(menu.cget("activeforeground")).lower() == theme.FG and str(menu.cget("activebackground")).lower() != theme.LIVE
+              and str(menu.cget("background")).lower() == theme.PANEL, "menu: survol en texte clair sur un fond teinte (plus d'accent plein + texte sombre)",
+              f"{menu.cget('activeforeground')} {menu.cget('activebackground')}")
+        check(str(menu.cget("activebackground")).lower() == theme.mix(theme.PANEL, theme.OVERLAY, 0.5), "menu: la teinte du survol suit l'accent de la zone")
+        check(str(option.cget("activeforeground")).lower() == theme.FG and str(option.cget("fg")).lower() == theme.FG,
+              "select: le bouton garde un texte clair au survol (activeforeground)", f"{option.cget('activeforeground')} {option.cget('fg')}")
+        check(str(plain.entrycget(0, "background")).lower() == "#ff0000", "menu: une entree qui porte sa couleur la garde")
+    finally:
+        root.destroy()
+
+
+def check_scrollbar() -> None:
+    """Ascenseur de la GUI (skin.scrollbar) : sombre, fin, sans fleches, meme interface que tk.Scrollbar."""
+    import tkinter as tk
+    from tkinter import ttk
+    import skin
+    import theme
+    print("ascenseurs (skin.scrollbar)")
+    root = tk.Tk()
+    try:
+        canvas = tk.Canvas(root, height=100, width=100)
+        bar = skin.scrollbar(root, command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        canvas.pack(side="left")
+        canvas.configure(scrollregion=(0, 0, 100, 400))
+        root.update()
+        lo, hi = bar.get()
+        canvas.yview_moveto(0.5)
+        root.update()
+        style = ttk.Style(root)
+        check(isinstance(bar, ttk.Scrollbar) and bar.winfo_class() == "TScrollbar" and str(bar.cget("style")) == skin.SCROLL_STYLE,
+              "ascenseur: ttk (couleurs reglables), pas le tk.Scrollbar clair de Windows")
+        check(style.lookup(skin.SCROLL_STYLE, "troughcolor") == theme.BG and style.lookup(skin.SCROLL_STYLE, "background") != "#f0f0f0",
+              "ascenseur: rail a la couleur de la fenetre, poignee discrete", f"{style.lookup(skin.SCROLL_STYLE, 'troughcolor')} {style.lookup(skin.SCROLL_STYLE, 'background')}")
+        check(bar.winfo_reqwidth() <= skin.SCROLL_WIDTH + 6, "ascenseur: fin (pas de fleches)", str(bar.winfo_reqwidth()))
+        check(lo < 0.02 and 0.2 < hi < 0.3 and bar.get()[0] > 0.45, "ascenseur: suit le canvas (set) et le pilote (command)", f"{(lo, hi)} {bar.get()}")
+        bar2 = skin.scrollbar(root)
+        check(str(bar2.cget("style")) == skin.SCROLL_STYLE, "ascenseur: un second ascenseur reutilise le style")
+    finally:
+        root.destroy()
 
 
 def check_skin() -> None:
@@ -3878,12 +4038,17 @@ def main() -> None:
     check_noise()
     check_scenes()
     check_bg_video()
+    check_fond_saveable()
     check_randomizer()
     check_diagnostics()
     check_skin()
+    check_scrollbar()
+    check_menu_style()
     check_dialogs()
     check_audio2wave_api()
     check_projection()
+    check_bar_gap()
+    check_line_resolution()
     check_contract()
     check_vj_flash()
     check_gates()

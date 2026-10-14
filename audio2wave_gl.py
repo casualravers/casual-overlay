@@ -1587,6 +1587,44 @@ def build_live_args(live, device: str | None, size: tuple[int, int], fps: int, e
         sys.argv = old
 
 
+BAR_GAP_MAX = 0.7        # espace entre barres (fraction de leur largeur) au-dela duquel l'analyzer en barres n'a plus rien a montrer
+
+
+def limit_bar_gap(live_args) -> str | None:
+    """Analyzer en barres : le separateur noir (`drawgrid`) fait `largeur / barres x bar_gap` pixels, donc des `bar_gap` >= 1 (le
+    curseur d'audio2wave va jusqu'a 1,5 ; le preset `devil` est a 1,4) l'ecrasent : mesure sur le vrai filtre, 0,7 laisse la moitie des
+    colonnes, 0,9 = 4 % de l'image, 1,0 et plus = ecran noir. Plafonne a `BAR_GAP_MAX` sur la copie envoyee au producteur (les
+    reglages de leur fenetre ne sont pas touches) et rend un message, ou None si rien n'a ete change."""
+    if (getattr(live_args, "style", "") == "analyzer" and getattr(live_args, "shape", "") == "bar"
+            and float(getattr(live_args, "bar_gap", 0) or 0) > BAR_GAP_MAX):
+        asked = float(live_args.bar_gap)
+        live_args.bar_gap = BAR_GAP_MAX
+        return f"Espace entre barres {asked:.2f} : plus aucune barre visible, limite a {BAR_GAP_MAX}"
+    return None
+
+
+LINE_MIN_POINTS = 400    # analyzer en courbe : points mini (le curseur d'audio2wave s'arrete a 400) ; leur defaut, 128, fait des marches de 15 px
+LINE_MIN_WIN = 2048      # ... et fenetre d'analyse mini (leur defaut, 512 a 16 kHz, ne donne que 256 frequences : une courbe en escalier)
+
+
+def sharpen_line(live_args) -> bool:
+    """Analyzer en courbe (`--shape line`) : avec les defauts d'audio2wave (128 points, fenetre de 512) la courbe est un escalier
+    epais et flou une fois etiree sur l'ecran (mesure : marches de ~15 px, traits de 15 px de large). On la dessine avec au moins
+    `LINE_MIN_POINTS` points et une fenetre de `LINE_MIN_WIN` (plus de frequences, trait fin et net ; la fenetre plus longue lisse un
+    peu le mouvement, sans effet sur la detection du kick qui est a nous). Applique a la copie envoyee au producteur, jamais a leur
+    fenetre. Rend True si quelque chose a change."""
+    if getattr(live_args, "style", "") != "analyzer" or getattr(live_args, "shape", "") != "line":
+        return False
+    changed = False
+    if int(getattr(live_args, "bars", None) or 0) < LINE_MIN_POINTS:
+        live_args.bars = LINE_MIN_POINTS
+        changed = True
+    if int(getattr(live_args, "win_size", None) or 0) < LINE_MIN_WIN:
+        live_args.win_size = LINE_MIN_WIN
+        changed = True
+    return changed
+
+
 def format_command(cmd: list[str]) -> str:
     return " ".join(f'"{c}"' if " " in c else c for c in cmd)
 
@@ -2355,7 +2393,9 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
     if args.synthetic:
         reader = FrameReader(SyntheticVideoStream(render_size[0], render_size[1], args.fps), frame_size)
     elif live_args.device:
-        manager = ProducerManager(live, live_args, frame_size, {})
+        producer_args = copy.copy(live_args)
+        sharpen_line(producer_args)                      # courbe de l'analyzer : points et fenetre assez fins (sans toucher a leur fenetre)
+        manager = ProducerManager(live, producer_args, frame_size, {})
         reader = manager.reader
     else:
         # --gui sans -d: pas de producteur tant qu'aucune entree n'est choisie dans la fenetre.
