@@ -18,13 +18,17 @@ import re
 from pathlib import Path
 
 import audio2wave_gl as gl
+import randomizer
 
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
 MAX_NAME = 24
 VJ_SECONDS = (10, 20, 30, 60, 120, 300)          # durees proposees dans le menu du VJ
-VJ_DEFAULTS = {"seconds": 30, "order": "seq"}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois)
+VJ_DEFAULTS = {"seconds": 30, "order": "seq"}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
+                                                 # "alea" = Full Randomizer (scene tiree a chaque changement, voir randomizer.py)
+VJ_ORDERS = ("seq", "random", "alea")
+VJ_DEFAULTS["random"] = randomizer.clean_settings(None)       # reglages du hasard du set (banque, sources, verrous)
 
 
 # Reglages d'audio2wave qu'une scene ne retient ni n'applique jamais : l'entree audio reste celle qui est active, et la
@@ -68,8 +72,9 @@ class SceneBook:
         if isinstance(raw, dict):
             if isinstance(raw.get("seconds"), (int, float)) and not isinstance(raw["seconds"], bool):
                 out["seconds"] = min(max(float(raw["seconds"]), 5.0), 300.0)
-            if raw.get("order") in ("seq", "random"):
+            if raw.get("order") in VJ_ORDERS:
                 out["order"] = raw["order"]
+        out["random"] = randomizer.clean_settings(raw.get("random") if isinstance(raw, dict) else None)
         return out
 
     @staticmethod
@@ -197,7 +202,7 @@ class SceneBook:
             return False
         source = data["sets"][self._find(data["sets"], copy_of)] if copy_of and self._find(data["sets"], copy_of) is not None else None
         data["sets"].append({"name": name, "entries": json.loads(json.dumps(source["entries"])) if source else [],
-                             "vj": dict(source["vj"]) if source else dict(VJ_DEFAULTS)})
+                             "vj": self._clean_vj(source["vj"] if source else None)})
         self._save(data)
         return True
 

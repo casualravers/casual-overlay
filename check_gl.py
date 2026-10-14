@@ -275,7 +275,24 @@ def check_gui() -> None:
     analyzer = NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0})
     audio = NS(synthetic=True, name="synthetique", analyzer=analyzer)
     params = gl.load_params()
-    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio,
+
+    class FakeProjection:
+        """Projection factice : la GUI ouvre / ferme la fenetre de rendu par son bouton."""
+        def __init__(self):
+            self.on, self.starts, self.stops = False, 0, 0
+
+        def running(self):
+            return self.on
+
+        def start(self):
+            self.on, self.starts = True, self.starts + 1
+            return "Projection ouverte en plein ecran sur le second ecran"
+
+        def stop(self, wait=0.0):
+            self.on, self.stops = False, self.stops + 1
+
+    fake_proj = FakeProjection()
+    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio, projection=fake_proj,
            commands=queue.SimpleQueue(), status={}, stop_event=threading.Event(),
            finished_event=threading.Event(), mode="live", pysrc=None, mode_args={}, reader=manager.reader,
            capture_factory=fake_capture)
@@ -401,7 +418,24 @@ def check_gui() -> None:
             out["presets"] = any(w.winfo_class() == "Label" and w.cget("text").startswith("PRESETS LIVE")
                                  for w in walk(root))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
-                                    and w.cget("text") == "courbe")
+                                    and w.cget("text") == "∿")
+            proj_btn = c["projection"]["button"]()
+            proj = {"text0": proj_btn.cget("text") if proj_btn else None}
+            if proj_btn:
+                proj_btn.invoke()
+                root.update()
+                proj.update(text1=proj_btn.cget("text"), started=fake_proj.starts)
+                c["projection"]["send"]("reload")
+                proj["queued"] = s.commands.empty()               # ouverte : la commande part au fil GL
+                while not s.commands.empty():
+                    s.commands.get_nowait()                       # (ne pas polluer les etapes suivantes)
+                proj_btn.invoke()
+                root.update()
+                proj.update(text2=proj_btn.cget("text"), stopped=fake_proj.stops)
+                c["projection"]["send"]("reload")
+                proj["closed_queue"] = s.commands.empty()         # fermee : rien ne s'empile
+                proj["closed_msg"] = s.status.get("msg", "")
+            out["proj"] = proj
             scale = find_scale(c["live_host"], "Gain (dB)")
             for v in (5, 8, 12):                                  # rafale: un seul redemarrage attendu
                 scale.set(v)
@@ -775,6 +809,7 @@ def check_gui() -> None:
                 try:
                     gui_sets_steps(c, s, out)
                     gui_expand_steps(c, s, out)
+                    gui_random_steps(c, s, out)
                     gui_bgvideo_steps(c, s, out)
                     gui_diag_steps(c, out)
                 except Exception:
@@ -1032,6 +1067,36 @@ def check_gui() -> None:
     check(out.get("bgv_drop") == (True, "video", True), "fond video (GUI): fichier depose sur le bloc = video du fond", str(out.get("bgv_drop")))
     check(out.get("bgv_drop_bad") == (False, "pattern", True), "fond video (GUI): un fichier qui n'est pas une video est refuse",
           str(out.get("bgv_drop_bad")))
+    rp = out.get("r_panel", ())
+    check(rp == (1, 1, 0, True, True, True),
+          "Full Randomizer (GUI): le panneau etendu montre la banque, ses categories, 'Tirer maintenant' et 'Garder', plus de lignes d'entrees",
+          str(rp))
+    check(out.get("r_bank") == (1, 3, True, 2),
+          "Full Randomizer (GUI): deux banques (FOND: 1 video, OVERLAY: 3 fichiers) scannees depuis les dossiers du set, un '+ Dossier' par banque",
+          str(out.get("r_bank")))
+    rdw = out.get("r_draw", ())
+    check(len(rdw) == 6 and rdw[0] and rdw[1] == "Full Randomizer" and rdw[2] and rdw[3] and rdw[4] and rdw[5],
+          "Full Randomizer (GUI): 'Tirer maintenant' applique une scene (flash, fond, media de la banque)", str(rdw))
+    check(out.get("r_keep3") == (True, True, True, True, True, True),
+          "Full Randomizer (GUI): la modale propose trois noms ; preset fond, preset overlay et scene enregistres, menus de presets a jour",
+          str(out.get("r_keep3")))
+    check(out.get("r_keep_err") == (True, True, True, True, True, 1),
+          "Full Randomizer (GUI): nom deja pris ou 'default' refuse, annuler n'ecrit rien, un seul champ rempli = seulement celui-la, "
+          "pas de preset de fond sans fond genere", str(out.get("r_keep_err")))
+    rm = out.get("r_modes", (0, [], [], False, False))
+    check(rm[0] == 1 and rm[1] == ["live", "ridge"] and sorted(rm[2]) == ["live", "ridge", "snap"] and rm[3] and rm[4],
+          "Full Randomizer (GUI): cases des modes audio2wave de la config aleatoire ; sans mode coche, la config aleatoire reste un fond genere (aucun changement de mode)",
+          str(out.get("r_modes")))
+    check(out.get("r_vj") == (True, True, True, True),
+          "Full Randomizer (GUI): le VJ tourne meme avec un set vide, un tirage par changement, minuteur = duree du set", str(out.get("r_vj")))
+    check(out.get("r_keep") == (True, True, True, True) and out.get("r_keep_apply") == (True, True),
+          "Full Randomizer (GUI): 'Garder ce tirage' ajoute la scene au set, elle se rejoue", f"{out.get('r_keep')} {out.get('r_keep_apply')}")
+    check(out.get("r_lock") == (True, True), "Full Randomizer (GUI): verrou du fond", str(out.get("r_lock")))
+    check(out.get("r_cats") == ["loops"] and out.get("r_cats_all") == [] and out.get("r_folders") == (2, 3, 1),
+          "Full Randomizer (GUI): categories cochees (toutes = aucune restriction), dossier ajoute sans doublon de fichiers",
+          f"{out.get('r_cats')} {out.get('r_cats_all')} {out.get('r_folders')}")
+    check(out.get("r_other_set") and out.get("r_back") == (True, 0, 1),
+          "Full Randomizer (GUI): reglages propres au set, retour a l'ordre normal = les entrees reviennent", f"{out.get('r_other_set')} {out.get('r_back')}")
     pb = out.get("presets_blocks", ((None, None), False, False))
     check(pb[0][0] == 0 and pb[0][1] is not None and pb[0][0] < pb[0][1] and pb[1] and pb[2],
           "coherence: les boutons de presets sont en tete de chaque bloc (LIVE, fond genere, OVERLAY)", str(pb))
@@ -1043,7 +1108,6 @@ def check_gui() -> None:
         check(n > 20 and not bad, f"info-bulles: toutes dans la fenetre ({tag}, {n} affichees)", str(bad[:2]))
     n, bad = out.get("snap", {}).get("tips", (0, [("absent",)]))
     check(n > 10 and not bad, f"info-bulles: toutes dans la fenetre (mode snap, {n} affichees)", str(bad[:2]))
-    check(gl_gui_tooltip_position_ok(), "info-bulles: position (decalee a gauche, passee au-dessus, toujours dans les bornes)")
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
     check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
           "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
@@ -1093,6 +1157,12 @@ def check_gui() -> None:
     check(b.get("mode") == "live" and b.get("src") is None and b.get("suspended") is False
           and b.get("resumed") == ["Micro"] and b.get("reader_ok") and b.get("banner") and b.get("gain"),
           "retour au mode Live : ffmpeg relance sur l'entree courante, lecteur d'origine, panneau Live reconstruit", str(b))
+    pj = out.get("proj", {})
+    check(pj.get("text0") == "Demarrer la projection" and pj.get("text1") == "Arreter la projection"
+          and pj.get("text2") == "Demarrer la projection" and pj.get("started") == 1 and pj.get("stopped") == 1,
+          "GUI: le bouton ouvre puis ferme la projection (et change de libelle)", str(pj))
+    check(pj.get("queued") is False and pj.get("closed_queue") is True and "projection" in pj.get("closed_msg", ""),
+          "GUI: une commande part au rendu quand la projection est ouverte, sinon rien ne s'empile et un message le dit", str(pj))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
     check(out.get("presets") and out.get("automation", 0) >= 1,
           "presets et automations d'audio2wave presents", f"{out.get('automation')} curseurs automatables")
@@ -2078,10 +2148,10 @@ def check_scenes() -> None:
     check(all(sc.next_scene_index(2, 0, "random", rng) == 1 for _ in range(20)), "VJ au hasard avec 2 scenes: elles alternent")
     book2 = sc.SceneBook(lambda: tmp)
     tmp.unlink()
-    check(book2.vj() == {"seconds": 30, "order": "seq"}, "VJ: reglages par defaut (30 s, dans l'ordre)")
+    check(_plain_vj(book2.vj()) == {"seconds": 30, "order": "seq"}, "VJ: reglages par defaut (30 s, dans l'ordre)")
     book2.put({"name": "X", "bg": "live", "overlay": {}})
     book2.set_vj(seconds=1000, order="random")
-    check(book2.vj() == {"seconds": 300.0, "order": "random"} and book2.names() == ["X"],
+    check(_plain_vj(book2.vj()) == {"seconds": 300.0, "order": "random"} and book2.names() == ["X"],
           "VJ: reglages gardes (duree bornee a 5..300 s), scenes intactes")
     book2.set_vj(order="n'importe quoi", seconds=2)
     check(book2.vj()["order"] == "seq" or book2.vj()["order"] == "n'importe quoi" and False or book2.vj()["seconds"] == 5.0,
@@ -2113,21 +2183,6 @@ def check_scenes() -> None:
     v2 = sc.scene_values(live_scene, dict(cur, bg_mode="pattern", bg_hue=0.77))
     check(v2["bg_mode"] == "live" and v2["bg_hue"] == 0.77 and v2["holo_intensity"] == 0.9,
           "valeurs d'une scene a fond audio2wave: bascule le fond, ne touche pas au motif", str((v2["bg_mode"], v2["bg_hue"])))
-
-
-def gl_gui_tooltip_position_ok() -> bool:
-    import gl_gui
-    pos = gl_gui.tooltip_position
-    bounds = (100, 50, 1100, 650)
-    ok = pos((200, 100, 80, 20), (260, 60), bounds) == (204, 124)                    # cas normal : sous le widget
-    x, y = pos((1050, 100, 40, 20), (260, 60), bounds)                              # bord droit : decalee a gauche
-    ok = ok and x + 260 <= 1100 and y == 124
-    x, y = pos((300, 640, 80, 20), (260, 60), bounds)                               # bord bas : au-dessus du widget
-    ok = ok and y + 60 <= 650 and y < 640
-    x, y = pos((50, 10, 30, 20), (260, 60), bounds)                                 # widget hors fenetre : on reste dedans
-    ok = ok and x >= 100 and y >= 50 and y + 60 <= 650
-    x, y = pos((300, 60, 80, 580), (260, 60), bounds)                               # ni dessous ni dessus : dans les bornes
-    return ok and 50 <= y and y + 60 <= 650
 
 
 def tooltip_violations(root) -> tuple:
@@ -2184,7 +2239,7 @@ def check_sets_pure(sc, tmp) -> None:
     tmp.write_text(_json.dumps({"scenes": [{"name": "A", "bg": "live", "overlay": {}}, {"name": "B", "bg": "live", "overlay": {}}],
                                 "vj": {"seconds": 45, "order": "random"}}), encoding="utf-8")
     bk = sc.SceneBook(lambda: tmp)
-    check(bk.set_names() == ["principal"] and bk.row_names() == ["A", "B"] and bk.vj() == {"seconds": 45.0, "order": "random"},
+    check(bk.set_names() == ["principal"] and bk.row_names() == ["A", "B"] and _plain_vj(bk.vj()) == {"seconds": 45.0, "order": "random"},
           "ancien scenes.json: lu comme un set `principal` avec toutes les scenes et ses reglages VJ")
     bk.put({"name": "C", "bg": "live", "overlay": {}})
     check(_json.loads(tmp.read_text(encoding="utf-8")).get("version") == 2 and "sets" in _json.loads(tmp.read_text(encoding="utf-8")),
@@ -2294,7 +2349,7 @@ def check_sets_pure(sc, tmp) -> None:
     check(sc.import_conflicts(dest, parsed) == {"set": False, "scenes": []}, "import dans un livre vide: aucun conflit")
     res = sc.import_set(dest, parsed)
     check(res["set"] == "Mon set" and dest.get_set("Mon set")["entries"][1]["media"]["logo_path"] == "Z:/absent.png"
-          and dest.get_set("Mon set")["vj"] == {"seconds": 60.0, "order": "random"} and set(dest.names()) == {"A", "B"}
+          and _plain_vj(dest.get_set("Mon set")["vj"]) == {"seconds": 60.0, "order": "random"} and set(dest.names()) == {"A", "B"}
           and res["missing"] == ["Z:/absent.png", "Z:/absent/clip.mp4"], "import: set, scenes, medias et reglages VJ retrouves ; media absent signale",
           str(res))
     imp = dest.get_set("Mon set")["entries"]
@@ -3179,6 +3234,550 @@ def check_params() -> None:
         gl.PARAMS_PATH = original
 
 
+def _plain_vj(vj: dict) -> dict:
+    """Reglages du VJ sans le bloc du hasard (duree et ordre seulement)."""
+    return {k: vj[k] for k in ("seconds", "order")}
+
+
+def check_randomizer() -> None:
+    """Full Randomizer (randomizer.py) : banque, tirage, verrous, plages, reglages du set. Sans fenetre."""
+    print("Full Randomizer (randomizer.py)")
+    import json
+    import random as rnd_mod
+    import tempfile
+
+    import randomizer as rz
+    import scenes as sc
+    d = Path(tempfile.mkdtemp(prefix="casual_overlay_bank_"))
+    (d / "logos").mkdir()
+    (d / "loops" / "sous" / "profond").mkdir(parents=True)
+    (d / ".cache").mkdir()
+    for name in ("logos/a.png", "logos/b.JPG", "loops/c.mp4", "loops/sous/d.webm", "loops/sous/profond/e.gif", "root.png", "note.txt",
+                 ".cache/hidden.png", "logos/.secret.png"):
+        (d / name).write_bytes(b"x")
+    bank = rz.scan_bank([str(d), str(d / "absent"), str(d)])
+    bank_fond = rz.scan_bank([str(d)], "fond")
+    names = sorted(Path(a.path).name for a in bank)
+    check(names == ["a.png", "b.JPG", "c.mp4", "d.webm", "e.gif", "root.png"],
+          "banque: images et videos trouvees (sous-dossiers compris), pas de texte ni de fichier cache, dossier absent / double ignore", str(names))
+    kinds = {Path(a.path).name: (a.kind, a.category) for a in bank}
+    check(kinds["a.png"] == ("image", "logos") and kinds["d.webm"] == ("video", "loops") and kinds["root.png"] == ("image", rz.ROOT_CATEGORY),
+          "banque: type (image / video) et categorie = premier sous-dossier", str(kinds))
+    check(sorted(Path(a.path).name for a in bank_fond) == ["c.mp4", "d.webm", "e.gif"] and all(a.kind == "video" for a in bank_fond),
+          "banque FOND: que des videos (pas d'image), classees par le dossier declare et non par l'extension")
+    check(rz.categories(bank) == sorted({"logos", "loops", rz.ROOT_CATEGORY}), "banque: liste des categories")
+    check(len(rz.scan_bank([str(d)], "overlay", max_files=2)) == 2, "banque: plafond de fichiers")
+    only = rz.usable(bank, ["logos"])
+    check({Path(a.path).name for a in only} == {"a.png", "b.JPG"} and len(rz.usable(bank, [], "video")) == 3,
+          "banque: filtre par categorie et par type")
+    (d / "logos" / "a.png").rename(d / "logos" / "a_moved.png")
+    check("a.png" not in {Path(a.path).name for a in rz.usable(bank, [])}, "banque: un fichier deplace depuis le scan est ecarte")
+    (d / "logos" / "a_moved.png").rename(d / "logos" / "a.png")
+    check(rz.media_for(rz.Asset("x.png", "image", "")) == {"logo_source": "image", "logo_path": "x.png"}
+          and rz.media_for(rz.Asset("x.mp4", "video", ""))["logo_source"] == "video", "media d'un asset: image ou video du logo")
+    # reglages
+    dirty = rz.clean_settings({"folders_overlay": ["a", 3, "", "b"], "bg_sources": ["video", "nimporte"], "overlay": "x", "lock_bg": "oui",
+                               "categories_overlay": None})
+    check(dirty["modes"] == list(rz.A2W_MODES) and rz.clean_settings({"modes": ["snap", "nimporte"]})["modes"] == ["snap"],
+          "reglages du hasard: modes audio2wave valides (tous par defaut)")
+    check(dirty["folders_overlay"] == ["a", "b"] and dirty["folders_fond"] == [] and dirty["bg_sources"] == ["video"]
+          and dirty["overlay"] == list(rz.OVERLAY_PARTS) and dirty["lock_bg"] is False and dirty["categories_overlay"] == [] and rz.clean_settings("abime") == rz.clean_settings(None),
+          "reglages du hasard: valides, valeurs par defaut pour tout ce qui est abime", str(dirty))
+    # plages
+    rng = rnd_mod.Random(7)
+    ok_bg = all(0 <= v["bg_hue"] <= 1 and 0 <= v["bg_angle"] <= 180 and 0.4 <= v["bg_speed"] <= 1.8 and 50 <= v["bg_tile"] <= 150
+                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo")
+                and (v["bg_palette"] != "duo" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
+                for v in (rz.random_background_params(rng) for _ in range(300)))
+    check(ok_bg, "fond aleatoire: valeurs dans les plages des curseurs, jamais la palette banc de test")
+    fxs = [rz.random_effects(rng) for _ in range(600)]
+    costly = [sum(1 for k in ("holo_on", "melt_on", "cell_on") if fx[k] >= 0.5) for fx in fxs]
+    check(max(costly) <= rz.MAX_COSTLY and set(costly) >= {0, 1, 2}, "effets aleatoires: au plus deux effets couteux a la fois",
+          str(sorted(set(costly))))
+    check(all(k in gl.DEFAULT_PARAMS for fx in fxs for k in fx) and all(len(fx["fx_on"]) == 5 and len(fx["noise_fx"]) == 5 for fx in fxs),
+          "effets aleatoires: seulement des reglages connus, listes de la bonne longueur")
+    coerced = gl.coerce_params(fxs[0])
+    check(all(coerced[k] == fxs[0][k] for k in ("holo_on", "fx_on", "logo_glow_color")), "effets aleatoires: acceptes par coerce_params")
+    ovs = [rz.random_overlay_params(rng) for _ in range(400)]
+    costly_ov = [sum(1 for k in ("holo_on", "melt_on", "cell_on") if o[k] >= 0.5) for o in ovs]
+    check(all(k in gl.DEFAULT_PARAMS for o in ovs for k in o)
+          and all(o["logo_x"] == 0.5 and o["logo_y"] == 0.5 and 0.28 <= o["logo_scale"] <= 0.45
+                  and 0.8 <= o["logo_opacity"] <= 1.0 and len(o["fxl_on"]) == 4 and len(o["fxl_int"]) == 4 for o in ovs)
+          and max(costly_ov) <= rz.MAX_COSTLY and {o["fx_link"] for o in ovs} == {0.0, 1.0}
+          and all("logo_path" not in o and "_automation" not in o and not any(k.startswith("bg_") for k in o) for o in ovs),
+          "overlay aleatoire: seulement des reglages connus, valeurs sures, toujours centre, au plus deux effets couteux, ni media ni fond ni automation")
+    check(all(gl.coerce_params(ovs[0])[k] == ovs[0][k] for k in ("logo_x", "fx_link", "fxl_on", "fx_on")),
+          "overlay aleatoire: accepte par coerce_params")
+    # tirage
+    presets = {"default": {}, "neon": {"bg_palette": "duo"}, "sobre": {"bg_react": 0.4}}
+    overlays = {"default": {}, "sobre": {"logo_glow": 0.5}, "neon": {"logo_glow": 1.4}}
+    a2w = {"default": {}, "club": {"gain": 35.0}, "calme": {"gain": 15.0}}
+
+    def ctx(**kw):
+        base = dict(bank_fond=bank_fond, bank_overlay=bank, bg_presets=presets, overlay_presets=overlays, a2w_presets=a2w, mode="snap", last={},
+                    current_scene={"bg": "pattern", "mode": None, "fond": {"bg_hue": 0.9, "bg_palette": "classic"},
+                                   "overlay": {"logo_source": "text", "text_content": "HELLO", "logo_glow": 0.77, "holo_on": 1.0}})
+        base.update(kw)
+        return rz.Context(**base)
+
+    def run(settings, n=1, seed=3, **kw):
+        r, last, out_ = rnd_mod.Random(seed), {}, []
+        for _ in range(n):
+            scene, info, record = rz.draw_scene(r, settings, ctx(last=last, **kw))
+            last = record
+            out_.append((scene, info))
+        return out_
+    first = run({}, 5)
+    again = run({}, 5)
+    check([x[0] for x in first] == [x[0] for x in again] and all(x[0]["name"] == "Full Randomizer" for x in first),
+          "tirage: meme graine = memes scenes")
+    kinds_seen = {x[0]["bg"] + (":" + x[0]["mode"] if x[0]["bg"] == "live" else "") for x in run({}, 80, seed=11)}
+    check(kinds_seen == {"pattern", "live:snap", "video"}, "tirage: les quatre sources de fond sortent (preset / audio2wave / video / aleatoire)", str(kinds_seen))
+    only_preset = run({"bg_sources": ["preset"]}, 30)
+    check(all(x[0]["bg"] == "pattern" and "fond: preset" in x[1] for x in only_preset), "tirage: seule la source cochee est tiree")
+    only_video = run({"bg_sources": ["video"]}, 20)
+    vids = {a.path for a in bank_fond}
+    check(all(x[0]["bg"] == "video" and x[0]["fond"]["bg_video"] in vids and x[0]["fond"]["bg_video_fit"] in ("cover", "stretch")
+              for x in only_video), "tirage: fond video = une video de la banque")
+    check(all(x[0]["overlay"].get("logo_video") != x[0]["fond"]["bg_video"] for x in only_video),
+          "tirage: la video du fond n'est pas aussi le logo")
+    no_video = run({"bg_sources": ["video"]}, 3, bank_fond=[])
+    check(all(x[0]["bg"] == "live" and x[0]["live_overrides"] is None and "aucune source" in x[1] for x in no_video),
+          "tirage: source cochee mais indisponible -> le fond ne change pas, message")
+    a2w_modes = {"live": {"default": {}, "calme": {"gain": 15.0}}, "snap": {"default": {}, "club": {"gain": 35.0}}, "ridge": {"default": {}, "fin": {"line_width": 2}}}
+    cfg = run({"bg_sources": ["params"]}, 120, seed=21, a2w_modes=a2w_modes)
+    gens = [x for x in cfg if x[0]["bg"] == "pattern"]
+    a2ws = [x for x in cfg if x[0]["bg"] == "live"]
+    check(gens and a2ws and all(x[0]["fond"]["bg_mode"] == "pattern" and "fond: aleatoire" in x[1] for x in gens),
+          "config aleatoire du fond: soit un fond genere, soit un visuel audio2wave")
+    check({x[0]["mode"] for x in a2ws} == {"live", "snap", "ridge"}
+          and all(x[0]["live_overrides"] is None or x[0]["live_overrides"] in a2w_modes[x[0]["mode"]].values() for x in a2ws)
+          and all("fond: audio2wave" in x[1] for x in a2ws),
+          "config aleatoire du fond: mode audio2wave (Live / Snap / Ridge) et preset de ce mode tires au hasard (default vide = pas d'etat)")
+    only_snap = run({"bg_sources": ["params"], "modes": ["snap"]}, 60, seed=5, a2w_modes=a2w_modes)
+    check({x[0]["mode"] for x in only_snap if x[0]["bg"] == "live"} == {"snap"}, "config aleatoire du fond: seuls les modes coches sont tires")
+    no_modes = run({"bg_sources": ["params"], "modes": []}, 30, seed=5, a2w_modes=a2w_modes)
+    check(all(x[0]["bg"] == "pattern" for x in no_modes) and all(x[0]["bg"] == "pattern" for x in run({"bg_sources": ["params"]}, 10)),
+          "config aleatoire du fond: aucun mode coche ou aucun preset de mode = fonds generes seulement")
+    seq_cfg = run({"bg_sources": ["params"]}, 80, seed=8, a2w_modes=a2w_modes)
+    rep_bg = sum(1 for a, b in zip(seq_cfg, seq_cfg[1:]) if a[0]["bg"] == b[0]["bg"] and a[0].get("mode") == b[0].get("mode")
+                 and a[0]["live_overrides"] == b[0]["live_overrides"] and a[0]["fond"] == b[0]["fond"])
+    check(rep_bg == 0, "config aleatoire du fond: jamais deux fois de suite le meme visuel", str(rep_bg))
+    only_a2w = run({"bg_sources": ["a2w"]}, 20)
+    check(all(x[0]["bg"] == "live" and x[0]["mode"] == "snap" and x[0]["live_overrides"] in ({"gain": 35.0}, {"gain": 15.0}) for x in only_a2w),
+          "tirage: preset audio2wave du mode courant (jamais `default` vide, jamais un autre mode)")
+    cats = run({"categories_overlay": ["logos"], "bg_sources": ["params"]}, 30)
+    media_names = {Path(x[0]["overlay"].get("logo_path", "")).name for x in cats}
+    check(media_names <= {"a.png", "b.JPG"} and media_names, "tirage: media pris seulement dans les categories cochees", str(media_names))
+    seq = run({"bg_sources": ["preset"]}, 60, seed=5)
+    same_media = sum(1 for a, b in zip(seq, seq[1:]) if a[0]["overlay"].get("logo_path") == b[0]["overlay"].get("logo_path")
+                     and a[0]["overlay"].get("logo_video") == b[0]["overlay"].get("logo_video"))
+    same_bg = sum(1 for a, b in zip(seq, seq[1:]) if a[0]["fond"] == b[0]["fond"])
+    check(same_media == 0 and same_bg == 0, "tirage: jamais deux fois de suite le meme media ni le meme preset de fond", f"{same_media} {same_bg}")
+    only_cfg = run({"overlay": ["params", "media"], "bg_sources": ["params"]}, 20)
+    check(all("overlay: config aleatoire" in x[1] and "logo_scale" in x[0]["overlay"]
+              and ("logo_path" in x[0]["overlay"] or "logo_video" in x[0]["overlay"]) for x in only_cfg), "tirage: overlay = config entierement nouvelle (sans preset), avec un media de la banque")
+    both = run({"overlay": ["overlay_preset", "params"], "bg_sources": ["params"]}, 60, seed=9)
+    kinds_ov = ["params" if "config aleatoire" in x[1] else "preset" for x in both]
+    check(set(kinds_ov) == {"preset", "params"} and all(a != b for a, b in zip(kinds_ov, kinds_ov[1:])),
+          "tirage: preset overlay et config aleatoire alternent quand les deux sont cochees")
+    only_fx = run({"overlay": ["fx"]}, 5)
+    check(all("overlay: preset" not in x[1] and "overlay: config" not in x[1] and "holo_on" in x[0]["overlay"] for x in only_fx),
+          "tirage: effets seuls (ni preset ni config) = juste les effets sur l'overlay")
+    # l'overlay est toujours centre et statique, quelle que soit sa source
+    off_center = dict(overlays, decale={"logo_x": 0.2, "logo_y": 0.8, "_automation": {"logo_x": {"enabled": True}, "logo_y": {"enabled": True},
+                                                                                   "logo_glow": {"enabled": True}}})
+    drawn = run({"overlay": ["overlay_preset"], "bg_sources": ["params"]}, 80, seed=4, overlay_presets=off_center)
+    check(all(x[0]["overlay"]["logo_x"] == 0.5 and x[0]["overlay"]["logo_y"] == 0.5 for x in drawn)
+          and any("preset decale" in x[1] for x in drawn), "overlay centre: meme un preset qui le decale est recentre")
+    auto_off = [x[0]["overlay"]["_automation"] for x in drawn if "preset decale" in x[1]]
+    check(auto_off and all(a["logo_x"]["enabled"] is False and a["logo_y"]["enabled"] is False and a["logo_glow"]["enabled"] is True
+                           for a in auto_off), "overlay centre: l'automation de position est coupee, les autres restent")
+    check(all("_automation" not in x[0]["overlay"] for x in drawn if "preset decale" not in x[1]),
+          "overlay centre: rien n'est ajoute aux automations quand aucune ne bouge la position")
+    moving = {"bg": "pattern", "mode": None, "fond": {}, "overlay": {"logo_x": 0.3, "logo_y": 0.7, "text_content": "HELLO", "logo_source": "text",
+                                                                    "_automation": {"logo_y": {"enabled": True}}}}
+    locked = run({"lock_fx": True, "lock_media": True}, 3, current_scene=moving)
+    check(all(x[0]["overlay"]["logo_x"] == 0.5 and x[0]["overlay"]["logo_y"] == 0.5 and x[0]["overlay"]["text_content"] == "HELLO"
+              and x[0]["overlay"]["_automation"]["logo_y"]["enabled"] is False for x in locked),
+          "overlay centre: meme avec les verrous, l'overlay du moment est recentre et rendu statique")
+    # verrous
+    locked_bg = run({"lock_bg": True}, 5)
+    check(all(x[0]["bg"] == "pattern" and x[0]["fond"] == {"bg_hue": 0.9, "bg_palette": "classic"} for x in locked_bg),
+          "verrou fond: le fond courant est repris")
+    locked_media = run({"lock_media": True}, 5)
+    check(all(x[0]["overlay"]["logo_source"] == "text" and x[0]["overlay"]["text_content"] == "HELLO" for x in locked_media),
+          "verrou media: le texte courant reste")
+    locked_fx = run({"lock_fx": True, "overlay": ["media"]}, 5)
+    check(all(x[0]["overlay"].get("logo_glow") == 0.77 and x[0]["overlay"].get("holo_on") == 1.0
+              and ("logo_path" in x[0]["overlay"] or "logo_video" in x[0]["overlay"]) for x in locked_fx),
+          "verrou effets: effets courants gardes, media tire")
+    keep_all = run({"lock_bg": True, "lock_media": True, "lock_fx": True}, 2)
+    check(keep_all[0][0]["overlay"]["text_content"] == "HELLO" and keep_all[0][0]["overlay"]["logo_glow"] == 0.77,
+          "tous les verrous: rien ne change")
+    empty = run({"overlay": ["media"]}, 3, bank_overlay=[])
+    check(all(x[0]["overlay"]["text_content"] == "HELLO" and "banque vide" in x[1] for x in empty),
+          "banque vide: le media courant reste, message")
+    no_media = run({"overlay": ["fx"]}, 2)
+    check(all("logo_path" not in x[0]["overlay"] and x[0]["overlay"]["text_content"] == "HELLO" for x in no_media),
+          "media non coche: le media courant reste (un preset ne remet pas le logo par defaut)")
+    # une scene tiree est applicable comme une scene enregistree
+    bad = None
+    for scene, _info in run({}, 30, seed=2):
+        values = sc.scene_values(scene, gl.load_params())
+        if not (values["bg_mode"] == scene["bg"] and all(k in gl.DEFAULT_PARAMS or k == "_automation" for k in values)):
+            bad = scene
+            break
+    check(bad is None, "une scene tiree donne des reglages valides (scene_values)", str(bad))
+    # reglages du set : persistance, par set, copie, export / import
+    book = sc.SceneBook(lambda: d / "scenes.json")
+    book.put({"name": "S1", "bg": "pattern", "mode": None, "live_overrides": None, "fond": {}, "overlay": {}})
+    first_set = book.active_set_name()
+    book.set_vj(order="alea", random={"folders_overlay": [str(d)], "lock_bg": True, "bg_sources": ["video"]})
+    relu = sc.SceneBook(lambda: d / "scenes.json").vj()
+    check(relu["order"] == "alea" and relu["random"]["folders_overlay"] == [str(d)] and relu["random"]["lock_bg"] is True
+          and relu["random"]["bg_sources"] == ["video"], "reglages du hasard: ecrits dans le set, relus", str(relu))
+    book.set_vj(order="nimporte")
+    check(book.vj()["order"] == "seq" and book.vj()["random"]["lock_bg"] is True,
+          "ordre inconnu: retour a l'ordre par defaut, reglages du hasard intacts")
+    book.set_vj(order="alea")
+    book.new_set("Autre")
+    book.set_active("Autre")
+    check(book.vj()["order"] == "seq" and book.vj()["random"] == rz.clean_settings(None), "reglages du hasard: propres a chaque set")
+    book.set_active(first_set)
+    book.new_set("Copie", copy_of=first_set)
+    book.set_active("Copie")
+    check(book.vj()["order"] == "alea" and book.vj()["random"]["lock_bg"], "dupliquer un set copie ses reglages du hasard")
+    parsed = sc.parse_import(json.dumps(sc.export_set(book, "Copie")))
+    check(parsed["set"]["vj"]["order"] == "alea" and parsed["set"]["vj"]["random"]["bg_sources"] == ["video"],
+          "export / import d'un set: reglages du hasard conserves")
+    check(sc.next_entry_index([], None, "alea") is None, "ordre aleatoire: pas d'entree a lire")
+    import gl_gui
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    stores = {m: gl_gui.mode_store(live, m).all() for m in rz.A2W_MODES}
+    check(all(isinstance(v, dict) and "default" in v for v in stores.values()),
+          "presets des trois modes audio2wave lisibles (config aleatoire du fond)", str({m: len(v) for m, v in stores.items()}))
+    import build_portable
+    check("randomizer.py" in build_portable.APP_FILES, "version portable: randomizer.py embarque")
+
+
+def gui_random_steps(c, s, out) -> None:
+    """Full Randomizer dans la vraie fenetre : ordre, panneau (banque, categories, verrous), tirage, VJ, garder."""
+    import random as rnd_mod
+    import tempfile
+
+    from PIL import Image
+    sc, book, vj, rd = c["scenes"], c["scene_book"], c["vj"], c["random"]
+    root, params = c["root"], s.params
+    tmpd = Path(tempfile.mkdtemp(prefix="casual_overlay_alea_"))
+    (tmpd / "logos").mkdir()
+    (tmpd / "loops").mkdir()
+    for i in range(2):
+        Image.new("RGBA", (40, 40), (255, 0, 0, 255)).save(tmpd / "logos" / f"l{i}.png")
+    (tmpd / "loops" / "v.mp4").write_bytes(b"x")
+    base_set = book.active_set_name()
+    sc["create_set"]("Alea")
+    book.set_vj(order="alea", seconds=20, random={"folders_overlay": [str(tmpd)], "folders_fond": [str(tmpd / "loops")],
+                                                  "bg_sources": ["preset", "params", "video"]})
+    rd["state"]["rng"] = rnd_mod.Random(5)
+    rd["state"]["last"] = {}
+    rd["state"]["scene"] = None
+    sc["switch_set"]("Alea")                       # reconstruit la barre et le panneau avec les nouveaux reglages
+    sc["expand"](True)
+    root.update()
+    panel = sc["panel"]
+
+    def walk_(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_(ch)
+
+    def widgets(cls, text):
+        return [w for w in walk_(panel) if w.winfo_class() == cls and str(w.cget("text")) == text]
+    out["r_panel"] = (len(widgets("Button", "Tirer maintenant")), len(widgets("Button", "Garder ce tirage...")), len(widgets("Button", "Retirer")),
+                      bool(widgets("Checkbutton", "logos (2)")), bool(widgets("Checkbutton", "loops (1)")),
+                      any("Full Randomizer" in str(w.cget("text")) for w in walk_(panel) if w.winfo_class() == "Menubutton"))
+    out["r_bank"] = (len(rd["bank"]()["fond"]), len(rd["bank"]()["overlay"]), book.vj()["random"]["folders_overlay"] == [str(tmpd)],
+                     len(widgets("Button", "+ Dossier")))
+    # tirage a la demande
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    widgets("Button", "Tirer maintenant")[0].invoke()
+    root.update()
+    cmds = []
+    while not s.commands.empty():
+        cmds.append(s.commands.get_nowait())
+    scene = rd["state"]["scene"]
+    out["r_draw"] = ("flash" in cmds, s.active_scene, sc["msg"].get().startswith("Full Randomizer :"),
+                     scene is not None and params["bg_mode"] == scene["bg"], params["logo_source"] in ("image", "video"),
+                     str(params.get("logo_path")).startswith(str(tmpd)) or str(params.get("logo_video")).startswith(str(tmpd)))
+    # VJ : tourne meme avec un set vide, un tirage par changement, minuteur = duree du set
+    before = rd["state"]["scene"]
+    vj["state"]["running"] = False
+    vj["toggle"]()
+    started = vj["state"]["running"]
+    vj["advance"]()
+    out["r_vj"] = (len(book.rows()) == 0, started, rd["state"]["scene"] is not before, 19 < vj["remaining"]() <= 20)
+    vj["toggle"]()                                                       # pause
+    # garder : devient une scene du set
+    kept_scene = rd["state"]["scene"]
+    asked: dict = {}
+
+    def ask_keep(defaults, fond_ok, validate):
+        asked.update(defaults=dict(defaults), fond_ok=fond_ok, empty=validate({"fond": "", "overlay": "", "scene": ""}))
+        return {"fond": "Tirage fond", "overlay": "Tirage overlay", "scene": "Tirage"}
+    sc["ui"]["ask_keep"] = ask_keep
+    widgets("Button", "Garder ce tirage...")[0].invoke()
+    root.update()
+    kept = book.get("Tirage")
+    active_kept = s.active_scene
+    labels = lambda m: [m.entrycget(i, "label") for i in range((m.index("end") or -1) + 1) if m.type(i) == "command"]
+    out["r_keep3"] = (asked.get("defaults") == {"fond": "Tirage fond", "overlay": "Tirage overlay", "scene": "Tirage"}, asked.get("fond_ok"),
+                      "au moins un nom" in str(asked.get("empty")),
+                      gl.BACKGROUND_BOOK.all().get("Tirage fond") == kept_scene["fond"],
+                      gl.OVERLAY_BOOK.all().get("Tirage overlay") == kept_scene["overlay"],
+                      "Tirage fond" in labels(c["bg_presets"]["menu"]["menu"]) and "Tirage overlay" in labels(c["overlay_presets"]["menu"]["menu"]))
+    # nom deja pris : rien n'est ecrit ; annuler : rien ; un seul champ rempli : seulement celui-la ; fond refuse sans fond genere
+    n_scenes = len(book.names())
+    err_dup = rd["save"]({"fond": "Tirage fond", "overlay": "", "scene": ""})
+    err_default = rd["save"]({"fond": "", "overlay": "default", "scene": ""})
+    sc["ui"]["ask_keep"] = lambda defaults, fond_ok, validate: None
+    widgets("Button", "Garder ce tirage...")[0].invoke()
+    err_solo = rd["save"]({"fond": "", "overlay": "", "scene": "Solo"})
+    real_scene = rd["state"]["scene"]
+    rd["state"]["scene"] = {"bg": "live", "mode": "live", "live_overrides": None, "fond": None, "overlay": {"logo_glow": 1.0}}
+    err_nofond = rd["check"]({"fond": "X", "overlay": "", "scene": ""})
+    rd["state"]["scene"] = real_scene
+    out["r_keep_err"] = ("existe deja" in str(err_dup), "existe deja" in str(err_default), err_solo is None and book.get("Solo") is not None,
+                         len(book.names()) == n_scenes + 1, "pas de fond genere" in str(err_nofond),
+                         sorted(gl.BACKGROUND_BOOK.names()).count("Tirage fond"))
+    book.delete("Solo")
+    out["r_keep"] = (kept is not None, kept is not None and kept["bg"] == kept_scene["bg"] and kept["overlay"] == kept_scene["overlay"],
+                     [r["name"] for r in book.rows()] == ["Tirage"], active_kept == "Tirage")
+    sc["apply"]("Tirage")                                                # la scene gardee se rejoue comme les autres
+    out["r_keep_apply"] = (s.active_scene == "Tirage", params["bg_mode"] == kept["bg"])
+    # verrou du fond : le fond courant reste
+    book.set_vj(random={**book.vj()["random"], "lock_bg": True})
+    mode_before, hue_before = params["bg_mode"], params["bg_hue"]
+    for _ in range(6):
+        rd["draw"]()
+    out["r_lock"] = (params["bg_mode"] == mode_before, params["bg_hue"] == hue_before)
+    book.set_vj(random={**book.vj()["random"], "lock_bg": False})
+    # config aleatoire du fond : cases des modes audio2wave ; avec le seul mode courant, aucun changement de mode (pas de reconstruction)
+    sc["switch_set"]("Alea")
+    root.update()
+    snap_box = widgets("Checkbutton", "Snap")
+    snap_box[0].invoke()
+    modes_off = list(book.vj()["random"]["modes"])
+    snap_box[0].invoke()
+    modes_on = list(book.vj()["random"]["modes"])
+    # (pas de preset audio2wave tire ici : appliquer `club` / `calme` au panneau de la fenetre de test fausserait les etapes suivantes ;
+    # la logique du tirage de mode est verifiee en pur, les magasins des trois modes par check_randomizer)
+    book.set_vj(random={**book.vj()["random"], "bg_sources": ["params"], "modes": []})
+    mode_before = s.mode
+    for _ in range(14):
+        rd["draw"]()
+    out["r_modes"] = (len(snap_box), modes_off, modes_on, s.mode == mode_before == "live", rd["state"]["scene"] is not None)
+    book.set_vj(random={**book.vj()["random"], "bg_sources": ["preset", "params", "video"], "modes": ["live", "snap", "ridge"]})
+    # categories, dossiers
+    sc["switch_set"]("Alea")
+    root.update()
+    widgets("Checkbutton", "logos (2)")[0].invoke()
+    out["r_cats"] = book.vj()["random"]["categories_overlay"]
+    widgets("Checkbutton", "logos (2)")[0].invoke()
+    out["r_cats_all"] = book.vj()["random"]["categories_overlay"]
+    sc["ui"]["ask_dir"] = lambda: str(tmpd / "logos")
+    widgets("Button", "+ Dossier")[1].invoke()                              # banque OVERLAY
+    root.update()
+    out["r_folders"] = (len(book.vj()["random"]["folders_overlay"]), len(rd["bank"]()["overlay"]), len(book.vj()["random"]["folders_fond"]))
+    # un autre set garde son ordre ; revenir a un ordre normal remet les entrees
+    sc["switch_set"](base_set)
+    out["r_other_set"] = book.vj()["order"] in ("seq", "random")
+    sc["switch_set"]("Alea")
+    book.set_vj(order="seq")
+    sc["switch_set"]("Alea")
+    root.update()
+    out["r_back"] = (sc["panel"].winfo_ismapped(), len(widgets("Button", "Tirer maintenant")), len(widgets("Button", "Retirer")))
+    sc["delete_set"]()                                                   # supprime le set actif ("Alea")
+    sc["switch_set"](base_set)
+    vj["state"]["running"] = False
+    sc["expand"](False)
+    root.update()
+
+
+def check_dialogs() -> None:
+    """Les vraies modales (`choice_dialog`, `keep_dialog`) : elles s'ouvrent, repondent, restent ouvertes sur une erreur. Un test qui
+    les remplace (scene_ui) ne verrait pas qu'elles plantaient (`a2w` etait un nom inconnu au niveau du module)."""
+    print("modales (choice_dialog, keep_dialog)")
+    import tkinter as tk
+    import gl_gui
+    import skin
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    root = tk.Tk()
+    try:
+        live.style_gui(root)
+        skin.install()
+
+        def find(w, cls, text=None):
+            for ch in w.winfo_children():
+                if ch.winfo_class() == cls and (text is None or ch.cget("text") == text):
+                    return ch
+                found = find(ch, cls, text)
+                if found is not None:
+                    return found
+            return None
+
+        def top_():
+            return next(w for w in root.winfo_children() if w.winfo_class() == "Toplevel")
+
+        root.after(300, lambda: find(top_(), "Button", "Oui").invoke())
+        check(gl_gui.choice_dialog(root, "Titre", "Texte", ["Non", "Oui"]) == "Oui", "choice_dialog: s'ouvre et rend le bouton clique")
+        root.after(300, lambda: top_().destroy())
+        check(gl_gui.choice_dialog(root, "Titre", "Texte", ["Non", "Oui"]) is None, "choice_dialog: fermer = None")
+        seen: dict = {}
+
+        def drive() -> None:
+            top = top_()
+            entries = []
+
+            def walk(w) -> None:
+                for ch in w.winfo_children():
+                    if ch.winfo_class() == "Entry":
+                        entries.append(ch)
+                    walk(ch)
+            walk(top)
+            seen["values"] = [e.get() for e in entries]
+            entries[0].delete(0, "end")
+            entries[0].insert(0, "pris")
+            find(top, "Button", "Enregistrer").invoke()
+            seen["open_after_error"] = bool(top.winfo_exists())
+            seen["error"] = any("existe deja" in str(w.cget("text")) for w in top.winfo_children() if w.winfo_class() == "Label")
+            entries[0].delete(0, "end")
+            entries[0].insert(0, "libre")
+            entries[2].delete(0, "end")
+            find(top, "Button", "Enregistrer").invoke()
+        root.after(300, drive)
+        got = gl_gui.keep_dialog(root, {"fond": "A", "overlay": "B", "scene": "C"}, True,
+                                 lambda n: "fond 'pris' existe deja" if n["fond"] == "pris" else None)
+        check(seen.get("values") == ["A", "B", "C"] and seen.get("open_after_error") and seen.get("error")
+              and got == {"fond": "libre", "overlay": "B", "scene": ""},
+              "keep_dialog: trois noms proposes, un nom refuse laisse la fenetre ouverte avec le message, un champ vide = pas enregistre",
+              f"{seen} {got}")
+
+        def no_fond() -> None:
+            top = top_()
+            fields = [w for w in top.winfo_children()[1].winfo_children() if w.winfo_class() == "Entry"]
+            seen["fond_state"] = str(fields[0].cget("state")), fields[0].get()
+            find(top, "Button", "Annuler").invoke()
+        root.after(300, no_fond)
+        got = gl_gui.keep_dialog(root, {"fond": "A", "overlay": "B", "scene": "C"}, False, lambda n: None)
+        check(got is None and seen.get("fond_state") == ("disabled", ""),
+              "keep_dialog: sans fond genere le champ preset fond est grise et vide ; annuler = None", str(seen.get("fond_state")))
+    finally:
+        root.destroy()
+
+
+def check_audio2wave_api() -> None:
+    """Garde de version : un depot audio2wave sans les points d'extension attendus donne un message clair, pas un AttributeError."""
+    print("garde de version d'audio2wave")
+    import types
+    import gl_gui
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    check(gl_gui.audio2wave_api_missing(live) == [], "audio2wave: le depot voisin expose set_gui_accent et default_on_editor_open",
+          str(gl_gui.audio2wave_api_missing(live)))
+    gl_gui.require_audio2wave_api(live)
+    check(True, "audio2wave: require_audio2wave_api laisse passer un depot a jour")
+    old_live = types.SimpleNamespace(AutomationManager=type("AutomationManager", (), {}), __file__="C:/x/audio2wave/audio2wave_live.py")
+    nothing = types.SimpleNamespace()
+    missing = gl_gui.audio2wave_api_missing(old_live, nothing, nothing)
+    check(len(missing) == 3 and "set_gui_accent" in missing[0] and "default_on_editor_open" in missing[1] and "preset_registry" in missing[2],
+          "audio2wave ancien: les trois points d'extension manquants sont nommes", str(missing))
+    half = gl_gui.audio2wave_api_missing(old_live, types.SimpleNamespace(set_gui_accent=lambda *a: None),
+                                         types.SimpleNamespace(store_for=lambda *a: None))
+    check(len(half) == 1 and "default_on_editor_open" in half[0], "audio2wave ancien: un seul manque = un seul nom", str(half))
+    no_registry = gl_gui.audio2wave_api_missing(live, None, nothing)
+    check(len(no_registry) == 1 and "preset_registry" in no_registry[0], "audio2wave sans preset_registry: signale (un seul manque)", str(no_registry))
+    try:
+        gl_gui.require_audio2wave_api(old_live, nothing, nothing)
+        message = ""
+    except SystemExit as exc:
+        message = str(exc)
+    check("Mets a jour le depot audio2wave" in message and "set_gui_accent" in message and "default_on_editor_open" in message
+          and "preset_registry" in message and gl_gui.AUDIO2WAVE_REQUIRED in message and "AttributeError" not in message,
+          "audio2wave ancien: arret avec un message clair (quoi, ou et comment mettre a jour)", message[:160])
+    check(gl_gui.audio2wave_api_missing(types.SimpleNamespace(), None, None) != [], "audio2wave sans AutomationManager ni common: signale, ne plante pas")
+
+
+def check_projection() -> None:
+    """Projection a la demande : la GUI s'ouvre seule, la fenetre de rendu part d'un bouton (second ecran, plein ecran)."""
+    print("projection a la demande")
+    import types
+    runs: list[str] = []
+
+    def target(s):
+        runs.append("run")
+        s.proj_stop.wait(5)
+
+    def make(second, request=None, monitor=None, boom=None):
+        args = types.SimpleNamespace(fullscreen=None, fullscreen_request=request, monitor=monitor, gui=True)
+        s = gl.Session(args, {}, None, None, (1280, 720), (1280, 720), None, None, None)
+        def run(s):
+            if boom:
+                raise boom
+            target(s)
+        return s, gl.Projection(s, target=run, secondary=lambda: second)
+
+    s, p = make(True)
+    s.commands.put("flash")
+    msg = p.start()
+    check(p.running() and s.args.fullscreen is True and "plein ecran" in msg and "second ecran" in msg and s.commands.empty(),
+          "projection: deux ecrans = plein ecran sur le second, commandes perimees jetees", msg)
+    check("deja ouverte" in p.start() and runs == ["run"], "projection: un second demarrage n'ouvre rien de plus")
+    p.stop(wait=3.0)
+    check(not p.running() and not s.finished_event.is_set(), "projection: l'arret ferme la fenetre sans fermer le programme")
+    p.start()
+    time.sleep(0.2)
+    check(p.running() and runs == ["run", "run"], "projection: on peut la rouvrir autant de fois qu'on veut")
+    p.stop(wait=3.0)
+    s, p = make(False)
+    msg = p.start()
+    check(s.args.fullscreen is False and "Pas de second ecran" in msg, "projection: un seul ecran = en fenetre, jamais sur le poste de travail", msg)
+    p.stop(wait=3.0)
+    s, p = make(False, request=True)
+    p.start()
+    check(s.args.fullscreen is True, "projection: --fullscreen explicite l'emporte meme avec un seul ecran")
+    p.stop(wait=3.0)
+    s, p = make(True, request=False)
+    p.start()
+    check(s.args.fullscreen is False, "projection: --no-fullscreen explicite l'emporte meme avec deux ecrans")
+    p.stop(wait=3.0)
+    s, p = make(True, boom=SystemExit(1))
+    p.start()
+    time.sleep(0.3)
+    check(not p.running() and "Projection impossible" in s.status.get("msg", ""),
+          "projection: un echec d'ouverture (SystemExit) est signale, la GUI continue", s.status.get("msg", ""))
+    s, p = make(True, boom=RuntimeError("pilote"))
+    p.start()
+    time.sleep(0.3)
+    check(not p.running() and "pilote" in s.status.get("msg", ""), "projection: une erreur du rendu est signalee, la GUI continue")
+
+
+def check_contract() -> None:
+    """Test de contrat d'audio2wave (`check_contract.py` du depot voisin : noms et signatures dont depend casual-overlay) :
+    un code de sortie non nul fait echouer la suite. Si c'est un nom dont on depend qui est casse, c'est cote audio2wave
+    qu'il faut le corriger (on n'y touche pas)."""
+    print("contrat d'audio2wave (check_contract.py)")
+    import subprocess
+    script = Path(gl.DEFAULT_A2W_DIR) / "check_contract.py"
+    if not script.is_file():
+        check(False, "contrat d'audio2wave: check_contract.py absent du depot audio2wave", f"{script} : mets a jour le depot audio2wave")
+        return
+    res = subprocess.run([sys.executable, str(script)], cwd=script.parent, capture_output=True, text=True, timeout=120)
+    lines = [ln for ln in (res.stdout + res.stderr).splitlines() if "ECHEC" in ln or "Traceback" in ln or "Error" in ln]
+    check(res.returncode == 0, "contrat d'audio2wave: check_contract.py sort avec le code 0 (tous les noms et signatures dont on depend)",
+          f"code {res.returncode} : " + " | ".join(lines[:6]))
+
+
 def check_skin() -> None:
     """Habillage (skin.py / theme.py) : les widgets gardent leur comportement, seules leurs images changent."""
     print("habillage de la fenetre (skin.py)")
@@ -3279,8 +3878,13 @@ def main() -> None:
     check_noise()
     check_scenes()
     check_bg_video()
+    check_randomizer()
     check_diagnostics()
     check_skin()
+    check_dialogs()
+    check_audio2wave_api()
+    check_projection()
+    check_contract()
     check_vj_flash()
     check_gates()
     check_layers()

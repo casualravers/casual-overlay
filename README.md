@@ -4,7 +4,8 @@ Fenetre OpenGL plein ecran pour videoprojecteur : le visuel `audio2wave_live` (s
 micro), un logo PNG, un texte tape a la main ou une animation video detouree incruste par-dessus, et des deformations (wobble, onde de choc, aberration
 chromatique, glitch, pulsation du logo) pilotees en temps reel par les basses et le kick.
 
-Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`).
+Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`), a jour : branche `add-snap-waveform-photo`,
+commit `3bf25c9` ou plus recent (sinon le programme s'arrete avec un message qui dit de mettre a jour ce depot).
 
 ## Version portable (rien a installer)
 
@@ -36,8 +37,13 @@ py -3.12 -m venv .venv
 
 ## Lancement
 
-**Double-clic sur [start.bat](start.bat)** : ouvre la fenetre de reglages et la fenetre video (choisis
-l'entree audio dans la fenetre de reglages). Il accepte les memes options que le script, par exemple
+**Double-clic sur [start.bat](start.bat)** : ouvre **la fenetre de reglages seule** (choisis l'entree audio, prepare tes scenes).
+Le bouton **Demarrer la projection** (en haut a gauche) ouvre la fenetre video : **en plein ecran sur le second ecran** (le
+videoprojecteur) ; sans second ecran detecte, en fenetre (un plein ecran sur le poste de travail le recouvrirait, souris comprise).
+Echap dans la projection la ferme sans fermer les reglages, le meme bouton (*Arreter la projection*) aussi, et on la rouvre quand on
+veut. Si le projecteur est branche apres le lancement, F (ou la case *Plein ecran*) le trouve a ce moment-la ; le plein ecran
+demande par la case ou par un preset est **refuse sur l'ecran principal** (sauf `--fullscreen`). `start.bat --projeter` ouvre aussi
+la projection tout de suite. Il accepte les memes options que le script, par exemple
 `start.bat -d "Microphone (Realtek(R) Audio)"` ou `start.bat --text "CASUAL RAVERS"`.
 
 En ligne de commande :
@@ -81,6 +87,22 @@ se batte pas avec toi. Dans la fenetre de rendu : **Espace** = lecture / pause, 
 au moins 2 scenes dans le set. Un changement de mode (Live, Snap, Ridge) prend environ une seconde : le flash le masque en partie.
 **Une scene ne change ni l'entree audio (elle reste celle qui est active), ni le plein ecran / la taille de la fenetre de
 rendu**, et quand le VJ tourne la fenetre de reglages garde sa taille meme si une scene change de mode.
+**Full Randomizer** : un 3e ordre du VJ (*reglages VJ*, ou *Etendre* > *ordre*), qui **fabrique une scene au hasard a chaque
+changement** au lieu de lire le set (il marche meme avec un set vide). Le panneau etendu affiche alors ses reglages, propres a chaque
+set. **Deux banques d'assets, chacune avec autant de dossiers que tu veux** : la banque **FOND** (des videos plein cadre, qui servent
+de fond) et la banque **OVERLAY** (images png / jpg / bmp, animations et videos, qui servent de logo). **C'est le dossier qui
+classe, pas l'extension** (un .mov peut etre une animation a fond transparent comme une video) : pour qu'une video serve aux deux,
+declare son dossier dans les deux banques. Les **sous-dossiers sont des categories** que l'on coche, par banque. Le Full
+Randomizer tire aussi les **sources du fond** (preset de fond genere, preset audio2wave du mode courant sans changer de mode, video
+de la banque FOND, ou **config aleatoire** : un fond entierement nouveau, genere ou un visuel audio2wave dans un mode (Live / Snap /
+Ridge, au choix) et un preset de ce mode tires au hasard), celles de l'**overlay** (preset overlay, ou **config
+aleatoire** : logo, contour, effets, halo / fonte / cellules et noise entierement nouveaux, avec au plus deux effets couteux a la
+fois ; effets du logo allumes au hasard par-dessus un preset ; media de la banque OVERLAY) et respecte des **verrous** (fond, media, effets : la couche verrouillee
+reste telle quelle pendant que le reste varie). **L'overlay est toujours centre et statique** (position au centre, automation de position coupee, meme avec un
+preset qui le decale). Jamais deux fois de suite le meme media ni le meme preset. *Tirer maintenant* tire
+tout de suite ; *Garder ce tirage...* ouvre une fenetre qui propose les **noms du preset de fond, du preset overlay et de la scene**
+(un champ vide = pas enregistre) : un tirage en config aleatoire qui te plait devient ainsi un vrai preset, reutilisable ailleurs.
+La duree est celle du set (*duree par defaut*).
 **Sets** : un set est un enchainement de scenes enregistre sous un nom. Les scenes sont des **briques** (une
 bibliotheque, sans limite) : un set les **reference**, autant de fois qu'on veut et dans plusieurs sets ; modifier une scene
 la modifie partout. Chaque entree d'un set peut porter son **propre media** (logo image, texte ou video : clic droit >
@@ -202,8 +224,8 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 
 | Touche | Action |
 |---|---|
-| Echap | quitter |
-| F | fenetre / plein ecran (plein ecran au lancement seulement s'il y a un 2e ecran) |
+| Echap | quitter (avec la fenetre de reglages : ferme seulement la projection) |
+| F | fenetre / plein ecran (cherche le projecteur a ce moment-la) |
 | B | fond : spectre audio / motif genere / video (si un fichier est choisi) |
 | T | automations : actives / figees |
 | H | barres de debug (basses, mediums, aigus, RMS, kick + etat des effets) |
@@ -229,10 +251,12 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   detecteur de kick, ou un autre micro) en plus des effets separes, pour decorreler vraiment les deux
   couches. Suppose des enveloppes `bass/mid/high/beat` par couche dans le shader et un choix de source
   dans la GUI.
-- **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre ou au hasard, flash a
+- **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre, au hasard ou Full Randomizer, flash a
   chaque changement, Espace et fleche droite, panneau « Etendre » avec duree propre et exclusion par scene, ordre libre,
   medias lies aux scenes par glisser-deposer). Reste a faire :
   - **Changer en rythme** (toutes les N mesures, en comptant les kicks detectes) plutot qu'a la seconde.
+  - **Full Randomizer** : duree tiree dans une plage, poids / favoris et exclusions de la banque, tirage du mode audio2wave
+    (Live / Snap / Ridge), position et taille du logo, tag par fichier (au lieu de tout classer par dossier).
   - **Une vraie transition** (fondu des reglages numeriques ; un changement de mode Live -> Snap coupe la source, donc
     plutot un fondu enchaine d'image a image).
   - Reglages de transition (type, duree du flash) dans le panneau etendu.

@@ -14,6 +14,19 @@ au visuel de base (filtres ffmpeg, `--averaging`, latence). Ici on n'en modifie 
 fichier** ; on importe `audio2wave_live` (`parse_args`, `producer_command`,
 `resolve_size`, `list_audio_devices`).
 
+**Points d'extension d'audio2wave utilises** (branche `add-snap-waveform-photo`, commit `3bf25c9` ou plus recent ; c'est le depot
+audio2wave qui les expose, on ne reecrit plus ses constantes ni ses methodes) : `common.set_gui_accent(accent, accent_fg)` (accent de la
+palette, applique aux modules deja importes : `apply_a2w_palette`), `AutomationManager(..., curve_label, on_editor_open)` et son
+crochet de classe `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)` (habillage de la fenetre « courbe » :
+`install_curve_skin`), un `Tooltip` qui reste dans la fenetre de reglages (sans rien de notre cote), et **`preset_registry`**
+(`store_for(mode)` -> `ModeStore` : `user` / `all` / `save` / `delete` / `override_default`, identique pour Live, Snap et Ridge ; c'est
+`gl_gui.mode_store`, qui remplace les anciennes classes `_ObjStore` / `_SnapStore` ; `CROSS_MODE_UNSAFE_KEYS` et `strip_foreign` = la
+regle de partage d'un preset entre modes). **Garde de version** : `gl_gui.require_audio2wave_api(live)` (appelee par `audio2wave_gl`
+avant de lancer le rendu, et par `run_gui`) s'arrete avec un message clair (« mets a jour le depot audio2wave ») si
+`common.set_gui_accent`, `default_on_editor_open` ou `preset_registry.store_for` manque (`audio2wave_api_missing`, injectable ;
+`check_gl.py` : `check_audio2wave_api`). **Test de contrat** : `check_gl.py` (`check_contract`) lance `check_contract.py` du depot
+audio2wave (noms et signatures dont on depend) et echoue sur un code de sortie non nul ; un nom casse se corrige cote audio2wave.
+
 **Toute la documentation, les commentaires et les messages CLI sont en francais sans
 accents** (meme convention qu'audio2wave, compatibilite console Windows).
 
@@ -52,12 +65,14 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
     (`presets_to_top`, `tidy_mode_gui` et les tests le retrouvent par leur texte). Onglets ttk : selectionne = `CARD` + texte d'accent.
   - Couleurs lues sur un widget : `_norm` (nom Tk / systeme -> `#rrggbb`). Les `PhotoImage` sont gardees par racine Tk (`root._skin_photos`,
     plusieurs racines dans les tests). Hauteur : boutons ~24 px, champs 1 px de bord (la fenetre reste sous 700 px).
-- **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) est remplace par `theme.LIVE` **dans ce processus** par `apply_a2w_palette()`
-  (modules `common`, `audio2wave`, `audio2wave_live`, `_snap`, `_ridge`, avant `live.style_gui` : leurs widgets le lisent a la creation ;
-  Snap / Ridge, importes plus tard, heritent de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`. Aucun fichier touche.
-- **Fenetre « courbe »** (`AutomationManager.open_editor`, audio2wave) : `install_curve_skin` enveloppe la methode (idempotent) : a la
-  creation de la fenetre, `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour celui d'audio2wave), canvas sombre,
-  `Label` remis au fond du panneau, `skin.apply`.
+- **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) devient `theme.LIVE` par le point d'extension `common.set_gui_accent`
+  (`apply_a2w_palette()`, avant `live.style_gui` : leurs widgets le lisent a la creation ; Snap / Ridge, importes plus tard, lisent la
+  valeur de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`.
+- **Fenetre « courbe »** (editeur d'audio2wave) : `install_curve_skin` affecte le crochet de classe
+  `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)`, appele une fois la fenetre construite (aussi pour les
+  gestionnaires crees par les `build_gui` d'audio2wave) : `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour
+  celui d'audio2wave), canvas sombre, `Label` remis au fond du panneau, `skin.apply`. Le bouton d'edition est `curve_label` (« ∿ » par
+  defaut chez eux : plus de boucle qui le restyle ; `check_gl.py` compte les boutons `∿`).
 - **Boutons jamais colles** : `BTN_MARGIN` = 3 x 1 px transparents autour de l'image d'un bouton (a hauteur totale constante : la forme
   est plus basse d'autant), meme dans les conteneurs d'audio2wave qui n'ont pas d'espacement.
 - `check_gl.py` (`check_skin`) : classe / texte / `invoke` conserves, neutre / accent / couleur propre, desactive et cache d'images,
@@ -81,7 +96,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   dans `choice_dialog`.
 - **Version portable** (`build_portable.py`, stdlib, Windows) : un dossier `dist/casual-overlay-portable/` = `python/` (copie de
   l'installation Python de base du venv, sans Doc / tests / pip, avec tcl/tk, + `site-packages` du `.venv`), les `.py`, `gl_shaders/`,
-  `asset/` (fichiers du dossier, pas les animations perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
+  `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
   ffprobe.exe), `start.bat`, `LISEZMOI.txt`. **Pas de gel (PyInstaller)** : audio2wave est importe dynamiquement et tkinter /
   modules varient selon le mode. `audio2wave_gl.bundled_paths(script_dir, path)` : `audio2wave/` a cote du programme l'emporte sur le
   depot voisin (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
@@ -101,6 +116,7 @@ python audio2wave_gl.py --list-devices                 # entrees dshow (ffmpeg)
 python audio2wave_gl.py --list-audio-devices           # entrees sounddevice
 python audio2wave_gl.py -d "<entree>" --dry-run        # meme commande ffmpeg que audio2wave_live
 python audio2wave_gl.py -d "<entree>"                  # live (plein ecran auto seulement avec un 2e moniteur)
+python audio2wave_gl.py --gui [--projeter]             # reglages seuls ; bouton « Demarrer la projection » (ou --projeter)
 python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
 python check_gl.py                                     # verifications hors materiel
 python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ffmpeg, OpenGL, micro...)
@@ -155,6 +171,19 @@ Tout est dans [audio2wave_gl.py](audio2wave_gl.py) ; les GLSL sont dans `gl_shad
   masque et GUI cachee dessous (signale en usage reel : "je perds ma souris"; F ou Echap
   rendent la main). `hide_cursor()` : le curseur n'est masque qu'en plein ecran **hors**
   moniteur principal.
+- **Projection a la demande (`--gui`)** : `start.bat` n'ouvre que la fenetre de reglages ; la fenetre GL (`gl_main`, fil `gl`) part
+  du bouton **Demarrer la projection** (barre des scenes, `toggle_projection`) ou de `--projeter`. `Projection(s)` (audio2wave_gl.py,
+  `s.projection`) : `start()` decide du plein ecran **a ce moment-la** (`resolve_fullscreen(args.fullscreen_request, monitor,
+  has_secondary_monitor())` : second ecran = plein ecran dessus, sinon fenetre ; `--fullscreen` / `--no-fullscreen` explicites
+  l'emportent), jette les commandes empilees projection fermee, lance le fil ; `stop()` positionne `s.proj_stop` (la boucle GL sort,
+  `gl_main` ne positionne PAS `finished_event` en mode `--gui` : Echap ferme la projection, pas les reglages) ; rouvrable a volonte
+  (glfw reinitialise a chaque ouverture). Un echec (`SystemExit`, exception) est dit dans le statut, la GUI continue. Fermer les
+  reglages (`on_close`) positionne `stop_event` et `finished_event`. Commandes (`send` dans `gl_gui`) : projection fermee, `save` ecrit
+  `gl_params.json` directement, `reload` / `hud` / `fullscreen` repondent « Disponible quand la projection est ouverte ». Plein
+  ecran : `Window.retarget(pick_monitor(...))` a chaque passage en plein ecran (un projecteur branche apres le lancement est
+  trouve) ; **la commande `fullscreen=1` (case, preset qui la coche) est refusee sur l'ecran principal** sans `--fullscreen` /
+  `--monitor` (la touche F, elle, reste permise : la fenetre a le focus et Echap rend la main). Sans `--gui` rien ne change
+  (`gl_main` direct). `check_gl.py` : `check_projection` (Projection avec cible et ecrans factices) + bouton dans le test GUI.
 - **Texte a incruster** (source `text`, `--text`, GUI : Source > Texte) : `render_text()`
   dessine le texte avec Pillow (plusieurs lignes, police, couleur, alignement), le
   premultiplie comme un PNG (`_premultiplied`, plafond 2048 px) avec une marge transparente de
@@ -364,8 +393,8 @@ visuel d'audio2wave, il ne le complete pas) :
   Entry + bouton, **aucune modification de leur code**), on relit le resultat dans leur magasin, puis on le retire (fichier et
   ligne du menu) et on remet l'affichage du menu comme avant. Application (`apply_live_overrides`) : pas d'ecriture du tout ;
   le temps d'un clic sur la ligne `default` de leur menu, leur magasin renvoie `overrides` pour `default`
-  (`_ObjStore.override_default` : `preset_store.all` remplace sur l'instance pour Live et Ridge, `all_presets` pour Snap ; leur
-  fenetre relit le magasin au clic, donc charge cet etat), puis tout est remis. Leur menu affiche alors `default`. Pas d'etat
+  (`preset_registry.ModeStore.override_default`, via `mode_store(live, mode)` : leur fenetre relit le magasin au clic, donc charge
+  cet etat), puis tout est remis. Leur menu affiche alors `default`. Pas d'etat
   audio2wave pour une scene a motif.
 - **Exclusions** (`scenes.SCENE_EXCLUDED` = `device`, `fullscreen`, `size`, filtrees par `strip_live_overrides` a la capture, a
   l'application et a la migration, donc aussi pour les scenes deja enregistrees) : une scene change le look, pas
@@ -431,6 +460,51 @@ visuel d'audio2wave, il ne le complete pas) :
     La GUI (`import_set_now`, `resolve_conflict`) pose la question puis **demande confirmation avant de remplacer**.
   - Dialogues dans `scene_ui` (`chooser`, `ask_name`, `ask_save`, `ask_open`) : les tests les remplacent, jamais de fenetre
     bloquante. `choice_dialog` (module) = fenetre modale a boutons.
+- **Full Randomizer** (`randomizer.py`, ordre VJ `alea`, `scenes.VJ_ORDERS`, libelle « Full Randomizer » partout dans la GUI) : a chaque changement `vj_advance` appelle `random_draw()`
+  au lieu de lire une entree : `randomizer.draw_scene(rng, settings, Context)` (pur, graine injectable) rend une **scene temporaire**
+  (meme format que `capture_scene`, nom `Full Randomizer`), appliquee par `apply_scene_dict` (extrait de `apply_scene_core`, qui lui
+  passe la scene de la bibliotheque) : flash, minuteur = `duree` du set, `s.active_scene` = `Full Randomizer`, `s.rnd` = etat (`last`,
+  `scene`, `info`, `bank` = `{"fond", "overlay"}`, `rng`). **Marche avec un set vide** (`vj_toggle` ne demande 2 scenes que hors `alea`).
+  - Reglages dans `vj["random"]` **du set** (validation `randomizer.clean_settings` appelee par `SceneBook._clean_vj`, donc aussi a
+    la copie, l'export et l'import) : `folders_fond` / `folders_overlay`, `categories_fond` / `categories_overlay` ([] = toutes), `bg_sources` (`preset` / `a2w` / `video` / `params`),
+    `overlay` (`overlay_preset` / `params` / `fx` / `media`), `lock_bg` / `lock_media` / `lock_fx`. Un ordre inconnu revient a `seq`.
+  - **Deux banques**, autant de dossiers que l'on veut : **FOND** (videos plein cadre : le fond) et **OVERLAY** (images, animations,
+    videos : le logo). **Le dossier classe, jamais l'extension** (un .mov peut etre une animation a fond transparent) ; pour qu'une
+    video serve aux deux, son dossier est declare dans les deux. `scan_bank(dossiers, "fond" | "overlay")` (os.walk, 4 niveaux, 5000
+    fichiers, caches ignores, doublons de chemins ecartes ; FOND = videos seulement), `Asset(path, kind, category)` (`kind` image /
+    video = la source du logo a utiliser), categorie = premier sous-dossier (`ROOT_CATEGORY` a la racine) ; `Context.bank_fond` /
+    `bank_overlay` ; `random_bank()` (GUI, `{"fond", "overlay"}`) garde le scan tant que les dossiers ne changent pas (Rescanner).
+    Un fichier disparu depuis le scan est ecarte au tirage (`usable(bank, categories, kind)`).
+  - Fond : `preset` -> `BACKGROUND_BOOK.all()` (scene `pattern`, ou `live` sans toucher au panneau si le preset est en mode live),
+    `a2w` -> presets du mode courant (`mode_store(...).all()`, **jamais `default` vide**, jamais un autre mode : pas de reconstruction de la fenetre),
+    `video` -> video de la banque FOND (`bg_video_fit` cover / stretch), `params` = **config aleatoire** -> soit `random_background_params` (plages des curseurs, jamais
+    la palette banc de test), soit un **visuel audio2wave** : mode (`modes` du set, `Context.a2w_modes` = presets de chaque mode, charges par
+    `random_draw` seulement si `params` est coche) et preset de ce mode au hasard (`default` vide = `live_overrides` None) ; changer de mode
+    reconstruit la fenetre (~1 s, masque par le flash) via `apply_scene_dict` ; `record["bg"]` = `params:gen` ou `params:a2w:<mode>:<nom>`. Une source cochee mais indisponible est ignoree ; aucune = le fond ne change pas (message).
+  - Overlay : une base, **preset overlay** ou **config entierement nouvelle** (`params`, `random_overlay_params` : disposition et contour du
+    logo dans des valeurs sures, effets du fond et de la couche logo, `fx_link` 0 / 1, halo / fonte / cellules, noise ; ni media ni
+    automation ; les deux bases alternent si les deux sont cochees ; `record["overlay"]` = `preset:<nom>` ou `params`) ; `fx` ajoute
+    `random_effects` par-dessus un preset (inutile avec `params`, qui en contient deja) ; `random_effects` (halo / fonte / cellules, **`MAX_COSTLY` = 2** pour ne pas declencher le
+    garde-fou GPU ; les effets non tires sont coupes explicitement, le tirage ne depend pas de l'etat d'avant) + media de la banque OVERLAY
+    (`media_for`). **Sans media a tirer (banque vide, non coche) le media courant reste** : un preset applique les valeurs par
+    defaut et remettrait sinon le logo par defaut. La video du fond n'est pas aussi le logo (sauf si c'est la seule).
+  - **Overlay toujours centre et statique** : `randomizer.centered(overlay, overlay_du_moment)` est applique a **tout** tirage (preset, config,
+    verrou des effets compris) : `logo_x` = `logo_y` = 0,5 (`CENTER`) et automation de position coupee (`_automation` de l'overlay, sinon
+    celle du moment ; rien n'est ajoute si aucune n'est allumee : fournir `_automation` reinitialiserait les autres automations).
+  - Verrous : le fond verrouille reprend `current_scene["bg"]` / `fond` (jamais d'etat audio2wave), le media et les effets reprennent
+    l'overlay courant (`capture_scene`). Pas de repetition immediate (`last`).
+  - GUI : le panneau etendu affiche `build_random_body` a la place des lignes d'entrees (banques FOND et OVERLAY avec leurs dossiers, categories + sources + verrous +
+    *Tirer maintenant* / *Garder cette scene* + le resume du dernier tirage) ; **`Garder ce tirage...`** ouvre `keep_dialog` (modale, `scene_ui["ask_keep"]`, remplacable par les
+    tests) : trois noms, preset de fond (`BACKGROUND_BOOK.save` de `scene["fond"]`, seulement si le fond est genere ou video), preset
+    overlay (`OVERLAY_BOOK.save` de `scene["overlay"]`) et scene (`scene_book.put`), un champ vide = pas enregistre ; defauts uniques
+    (`Tirage fond`, `Tirage overlay`, `Tirage`) ; `random_keep_check(noms)` valide (un nom deja pris ou `default` est refuse, la modale
+    reste ouverte avec le message ; rien n'est ecrit en cas d'erreur) ; `random_save(noms)` ecrit puis rafraichit les menus de presets. `scene_ui["ask_dir"]` (remplacable par les tests). Controles : `c["random"]` (`draw`, `draw_now`, `keep`, `bank`, `option`, `state`).
+  - **Piege (modales)** : `a2w` (palette d'audio2wave) n'est pas un nom du module `gl_gui`, seulement un import local de `build_window` : une
+    modale de niveau module (`choice_dialog`, `keep_dialog`) qui l'utilise doit faire `import audio2wave as a2w` elle-meme. `choice_dialog`
+    plantait ainsi sans qu'aucun test le voie (ils remplacent les dialogues par `scene_ui`) ; `check_dialogs` ouvre les vraies modales.
+  - `check_gl.py` (`check_randomizer`, `gui_random_steps`) : banque, reglages, plages, effets, determinisme, sources, verrous, banque
+    vide, scene applicable (`scene_values`), reglages par set / copie / export, puis dans la fenetre : panneau, tirage + flash, VJ sur set
+    vide, Garder + rejouer, verrou, categories, dossier, retour a l'ordre normal.
 - **Panneau etendu** (`scene_top` = barre + `scene_panel`, `set_expanded`, `refresh_scene_panel`, `build_panel_row`) : bouton
   `Etendre` / `Reduire` dans la barre ; l'etat est `s.scenes_expanded` (survit aux reconstructions de la fenetre). La fenetre
   grandit de `scene_panel.winfo_reqheight()` (memorise dans `s.scene_panel_h`, plafonne a la hauteur de l'ecran - 80) et la
@@ -586,11 +660,10 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   (`presets_to_top` : le bandeau `PRESETS ...`, `Charger`, `Sauvegarder sous` et `Mode VJ` de Snap remontent sur les premieres lignes
   de la grille de leur panneau, la ligne de statut reste en bas ; seuls les widgets directement poses dans la grille de l'hote sont
   deplaces : les champs couleur sont re-grilles dans un conteneur, `grid_info()["in"]`). `check_gl.py` (`presets_top_state`).
-- **Info-bulles dans la fenetre** : `live.Tooltip` (audio2wave, aussi pour Snap, Ridge et nos panneaux) se posait sous le widget sans
-  regarder le bord. `install_tooltip_clamp` remplace sa methode `_show` au lancement (sans toucher a leur fichier) : l'info-bulle est
-  mesuree puis placee par `tooltip_position` (pure : decalee a gauche si elle depasse a droite, au-dessus du widget si elle depasse en
-  bas, toujours dans la fenetre). `check_gl.py` (`tooltip_violations`) survole chaque widget qui porte une info-bulle et verifie
-  qu'elle est dans la fenetre (large, 940 px, 420 px de haut, panneau etendu, panneau Snap). Seuil de la mise en page empilee
+- **Info-bulles dans la fenetre** : `live.Tooltip` (audio2wave, aussi pour Snap, Ridge et nos panneaux) mesure l'info-bulle puis la garde
+  dans la fenetre de reglages (decalee a gauche si elle depasse a droite, au-dessus du widget si elle depasse en bas) : c'est
+  audio2wave qui le fait (avant, `install_tooltip_clamp` remplacait sa methode `_show` ; supprime, comme `tooltip_position`).
+  `check_gl.py` (`tooltip_violations`) survole chaque widget qui porte une info-bulle et verifie qu'elle est dans la fenetre (large, 940 px, 420 px de haut, panneau etendu, panneau Snap). Seuil de la mise en page empilee
   (`layout["wide_need"]`) : sans la largeur de l'ascenseur du panneau d'audio2wave, qui apparait ou disparait selon la hauteur (une
   fenetre a sa taille naturelle sans ascenseur passait en empile ; course avec la minuterie `settled`, vue par le test de taille VJ).
 - **Structure visible** : deux grandes parties, LIVE (titre bleu, fenetre d'audio2wave) et OVERLAY

@@ -39,6 +39,7 @@ from tkinter import colorchooser, filedialog, simpledialog, ttk
 
 import audio2wave_gl as gl
 import diagnostics
+import randomizer
 import skin
 import theme
 import gui_colors
@@ -108,95 +109,71 @@ MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
 
 
-def tooltip_position(widget: tuple, tip: tuple, bounds: tuple, gap: int = 4) -> tuple:
-    """Coin haut-gauche d'une info-bulle qui reste dans `bounds` (gauche, haut, droite, bas). `widget` = (x, y, largeur,
-    hauteur) du widget survole, `tip` = (largeur, hauteur) de l'info-bulle. Par defaut sous le widget, alignee a gauche (comme
-    audio2wave) ; decalee vers la gauche si elle depasse a droite, passee AU-DESSUS du widget si elle depasse en bas."""
-    wx, wy, ww, wh = widget
-    tw, th = tip
-    left, top, right, bottom = bounds
-    x = min(wx + gap, right - tw - gap)
-    x = max(x, left + gap)
-    y = wy + wh + gap
-    if y + th > bottom - gap:
-        above = wy - th - gap
-        y = above if above >= top + gap else max(top + gap, bottom - th - gap)
-    y = max(top + gap, min(y, bottom - th - gap))      # widget lui-meme hors de la fenetre (defile hors de vue) : on reste dedans
-    return x, y
+AUDIO2WAVE_REQUIRED = "branche add-snap-waveform-photo, commit 3bf25c9 ou plus recent"
+
+
+def audio2wave_api_missing(live, common=None, registry=None) -> list[str]:
+    """Points d'extension d'audio2wave dont casual-overlay a besoin et qui manquent (liste vide = depot assez recent) :
+    `common.set_gui_accent` (accent de la palette), `AutomationManager.default_on_editor_open` (crochet de la fenetre courbe) et
+    `preset_registry.store_for` (acces unifie aux presets des trois modes).
+    `live` = le module `audio2wave_live` ; `common` et `registry` s'injectent pour les tests."""
+    if common is None:
+        try:
+            import common
+        except ImportError:
+            common = None
+    if registry is None:
+        try:
+            import preset_registry as registry
+        except ImportError:
+            registry = None
+    missing = []
+    if common is None or not callable(getattr(common, "set_gui_accent", None)):
+        missing.append("common.set_gui_accent(accent, accent_fg)")
+    if not hasattr(getattr(live, "AutomationManager", None), "default_on_editor_open"):
+        missing.append("AutomationManager.default_on_editor_open (crochet de la fenetre courbe)")
+    if registry is None or not callable(getattr(registry, "store_for", None)):
+        missing.append("preset_registry.store_for(mode) (acces unifie aux presets)")
+    return missing
+
+
+def require_audio2wave_api(live, common=None, registry=None) -> None:
+    """Arrete le programme avec un message clair si le depot audio2wave est trop ancien (au lieu d'un AttributeError obscur)."""
+    missing = audio2wave_api_missing(live, common, registry)
+    if missing:
+        where = Path(getattr(live, "__file__", ".")).resolve().parent
+        raise SystemExit("Le depot audio2wave est trop ancien pour cette version de casual-overlay : il manque "
+                         + " et ".join(missing) + f".\nMets a jour le depot audio2wave ({where}) : git pull, {AUDIO2WAVE_REQUIRED}.")
 
 
 def apply_a2w_palette() -> None:
-    """Accent d'audio2wave (`GUI_ACCENT`, turquoise) -> bleu du theme, dans CE processus seulement et sans toucher a leurs fichiers :
-    leurs modules lisent ces constantes a la creation de leurs widgets (`option_add` de style_gui, labels, curseurs). A appeler
-    avant de les construire ; `common` d'abord (Snap et Ridge, importes plus tard, en heritent)."""
-    for name in ("common", "audio2wave", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge"):
-        module = sys.modules.get(name)
-        if module is not None and hasattr(module, "GUI_ACCENT"):
-            module.GUI_ACCENT = theme.LIVE
-            if hasattr(module, "GUI_ACCENT_FG"):
-                module.GUI_ACCENT_FG = theme.ON_ACCENT
+    """Accent d'audio2wave (`GUI_ACCENT`, turquoise) -> bleu du theme, par le point d'extension `common.set_gui_accent` (met a jour
+    tous les modules audio2wave deja importes ; Snap et Ridge, importes plus tard, lisent la valeur de `common`). A appeler avant
+    de construire leurs widgets (leur `style_gui`, leurs labels et curseurs la lisent a la creation)."""
+    import common
+    common.set_gui_accent(theme.LIVE, theme.ON_ACCENT)
 
 
 def install_curve_skin(live) -> None:
-    """Fenetre « courbe » (editeur de variation automatique d'audio2wave, `AutomationManager.open_editor`) : habillee comme le
-    reste a son ouverture (accent du gestionnaire : violet cote overlay, bleu cote LIVE), sans toucher a leur fichier. Idempotent."""
-    cls = live.AutomationManager
-    if getattr(cls, "_skinned", False):
-        return
-    original = cls.open_editor
+    """Fenetre « courbe » (editeur de variation automatique d'audio2wave) : habillee comme le reste a son ouverture (accent du
+    gestionnaire : violet cote overlay, bleu cote LIVE) par le crochet de classe `AutomationManager.default_on_editor_open`,
+    `(manager, fenetre, attr, canvas)`, appele une fois la fenetre construite. Idempotent (le crochet est simplement reaffecte)."""
+    def on_editor_open(manager, win, attr: str, canvas) -> None:
+        skin.zone(win, manager.accent)
+        if canvas is not None:
+            canvas.configure(bg=theme.TROUGH, highlightbackground=theme.LINE)
+            canvas.pack_configure(padx=18, pady=(18, 14))
+        stack = [win]
+        while stack:                                  # leurs Label n'ont pas le fond du panneau (palette de la fenetre)
+            node = stack.pop()
+            for child in node.winfo_children():
+                if child.winfo_class() == "Label":
+                    child.configure(bg=str(node.cget("bg")))
+                stack.append(child)
+        skin.apply(win)
 
-    def open_editor(self, attr: str) -> None:
-        before = self.state[attr]["editor"]
-        original(self, attr)
-        win = self.state[attr]["editor"]
-        if win is not None and win is not before:
-            skin.zone(win, self.accent)
-            canvas = self.state[attr]["canvas"]
-            if canvas is not None:
-                canvas.configure(bg=theme.TROUGH, highlightbackground=theme.LINE)
-                canvas.pack_configure(padx=18, pady=(18, 14))
-            stack = [win]
-            while stack:                                  # leurs Label n'ont pas le fond du panneau (palette de la fenetre)
-                node = stack.pop()
-                for child in node.winfo_children():
-                    if child.winfo_class() == "Label":
-                        child.configure(bg=str(node.cget("bg")))
-                    stack.append(child)
-            skin.apply(win)
-
-    cls.open_editor = open_editor
-    cls._skinned = True
-
-
-def install_tooltip_clamp(live) -> None:
-    """Les info-bulles d'audio2wave (`live.Tooltip`, aussi utilisee par Snap, Ridge et par nos panneaux) se posent sous le
-    widget sans regarder ou est le bord : a droite ou en bas de la fenetre elles sortaient. On remplace, au lancement et sans
-    toucher a leur fichier, la methode qui les place (`_show`) par une version qui mesure l'info-bulle puis la garde dans la
-    fenetre de reglages. Idempotent."""
-    cls = live.Tooltip
-    if getattr(cls, "_clamped", False):
-        return
-
-    def show(self, _evt=None) -> None:
-        if self.tip is not None:
-            return
-        w = self.widget
-        self.tip = tk.Toplevel(w)
-        self.tip.wm_overrideredirect(True)
-        self.tip.withdraw()
-        tk.Label(self.tip, text=self.text, justify="left", bg=live.GUI_PANEL_BG, fg=live.GUI_FG, font=live.GUI_FONT,
-                 relief="solid", borderwidth=1, padx=6, pady=4, wraplength=260).pack()
-        self.tip.update_idletasks()
-        win = w.winfo_toplevel()
-        left, top = win.winfo_rootx(), win.winfo_rooty()
-        x, y = tooltip_position((w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height()),
-                                (self.tip.winfo_reqwidth(), self.tip.winfo_reqheight()),
-                                (left, top, left + win.winfo_width(), top + win.winfo_height()))
-        self.tip.wm_geometry(f"+{x}+{y}")
-        self.tip.deiconify()
-
-    cls._show = show
-    cls._clamped = True
+    # Crochet de classe : atteint aussi les gestionnaires crees par les build_gui d'audio2wave.
+    live.AutomationManager.default_on_editor_open = on_editor_open
 
 
 def presets_to_top(host) -> None:
@@ -318,67 +295,13 @@ def activate_mode(s, live, new: str) -> str | None:
     return None
 
 
-class _ObjStore:
-    """Presets d'un mode dont le magasin est un objet (`preset_store` : Live et Ridge)."""
-
-    def __init__(self, store) -> None:
-        self.store = store
-
-    def user(self) -> dict:
-        return self.store.load_user()
-
-    def delete(self, name: str) -> None:
-        self.store.delete_user(name)
-
-    def override_default(self, overrides: dict):
-        """Le temps du `with`, `default` vaut `overrides` : le menu d'audio2wave charge alors CET etat en 'cliquant' sa
-        ligne `default`, sans rien ecrire dans leurs fichiers (leur fenetre relit le magasin au clic)."""
-        import contextlib
-
-        @contextlib.contextmanager
-        def ctx():
-            original = self.store.all
-            self.store.all = lambda: {**original(), "default": overrides}
-            try:
-                yield
-            finally:
-                self.store.__dict__.pop("all", None)
-        return ctx()
-
-
-class _SnapStore(_ObjStore):
-    """Snap : des fonctions de module plutot qu'un objet."""
-
-    def __init__(self, module) -> None:
-        self.module = module
-
-    def user(self) -> dict:
-        return self.module.load_user_presets()
-
-    def delete(self, name: str) -> None:
-        self.module.delete_user_preset(name)
-
-    def override_default(self, overrides: dict):
-        import contextlib
-
-        @contextlib.contextmanager
-        def ctx():
-            original = self.module.all_presets
-            self.module.all_presets = lambda *a, **k: {**original(*a, **k), "default": overrides}
-            try:
-                yield
-            finally:
-                self.module.all_presets = original
-        return ctx()
-
-
-def mode_store(live, mode: str) -> _ObjStore:
-    """Magasin de presets du mode d'audio2wave `mode` ("live", "snap" ou "ridge")."""
+def mode_store(live, mode: str):
+    """Magasin de presets du mode d'audio2wave `mode` ("live", "snap" ou "ridge") : `preset_registry.ModeStore`
+    (user/all/save/delete/override_default), le meme acces unifie que le Mode VJ de Snap."""
+    import preset_registry
     import py_modes
-    if mode == "live":
-        return _ObjStore(live.preset_store)
-    module = py_modes.load_mode(Path(live.__file__).resolve().parent, mode)
-    return _SnapStore(module) if mode == "snap" else _ObjStore(module.preset_store)
+    module = live if mode == "live" else py_modes.load_mode(Path(live.__file__).resolve().parent, mode)
+    return preset_registry.store_for(mode, module)
 
 
 def migrate_scene_presets(live) -> None:
@@ -465,6 +388,7 @@ def make_thumb(media: dict):
 
 def choice_dialog(parent, title: str, text: str, buttons: list[str]) -> str | None:
     """Petite fenetre modale : un texte et des boutons ; renvoie le libelle du bouton choisi (None si on ferme)."""
+    import audio2wave as a2w                 # (palette d'audio2wave : pas un import de module, le depot voisin est deja sur sys.path)
     top = tk.Toplevel(parent)
     top.title(title)
     top.configure(bg=a2w.GUI_BG)
@@ -483,6 +407,60 @@ def choice_dialog(parent, title: str, text: str, buttons: list[str]) -> str | No
     top.protocol("WM_DELETE_WINDOW", top.destroy)
     top.bind("<Escape>", lambda _e: top.destroy())
     skin.apply(top)
+    try:
+        top.grab_set()
+    except tk.TclError:
+        pass
+    parent.wait_window(top)
+    return answer[0]
+
+
+def keep_dialog(parent, defaults: dict, fond_ok: bool, validate) -> dict | None:
+    """Modale « Garder ce tirage » : trois noms (preset de fond, preset overlay, scene), un champ vide = ne pas l'enregistrer.
+    `validate(noms)` rend un message d'erreur (la fenetre reste ouverte) ou None. Rend `{"fond", "overlay", "scene"}` ou None."""
+    import audio2wave as a2w
+    top = tk.Toplevel(parent)
+    top.title("Garder ce tirage")
+    top.configure(bg=a2w.GUI_BG)
+    top.transient(parent.winfo_toplevel())
+    top.resizable(False, False)
+    answer: list = [None]
+    tk.Label(top, text="Enregistre ce tirage. Laisse un champ vide pour ne pas l'enregistrer.", bg=a2w.GUI_BG, fg=a2w.GUI_FG,
+             justify="left", padx=18, pady=12).pack(anchor="w")
+    form = tk.Frame(top, bg=a2w.GUI_BG)
+    form.pack(padx=18)
+    vars_: dict[str, tk.StringVar] = {}
+    entries: dict[str, tk.Entry] = {}
+    for row, (key, label) in enumerate((("fond", "Preset fond"), ("overlay", "Preset overlay"), ("scene", "Scene"))):
+        tk.Label(form, text=label, bg=a2w.GUI_BG, fg=a2w.GUI_FG, anchor="w", width=14).grid(row=row, column=0, sticky="w", pady=4)
+        var = tk.StringVar(value=defaults.get(key, "") if (key != "fond" or fond_ok) else "")
+        entry = tk.Entry(form, textvariable=var, width=28, state="normal" if (key != "fond" or fond_ok) else "disabled")
+        entry.grid(row=row, column=1, pady=4, padx=(6, 0))
+        vars_[key], entries[key] = var, entry
+    if not fond_ok:
+        tk.Label(top, text="Ce tirage n'a pas de fond genere (fond audio2wave) : pas de preset de fond.", bg=a2w.GUI_BG,
+                 fg=a2w.GUI_MUTED_FG, padx=18).pack(anchor="w")
+    error = tk.Label(top, text="", bg=a2w.GUI_BG, fg="#ff8a8a", padx=18, anchor="w", justify="left", wraplength=360)
+    error.pack(anchor="w")
+    row = tk.Frame(top, bg=a2w.GUI_BG)
+    row.pack(pady=(8, 14))
+
+    def ok(_e=None) -> None:
+        names = {k: v.get().strip() for k, v in vars_.items()}
+        message = validate(names)
+        if message:
+            error.config(text=message)
+            return
+        answer[0] = names
+        top.destroy()
+    tk.Button(row, text="Enregistrer", command=ok).pack(side="left", padx=5)
+    tk.Button(row, text="Annuler", command=top.destroy).pack(side="left", padx=5)
+    top.protocol("WM_DELETE_WINDOW", top.destroy)
+    top.bind("<Escape>", lambda _e: top.destroy())
+    top.bind("<Return>", ok)
+    skin.apply(top)
+    first = entries["fond"] if fond_ok else entries["overlay"]
+    first.focus_set()
     try:
         top.grab_set()
     except tk.TclError:
@@ -522,6 +500,7 @@ def run_gui(s, live, on_ready=None) -> None:
     """Cree la fenetre Tk, la construit pour le mode courant et bloque dans mainloop() jusqu'a la fin.
 
     `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite."""
+    require_audio2wave_api(live)
     root = tk.Tk()
     build_window(s, live, root, s.mode, on_ready)
     root.mainloop()
@@ -534,7 +513,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     le relisent a leur creation."""
     import audio2wave as a2w
 
-    install_tooltip_clamp(live)          # info-bulles toujours dans la fenetre
     Tooltip = live.Tooltip
     params = s.params
     manager = s.manager
@@ -694,6 +672,20 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     skin.title(banner_overlay, OVERLAY_COLOR, kicker=False)
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
+    projection = getattr(s, "projection", None)           # avec --gui : la fenetre de rendu s'ouvre au bouton
+    proj_ui: dict = {"btn": None}
+
+    def send(name: str) -> None:
+        """Commande pour le fil GL ; projection fermee : l'enregistrement se fait ici, le reste attend l'ouverture."""
+        if projection is not None and not projection.running():
+            if name == "save":
+                gl.save_params(params)
+                s.status["msg"] = f"Reglages sauves ({gl.PARAMS_PATH.name})"
+            elif name in ("reload", "hud", "fullscreen"):
+                s.status["msg"] = "Disponible quand la projection est ouverte"
+            return
+        s.commands.put(name)
+
     # ------------------------------------------------ 2. pont restart_event -> ProducerManager (mode Live)
     last = {"fullscreen": bool(s.live_args.fullscreen)}
 
@@ -817,9 +809,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         holder = tk.Frame(z.parent)
         holder.grid(row=r, column=2, sticky="w", padx=(0, 4))
         automation.register(holder, key, label, lo, hi)
-        for widget in holder.winfo_children()[0].winfo_children():
-            if widget.winfo_class() == "Button":
-                widget.config(text="∿", padx=3)          # "courbe" -> compact, l'info-bulle reste
         auto_vars[key] = var
 
     def compact_scale(parent, lo: float, hi: float, step: float, var: tk.Variable, length: int = 120) -> tk.Frame:
@@ -1535,7 +1524,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         frame = tk.Frame(tab_aff)
         frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         for text, cmd in row_buttons:
-            tk.Button(frame, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
+            tk.Button(frame, text=text, command=lambda c=cmd: send(c)).pack(side="left", padx=(0, 6))
 
     def diagnostic_report() -> str:
         """Rapport du diagnostic : verifications refaites maintenant, sauf OpenGL (resultat du demarrage : on n'ouvre pas un
@@ -1687,7 +1676,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def apply_live_overrides(overrides: dict) -> bool:
         """Applique l'etat `overrides` au panneau d'audio2wave courant : la ligne `default` de leur menu vaut `overrides` le
-        temps du clic (voir `_ObjStore.override_default`). Rien n'est ecrit dans leurs presets."""
+        temps du clic (voir `preset_registry.ModeStore.override_default`). Rien n'est ecrit dans leurs presets."""
         found = preset_menu()
         if found is None:
             return False
@@ -1803,9 +1792,132 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         except tk.TclError:
             vj_ui.clear()
 
+    # ---- Full Randomizer : une scene temporaire tiree dans les presets, la banque d'assets et les valeurs aleatoires
+    rnd = getattr(s, "rnd", None)
+    if rnd is None:
+        rnd = s.rnd = {"last": {}, "scene": None, "info": "", "bank": {"fond": [], "overlay": []}, "bank_key": None,
+                       "rng": random.Random()}
+
+    def random_bank(force: bool = False) -> dict:
+        """Les deux banques d'assets du set, `{"fond": [...], "overlay": [...]}` (rescannees seulement si les dossiers changent
+        ou si `force`)."""
+        rs = scene_book.vj()["random"]
+        key = (tuple(rs["folders_fond"]), tuple(rs["folders_overlay"]))
+        if force or rnd["bank_key"] != key:
+            rnd["bank"] = {"fond": randomizer.scan_bank(list(key[0]), "fond"), "overlay": randomizer.scan_bank(list(key[1]), "overlay")}
+            rnd["bank_key"] = key
+        return rnd["bank"]
+
+    def random_draw() -> bool:
+        """Tire une scene et l'applique (le VJ ajoute le flash et relance le minuteur)."""
+        sync_automation_now()
+        settings = scene_book.vj()["random"]
+        try:
+            a2w_presets = mode_store(live, s.mode).all()
+        except Exception:
+            a2w_presets = {}
+        a2w_modes: dict = {}
+        if "params" in settings["bg_sources"]:               # config aleatoire : tous les modes autorises (charges seulement ici)
+            for mode in settings["modes"]:
+                try:
+                    a2w_modes[mode] = a2w_presets if mode == s.mode else mode_store(live, mode).all()
+                except Exception:
+                    a2w_modes[mode] = {}
+        banks = random_bank()
+        ctx = randomizer.Context(bank_fond=banks["fond"], bank_overlay=banks["overlay"], bg_presets=gl.BACKGROUND_BOOK.all(),
+                                 overlay_presets=gl.OVERLAY_BOOK.all(), a2w_presets=a2w_presets, a2w_modes=a2w_modes, mode=s.mode,
+                                 current_scene=scenes.capture_scene("Full Randomizer", params, s.mode, None), last=rnd["last"])
+        scene, info, record = randomizer.draw_scene(rnd["rng"], settings, ctx)
+        rnd["last"], rnd["scene"], rnd["info"] = record, scene, info
+        apply_scene_dict(scene)
+        s.active_scene, s.active_entry = "Full Randomizer", None
+        scene_msg.set("Full Randomizer : " + info)
+        return True
+
+    def random_draw_now() -> None:
+        """Bouton « Tirer maintenant » : un tirage tout de suite (le VJ, s'il tourne, repart pour une duree pleine)."""
+        s.commands.put("flash")
+        random_draw()
+        if vj["running"]:
+            vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
+        refresh_scene_bar()
+
+    def random_keep_check(names: dict) -> str | None:
+        """Message d'erreur pour les noms demandes (None = tout va bien)."""
+        scene = rnd["scene"]
+        if scene is None:
+            return "Aucun tirage a garder : 'Tirer maintenant' d'abord"
+        names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "scene")}
+        if not any(names.values()):
+            return "Donne au moins un nom (preset fond, preset overlay ou scene)"
+        if names["fond"] and not (scene["bg"] in ("pattern", "video") and isinstance(scene.get("fond"), dict)):
+            return "Ce tirage n'a pas de fond genere : pas de preset de fond"
+        for key, taken, label in (("fond", gl.BACKGROUND_BOOK.names(), "preset de fond"),
+                                  ("overlay", gl.OVERLAY_BOOK.names(), "preset overlay"), ("scene", scene_book.names(), "scene")):
+            name = names[key]
+            if name and (name.lower() == "default" or name.lower() in (x.lower() for x in taken)):
+                return f"{label} '{name}' existe deja : choisis un autre nom"
+        return None
+
+    def random_save(names: dict) -> str | None:
+        """Enregistre le dernier tirage : preset de fond, preset overlay et / ou scene (un nom vide = pas enregistre). Rend un message
+        d'erreur (rien n'est ecrit) ou None."""
+        error = random_keep_check(names)
+        if error:
+            return error
+        scene = rnd["scene"]
+        names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "scene")}
+        saved = []
+        if names["fond"]:
+            gl.BACKGROUND_BOOK.save(names["fond"], json.loads(json.dumps(scene["fond"])))
+            bg_presets["refresh"]()
+            saved.append(f"preset fond '{names['fond']}'")
+        if names["overlay"]:
+            gl.OVERLAY_BOOK.save(names["overlay"], json.loads(json.dumps(scene["overlay"])))
+            overlay_presets["refresh"]()
+            saved.append(f"preset overlay '{names['overlay']}'")
+        if names["scene"]:
+            scene_book.put(dict(scene, name=names["scene"]))
+            s.active_scene = names["scene"]
+            s.active_entry = current_index(scene_book.rows())
+            saved.append(f"scene '{names['scene']}' (ajoutee au set)")
+        scene_msg.set("Enregistre : " + ", ".join(saved))
+        refresh_scene_bar()
+        return None
+
+    def random_keep() -> None:
+        """Bouton « Garder ce tirage... » : une modale propose les noms du preset de fond, du preset overlay et de la scene."""
+        scene = rnd["scene"]
+        if scene is None:
+            scene_msg.set("Aucun tirage a garder : 'Tirer maintenant' d'abord")
+            return
+        fond_ok = scene["bg"] in ("pattern", "video") and isinstance(scene.get("fond"), dict)
+        defaults = {"fond": scenes.unique_name("Tirage fond", gl.BACKGROUND_BOOK.names()),
+                    "overlay": scenes.unique_name("Tirage overlay", gl.OVERLAY_BOOK.names()),
+                    "scene": scenes.unique_name("Tirage", scene_book.names())}
+        names = scene_ui["ask_keep"](defaults, fond_ok, random_keep_check)
+        if names is None:
+            return
+        error = random_save(names)
+        if error:
+            scene_msg.set(error)
+
+    def set_random_option(refresh: bool = False, **kw) -> None:
+        current = scene_book.vj()["random"]
+        current.update(kw)
+        scene_book.set_vj(random=current)
+        if refresh:
+            refresh_scene_bar()
+
     def vj_advance() -> None:
-        """Entree suivante du set (ordre choisi) + flash, et le minuteur repart."""
+        """Entree suivante du set (ordre choisi) + flash, et le minuteur repart. Ordre `alea` : une scene tiree au hasard."""
         rows = scene_book.rows()
+        if scene_book.vj()["order"] == "alea":
+            s.commands.put("flash")
+            random_draw()
+            vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
+            update_vj_button()
+            return
         if sum(1 for r in rows if not r["skip"]) < 2:
             vj["running"] = False
             scene_msg.set("Il faut au moins 2 scenes actives dans le set pour enchainer")
@@ -1822,12 +1934,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if vj["running"]:
             vj["running"] = False
             scene_msg.set("VJ en pause")
-        elif sum(1 for r in scene_book.rows() if not r["skip"]) < 2:
+        elif scene_book.vj()["order"] != "alea" and sum(1 for r in scene_book.rows() if not r["skip"]) < 2:
             scene_msg.set("Il faut au moins 2 scenes actives dans le set pour enchainer")
         else:
             vj["running"] = True
             vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
-            scene_msg.set(f"VJ: une scene toutes les {scene_book.vj()['seconds']:.0f} s")
+            scene_msg.set(f"VJ: une scene toutes les {scene_book.vj()['seconds']:.0f} s"
+                          + (" (Full Randomizer)" if scene_book.vj()["order"] == "alea" else ""))
         update_vj_button()
 
     def vj_tick() -> None:
@@ -1868,6 +1981,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if scene is None:
             scene_msg.set(f"scene inconnue: {name}")
             return
+        apply_scene_dict(scene, media, index, a2w)
+
+    def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None) -> None:
+        """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire)."""
         sync_automation_now()
         values = scenes.scene_values(scene, params)
         note = ""
@@ -1988,6 +2105,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         "ask_save": lambda initial: filedialog.asksaveasfilename(
             parent=root, title="Exporter le set", initialfile=initial, defaultextension=".json",
             filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+        "ask_keep": lambda defaults, fond_ok, validate: keep_dialog(root, defaults, fond_ok, validate),
+        "ask_dir": lambda: filedialog.askdirectory(parent=root, title="Dossier d'assets (images, videos, animations)"),
         "ask_open": lambda: filedialog.askopenfilename(
             parent=root, title="Importer un set", filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
     }
@@ -2379,6 +2498,131 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         register_drop(fr, i)
         register_drop(name_btn, i)
 
+    def build_random_body(inner, settings: dict) -> None:
+        """Corps du panneau etendu en ordre « Full Randomizer » : banques d'assets, sources du fond et de l'overlay, verrous."""
+        rs = settings["random"]
+        bg = a2w.GUI_BG
+        small = ("Segoe UI", 8, "bold")
+
+        def line(title: str) -> tk.Frame:
+            fr = tk.Frame(inner, bg=bg)
+            fr.pack(fill="x", padx=8, pady=3)
+            tk.Label(fr, text=title, width=15, anchor="w", bg=bg, fg=SCENE_COLOR, font=small).pack(side="left")
+            return fr
+
+        def check(parent, text: str, checked: bool, command, tip: str = "") -> tk.Checkbutton:
+            var = tk.IntVar(value=int(checked))
+            cb = tk.Checkbutton(parent, text=text, variable=var, command=lambda: command(bool(var.get())), bg=bg, fg=a2w.GUI_FG,
+                                selectcolor=a2w.GUI_PANEL_BG, bd=0, activebackground=bg, activeforeground=a2w.GUI_FG)
+            cb.var = var
+            cb.pack(side="left", padx=(0, 10))
+            if tip:
+                Tooltip(cb, tip)
+            return cb
+
+        def member(key: str, value: str):
+            def toggle(on: bool) -> None:
+                items = [x for x in scene_book.vj()["random"][key] if x != value]
+                set_random_option(**{key: items + [value] if on else items})
+            return toggle
+
+        # ---- banques : FOND (videos plein cadre) et OVERLAY (images, animations, videos), autant de dossiers que l'on veut.
+        # C'est le dossier qui classe, jamais l'extension (un .mov peut etre une animation comme une video).
+        banks = random_bank()
+
+        def bank_block(which: str, title: str, tip: str) -> None:
+            bank = banks[which]
+            fkey, ckey = f"folders_{which}", f"categories_{which}"
+            fr = line(title)
+            for folder in rs[fkey]:
+                box = tk.Frame(fr, bg=a2w.GUI_PANEL_BG)
+                box.pack(side="left", padx=(0, 6))
+                ok = Path(folder).is_dir()
+                tk.Label(box, text=("" if ok else "\u26a0 ") + (folder if len(folder) <= 30 else "..." + folder[-27:]),
+                         bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG if ok else "#ff8a8a", padx=6).pack(side="left")
+                tk.Button(box, text="\u2715", command=lambda f=folder: set_random_option(
+                    refresh=True, **{fkey: [x for x in scene_book.vj()["random"][fkey] if x != f]}),
+                    relief="flat", bd=0, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(side="left")
+
+            def add_folder() -> None:
+                folder = scene_ui["ask_dir"]()
+                if folder and folder not in scene_book.vj()["random"][fkey]:
+                    set_random_option(refresh=True, **{fkey: scene_book.vj()["random"][fkey] + [folder]})
+
+            add_btn = tk.Button(fr, text="+ Dossier", command=add_folder, relief="flat", bd=0, padx=8, cursor="hand2",
+                                bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR)
+            add_btn.pack(side="left", padx=2)
+            Tooltip(add_btn, tip)
+            n_img = sum(1 for a in bank if a.kind == "image")
+            if which == "fond":
+                count = f"{len(bank)} video(s)"
+            else:
+                count = f"{n_img} image(s), {len(bank) - n_img} video(s) / animation(s)"
+            tk.Label(fr, text=count if bank else ("vide : ajoute un dossier" if not rs[fkey] else "aucun fichier trouve"),
+                     bg=bg, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
+            if which == "overlay":
+                scan_btn = tk.Button(fr, text="Rescanner", command=lambda: (random_bank(True), refresh_scene_panel()), relief="flat",
+                                     bd=0, padx=8, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG)
+                scan_btn.pack(side="left", padx=2)
+                Tooltip(scan_btn, "Relit les dossiers des deux banques (nouveaux fichiers ajoutes depuis).")
+            cats = randomizer.categories(bank)
+            if len(cats) > 1:
+                cfr = line("  categories")
+                chosen = set(rs[ckey] or cats)
+                for cat in cats:
+                    def toggle_cat(on: bool, cat=cat, ckey=ckey, cats=cats) -> None:
+                        now = set(scene_book.vj()["random"][ckey] or cats)
+                        now = (now | {cat}) if on else (now - {cat})
+                        set_random_option(**{ckey: [] if now >= set(cats) else sorted(now)})
+                    check(cfr, f"{cat} ({sum(1 for a in bank if a.category == cat)})", cat in chosen, toggle_cat,
+                          "Les categories (sous-dossiers) de cette banque dans lesquelles piocher.")
+
+        bank_block("fond", "BANQUE FOND", "Dossiers de VIDEOS plein cadre : elles servent de fond. Pour qu'une video serve aussi de logo, "
+                                          "declare son dossier dans la banque OVERLAY.")
+        bank_block("overlay", "BANQUE OVERLAY", "Dossiers d'images, d'animations et de videos : ils servent de logo (le dossier decide, "
+                                                "pas l'extension : un .mov peut etre une animation).")
+        # ---- fond
+        fr = line("FOND")
+        for key, label, tip in (("preset", "preset de fond", "Un preset de fond genere (section PRESETS FOND)."),
+                                ("a2w", "preset audio2wave", "Un preset du mode audio2wave courant (Live / Snap / Ridge) : le mode ne change pas."),
+                                ("video", "video de la banque FOND", "Une video de la banque FOND, en fond video."),
+                                ("params", "config aleatoire", "Un fond entierement nouveau : soit un fond genere aux reglages tires au hasard (palette, couleurs, "
+                                                               "teinte, angle, vitesse...), soit un visuel audio2wave dans un mode et un preset de ce mode "
+                                                               "tires au hasard (modes ci-dessous).")):
+            check(fr, label, key in rs["bg_sources"], member("bg_sources", key), tip)
+        fr = line("  modes a2w")
+        for key, label in (("live", "Live"), ("snap", "Snap"), ("ridge", "Ridge")):
+            check(fr, label, key in rs["modes"], member("modes", key),
+                  "Modes audio2wave que la config aleatoire du fond peut tirer. Changer de mode reconstruit la fenetre (environ 1 s, "
+                  "masque en partie par le flash) ; Ridge demande une entree audio.")
+        # ---- overlay
+        fr = line("OVERLAY")
+        for key, label, tip in (("overlay_preset", "preset overlay", "Un des presets overlay enregistres."),
+                                ("params", "config aleatoire", "Une configuration entierement nouvelle : logo (taille, position, contour), effets, halo / "
+                                                               "fonte / cellules et noise tires au hasard, sans partir d'un preset."),
+                                ("fx", "effets du logo", "Halo, fonte, cellules, noise et effets allumes au hasard (au plus deux effets couteux)."),
+                                ("media", "media de la banque OVERLAY", "Une image, animation ou video de la banque OVERLAY comme logo.")):
+            check(fr, label, key in rs["overlay"], member("overlay", key), tip)
+        # ---- verrous
+        fr = line("VERROUS")
+        for key, label, tip in (("lock_bg", "fond", "Le fond reste celui du moment pendant que l'overlay varie."),
+                                ("lock_media", "media", "Le logo / texte / video reste celui du moment."),
+                                ("lock_fx", "effets", "Les effets et le preset overlay restent ceux du moment.")):
+            check(fr, label, bool(rs[key]), lambda on, key=key: set_random_option(**{key: on}), tip)
+        # ---- actions
+        fr = line("TIRAGE")
+        draw_btn = tk.Button(fr, text="Tirer maintenant", command=random_draw_now, relief="flat", bd=0, padx=10, cursor="hand2",
+                             bg=SCENE_COLOR, fg=BANNER_FG, font=BOLD)
+        draw_btn.pack(side="left", padx=(0, 6))
+        Tooltip(draw_btn, "Tire et applique une scene tout de suite (avec le flash).")
+        keep_btn = tk.Button(fr, text="Garder ce tirage...", command=random_keep, relief="flat", bd=0, padx=10, cursor="hand2",
+                             bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG)
+        keep_btn.pack(side="left", padx=2)
+        Tooltip(keep_btn, "Enregistre le dernier tirage : une fenetre propose les noms du preset de fond, du preset overlay et de la "
+                          "scene (champ vide = pas enregistre).")
+        tk.Label(fr, text=rnd["info"], bg=bg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=760).pack(
+            side="left", padx=10, fill="x")
+
     def refresh_scene_panel() -> None:
         for child in scene_panel.winfo_children():
             child.destroy()
@@ -2392,13 +2636,14 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         head.pack(fill="x")
         tk.Label(head, text=f" SET  {scene_book.active_set_name()}", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=BOLD).pack(
             side="left", padx=(6, 12), pady=4)
-        order = tk.Menubutton(head, text="ordre : " + ("dans l'ordre" if settings["order"] == "seq" else "au hasard") + " \u25be",
+        order = tk.Menubutton(head, text="ordre : " + {"seq": "dans l'ordre", "random": "au hasard", "alea": "Full Randomizer"}[settings["order"]] + " \u25be",
                               relief="flat", bd=0, padx=8, cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG,
                               activebackground=a2w.GUI_PANEL_BG, activeforeground=a2w.GUI_FG)
         order.pack(side="left", padx=2)
         om = tk.Menu(order, tearoff=0)
         om.add_command(label="Dans l'ordre", command=lambda: set_vj_option(order="seq"))
         om.add_command(label="Au hasard (jamais la meme deux fois)", command=lambda: set_vj_option(order="random"))
+        om.add_command(label="Full Randomizer (fond, overlay et media tires a chaque fois)", command=lambda: set_vj_option(order="alea"))
         order["menu"] = om
         secs = settings["seconds"]
         default = tk.Menubutton(head, text=f"duree par defaut : {secs:.0f} s \u25be", relief="flat", bd=0, padx=8, cursor="hand2",
@@ -2411,9 +2656,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         default["menu"] = dm
         played = [r for r in rows if not r["skip"]]
         loop = sum(r["seconds"] or secs for r in played)
-        tk.Label(head, text=f"{len(played)}/{len(rows)} scenes dans le VJ, boucle ~ "
-                 + (f"{loop / 60:.1f} min" if loop >= 90 else f"{loop:.0f} s"), bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(
-            side="left", padx=10)
+        tk.Label(head, text=(f"Full Randomizer : un tirage toutes les {secs:.0f} s" if settings["order"] == "alea" else
+                             f"{len(played)}/{len(rows)} scenes dans le VJ, boucle ~ "
+                             + (f"{loop / 60:.1f} min" if loop >= 90 else f"{loop:.0f} s")),
+                 bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
         tk.Label(head, text="glisser-deposer d'un fichier sur une zone (overlay / audio2wave) = lier ce media"
                  if dnd["ok"] else "glisser-deposer indisponible (pip install tkinterdnd2)", bg=a2w.GUI_PANEL_BG,
                  fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
@@ -2429,6 +2675,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         item = cv.create_window((0, 0), window=inner, anchor="nw")
         cv.bind("<Configure>", lambda e: cv.itemconfigure(item, width=e.width))
         inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        if settings["order"] == "alea":
+            build_random_body(inner, settings)
+            return
         if not rows:
             tk.Label(inner, text="Ce set est vide : '+ Scene' pour en ajouter.", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG).pack(pady=20)
         current = current_index(rows)
@@ -2449,9 +2698,39 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             height = max(MIN_WIN_H, min(root.winfo_height() + delta, root.winfo_screenheight() - 80))
             root.geometry(f"{root.winfo_width()}x{height}")
 
+    def proj_text() -> str:
+        return "Arreter la projection" if projection is not None and projection.running() else "Demarrer la projection"
+
+    def toggle_projection() -> None:
+        if projection is None:
+            return
+        if projection.running():
+            projection.stop()
+            scene_msg.set("Projection fermee")
+        else:
+            scene_msg.set(projection.start())
+        refresh_proj_button()
+
+    def refresh_proj_button() -> None:
+        btn = proj_ui["btn"]
+        if btn is None:
+            return
+        try:
+            if btn.cget("text") != proj_text():
+                btn.configure(text=proj_text())
+        except tk.TclError:
+            proj_ui["btn"] = None
+
     def refresh_scene_bar() -> None:
         for child in scene_bar.winfo_children():
             child.destroy()
+        proj_ui["btn"] = None
+        if projection is not None:
+            btn = tk.Button(scene_bar, text=proj_text(), command=toggle_projection, padx=10)
+            btn.pack(side="left", padx=(8, 4), pady=5)
+            proj_ui["btn"] = btn
+            Tooltip(btn, "Ouvre la fenetre de projection : plein ecran sur le second ecran (le projecteur) ; sans second ecran, "
+                         "en fenetre. Echap dans cette fenetre la ferme sans fermer les reglages.")
         scenes_title = tk.Label(scene_bar, text="SCENES")
         skin.title(scenes_title, SCENE_COLOR)
         scenes_title.pack(side="left", padx=(8, 6), pady=5)
@@ -2471,7 +2750,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         menu = tk.Menu(opts, tearoff=0)
         order_var = tk.StringVar(value=scene_book.vj()["order"])
         secs_var = tk.IntVar(value=int(scene_book.vj()["seconds"]))
-        for label, value in (("Dans l'ordre", "seq"), ("Au hasard (jamais la meme deux fois)", "random")):
+        for label, value in (("Dans l'ordre", "seq"), ("Au hasard (jamais la meme deux fois)", "random"),
+                             ("Full Randomizer (banques d'assets)", "alea")):
             menu.add_radiobutton(label=label, variable=order_var, value=value,
                                  command=lambda: set_vj_option(order=order_var.get()))
         menu.add_separator()
@@ -2602,6 +2882,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             root.destroy()
             return
         poll_scene_requests()
+        refresh_proj_button()
         # Recopie les reglages que les touches de la fenetre GL ont pu changer.
         for i, v in enumerate(fx_on_vars):
             if int(params["fx_on"][i]) != v.get():
@@ -2648,7 +2929,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         after(METER_MS, update_meter)
 
     def on_close() -> None:
-        s.stop_event.set()                # le fil GL sort, positionne finished_event, leur refresh() ferme
+        s.stop_event.set()                # le fil GL (s'il est ouvert) sort ; finished_event : leur refresh() ferme leurs panneaux
+        s.finished_event.set()
         root.after(3000, root.destroy)    # filet de securite si le fil GL ne repond plus
 
     # ---- Mise en page adaptative : cote a cote quand la largeur le permet, sinon LIVE au-dessus de OVERLAY
@@ -2728,7 +3010,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         after(150, lambda: apply_live_overrides(pending) or scene_msg.set("panneau audio2wave de la scene introuvable"))
     if on_ready is not None:
         root.after(50, lambda: on_ready({
-            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close,
+            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
             "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,
@@ -2738,6 +3020,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
             "vj": {"state": vj, "toggle": vj_toggle, "advance": vj_advance, "tick": vj_tick, "remaining": vj_remaining},
+            "random": {"draw": random_draw, "draw_now": random_draw_now, "keep": random_keep, "save": random_save, "check": random_keep_check, "bank": random_bank,
+                       "option": set_random_option, "state": rnd},
             "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,
                        "poll": poll_scene_requests, "msg": scene_msg, "start_adding": start_adding, "entry_var": scene_entry_var,
                        "new_from_entry": new_scene_from_entry, "switch_set": switch_set, "create_set": create_set,

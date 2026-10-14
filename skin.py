@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageTk
 import theme as T
 
 SS = 4                                   # sur-echantillonnage du dessin
-PRIMARY = {"Sauvegarder", "Enregistrer"}      # textes des boutons a l'accent (les autres sont neutres)
+PRIMARY = {"Sauvegarder", "Enregistrer", "Demarrer la projection"}      # textes des boutons a l'accent (les autres sont neutres)
 BTN_MARGIN = (3, 1)                      # transparent autour d'un bouton : jamais colle a son voisin
 GAP = 6                                  # espace image / texte des radios et cases
 _pil_cache: dict = {}
