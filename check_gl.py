@@ -401,7 +401,7 @@ def check_gui() -> None:
             out["presets"] = any(w.winfo_class() == "Label" and w.cget("text").startswith("PRESETS LIVE")
                                  for w in walk(root))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
-                                    and w.cget("text") == "courbe")
+                                    and w.cget("text") == "∿")
             scale = find_scale(c["live_host"], "Gain (dB)")
             for v in (5, 8, 12):                                  # rafale: un seul redemarrage attendu
                 scale.set(v)
@@ -1043,7 +1043,6 @@ def check_gui() -> None:
         check(n > 20 and not bad, f"info-bulles: toutes dans la fenetre ({tag}, {n} affichees)", str(bad[:2]))
     n, bad = out.get("snap", {}).get("tips", (0, [("absent",)]))
     check(n > 10 and not bad, f"info-bulles: toutes dans la fenetre (mode snap, {n} affichees)", str(bad[:2]))
-    check(gl_gui_tooltip_position_ok(), "info-bulles: position (decalee a gauche, passee au-dessus, toujours dans les bornes)")
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
     check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
           "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
@@ -2115,21 +2114,6 @@ def check_scenes() -> None:
           "valeurs d'une scene a fond audio2wave: bascule le fond, ne touche pas au motif", str((v2["bg_mode"], v2["bg_hue"])))
 
 
-def gl_gui_tooltip_position_ok() -> bool:
-    import gl_gui
-    pos = gl_gui.tooltip_position
-    bounds = (100, 50, 1100, 650)
-    ok = pos((200, 100, 80, 20), (260, 60), bounds) == (204, 124)                    # cas normal : sous le widget
-    x, y = pos((1050, 100, 40, 20), (260, 60), bounds)                              # bord droit : decalee a gauche
-    ok = ok and x + 260 <= 1100 and y == 124
-    x, y = pos((300, 640, 80, 20), (260, 60), bounds)                               # bord bas : au-dessus du widget
-    ok = ok and y + 60 <= 650 and y < 640
-    x, y = pos((50, 10, 30, 20), (260, 60), bounds)                                 # widget hors fenetre : on reste dedans
-    ok = ok and x >= 100 and y >= 50 and y + 60 <= 650
-    x, y = pos((300, 60, 80, 580), (260, 60), bounds)                               # ni dessous ni dessus : dans les bornes
-    return ok and 50 <= y and y + 60 <= 650
-
-
 def tooltip_violations(root) -> tuple:
     """(nombre d'info-bulles affichees, liste de celles qui sortent de la fenetre) : survole (<Enter>) chaque widget visible,
     mesure l'info-bulle (Toplevel fille du widget : position posee par wm_geometry, taille voulue) puis la ferme. Sans jamais
@@ -3179,6 +3163,53 @@ def check_params() -> None:
         gl.PARAMS_PATH = original
 
 
+def check_audio2wave_api() -> None:
+    """Garde de version : un depot audio2wave sans les points d'extension attendus donne un message clair, pas un AttributeError."""
+    print("garde de version d'audio2wave")
+    import types
+    import gl_gui
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    check(gl_gui.audio2wave_api_missing(live) == [], "audio2wave: le depot voisin expose set_gui_accent et default_on_editor_open",
+          str(gl_gui.audio2wave_api_missing(live)))
+    gl_gui.require_audio2wave_api(live)
+    check(True, "audio2wave: require_audio2wave_api laisse passer un depot a jour")
+    old_live = types.SimpleNamespace(AutomationManager=type("AutomationManager", (), {}), __file__="C:/x/audio2wave/audio2wave_live.py")
+    nothing = types.SimpleNamespace()
+    missing = gl_gui.audio2wave_api_missing(old_live, nothing, nothing)
+    check(len(missing) == 3 and "set_gui_accent" in missing[0] and "default_on_editor_open" in missing[1] and "preset_registry" in missing[2],
+          "audio2wave ancien: les trois points d'extension manquants sont nommes", str(missing))
+    half = gl_gui.audio2wave_api_missing(old_live, types.SimpleNamespace(set_gui_accent=lambda *a: None),
+                                         types.SimpleNamespace(store_for=lambda *a: None))
+    check(len(half) == 1 and "default_on_editor_open" in half[0], "audio2wave ancien: un seul manque = un seul nom", str(half))
+    no_registry = gl_gui.audio2wave_api_missing(live, None, nothing)
+    check(len(no_registry) == 1 and "preset_registry" in no_registry[0], "audio2wave sans preset_registry: signale (un seul manque)", str(no_registry))
+    try:
+        gl_gui.require_audio2wave_api(old_live, nothing, nothing)
+        message = ""
+    except SystemExit as exc:
+        message = str(exc)
+    check("Mets a jour le depot audio2wave" in message and "set_gui_accent" in message and "default_on_editor_open" in message
+          and "preset_registry" in message and gl_gui.AUDIO2WAVE_REQUIRED in message and "AttributeError" not in message,
+          "audio2wave ancien: arret avec un message clair (quoi, ou et comment mettre a jour)", message[:160])
+    check(gl_gui.audio2wave_api_missing(types.SimpleNamespace(), None, None) != [], "audio2wave sans AutomationManager ni common: signale, ne plante pas")
+
+
+def check_contract() -> None:
+    """Test de contrat d'audio2wave (`check_contract.py` du depot voisin : noms et signatures dont depend casual-overlay) :
+    un code de sortie non nul fait echouer la suite. Si c'est un nom dont on depend qui est casse, c'est cote audio2wave
+    qu'il faut le corriger (on n'y touche pas)."""
+    print("contrat d'audio2wave (check_contract.py)")
+    import subprocess
+    script = Path(gl.DEFAULT_A2W_DIR) / "check_contract.py"
+    if not script.is_file():
+        check(False, "contrat d'audio2wave: check_contract.py absent du depot audio2wave", f"{script} : mets a jour le depot audio2wave")
+        return
+    res = subprocess.run([sys.executable, str(script)], cwd=script.parent, capture_output=True, text=True, timeout=120)
+    lines = [ln for ln in (res.stdout + res.stderr).splitlines() if "ECHEC" in ln or "Traceback" in ln or "Error" in ln]
+    check(res.returncode == 0, "contrat d'audio2wave: check_contract.py sort avec le code 0 (tous les noms et signatures dont on depend)",
+          f"code {res.returncode} : " + " | ".join(lines[:6]))
+
+
 def check_skin() -> None:
     """Habillage (skin.py / theme.py) : les widgets gardent leur comportement, seules leurs images changent."""
     print("habillage de la fenetre (skin.py)")
@@ -3281,6 +3312,8 @@ def main() -> None:
     check_bg_video()
     check_diagnostics()
     check_skin()
+    check_audio2wave_api()
+    check_contract()
     check_vj_flash()
     check_gates()
     check_layers()

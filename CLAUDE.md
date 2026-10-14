@@ -14,6 +14,19 @@ au visuel de base (filtres ffmpeg, `--averaging`, latence). Ici on n'en modifie 
 fichier** ; on importe `audio2wave_live` (`parse_args`, `producer_command`,
 `resolve_size`, `list_audio_devices`).
 
+**Points d'extension d'audio2wave utilises** (branche `add-snap-waveform-photo`, commit `3bf25c9` ou plus recent ; c'est le depot
+audio2wave qui les expose, on ne reecrit plus ses constantes ni ses methodes) : `common.set_gui_accent(accent, accent_fg)` (accent de la
+palette, applique aux modules deja importes : `apply_a2w_palette`), `AutomationManager(..., curve_label, on_editor_open)` et son
+crochet de classe `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)` (habillage de la fenetre « courbe » :
+`install_curve_skin`), un `Tooltip` qui reste dans la fenetre de reglages (sans rien de notre cote), et **`preset_registry`**
+(`store_for(mode)` -> `ModeStore` : `user` / `all` / `save` / `delete` / `override_default`, identique pour Live, Snap et Ridge ; c'est
+`gl_gui.mode_store`, qui remplace les anciennes classes `_ObjStore` / `_SnapStore` ; `CROSS_MODE_UNSAFE_KEYS` et `strip_foreign` = la
+regle de partage d'un preset entre modes). **Garde de version** : `gl_gui.require_audio2wave_api(live)` (appelee par `audio2wave_gl`
+avant de lancer le rendu, et par `run_gui`) s'arrete avec un message clair (« mets a jour le depot audio2wave ») si
+`common.set_gui_accent`, `default_on_editor_open` ou `preset_registry.store_for` manque (`audio2wave_api_missing`, injectable ;
+`check_gl.py` : `check_audio2wave_api`). **Test de contrat** : `check_gl.py` (`check_contract`) lance `check_contract.py` du depot
+audio2wave (noms et signatures dont on depend) et echoue sur un code de sortie non nul ; un nom casse se corrige cote audio2wave.
+
 **Toute la documentation, les commentaires et les messages CLI sont en francais sans
 accents** (meme convention qu'audio2wave, compatibilite console Windows).
 
@@ -52,12 +65,14 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
     (`presets_to_top`, `tidy_mode_gui` et les tests le retrouvent par leur texte). Onglets ttk : selectionne = `CARD` + texte d'accent.
   - Couleurs lues sur un widget : `_norm` (nom Tk / systeme -> `#rrggbb`). Les `PhotoImage` sont gardees par racine Tk (`root._skin_photos`,
     plusieurs racines dans les tests). Hauteur : boutons ~24 px, champs 1 px de bord (la fenetre reste sous 700 px).
-- **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) est remplace par `theme.LIVE` **dans ce processus** par `apply_a2w_palette()`
-  (modules `common`, `audio2wave`, `audio2wave_live`, `_snap`, `_ridge`, avant `live.style_gui` : leurs widgets le lisent a la creation ;
-  Snap / Ridge, importes plus tard, heritent de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`. Aucun fichier touche.
-- **Fenetre « courbe »** (`AutomationManager.open_editor`, audio2wave) : `install_curve_skin` enveloppe la methode (idempotent) : a la
-  creation de la fenetre, `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour celui d'audio2wave), canvas sombre,
-  `Label` remis au fond du panneau, `skin.apply`.
+- **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) devient `theme.LIVE` par le point d'extension `common.set_gui_accent`
+  (`apply_a2w_palette()`, avant `live.style_gui` : leurs widgets le lisent a la creation ; Snap / Ridge, importes plus tard, lisent la
+  valeur de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`.
+- **Fenetre « courbe »** (editeur d'audio2wave) : `install_curve_skin` affecte le crochet de classe
+  `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)`, appele une fois la fenetre construite (aussi pour les
+  gestionnaires crees par les `build_gui` d'audio2wave) : `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour
+  celui d'audio2wave), canvas sombre, `Label` remis au fond du panneau, `skin.apply`. Le bouton d'edition est `curve_label` (« ∿ » par
+  defaut chez eux : plus de boucle qui le restyle ; `check_gl.py` compte les boutons `∿`).
 - **Boutons jamais colles** : `BTN_MARGIN` = 3 x 1 px transparents autour de l'image d'un bouton (a hauteur totale constante : la forme
   est plus basse d'autant), meme dans les conteneurs d'audio2wave qui n'ont pas d'espacement.
 - `check_gl.py` (`check_skin`) : classe / texte / `invoke` conserves, neutre / accent / couleur propre, desactive et cache d'images,
@@ -364,8 +379,8 @@ visuel d'audio2wave, il ne le complete pas) :
   Entry + bouton, **aucune modification de leur code**), on relit le resultat dans leur magasin, puis on le retire (fichier et
   ligne du menu) et on remet l'affichage du menu comme avant. Application (`apply_live_overrides`) : pas d'ecriture du tout ;
   le temps d'un clic sur la ligne `default` de leur menu, leur magasin renvoie `overrides` pour `default`
-  (`_ObjStore.override_default` : `preset_store.all` remplace sur l'instance pour Live et Ridge, `all_presets` pour Snap ; leur
-  fenetre relit le magasin au clic, donc charge cet etat), puis tout est remis. Leur menu affiche alors `default`. Pas d'etat
+  (`preset_registry.ModeStore.override_default`, via `mode_store(live, mode)` : leur fenetre relit le magasin au clic, donc charge
+  cet etat), puis tout est remis. Leur menu affiche alors `default`. Pas d'etat
   audio2wave pour une scene a motif.
 - **Exclusions** (`scenes.SCENE_EXCLUDED` = `device`, `fullscreen`, `size`, filtrees par `strip_live_overrides` a la capture, a
   l'application et a la migration, donc aussi pour les scenes deja enregistrees) : une scene change le look, pas
@@ -586,11 +601,10 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   (`presets_to_top` : le bandeau `PRESETS ...`, `Charger`, `Sauvegarder sous` et `Mode VJ` de Snap remontent sur les premieres lignes
   de la grille de leur panneau, la ligne de statut reste en bas ; seuls les widgets directement poses dans la grille de l'hote sont
   deplaces : les champs couleur sont re-grilles dans un conteneur, `grid_info()["in"]`). `check_gl.py` (`presets_top_state`).
-- **Info-bulles dans la fenetre** : `live.Tooltip` (audio2wave, aussi pour Snap, Ridge et nos panneaux) se posait sous le widget sans
-  regarder le bord. `install_tooltip_clamp` remplace sa methode `_show` au lancement (sans toucher a leur fichier) : l'info-bulle est
-  mesuree puis placee par `tooltip_position` (pure : decalee a gauche si elle depasse a droite, au-dessus du widget si elle depasse en
-  bas, toujours dans la fenetre). `check_gl.py` (`tooltip_violations`) survole chaque widget qui porte une info-bulle et verifie
-  qu'elle est dans la fenetre (large, 940 px, 420 px de haut, panneau etendu, panneau Snap). Seuil de la mise en page empilee
+- **Info-bulles dans la fenetre** : `live.Tooltip` (audio2wave, aussi pour Snap, Ridge et nos panneaux) mesure l'info-bulle puis la garde
+  dans la fenetre de reglages (decalee a gauche si elle depasse a droite, au-dessus du widget si elle depasse en bas) : c'est
+  audio2wave qui le fait (avant, `install_tooltip_clamp` remplacait sa methode `_show` ; supprime, comme `tooltip_position`).
+  `check_gl.py` (`tooltip_violations`) survole chaque widget qui porte une info-bulle et verifie qu'elle est dans la fenetre (large, 940 px, 420 px de haut, panneau etendu, panneau Snap). Seuil de la mise en page empilee
   (`layout["wide_need"]`) : sans la largeur de l'ascenseur du panneau d'audio2wave, qui apparait ou disparait selon la hauteur (une
   fenetre a sa taille naturelle sans ascenseur passait en empile ; course avec la minuterie `settled`, vue par le test de taille VJ).
 - **Structure visible** : deux grandes parties, LIVE (titre bleu, fenetre d'audio2wave) et OVERLAY

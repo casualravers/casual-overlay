@@ -2346,6 +2346,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
             reader.start()
         if args.gui:
             import gl_gui
+            gl_gui.require_audio2wave_api(live)          # depot audio2wave trop ancien : message clair, avant de lancer le rendu
             thread = threading.Thread(target=gl_main, args=(s,), name="gl", daemon=True)
             thread.start()
             gl_gui.run_gui(s, live)

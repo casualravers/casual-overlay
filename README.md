@@ -4,7 +4,8 @@ Fenetre OpenGL plein ecran pour videoprojecteur : le visuel `audio2wave_live` (s
 micro), un logo PNG, un texte tape a la main ou une animation video detouree incruste par-dessus, et des deformations (wobble, onde de choc, aberration
 chromatique, glitch, pulsation du logo) pilotees en temps reel par les basses et le kick.
 
-Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`).
+Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`), a jour : branche `add-snap-waveform-photo`,
+commit `3bf25c9` ou plus recent (sinon le programme s'arrete avec un message qui dit de mettre a jour ce depot).
 
 ## Version portable (rien a installer)
 

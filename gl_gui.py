@@ -108,95 +108,71 @@ MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
 
 
-def tooltip_position(widget: tuple, tip: tuple, bounds: tuple, gap: int = 4) -> tuple:
-    """Coin haut-gauche d'une info-bulle qui reste dans `bounds` (gauche, haut, droite, bas). `widget` = (x, y, largeur,
-    hauteur) du widget survole, `tip` = (largeur, hauteur) de l'info-bulle. Par defaut sous le widget, alignee a gauche (comme
-    audio2wave) ; decalee vers la gauche si elle depasse a droite, passee AU-DESSUS du widget si elle depasse en bas."""
-    wx, wy, ww, wh = widget
-    tw, th = tip
-    left, top, right, bottom = bounds
-    x = min(wx + gap, right - tw - gap)
-    x = max(x, left + gap)
-    y = wy + wh + gap
-    if y + th > bottom - gap:
-        above = wy - th - gap
-        y = above if above >= top + gap else max(top + gap, bottom - th - gap)
-    y = max(top + gap, min(y, bottom - th - gap))      # widget lui-meme hors de la fenetre (defile hors de vue) : on reste dedans
-    return x, y
+AUDIO2WAVE_REQUIRED = "branche add-snap-waveform-photo, commit 3bf25c9 ou plus recent"
+
+
+def audio2wave_api_missing(live, common=None, registry=None) -> list[str]:
+    """Points d'extension d'audio2wave dont casual-overlay a besoin et qui manquent (liste vide = depot assez recent) :
+    `common.set_gui_accent` (accent de la palette), `AutomationManager.default_on_editor_open` (crochet de la fenetre courbe) et
+    `preset_registry.store_for` (acces unifie aux presets des trois modes).
+    `live` = le module `audio2wave_live` ; `common` et `registry` s'injectent pour les tests."""
+    if common is None:
+        try:
+            import common
+        except ImportError:
+            common = None
+    if registry is None:
+        try:
+            import preset_registry as registry
+        except ImportError:
+            registry = None
+    missing = []
+    if common is None or not callable(getattr(common, "set_gui_accent", None)):
+        missing.append("common.set_gui_accent(accent, accent_fg)")
+    if not hasattr(getattr(live, "AutomationManager", None), "default_on_editor_open"):
+        missing.append("AutomationManager.default_on_editor_open (crochet de la fenetre courbe)")
+    if registry is None or not callable(getattr(registry, "store_for", None)):
+        missing.append("preset_registry.store_for(mode) (acces unifie aux presets)")
+    return missing
+
+
+def require_audio2wave_api(live, common=None, registry=None) -> None:
+    """Arrete le programme avec un message clair si le depot audio2wave est trop ancien (au lieu d'un AttributeError obscur)."""
+    missing = audio2wave_api_missing(live, common, registry)
+    if missing:
+        where = Path(getattr(live, "__file__", ".")).resolve().parent
+        raise SystemExit("Le depot audio2wave est trop ancien pour cette version de casual-overlay : il manque "
+                         + " et ".join(missing) + f".\nMets a jour le depot audio2wave ({where}) : git pull, {AUDIO2WAVE_REQUIRED}.")
 
 
 def apply_a2w_palette() -> None:
-    """Accent d'audio2wave (`GUI_ACCENT`, turquoise) -> bleu du theme, dans CE processus seulement et sans toucher a leurs fichiers :
-    leurs modules lisent ces constantes a la creation de leurs widgets (`option_add` de style_gui, labels, curseurs). A appeler
-    avant de les construire ; `common` d'abord (Snap et Ridge, importes plus tard, en heritent)."""
-    for name in ("common", "audio2wave", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge"):
-        module = sys.modules.get(name)
-        if module is not None and hasattr(module, "GUI_ACCENT"):
-            module.GUI_ACCENT = theme.LIVE
-            if hasattr(module, "GUI_ACCENT_FG"):
-                module.GUI_ACCENT_FG = theme.ON_ACCENT
+    """Accent d'audio2wave (`GUI_ACCENT`, turquoise) -> bleu du theme, par le point d'extension `common.set_gui_accent` (met a jour
+    tous les modules audio2wave deja importes ; Snap et Ridge, importes plus tard, lisent la valeur de `common`). A appeler avant
+    de construire leurs widgets (leur `style_gui`, leurs labels et curseurs la lisent a la creation)."""
+    import common
+    common.set_gui_accent(theme.LIVE, theme.ON_ACCENT)
 
 
 def install_curve_skin(live) -> None:
-    """Fenetre « courbe » (editeur de variation automatique d'audio2wave, `AutomationManager.open_editor`) : habillee comme le
-    reste a son ouverture (accent du gestionnaire : violet cote overlay, bleu cote LIVE), sans toucher a leur fichier. Idempotent."""
-    cls = live.AutomationManager
-    if getattr(cls, "_skinned", False):
-        return
-    original = cls.open_editor
+    """Fenetre « courbe » (editeur de variation automatique d'audio2wave) : habillee comme le reste a son ouverture (accent du
+    gestionnaire : violet cote overlay, bleu cote LIVE) par le crochet de classe `AutomationManager.default_on_editor_open`,
+    `(manager, fenetre, attr, canvas)`, appele une fois la fenetre construite. Idempotent (le crochet est simplement reaffecte)."""
+    def on_editor_open(manager, win, attr: str, canvas) -> None:
+        skin.zone(win, manager.accent)
+        if canvas is not None:
+            canvas.configure(bg=theme.TROUGH, highlightbackground=theme.LINE)
+            canvas.pack_configure(padx=18, pady=(18, 14))
+        stack = [win]
+        while stack:                                  # leurs Label n'ont pas le fond du panneau (palette de la fenetre)
+            node = stack.pop()
+            for child in node.winfo_children():
+                if child.winfo_class() == "Label":
+                    child.configure(bg=str(node.cget("bg")))
+                stack.append(child)
+        skin.apply(win)
 
-    def open_editor(self, attr: str) -> None:
-        before = self.state[attr]["editor"]
-        original(self, attr)
-        win = self.state[attr]["editor"]
-        if win is not None and win is not before:
-            skin.zone(win, self.accent)
-            canvas = self.state[attr]["canvas"]
-            if canvas is not None:
-                canvas.configure(bg=theme.TROUGH, highlightbackground=theme.LINE)
-                canvas.pack_configure(padx=18, pady=(18, 14))
-            stack = [win]
-            while stack:                                  # leurs Label n'ont pas le fond du panneau (palette de la fenetre)
-                node = stack.pop()
-                for child in node.winfo_children():
-                    if child.winfo_class() == "Label":
-                        child.configure(bg=str(node.cget("bg")))
-                    stack.append(child)
-            skin.apply(win)
-
-    cls.open_editor = open_editor
-    cls._skinned = True
-
-
-def install_tooltip_clamp(live) -> None:
-    """Les info-bulles d'audio2wave (`live.Tooltip`, aussi utilisee par Snap, Ridge et par nos panneaux) se posent sous le
-    widget sans regarder ou est le bord : a droite ou en bas de la fenetre elles sortaient. On remplace, au lancement et sans
-    toucher a leur fichier, la methode qui les place (`_show`) par une version qui mesure l'info-bulle puis la garde dans la
-    fenetre de reglages. Idempotent."""
-    cls = live.Tooltip
-    if getattr(cls, "_clamped", False):
-        return
-
-    def show(self, _evt=None) -> None:
-        if self.tip is not None:
-            return
-        w = self.widget
-        self.tip = tk.Toplevel(w)
-        self.tip.wm_overrideredirect(True)
-        self.tip.withdraw()
-        tk.Label(self.tip, text=self.text, justify="left", bg=live.GUI_PANEL_BG, fg=live.GUI_FG, font=live.GUI_FONT,
-                 relief="solid", borderwidth=1, padx=6, pady=4, wraplength=260).pack()
-        self.tip.update_idletasks()
-        win = w.winfo_toplevel()
-        left, top = win.winfo_rootx(), win.winfo_rooty()
-        x, y = tooltip_position((w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height()),
-                                (self.tip.winfo_reqwidth(), self.tip.winfo_reqheight()),
-                                (left, top, left + win.winfo_width(), top + win.winfo_height()))
-        self.tip.wm_geometry(f"+{x}+{y}")
-        self.tip.deiconify()
-
-    cls._show = show
-    cls._clamped = True
+    # Crochet de classe : atteint aussi les gestionnaires crees par les build_gui d'audio2wave.
+    live.AutomationManager.default_on_editor_open = on_editor_open
 
 
 def presets_to_top(host) -> None:
@@ -318,67 +294,13 @@ def activate_mode(s, live, new: str) -> str | None:
     return None
 
 
-class _ObjStore:
-    """Presets d'un mode dont le magasin est un objet (`preset_store` : Live et Ridge)."""
-
-    def __init__(self, store) -> None:
-        self.store = store
-
-    def user(self) -> dict:
-        return self.store.load_user()
-
-    def delete(self, name: str) -> None:
-        self.store.delete_user(name)
-
-    def override_default(self, overrides: dict):
-        """Le temps du `with`, `default` vaut `overrides` : le menu d'audio2wave charge alors CET etat en 'cliquant' sa
-        ligne `default`, sans rien ecrire dans leurs fichiers (leur fenetre relit le magasin au clic)."""
-        import contextlib
-
-        @contextlib.contextmanager
-        def ctx():
-            original = self.store.all
-            self.store.all = lambda: {**original(), "default": overrides}
-            try:
-                yield
-            finally:
-                self.store.__dict__.pop("all", None)
-        return ctx()
-
-
-class _SnapStore(_ObjStore):
-    """Snap : des fonctions de module plutot qu'un objet."""
-
-    def __init__(self, module) -> None:
-        self.module = module
-
-    def user(self) -> dict:
-        return self.module.load_user_presets()
-
-    def delete(self, name: str) -> None:
-        self.module.delete_user_preset(name)
-
-    def override_default(self, overrides: dict):
-        import contextlib
-
-        @contextlib.contextmanager
-        def ctx():
-            original = self.module.all_presets
-            self.module.all_presets = lambda *a, **k: {**original(*a, **k), "default": overrides}
-            try:
-                yield
-            finally:
-                self.module.all_presets = original
-        return ctx()
-
-
-def mode_store(live, mode: str) -> _ObjStore:
-    """Magasin de presets du mode d'audio2wave `mode` ("live", "snap" ou "ridge")."""
+def mode_store(live, mode: str):
+    """Magasin de presets du mode d'audio2wave `mode` ("live", "snap" ou "ridge") : `preset_registry.ModeStore`
+    (user/all/save/delete/override_default), le meme acces unifie que le Mode VJ de Snap."""
+    import preset_registry
     import py_modes
-    if mode == "live":
-        return _ObjStore(live.preset_store)
-    module = py_modes.load_mode(Path(live.__file__).resolve().parent, mode)
-    return _SnapStore(module) if mode == "snap" else _ObjStore(module.preset_store)
+    module = live if mode == "live" else py_modes.load_mode(Path(live.__file__).resolve().parent, mode)
+    return preset_registry.store_for(mode, module)
 
 
 def migrate_scene_presets(live) -> None:
@@ -522,6 +444,7 @@ def run_gui(s, live, on_ready=None) -> None:
     """Cree la fenetre Tk, la construit pour le mode courant et bloque dans mainloop() jusqu'a la fin.
 
     `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite."""
+    require_audio2wave_api(live)
     root = tk.Tk()
     build_window(s, live, root, s.mode, on_ready)
     root.mainloop()
@@ -534,7 +457,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     le relisent a leur creation."""
     import audio2wave as a2w
 
-    install_tooltip_clamp(live)          # info-bulles toujours dans la fenetre
     Tooltip = live.Tooltip
     params = s.params
     manager = s.manager
@@ -817,9 +739,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         holder = tk.Frame(z.parent)
         holder.grid(row=r, column=2, sticky="w", padx=(0, 4))
         automation.register(holder, key, label, lo, hi)
-        for widget in holder.winfo_children()[0].winfo_children():
-            if widget.winfo_class() == "Button":
-                widget.config(text="∿", padx=3)          # "courbe" -> compact, l'info-bulle reste
         auto_vars[key] = var
 
     def compact_scale(parent, lo: float, hi: float, step: float, var: tk.Variable, length: int = 120) -> tk.Frame:
@@ -1687,7 +1606,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def apply_live_overrides(overrides: dict) -> bool:
         """Applique l'etat `overrides` au panneau d'audio2wave courant : la ligne `default` de leur menu vaut `overrides` le
-        temps du clic (voir `_ObjStore.override_default`). Rien n'est ecrit dans leurs presets."""
+        temps du clic (voir `preset_registry.ModeStore.override_default`). Rien n'est ecrit dans leurs presets."""
         found = preset_menu()
         if found is None:
             return False
