@@ -415,9 +415,10 @@ def choice_dialog(parent, title: str, text: str, buttons: list[str]) -> str | No
     return answer[0]
 
 
-def keep_dialog(parent, defaults: dict, fond_ok: bool, validate) -> dict | None:
-    """Modale « Garder ce tirage » : trois noms (preset de fond, preset overlay, scene), un champ vide = ne pas l'enregistrer.
-    `validate(noms)` rend un message d'erreur (la fenetre reste ouverte) ou None. Rend `{"fond", "overlay", "scene"}` ou None."""
+def keep_dialog(parent, defaults: dict, fond_ok: bool, validate, a2w_mode: str | None = None) -> dict | None:
+    """Modale « Garder ce tirage » : les noms du preset de fond, du preset overlay, du preset audio2wave (seulement si le fond du
+    tirage est un visuel audio2wave : `a2w_mode` = son mode) et de la scene, un champ vide = ne pas l'enregistrer.
+    `validate(noms)` rend un message d'erreur (la fenetre reste ouverte) ou None. Rend `{"fond", "overlay", "a2w", "scene"}` ou None."""
     import audio2wave as a2w
     top = tk.Toplevel(parent)
     top.title("Garder ce tirage")
@@ -431,22 +432,27 @@ def keep_dialog(parent, defaults: dict, fond_ok: bool, validate) -> dict | None:
     form.pack(padx=18)
     vars_: dict[str, tk.StringVar] = {}
     entries: dict[str, tk.Entry] = {}
-    for row, (key, label) in enumerate((("fond", "Preset fond"), ("overlay", "Preset overlay"), ("scene", "Scene"))):
+    fields = [("fond", "Preset fond"), ("overlay", "Preset overlay")]
+    if a2w_mode:
+        fields.append(("a2w", f"Preset {a2w_mode.capitalize()}"))
+    fields.append(("scene", "Scene"))
+    for row, (key, label) in enumerate(fields):
         tk.Label(form, text=label, bg=a2w.GUI_BG, fg=a2w.GUI_FG, anchor="w", width=14).grid(row=row, column=0, sticky="w", pady=4)
         var = tk.StringVar(value=defaults.get(key, "") if (key != "fond" or fond_ok) else "")
         entry = tk.Entry(form, textvariable=var, width=28, state="normal" if (key != "fond" or fond_ok) else "disabled")
         entry.grid(row=row, column=1, pady=4, padx=(6, 0))
         vars_[key], entries[key] = var, entry
     if not fond_ok:
-        tk.Label(top, text="Ce tirage n'a pas de fond genere (fond audio2wave) : pas de preset de fond.", bg=a2w.GUI_BG,
-                 fg=a2w.GUI_MUTED_FG, padx=18).pack(anchor="w")
+        why = ("Fond audio2wave : son reglage s'enregistre dans le champ Preset " + a2w_mode.capitalize() + " (presets d'audio2wave)."
+               if a2w_mode else "Ce tirage n'a pas de fond genere ni de video choisie : pas de preset de fond.")
+        tk.Label(top, text=why, bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG, padx=18, wraplength=380, justify="left").pack(anchor="w")
     error = tk.Label(top, text="", bg=a2w.GUI_BG, fg="#ff8a8a", padx=18, anchor="w", justify="left", wraplength=360)
     error.pack(anchor="w")
     row = tk.Frame(top, bg=a2w.GUI_BG)
     row.pack(pady=(8, 14))
 
     def ok(_e=None) -> None:
-        names = {k: v.get().strip() for k, v in vars_.items()}
+        names = {k: vars_[k].get().strip() if k in vars_ else "" for k in ("fond", "overlay", "a2w", "scene")}
         message = validate(names)
         if message:
             error.config(text=message)
@@ -554,7 +560,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # fenetre est petite, et au-dela de la taille voulue le contenu s'etire. La mise en page (cote a cote / empilee)
     # s'adapte a la largeur : voir `set_layout` plus bas.
     page_canvas = tk.Canvas(root, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollincrement=24)
-    page_bar = tk.Scrollbar(root, orient="vertical", command=page_canvas.yview)
+    page_bar = skin.scrollbar(root, command=page_canvas.yview)
     page_canvas.configure(yscrollcommand=page_bar.set)
     page_canvas.grid(row=1, column=0, sticky="nsew")
     page = tk.Frame(page_canvas)
@@ -577,7 +583,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     live_wrap = tk.Frame(page)
     canvas = tk.Canvas(live_wrap, highlightthickness=0, bd=0, width=10, height=10, bg=a2w.GUI_BG,
                        yscrollincrement=24)
-    vbar = tk.Scrollbar(live_wrap, orient="vertical", command=canvas.yview)
+    vbar = skin.scrollbar(live_wrap, command=canvas.yview)
     canvas.configure(yscrollcommand=vbar.set)
     canvas.pack(side="left", fill="both", expand=True)
     host = HostFrame(canvas)
@@ -700,6 +706,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         new = copy.copy(args)                       # build_gui a fini de muter `args`: copie coherente
         new.size = f"{render_w}x{render_h}"         # resolution du rendu fixe
+        gl.sharpen_line(new)                        # analyzer en courbe : escalier flou avec leurs defauts (128 points, fenetre de 512)
+        gap_note = gl.limit_bar_gap(new)            # un espace entre barres >= 1 efface l'analyzer : on le plafonne pour le producteur
+        if gap_note:
+            s.status["msg"] = gap_note
         if not new.device:
             live_status["text"] = "Choisis une entree audio"
             return
@@ -1707,7 +1717,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return overrides
 
     def save_live_preset(name: str) -> bool:
-        """Enregistre l'etat du panneau d'audio2wave courant sous `name` via son propre champ 'Sauvegarder sous'."""
+        """Enregistre l'etat du panneau d'audio2wave courant sous `name` via son propre champ 'Sauvegarder sous'. Leurs trois modes
+        passent le nom en minuscules (`.strip().lower()`) : le preset s'appelle donc `name.lower()`, et c'est ce nom qu'on cherche
+        dans leur menu (avec « Mon live » on ne le trouvait jamais : l'enregistrement etait fait mais declare en echec)."""
+        name = name.strip().lower()
         label = gui_gates.find(host, "Label", "Sauvegarder sous")
         if label is None:
             return False
@@ -1842,18 +1855,31 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
         refresh_scene_bar()
 
+    def keep_a2w_mode(scene: dict | None) -> str | None:
+        """Mode d'audio2wave dont le panneau est le fond de ce tirage (None : le fond n'est pas un visuel audio2wave)."""
+        if scene is not None and scene.get("bg") == "live" and (scene.get("mode") in (None, s.mode)):
+            return s.mode
+        return None
+
     def random_keep_check(names: dict) -> str | None:
         """Message d'erreur pour les noms demandes (None = tout va bien)."""
         scene = rnd["scene"]
         if scene is None:
             return "Aucun tirage a garder : 'Tirer maintenant' d'abord"
-        names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "scene")}
+        names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "a2w", "scene")}
         if not any(names.values()):
-            return "Donne au moins un nom (preset fond, preset overlay ou scene)"
-        if names["fond"] and not (scene["bg"] in ("pattern", "video") and isinstance(scene.get("fond"), dict)):
-            return "Ce tirage n'a pas de fond genere : pas de preset de fond"
+            return "Donne au moins un nom (preset fond, preset overlay, preset audio2wave ou scene)"
+        if names["fond"] and not randomizer.fond_saveable(scene):
+            return "Ce tirage n'a pas de fond genere ni de video choisie : pas de preset de fond"
+        if names["a2w"] and keep_a2w_mode(scene) is None:
+            return "Ce tirage n'a pas de fond audio2wave : pas de preset audio2wave"
+        try:
+            a2w_taken = list(mode_store(live, s.mode).all())
+        except Exception:
+            a2w_taken = []
         for key, taken, label in (("fond", gl.BACKGROUND_BOOK.names(), "preset de fond"),
-                                  ("overlay", gl.OVERLAY_BOOK.names(), "preset overlay"), ("scene", scene_book.names(), "scene")):
+                                  ("overlay", gl.OVERLAY_BOOK.names(), "preset overlay"),
+                                  ("a2w", a2w_taken, f"preset {s.mode} d'audio2wave"), ("scene", scene_book.names(), "scene")):
             name = names[key]
             if name and (name.lower() == "default" or name.lower() in (x.lower() for x in taken)):
                 return f"{label} '{name}' existe deja : choisis un autre nom"
@@ -1866,8 +1892,19 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if error:
             return error
         scene = rnd["scene"]
-        names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "scene")}
+        names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "a2w", "scene")}
+        names["a2w"] = names["a2w"].lower()               # audio2wave range ses presets en minuscules
         saved = []
+        if keep_a2w_mode(scene) is not None and (names["a2w"] or names["scene"]):
+            # Fond audio2wave : ce qui est a l'ecran est l'etat reel de leur panneau (le tirage, mais aussi ce qui a pu etre retouche
+            # depuis, et un tirage « fond verrouille » ou preset de fond live n'a pas d'etat propre) : c'est lui qu'on retient.
+            if names["a2w"] and not save_live_preset(names["a2w"]):
+                return f"Preset {s.mode} d'audio2wave non enregistre : leur panneau n'a pas repondu (rien n'a ete ecrit)"
+            if names["a2w"]:
+                saved.append(f"preset {s.mode} '{names['a2w']}'")
+            state = capture_live_overrides()
+            if state is not None:
+                scene = dict(scene, mode=s.mode, live_overrides=scenes.strip_live_overrides(state))
         if names["fond"]:
             gl.BACKGROUND_BOOK.save(names["fond"], json.loads(json.dumps(scene["fond"])))
             bg_presets["refresh"]()
@@ -1891,11 +1928,17 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if scene is None:
             scene_msg.set("Aucun tirage a garder : 'Tirer maintenant' d'abord")
             return
-        fond_ok = scene["bg"] in ("pattern", "video") and isinstance(scene.get("fond"), dict)
+        fond_ok = randomizer.fond_saveable(scene)
+        a2w_mode = keep_a2w_mode(scene)
         defaults = {"fond": scenes.unique_name("Tirage fond", gl.BACKGROUND_BOOK.names()),
                     "overlay": scenes.unique_name("Tirage overlay", gl.OVERLAY_BOOK.names()),
                     "scene": scenes.unique_name("Tirage", scene_book.names())}
-        names = scene_ui["ask_keep"](defaults, fond_ok, random_keep_check)
+        if a2w_mode:
+            try:
+                defaults["a2w"] = scenes.unique_name(f"Tirage {a2w_mode}", list(mode_store(live, a2w_mode).all()))
+            except Exception:
+                defaults["a2w"] = f"Tirage {a2w_mode}"
+        names = scene_ui["ask_keep"](defaults, fond_ok, random_keep_check, a2w_mode)
         if names is None:
             return
         error = random_save(names)
@@ -2105,7 +2148,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         "ask_save": lambda initial: filedialog.asksaveasfilename(
             parent=root, title="Exporter le set", initialfile=initial, defaultextension=".json",
             filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
-        "ask_keep": lambda defaults, fond_ok, validate: keep_dialog(root, defaults, fond_ok, validate),
+        "ask_keep": lambda defaults, fond_ok, validate, a2w_mode=None: keep_dialog(root, defaults, fond_ok, validate, a2w_mode),
         "ask_dir": lambda: filedialog.askdirectory(parent=root, title="Dossier d'assets (images, videos, animations)"),
         "ask_open": lambda: filedialog.askopenfilename(
             parent=root, title="Importer un set", filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
@@ -2311,6 +2354,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if not 0 <= index < len(rows):
             return
         menu = tk.Menu(root, tearoff=0)
+        skin.style_menu(menu)
         scene = rows[index]["scene"]
         snap = scene.get("bg") == "live" and scene.get("mode") == "snap"
         menu.add_command(label="Overlay (logo / texte / video du logo)", command=lambda: drop_media(index, data, "overlay"))
@@ -2666,7 +2710,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         body = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=PANEL_BODY_H)
         body.pack(fill="x")
         body.pack_propagate(False)
-        bar = tk.Scrollbar(body, orient="vertical")
+        bar = skin.scrollbar(body)
         cv = tk.Canvas(body, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollcommand=bar.set)
         bar.config(command=cv.yview)
         bar.pack(side="right", fill="y")

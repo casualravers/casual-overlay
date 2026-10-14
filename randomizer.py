@@ -232,6 +232,19 @@ class Context:
     last: dict = field(default_factory=dict)                  # enregistrement du tirage precedent
 
 
+def fond_saveable(scene: dict | None) -> bool:
+    """Le fond de la scene peut-il devenir un preset de fond ? Un fond genere, ou une video qui existe. Pas un fond audio2wave
+    (il a ses propres presets) ni un fond « video » sans fichier choisi (ecran noir : rien a enregistrer)."""
+    scene = scene or {}
+    fond = scene.get("fond")
+    if scene.get("bg") not in ("pattern", "video") or not isinstance(fond, dict):
+        return False
+    if scene["bg"] == "video":
+        path = str(fond.get("bg_video") or "")
+        return bool(path) and Path(path).is_file()
+    return True
+
+
 def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, str, dict]:
     """Une scene temporaire `(scene, resume, enregistrement)` : `scene` au format des scenes enregistrees (nom `Full Randomizer`),
     `resume` = une ligne pour le message de la GUI, `enregistrement` = a rendre dans `ctx.last` au tirage suivant."""
