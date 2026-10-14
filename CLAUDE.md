@@ -73,6 +73,19 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   gestionnaires crees par les `build_gui` d'audio2wave) : `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour
   celui d'audio2wave), canvas sombre, `Label` remis au fond du panneau, `skin.apply`. Le bouton d'edition est `curve_label` (« ∿ » par
   defaut chez eux : plus de boucle qui le restyle ; `check_gl.py` compte les boutons `∿`).
+- **Ascenseurs** (`skin.scrollbar`) : le `tk.Scrollbar` de Windows ignore les couleurs (rail gris clair + fleches, un bloc clair dans une
+  fenetre sombre, vu sur la page, le panneau d'audio2wave et le panneau etendu) ; on prend un `ttk.Scrollbar` (theme `clam`, seul theme
+  dont les couleurs se reglent) au style `Casual.Vertical.TScrollbar` : rail `BG`, poignee discrete, plus claire au survol, accent
+  LIVE quand on la tient, 10 px, sans fleches. Meme interface (`set`, `command`, pack / grid), a utiliser pour tout nouvel ascenseur.
+  Pas encore habille : la liste du Mode VJ de Snap (dialogue d'audio2wave, leur `tk.Scrollbar`), voir l'audit des accrochages.
+- **Menus deroulants** (`skin.style_menu`, appele par `skin.apply` sur tout `tk.Menu` de l'arbre, et a la main pour un menu cree au clic) :
+  fond `PANEL`, texte `FG`, survol = fond **teinte de l'accent de la zone** (`mix(PANEL, accent, 0.5)`) avec le texte reste clair. Le
+  survol d'audio2wave (`*Menu.activeBackground` = accent plein, `activeForeground` = `GUI_ACCENT_FG`, quasi noir) rendait le texte
+  illisible sur le bleu. Une entree qui porte sa propre couleur (couleurs nommees) la garde.
+  **Le bouton du select** (OptionMenu, `_render_field`) est a part : `style_option_menu` d'audio2wave lui pose `activeforeground` =
+  `GUI_ACCENT_FG` (quasi noir) et l'image du champ reste sombre, donc son texte **noircissait des que la souris passait dessus** (c'etait
+  le vrai « texte noir au survol » ; le test des couleurs de menu ne le voyait pas, il a fallu une capture avec le curseur dessus).
+  `_render_field` reimpose `fg` / `activeforeground` = `FG` a chaque rendu.
 - **Boutons jamais colles** : `BTN_MARGIN` = 3 x 1 px transparents autour de l'image d'un bouton (a hauteur totale constante : la forme
   est plus basse d'autant), meme dans les conteneurs d'audio2wave qui n'ont pas d'espacement.
 - `check_gl.py` (`check_skin`) : classe / texte / `invoke` conserves, neutre / accent / couleur propre, desactive et cache d'images,
@@ -499,6 +512,14 @@ visuel d'audio2wave, il ne le complete pas) :
     overlay (`OVERLAY_BOOK.save` de `scene["overlay"]`) et scene (`scene_book.put`), un champ vide = pas enregistre ; defauts uniques
     (`Tirage fond`, `Tirage overlay`, `Tirage`) ; `random_keep_check(noms)` valide (un nom deja pris ou `default` est refuse, la modale
     reste ouverte avec le message ; rien n'est ecrit en cas d'erreur) ; `random_save(noms)` ecrit puis rafraichit les menus de presets. `scene_ui["ask_dir"]` (remplacable par les tests). Controles : `c["random"]` (`draw`, `draw_now`, `keep`, `bank`, `option`, `state`).
+  - **Garder un tirage audio2wave / fond sans video** : un fond `video` n'est propose en preset de fond que s'il y a un fichier
+    qui existe (`randomizer.fond_saveable` ; un mode video sans fichier = ecran noir, rien a enregistrer, vu avec le verrou du
+    fond). Un tirage dont le fond est un visuel audio2wave ajoute a la modale un champ **Preset Live / Snap / Ridge** : enregistre
+    par leur propre champ « Sauvegarder sous » (`save_live_preset`, donc leur menu est a jour), et la scene gardee retient l'**etat
+    reel du panneau** (`capture_live_overrides`), pas seulement celui du tirage (retouches depuis, fond verrouille). **Piege : leurs
+    trois modes passent le nom en minuscules** (`name.strip().lower()`) ; on cherchait « Mon live » dans leur menu, jamais trouve :
+    l'enregistrement etait fait mais declare en echec. `save_live_preset` cherche maintenant `name.lower()` ; refus aussi si le nom
+    est un integre (`default`, `club`...) ou existe deja (`random_keep_check`).
   - **Piege (modales)** : `a2w` (palette d'audio2wave) n'est pas un nom du module `gl_gui`, seulement un import local de `build_window` : une
     modale de niveau module (`choice_dialog`, `keep_dialog`) qui l'utilise doit faire `import audio2wave as a2w` elle-meme. `choice_dialog`
     plantait ainsi sans qu'aucun test le voie (ils remplacent les dialogues par `scene_ui`) ; `check_dialogs` ouvre les vraies modales.
@@ -844,6 +865,17 @@ fragile.
   4 Ko, voir plus haut). Le defaut d'audio2wave est donc laisse tel quel, ce qui garde
   `--dry-run` strictement identique a celui de live. Consequence pour la GUI : un nom de
   couleur inconnu n'est PAS refuse par le producteur, il s'affiche en blanc.
+- **Analyzer en barres qui n'affiche plus rien : `bar_gap` >= 1** : le separateur noir (`drawgrid`) de leur filtre fait
+  `largeur / barres x bar_gap` pixels ; leur curseur « Espace entre barres » va jusqu'a 1,5 et le preset `devil` est a 1,4 (sans effet en
+  radio, mais l'etat reste quand on repasse en analyzer + barres, par une scene ou un preset). Mesure sur le vrai filtre : 0,7 = la moitie
+  des colonnes, 0,9 = 4 % de l'image, >= 1,0 = ecran noir. `audio2wave_gl.limit_bar_gap` plafonne a `BAR_GAP_MAX` (0,7) la **copie envoyee au
+  producteur** (`push_live`, message dans le statut) ; leur fenetre n'est pas touchee. A corriger chez eux : borner `bar_gap` dans
+  `build_filter` (ou la plage du curseur).
+- **Analyzer en courbe (`--shape line`) a mauvaise resolution** : avec les defauts d'audio2wave (128 points, `win_size` auto = 512 a
+  16 kHz, soit 256 frequences) la courbe etiree sur l'ecran est un escalier de marches de ~15 px aux traits epais et flous (mesure sur
+  des captures reelles). `audio2wave_gl.sharpen_line` impose sur la **copie envoyee au producteur** (`push_live`, creation du
+  `ProducerManager`) au moins `LINE_MIN_POINTS` (400, le maximum de leur curseur) et `LINE_MIN_WIN` (2048) : trait fin et net, fenetre
+  plus longue = mouvement un peu plus lisse, sans effet sur notre detection du kick. Jamais de reduction d'un reglage deja plus fin.
 - **`ProducerManager.args` doit etre une COPIE** des options d'audio2wave_live : leur GUI les mute en place,
   et `push_live` compare `producer_command(nouvelles)` a celle du gestionnaire pour eviter un
   redemarrage inutile. Avec le meme objet, la comparaison etait toujours vraie ("Reglages a jour") et
