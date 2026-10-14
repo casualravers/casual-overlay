@@ -275,7 +275,24 @@ def check_gui() -> None:
     analyzer = NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0})
     audio = NS(synthetic=True, name="synthetique", analyzer=analyzer)
     params = gl.load_params()
-    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio,
+
+    class FakeProjection:
+        """Projection factice : la GUI ouvre / ferme la fenetre de rendu par son bouton."""
+        def __init__(self):
+            self.on, self.starts, self.stops = False, 0, 0
+
+        def running(self):
+            return self.on
+
+        def start(self):
+            self.on, self.starts = True, self.starts + 1
+            return "Projection ouverte en plein ecran sur le second ecran"
+
+        def stop(self, wait=0.0):
+            self.on, self.stops = False, self.stops + 1
+
+    fake_proj = FakeProjection()
+    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio, projection=fake_proj,
            commands=queue.SimpleQueue(), status={}, stop_event=threading.Event(),
            finished_event=threading.Event(), mode="live", pysrc=None, mode_args={}, reader=manager.reader,
            capture_factory=fake_capture)
@@ -402,6 +419,23 @@ def check_gui() -> None:
                                  for w in walk(root))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
                                     and w.cget("text") == "∿")
+            proj_btn = c["projection"]["button"]()
+            proj = {"text0": proj_btn.cget("text") if proj_btn else None}
+            if proj_btn:
+                proj_btn.invoke()
+                root.update()
+                proj.update(text1=proj_btn.cget("text"), started=fake_proj.starts)
+                c["projection"]["send"]("reload")
+                proj["queued"] = s.commands.empty()               # ouverte : la commande part au fil GL
+                while not s.commands.empty():
+                    s.commands.get_nowait()                       # (ne pas polluer les etapes suivantes)
+                proj_btn.invoke()
+                root.update()
+                proj.update(text2=proj_btn.cget("text"), stopped=fake_proj.stops)
+                c["projection"]["send"]("reload")
+                proj["closed_queue"] = s.commands.empty()         # fermee : rien ne s'empile
+                proj["closed_msg"] = s.status.get("msg", "")
+            out["proj"] = proj
             scale = find_scale(c["live_host"], "Gain (dB)")
             for v in (5, 8, 12):                                  # rafale: un seul redemarrage attendu
                 scale.set(v)
@@ -1123,6 +1157,12 @@ def check_gui() -> None:
     check(b.get("mode") == "live" and b.get("src") is None and b.get("suspended") is False
           and b.get("resumed") == ["Micro"] and b.get("reader_ok") and b.get("banner") and b.get("gain"),
           "retour au mode Live : ffmpeg relance sur l'entree courante, lecteur d'origine, panneau Live reconstruit", str(b))
+    pj = out.get("proj", {})
+    check(pj.get("text0") == "Demarrer la projection" and pj.get("text1") == "Arreter la projection"
+          and pj.get("text2") == "Demarrer la projection" and pj.get("started") == 1 and pj.get("stopped") == 1,
+          "GUI: le bouton ouvre puis ferme la projection (et change de libelle)", str(pj))
+    check(pj.get("queued") is False and pj.get("closed_queue") is True and "projection" in pj.get("closed_msg", ""),
+          "GUI: une commande part au rendu quand la projection est ouverte, sinon rien ne s'empile et un message le dit", str(pj))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
     check(out.get("presets") and out.get("automation", 0) >= 1,
           "presets et automations d'audio2wave presents", f"{out.get('automation')} curseurs automatables")
@@ -3668,6 +3708,60 @@ def check_audio2wave_api() -> None:
     check(gl_gui.audio2wave_api_missing(types.SimpleNamespace(), None, None) != [], "audio2wave sans AutomationManager ni common: signale, ne plante pas")
 
 
+def check_projection() -> None:
+    """Projection a la demande : la GUI s'ouvre seule, la fenetre de rendu part d'un bouton (second ecran, plein ecran)."""
+    print("projection a la demande")
+    import types
+    runs: list[str] = []
+
+    def target(s):
+        runs.append("run")
+        s.proj_stop.wait(5)
+
+    def make(second, request=None, monitor=None, boom=None):
+        args = types.SimpleNamespace(fullscreen=None, fullscreen_request=request, monitor=monitor, gui=True)
+        s = gl.Session(args, {}, None, None, (1280, 720), (1280, 720), None, None, None)
+        def run(s):
+            if boom:
+                raise boom
+            target(s)
+        return s, gl.Projection(s, target=run, secondary=lambda: second)
+
+    s, p = make(True)
+    s.commands.put("flash")
+    msg = p.start()
+    check(p.running() and s.args.fullscreen is True and "plein ecran" in msg and "second ecran" in msg and s.commands.empty(),
+          "projection: deux ecrans = plein ecran sur le second, commandes perimees jetees", msg)
+    check("deja ouverte" in p.start() and runs == ["run"], "projection: un second demarrage n'ouvre rien de plus")
+    p.stop(wait=3.0)
+    check(not p.running() and not s.finished_event.is_set(), "projection: l'arret ferme la fenetre sans fermer le programme")
+    p.start()
+    time.sleep(0.2)
+    check(p.running() and runs == ["run", "run"], "projection: on peut la rouvrir autant de fois qu'on veut")
+    p.stop(wait=3.0)
+    s, p = make(False)
+    msg = p.start()
+    check(s.args.fullscreen is False and "Pas de second ecran" in msg, "projection: un seul ecran = en fenetre, jamais sur le poste de travail", msg)
+    p.stop(wait=3.0)
+    s, p = make(False, request=True)
+    p.start()
+    check(s.args.fullscreen is True, "projection: --fullscreen explicite l'emporte meme avec un seul ecran")
+    p.stop(wait=3.0)
+    s, p = make(True, request=False)
+    p.start()
+    check(s.args.fullscreen is False, "projection: --no-fullscreen explicite l'emporte meme avec deux ecrans")
+    p.stop(wait=3.0)
+    s, p = make(True, boom=SystemExit(1))
+    p.start()
+    time.sleep(0.3)
+    check(not p.running() and "Projection impossible" in s.status.get("msg", ""),
+          "projection: un echec d'ouverture (SystemExit) est signale, la GUI continue", s.status.get("msg", ""))
+    s, p = make(True, boom=RuntimeError("pilote"))
+    p.start()
+    time.sleep(0.3)
+    check(not p.running() and "pilote" in s.status.get("msg", ""), "projection: une erreur du rendu est signalee, la GUI continue")
+
+
 def check_contract() -> None:
     """Test de contrat d'audio2wave (`check_contract.py` du depot voisin : noms et signatures dont depend casual-overlay) :
     un code de sortie non nul fait echouer la suite. Si c'est un nom dont on depend qui est casse, c'est cote audio2wave
@@ -3789,6 +3883,7 @@ def main() -> None:
     check_skin()
     check_dialogs()
     check_audio2wave_api()
+    check_projection()
     check_contract()
     check_vj_flash()
     check_gates()

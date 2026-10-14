@@ -37,8 +37,13 @@ py -3.12 -m venv .venv
 
 ## Lancement
 
-**Double-clic sur [start.bat](start.bat)** : ouvre la fenetre de reglages et la fenetre video (choisis
-l'entree audio dans la fenetre de reglages). Il accepte les memes options que le script, par exemple
+**Double-clic sur [start.bat](start.bat)** : ouvre **la fenetre de reglages seule** (choisis l'entree audio, prepare tes scenes).
+Le bouton **Demarrer la projection** (en haut a gauche) ouvre la fenetre video : **en plein ecran sur le second ecran** (le
+videoprojecteur) ; sans second ecran detecte, en fenetre (un plein ecran sur le poste de travail le recouvrirait, souris comprise).
+Echap dans la projection la ferme sans fermer les reglages, le meme bouton (*Arreter la projection*) aussi, et on la rouvre quand on
+veut. Si le projecteur est branche apres le lancement, F (ou la case *Plein ecran*) le trouve a ce moment-la ; le plein ecran
+demande par la case ou par un preset est **refuse sur l'ecran principal** (sauf `--fullscreen`). `start.bat --projeter` ouvre aussi
+la projection tout de suite. Il accepte les memes options que le script, par exemple
 `start.bat -d "Microphone (Realtek(R) Audio)"` ou `start.bat --text "CASUAL RAVERS"`.
 
 En ligne de commande :
@@ -219,8 +224,8 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 
 | Touche | Action |
 |---|---|
-| Echap | quitter |
-| F | fenetre / plein ecran (plein ecran au lancement seulement s'il y a un 2e ecran) |
+| Echap | quitter (avec la fenetre de reglages : ferme seulement la projection) |
+| F | fenetre / plein ecran (cherche le projecteur a ce moment-la) |
 | B | fond : spectre audio / motif genere / video (si un fichier est choisi) |
 | T | automations : actives / figees |
 | H | barres de debug (basses, mediums, aigus, RMS, kick + etat des effets) |

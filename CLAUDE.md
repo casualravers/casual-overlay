@@ -116,6 +116,7 @@ python audio2wave_gl.py --list-devices                 # entrees dshow (ffmpeg)
 python audio2wave_gl.py --list-audio-devices           # entrees sounddevice
 python audio2wave_gl.py -d "<entree>" --dry-run        # meme commande ffmpeg que audio2wave_live
 python audio2wave_gl.py -d "<entree>"                  # live (plein ecran auto seulement avec un 2e moniteur)
+python audio2wave_gl.py --gui [--projeter]             # reglages seuls ; bouton « Demarrer la projection » (ou --projeter)
 python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
 python check_gl.py                                     # verifications hors materiel
 python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ffmpeg, OpenGL, micro...)
@@ -170,6 +171,19 @@ Tout est dans [audio2wave_gl.py](audio2wave_gl.py) ; les GLSL sont dans `gl_shad
   masque et GUI cachee dessous (signale en usage reel : "je perds ma souris"; F ou Echap
   rendent la main). `hide_cursor()` : le curseur n'est masque qu'en plein ecran **hors**
   moniteur principal.
+- **Projection a la demande (`--gui`)** : `start.bat` n'ouvre que la fenetre de reglages ; la fenetre GL (`gl_main`, fil `gl`) part
+  du bouton **Demarrer la projection** (barre des scenes, `toggle_projection`) ou de `--projeter`. `Projection(s)` (audio2wave_gl.py,
+  `s.projection`) : `start()` decide du plein ecran **a ce moment-la** (`resolve_fullscreen(args.fullscreen_request, monitor,
+  has_secondary_monitor())` : second ecran = plein ecran dessus, sinon fenetre ; `--fullscreen` / `--no-fullscreen` explicites
+  l'emportent), jette les commandes empilees projection fermee, lance le fil ; `stop()` positionne `s.proj_stop` (la boucle GL sort,
+  `gl_main` ne positionne PAS `finished_event` en mode `--gui` : Echap ferme la projection, pas les reglages) ; rouvrable a volonte
+  (glfw reinitialise a chaque ouverture). Un echec (`SystemExit`, exception) est dit dans le statut, la GUI continue. Fermer les
+  reglages (`on_close`) positionne `stop_event` et `finished_event`. Commandes (`send` dans `gl_gui`) : projection fermee, `save` ecrit
+  `gl_params.json` directement, `reload` / `hud` / `fullscreen` repondent « Disponible quand la projection est ouverte ». Plein
+  ecran : `Window.retarget(pick_monitor(...))` a chaque passage en plein ecran (un projecteur branche apres le lancement est
+  trouve) ; **la commande `fullscreen=1` (case, preset qui la coche) est refusee sur l'ecran principal** sans `--fullscreen` /
+  `--monitor` (la touche F, elle, reste permise : la fenetre a le focus et Echap rend la main). Sans `--gui` rien ne change
+  (`gl_main` direct). `check_gl.py` : `check_projection` (Projection avec cible et ecrans factices) + bouton dans le test GUI.
 - **Texte a incruster** (source `text`, `--text`, GUI : Source > Texte) : `render_text()`
   dessine le texte avec Pillow (plusieurs lignes, police, couleur, alignement), le
   premultiplie comme un PNG (`_premultiplied`, plafond 2048 px) avec une marge transparente de

@@ -672,6 +672,20 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     skin.title(banner_overlay, OVERLAY_COLOR, kicker=False)
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
+    projection = getattr(s, "projection", None)           # avec --gui : la fenetre de rendu s'ouvre au bouton
+    proj_ui: dict = {"btn": None}
+
+    def send(name: str) -> None:
+        """Commande pour le fil GL ; projection fermee : l'enregistrement se fait ici, le reste attend l'ouverture."""
+        if projection is not None and not projection.running():
+            if name == "save":
+                gl.save_params(params)
+                s.status["msg"] = f"Reglages sauves ({gl.PARAMS_PATH.name})"
+            elif name in ("reload", "hud", "fullscreen"):
+                s.status["msg"] = "Disponible quand la projection est ouverte"
+            return
+        s.commands.put(name)
+
     # ------------------------------------------------ 2. pont restart_event -> ProducerManager (mode Live)
     last = {"fullscreen": bool(s.live_args.fullscreen)}
 
@@ -1510,7 +1524,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         frame = tk.Frame(tab_aff)
         frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         for text, cmd in row_buttons:
-            tk.Button(frame, text=text, command=lambda c=cmd: s.commands.put(c)).pack(side="left", padx=(0, 6))
+            tk.Button(frame, text=text, command=lambda c=cmd: send(c)).pack(side="left", padx=(0, 6))
 
     def diagnostic_report() -> str:
         """Rapport du diagnostic : verifications refaites maintenant, sauf OpenGL (resultat du demarrage : on n'ouvre pas un
@@ -2684,9 +2698,39 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             height = max(MIN_WIN_H, min(root.winfo_height() + delta, root.winfo_screenheight() - 80))
             root.geometry(f"{root.winfo_width()}x{height}")
 
+    def proj_text() -> str:
+        return "Arreter la projection" if projection is not None and projection.running() else "Demarrer la projection"
+
+    def toggle_projection() -> None:
+        if projection is None:
+            return
+        if projection.running():
+            projection.stop()
+            scene_msg.set("Projection fermee")
+        else:
+            scene_msg.set(projection.start())
+        refresh_proj_button()
+
+    def refresh_proj_button() -> None:
+        btn = proj_ui["btn"]
+        if btn is None:
+            return
+        try:
+            if btn.cget("text") != proj_text():
+                btn.configure(text=proj_text())
+        except tk.TclError:
+            proj_ui["btn"] = None
+
     def refresh_scene_bar() -> None:
         for child in scene_bar.winfo_children():
             child.destroy()
+        proj_ui["btn"] = None
+        if projection is not None:
+            btn = tk.Button(scene_bar, text=proj_text(), command=toggle_projection, padx=10)
+            btn.pack(side="left", padx=(8, 4), pady=5)
+            proj_ui["btn"] = btn
+            Tooltip(btn, "Ouvre la fenetre de projection : plein ecran sur le second ecran (le projecteur) ; sans second ecran, "
+                         "en fenetre. Echap dans cette fenetre la ferme sans fermer les reglages.")
         scenes_title = tk.Label(scene_bar, text="SCENES")
         skin.title(scenes_title, SCENE_COLOR)
         scenes_title.pack(side="left", padx=(8, 6), pady=5)
@@ -2838,6 +2882,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             root.destroy()
             return
         poll_scene_requests()
+        refresh_proj_button()
         # Recopie les reglages que les touches de la fenetre GL ont pu changer.
         for i, v in enumerate(fx_on_vars):
             if int(params["fx_on"][i]) != v.get():
@@ -2884,7 +2929,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         after(METER_MS, update_meter)
 
     def on_close() -> None:
-        s.stop_event.set()                # le fil GL sort, positionne finished_event, leur refresh() ferme
+        s.stop_event.set()                # le fil GL (s'il est ouvert) sort ; finished_event : leur refresh() ferme leurs panneaux
+        s.finished_event.set()
         root.after(3000, root.destroy)    # filet de securite si le fil GL ne repond plus
 
     # ---- Mise en page adaptative : cote a cote quand la largeur le permet, sinon LIVE au-dessus de OVERLAY
@@ -2964,7 +3010,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         after(150, lambda: apply_live_overrides(pending) or scene_msg.set("panneau audio2wave de la scene introuvable"))
     if on_ready is not None:
         root.after(50, lambda: on_ready({
-            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close,
+            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
             "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,

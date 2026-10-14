@@ -2033,6 +2033,14 @@ class Window:
         glfw.swap_interval(1)
         glfw.show_window(self.handle)
 
+    def retarget(self, monitor) -> None:
+        """Vise un autre moniteur (le projecteur branche apres le lancement, par exemple)."""
+        self.monitor = monitor
+        self.is_primary = _addr(monitor) == _addr(glfw.get_primary_monitor())
+        self.mx, self.my = glfw.get_monitor_pos(monitor)
+        mode = glfw.get_video_mode(monitor)
+        self.mw, self.mh = mode.size.width, mode.size.height
+
     def _place(self) -> None:
         if self.fullscreen:
             glfw.set_window_attrib(self.handle, glfw.DECORATED, False)
@@ -2066,7 +2074,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--audio-device", help="Entree sounddevice pour l'analyse: sous-chaine ou numero "
                    "(voir --list-audio-devices). Defaut: meme nom que --device si trouve, sinon defaut systeme")
     p.add_argument("--gui", action="store_true",
-                   help="Ouvre la fenetre de reglages (tkinter): visuel live, logo et effets en direct")
+                   help="Ouvre la fenetre de reglages (tkinter): visuel live, logo et effets en direct. La projection "
+                        "(fenetre OpenGL) ne s'ouvre qu'au bouton « Demarrer la projection »")
+    p.add_argument("--projeter", action="store_true",
+                   help="Avec --gui : ouvre aussi la projection tout de suite, sans attendre le bouton")
     p.add_argument("--background", choices=["live", "pattern", "video"], default=None,
                    help="Fond: live = spectre ffmpeg, pattern = motif genere, video = fichier video brut (--bg-video) "
                         "(defaut: reglage sauve, sinon live)")
@@ -2148,6 +2159,7 @@ def main() -> None:
             print("Le programme ne peut pas demarrer : corrige les erreurs ci-dessus "
                   "(python audio2wave_gl.py --diagnostic donne le rapport complet).", file=sys.stderr)
             sys.exit(1)
+    args.fullscreen_request = args.fullscreen        # None = pas demande : decide a l'ouverture de la projection
     args.fullscreen = resolve_fullscreen(args.fullscreen, args.monitor, has_secondary_monitor())
 
     if args.list_audio_devices:
@@ -2279,8 +2291,10 @@ class Session:
         self.status: dict = manager.status if manager else {}
         self.status.setdefault("fps", 0.0)
         self.commands: queue.SimpleQueue = queue.SimpleQueue()
-        self.stop_event = threading.Event()
+        self.stop_event = threading.Event()               # fermeture de tout le programme
         self.finished_event = threading.Event()
+        self.proj_stop = threading.Event()                # fermeture de la projection seule (la GUI reste ouverte)
+        self.projection: Projection | None = None         # avec --gui : la fenetre de rendu s'ouvre a la demande
         self.renderer: Renderer | None = None
         self.window: Window | None = None
         self.mode = "live"                 # source du fond : "live" (ffmpeg), "snap" ou "ridge" (py_modes)
@@ -2349,7 +2363,6 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
         reader = manager.reader
 
     s = Session(args, params, live, live_args, render_size, win_size, audio, manager, reader)
-    thread = None
     try:
         audio.start()
         if manager is not None:
@@ -2359,15 +2372,16 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
         if args.gui:
             import gl_gui
             gl_gui.require_audio2wave_api(live)          # depot audio2wave trop ancien : message clair, avant de lancer le rendu
-            thread = threading.Thread(target=gl_main, args=(s,), name="gl", daemon=True)
-            thread.start()
+            s.projection = Projection(s)                 # la GUI seule s'ouvre ; la projection part du bouton (ou de --projeter)
+            if args.projeter:
+                print(s.projection.start())
             gl_gui.run_gui(s, live)
         else:
             gl_main(s)
     finally:
         s.stop_event.set()
-        if thread is not None:
-            thread.join(5)
+        if s.projection is not None:
+            s.projection.stop(wait=5.0)
         if s.pysrc is not None:
             s.pysrc.stop()
         audio.stop()
@@ -2375,6 +2389,57 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
             manager.stop()
         else:
             reader.stop()
+
+
+class Projection:
+    """Fenetre de rendu (fil GL) ouverte et fermee a la demande, pour la GUI : `start()` / `stop()` autant de fois qu'on veut,
+    la GUI, l'audio et le producteur ne sont pas touches. Par defaut elle s'ouvre en plein ecran sur le second ecran (le
+    projecteur) ; sans second ecran, en fenetre (un plein ecran sur le poste de travail le recouvrirait, souris comprise).
+    `target` et `secondary` s'injectent pour les tests."""
+
+    def __init__(self, s: Session, target=None, secondary=None):
+        self.s = s
+        self._target = target
+        self._secondary = secondary or has_secondary_monitor
+        self.thread: threading.Thread | None = None
+
+    def running(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+    def start(self) -> str:
+        """Ouvre la projection. Rend le message a afficher."""
+        s = self.s
+        if self.running():
+            return "La projection est deja ouverte"
+        a = s.args
+        second = bool(self._secondary())
+        a.fullscreen = resolve_fullscreen(getattr(a, "fullscreen_request", None), a.monitor, second)
+        s.proj_stop.clear()
+        while True:                                     # commandes envoyees pendant que la projection etait fermee : perimees
+            try:
+                s.commands.get_nowait()
+            except queue.Empty:
+                break
+        self.thread = threading.Thread(target=self._run, name="gl", daemon=True)
+        self.thread.start()
+        if a.fullscreen:
+            return "Projection ouverte en plein ecran" + (" sur le second ecran" if second else "")
+        return "Pas de second ecran detecte : projection en fenetre (branche le projecteur puis F pour le plein ecran)"
+
+    def _run(self) -> None:
+        try:
+            (self._target or gl_main)(self.s)
+        except SystemExit as exc:                        # gl_main quitte par sys.exit : la GUI continue
+            self.s.status["msg"] = "Projection impossible (voir la console)" if exc.code else self.s.status.get("msg", "")
+        except Exception as exc:
+            self.s.status["msg"] = f"Projection arretee: {exc}"
+            print(f"Projection arretee: {exc}", file=sys.stderr)
+
+    def stop(self, wait: float = 0.0) -> None:
+        """Ferme la projection (attend au plus `wait` secondes)."""
+        self.s.proj_stop.set()
+        if wait and self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(wait)
 
 
 class NoDeviceManager(ProducerManager):
@@ -2540,7 +2605,11 @@ def gl_main(s: Session) -> None:
         if window is not None:
             glfw.destroy_window(window.handle)
         glfw.terminate()
-        s.finished_event.set()
+        if getattr(args, "gui", False):
+            s.status["msg"] = "Projection fermee"          # la GUI reste ouverte (bouton pour la rouvrir)
+            s.status["fps"] = 0.0
+        else:
+            s.finished_event.set()
 
 
 def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
@@ -2562,9 +2631,19 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         if name == "quit":
             quit_flag["v"] = True
         elif name == "fullscreen":
+            if not window.fullscreen:
+                window.retarget(pick_monitor(args.monitor))     # un projecteur branche depuis le lancement est pris en compte
             window.toggle_fullscreen()
-        elif name.startswith("fullscreen="):      # etat explicite (case "Plein ecran" de la GUI)
-            if window.fullscreen != (name.endswith("1")):
+        elif name.startswith("fullscreen="):      # etat explicite (case « Plein ecran » de la GUI, preset qui la coche)
+            want = name.endswith("1")
+            if want and not window.fullscreen:
+                window.retarget(pick_monitor(args.monitor))
+                if window.is_primary and args.monitor is None and getattr(args, "fullscreen_request", None) is not True:
+                    # jamais de plein ecran sur le poste de travail sans l'avoir demande (--fullscreen) : il le recouvrirait
+                    s.status["msg"] = "Plein ecran refuse sur l'ecran principal : branche le projecteur (ou --fullscreen)"
+                    print(s.status["msg"], file=sys.stderr)
+                    return
+            if window.fullscreen != want:
                 window.toggle_fullscreen()
         elif name == "hud":
             renderer.hud = not renderer.hud
@@ -2695,7 +2774,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     if args.screenshot and args.max_seconds is None:
         args.max_seconds = 3.0
 
-    while not glfw.window_should_close(handle) and not quit_flag["v"] and not s.stop_event.is_set():
+    while (not glfw.window_should_close(handle) and not quit_flag["v"] and not s.stop_event.is_set()
+           and not s.proj_stop.is_set()):
         glfw.poll_events()
         while True:
             try:
