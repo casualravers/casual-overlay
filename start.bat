@@ -1,6 +1,6 @@
 @echo off
 rem Lanceur de casual-overlay : fenetre de reglages (--gui) seule ; le bouton Demarrer la projection ouvre la fenetre OpenGL
-rem (plein ecran sur le second ecran). --projeter l'ouvre tout de suite.
+rem (en fenetre ; plein ecran par la case ou la touche F). --projeter l'ouvre tout de suite.
 rem Les arguments donnes au .bat sont transmis tels quels, par exemple :
 rem     start.bat -d "Microphone (Realtek(R) Audio)"
 rem     start.bat --text "CASUAL RAVERS" --background pattern

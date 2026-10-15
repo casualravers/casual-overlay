@@ -158,9 +158,11 @@ def accent_for(w: tk.Misc) -> str:
 
 SCROLL_STYLE = "Casual.Vertical.TScrollbar"
 SCROLL_WIDTH = 10
+SCROLL_STYLE_H = "Casual.Horizontal.TScrollbar"
+FIELD_MAX_TEXT = 360                                  # px : un nom de preset tres long n'elargit pas les listes a l'infini
 
 
-def scrollbar(parent: tk.Misc, command=None) -> ttk.Scrollbar:
+def scrollbar(parent: tk.Misc, command=None, orient: str = "vertical") -> ttk.Scrollbar:
     """Ascenseur vertical aux couleurs de la GUI. Le `tk.Scrollbar` de Windows ignore les couleurs (rail gris clair, fleches : un
     bloc clair dans une fenetre sombre) : on prend un `ttk.Scrollbar` (theme `clam`, le seul dont les couleurs se reglent) sans
     fleches, fin, poignee discrete qui s'eclaircit au survol et passe a l'accent de la partie LIVE quand on la tient. Meme
@@ -178,19 +180,12 @@ def scrollbar(parent: tk.Misc, command=None) -> ttk.Scrollbar:
         style.map(SCROLL_STYLE, background=[("pressed", T.LIVE), ("active", T.mix(thumb, T.MUTED, 0.5))],
                   lightcolor=[("pressed", T.LIVE), ("active", T.mix(thumb, T.MUTED, 0.5))],
                   darkcolor=[("pressed", T.LIVE), ("active", T.mix(thumb, T.MUTED, 0.5))])
-    return ttk.Scrollbar(parent, orient="vertical", style=SCROLL_STYLE, command=command)
-
-
-def style_menu(menu: tk.Menu) -> None:
-    """Menu deroulant (liste d'un select, menu contextuel) : fond de panneau, texte clair, et au survol un fond **teinte de l'accent
-    de la zone** avec le texte reste clair. Le survol d'audio2wave (accent plein + `GUI_ACCENT_FG`, un texte quasi noir sur le bleu)
-    se lisait mal. Les entrees qui portent leur propre couleur (menu des couleurs nommees) la gardent."""
-    accent = accent_for(menu)
-    try:
-        menu.configure(bg=T.PANEL, fg=T.FG, activebackground=T.mix(T.PANEL, accent, 0.5), activeforeground=T.FG,
-                       disabledforeground=T.FAINT, selectcolor=accent, activeborderwidth=0, borderwidth=0, relief="flat")
-    except tk.TclError:
-        pass
+        style.layout(SCROLL_STYLE_H, [("Horizontal.Scrollbar.trough", {"sticky": "ew", "children": [
+            ("Horizontal.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+        style.configure(SCROLL_STYLE_H, **style.configure(SCROLL_STYLE))
+        style.map(SCROLL_STYLE_H, **{k: style.map(SCROLL_STYLE, k) for k in ("background", "lightcolor", "darkcolor")})
+    horizontal = orient == "horizontal"
+    return ttk.Scrollbar(parent, orient=orient, style=SCROLL_STYLE_H if horizontal else SCROLL_STYLE, command=command)
 
 
 def zone(widget: tk.Misc, accent: str) -> None:
@@ -260,6 +255,12 @@ def _render_button(w: tk.Misc) -> None:
     lines = max(1, text.count("\n") + 1)
     width = text_w + 2 * sk["padx"]
     height = max(21, font.metrics("linespace") * lines + 2 * sk["pady"])
+    natural = (width + 2 * BTN_MARGIN[0], height + 2 * BTN_MARGIN[1])        # l'image fait la forme + la marge transparente
+    stretch = bool(getattr(w, "_skin_stretch", False))
+    if stretch:                               # bouton qui remplit sa case : l'image prend la taille allouee (mise a jour a chaque <Configure>)
+        alloc_w, alloc_h = sk.get("alloc", (0, 0))
+        width = max(width, alloc_w - 2 * BTN_MARGIN[0])
+        height = max(height, alloc_h - 2 * BTN_MARGIN[1])
     state = _state(w)
     fill, fg = _button_colors(w, state)
     key = (width, height, fill, fg, state)
@@ -268,7 +269,10 @@ def _render_button(w: tk.Misc) -> None:
     sk["key"] = key
     img = photo(w, round_rect_image(width, height, fill, T.RADIUS, margin=BTN_MARGIN))
     sk["img"] = img
-    _orig_configure(w, image=img, fg=fg, activeforeground=fg, activebackground=sk["parent"], width=0, height=0)
+    # Etire : la taille VOULUE du widget reste la taille naturelle (en pixels, le bouton a une image), sinon il ne pourrait plus
+    # retrecir quand la fenetre diminue ; c'est l'allocation du gestionnaire de mise en page qui donne la taille de l'image.
+    _orig_configure(w, image=img, fg=fg, activeforeground=fg, activebackground=sk["parent"],
+                    width=natural[0] if stretch else 0, height=natural[1] if stretch else 0)
 
 
 def _render_toggle(w: tk.Misc) -> None:
@@ -293,11 +297,8 @@ def _render_field(w: tk.Misc) -> None:
     labels = [str(w.tk.call(menu._w, "entrycget", i, "-label")) for i in range(int(menu.index("end") or -1) + 1)
               if str(w.tk.call(menu._w, "type", i)) != "separator"]
     labels.append(str(_orig_cget(w, "text")))
-    width = max([font.measure(t) for t in labels] + [30]) + 12 + 28
+    width = min(max([font.measure(t) for t in labels] + [30]), FIELD_MAX_TEXT) + 12 + 28
     height = max(24, font.metrics("linespace") + 8)
-    # Texte clair aussi au survol : le bouton garde sinon le `activeforeground` d'audio2wave (`GUI_ACCENT_FG`, quasi noir) que
-    # `style_option_menu` lui pose, et le texte noircit des que la souris passe dessus (l'image du champ reste sombre).
-    _orig_configure(w, fg=T.FG, activeforeground=T.FG, activebackground=T.PANEL, disabledforeground=T.FAINT)
     border = T.FAINT if dis else (sk["accent"] if sk.get("hover") else T.LINE)
     key = (width, height, dis, border)
     if sk.get("key") == key:
@@ -337,6 +338,38 @@ def _on(w, hover=None, down=None):
     if down is not None:
         sk["down"] = down
     _RENDER[sk["kind"]](w)
+
+
+def _on_alloc(w, e) -> None:
+    """Un bouton etire (`w._skin_stretch = True`) : son image suit la taille que la mise en page lui donne."""
+    sk = getattr(w, "_sk", None)
+    if sk is None or sk.get("alloc") == (e.width, e.height):
+        return
+    sk["alloc"] = (e.width, e.height)
+    _render_button(w)
+
+
+def retint(w: tk.Misc, parent_bg: str) -> None:
+    """Le fond du conteneur d'un widget habille change (ligne active d'un panneau) : on le repeint (coins transparents compris)
+    sans le reconstruire. Un widget non habille prend simplement le fond."""
+    sk = getattr(w, "_sk", None)
+    if sk is None:
+        try:
+            w.configure(bg=parent_bg)
+        except tk.TclError:
+            pass
+        return
+    if "parent" not in sk:
+        return
+    sk["parent"] = parent_bg.lower()
+    if sk["kind"] == "button":
+        _orig_configure(w, bg=parent_bg, activebackground=parent_bg)
+        sk["key"] = None
+        _render_button(w)
+    elif sk["kind"] in ("radio", "check"):
+        _orig_configure(w, bg=parent_bg, activebackground=parent_bg, selectcolor=parent_bg)
+    else:
+        _orig_configure(w, bg=parent_bg)
 
 
 def _make_configure(cls):
@@ -463,6 +496,8 @@ def skin_widget(w: tk.Misc) -> bool:
         w.bind("<Leave>", lambda e, w=w: _on(w, hover=False, down=False), add="+")
         w.bind("<ButtonPress-1>", lambda e, w=w: _on(w, down=True), add="+")
         w.bind("<ButtonRelease-1>", lambda e, w=w: _on(w, down=False), add="+")
+        if getattr(w, "_skin_stretch", False):
+            w.bind("<Configure>", lambda e, w=w: _on_alloc(w, e), add="+")
         _render_button(w)
         return True
     if cls in ("Radiobutton", "Checkbutton"):
@@ -501,8 +536,6 @@ def apply(root: tk.Misc) -> int:
             children = node.winfo_children()
         except tk.TclError:
             continue
-        if node.winfo_class() == "Menu":
-            style_menu(node)
         if node is not root or node.winfo_class() in ("Button", "Radiobutton", "Checkbutton", "Menubutton", "Scale", "Entry"):
             try:
                 count += bool(skin_widget(node))

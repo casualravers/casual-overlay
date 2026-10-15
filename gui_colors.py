@@ -132,9 +132,19 @@ class ColorField:
         return [str(b.cget("bg")) for b in self.swatches.winfo_children() if str(b.cget("text")) != "+"]
 
 
-def add_color_helpers(host, accent: str, accent_fg: str) -> dict[str, ColorField]:
-    """Ajoute les aides a chaque champ de couleur du panneau `host` ; renvoie les champs par libelle."""
+def add_color_helpers(host, accent: str, accent_fg: str, widgets: dict | None = None, mode: str | None = None) -> dict[str, ColorField]:
+    """Ajoute les aides a chaque champ de couleur du panneau `host` ; renvoie les champs par libelle.
+
+    Avec `widgets` (`GuiController.widgets` d'audio2wave) les champs sont les widgets nommes `colors` et `bg_color` (le champ
+    `colors` accepte plusieurs couleurs sauf en Ridge, ou c'est « Couleur du trait »). Sans, recherche par le texte du libelle."""
     fields: dict[str, ColorField] = {}
+    if widgets and widgets.get("colors") is not None:
+        label = "Couleur du trait" if mode == "ridge" else "Couleurs"
+        for key, name, multi in (("colors", label, FIELDS[label]), ("bg_color", "Couleur de fond", False)):
+            entry = widgets.get(key)
+            if entry is not None:
+                fields[name] = ColorField(host, entry, name, multi, accent, accent_fg)
+        return fields
     for label, multi in FIELDS.items():
         for w in row_of_label(host, label):
             entry = next((x for x in leaves(w) if x.winfo_class() == "Entry"), None)

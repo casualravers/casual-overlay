@@ -1572,57 +1572,14 @@ def load_live(a2w_dir: Path):
 
 def build_live_args(live, device: str | None, size: tuple[int, int], fps: int, extra: str | None,
                     fullscreen: bool = True):
-    argv = ["audio2wave_live.py", "--size", f"{size[0]}x{size[1]}", "--fps", str(fps)]
+    argv = ["--size", f"{size[0]}x{size[1]}", "--fps", str(fps)]
     if not fullscreen:
         # Sans effet sur ffmpeg, mais la case "Plein ecran" de la GUI d'audio2wave la reflete.
         argv.append("--no-fullscreen")
     if device:
         argv += ["-d", device]
     argv += shlex.split(extra or "")
-    old = sys.argv
-    sys.argv = argv
-    try:
-        return live.parse_args()
-    finally:
-        sys.argv = old
-
-
-BAR_GAP_MAX = 0.7        # espace entre barres (fraction de leur largeur) au-dela duquel l'analyzer en barres n'a plus rien a montrer
-
-
-def limit_bar_gap(live_args) -> str | None:
-    """Analyzer en barres : le separateur noir (`drawgrid`) fait `largeur / barres x bar_gap` pixels, donc des `bar_gap` >= 1 (le
-    curseur d'audio2wave va jusqu'a 1,5 ; le preset `devil` est a 1,4) l'ecrasent : mesure sur le vrai filtre, 0,7 laisse la moitie des
-    colonnes, 0,9 = 4 % de l'image, 1,0 et plus = ecran noir. Plafonne a `BAR_GAP_MAX` sur la copie envoyee au producteur (les
-    reglages de leur fenetre ne sont pas touches) et rend un message, ou None si rien n'a ete change."""
-    if (getattr(live_args, "style", "") == "analyzer" and getattr(live_args, "shape", "") == "bar"
-            and float(getattr(live_args, "bar_gap", 0) or 0) > BAR_GAP_MAX):
-        asked = float(live_args.bar_gap)
-        live_args.bar_gap = BAR_GAP_MAX
-        return f"Espace entre barres {asked:.2f} : plus aucune barre visible, limite a {BAR_GAP_MAX}"
-    return None
-
-
-LINE_MIN_POINTS = 400    # analyzer en courbe : points mini (le curseur d'audio2wave s'arrete a 400) ; leur defaut, 128, fait des marches de 15 px
-LINE_MIN_WIN = 2048      # ... et fenetre d'analyse mini (leur defaut, 512 a 16 kHz, ne donne que 256 frequences : une courbe en escalier)
-
-
-def sharpen_line(live_args) -> bool:
-    """Analyzer en courbe (`--shape line`) : avec les defauts d'audio2wave (128 points, fenetre de 512) la courbe est un escalier
-    epais et flou une fois etiree sur l'ecran (mesure : marches de ~15 px, traits de 15 px de large). On la dessine avec au moins
-    `LINE_MIN_POINTS` points et une fenetre de `LINE_MIN_WIN` (plus de frequences, trait fin et net ; la fenetre plus longue lisse un
-    peu le mouvement, sans effet sur la detection du kick qui est a nous). Applique a la copie envoyee au producteur, jamais a leur
-    fenetre. Rend True si quelque chose a change."""
-    if getattr(live_args, "style", "") != "analyzer" or getattr(live_args, "shape", "") != "line":
-        return False
-    changed = False
-    if int(getattr(live_args, "bars", None) or 0) < LINE_MIN_POINTS:
-        live_args.bars = LINE_MIN_POINTS
-        changed = True
-    if int(getattr(live_args, "win_size", None) or 0) < LINE_MIN_WIN:
-        live_args.win_size = LINE_MIN_WIN
-        changed = True
-    return changed
+    return live.parse_args(argv)             # API hote d'audio2wave : pas d'echange de sys.argv
 
 
 def format_command(cmd: list[str]) -> str:
@@ -2004,15 +1961,28 @@ def _addr(monitor) -> int:
     return ctypes.cast(monitor, ctypes.c_void_p).value or 0
 
 
-def pick_monitor(index: int | None):
-    """Moniteur cible : --monitor N (index glfw), sinon le premier NON principal (l'ordre
-    des moniteurs n'est pas fiable), sinon le principal."""
+def monitor_contains(monitor, point) -> bool:
+    """Le point (x, y) du bureau est-il sur ce moniteur ?"""
+    if point is None:
+        return False
+    mx, my = glfw.get_monitor_pos(monitor)
+    mode = glfw.get_video_mode(monitor)
+    return mx <= point[0] < mx + mode.size.width and my <= point[1] < my + mode.size.height
+
+
+def pick_monitor(index: int | None, avoid=None):
+    """Moniteur cible : --monitor N (index glfw), sinon un moniteur qui n'est PAS celui de la fenetre de reglages (`avoid` =
+    un point de cette fenetre), sinon le premier NON principal (l'ordre des moniteurs n'est pas fiable), sinon le principal."""
     monitors = glfw.get_monitors()
     if index is not None:
         if not 0 <= index < len(monitors):
             print(f"--monitor {index} invalide ({len(monitors)} moniteur(s) detecte(s)).", file=sys.stderr)
             sys.exit(2)
         return monitors[index]
+    if avoid is not None:
+        for m in monitors:
+            if not monitor_contains(m, avoid):
+                return m
     primary = _addr(glfw.get_primary_monitor())
     for m in monitors:
         if _addr(m) != primary:
@@ -2020,24 +1990,28 @@ def pick_monitor(index: int | None):
     return monitors[0]
 
 
-def has_secondary_monitor() -> bool:
-    """Vrai s'il y a plus d'un moniteur (Windows, EnumDisplayMonitors). Sert a decider du plein
-    ecran par defaut AVANT d'ouvrir la moindre fenetre (la GUI doit connaitre l'etat au depart)."""
-    if os.name != "nt":
-        return False
-    try:
-        return ctypes.windll.user32.GetSystemMetrics(80) > 1     # SM_CMONITORS
-    except Exception:
-        return False
+def resolve_fullscreen(requested: bool | None) -> bool:
+    """Fenetre par defaut, TOUJOURS : un plein ecran borderless pouvait recouvrir le poste de travail et la GUI (souris
+    bloquee). Il faut le demander (--fullscreen, case « Plein ecran », touche F)."""
+    return bool(requested)
+
+def windowed_rect(mx: int, my: int, mw: int, mh: int, size: tuple[int, int], shared: bool) -> tuple[int, int, int, int]:
+    """(x, y, largeur, hauteur) de la fenetre de projection sur un moniteur : centree, ou dans le coin bas droit si le moniteur
+    est aussi celui des reglages (ils restent atteignables). Toujours contenue dans le moniteur."""
+    w, h = min(size[0], max(mw - 40, 320)), min(size[1], max(mh - 80, 240))
+    if shared:
+        x, y = mx + mw - w - 20, my + mh - h - 60
+    else:
+        x, y = mx + (mw - w) // 2, my + (mh - h) // 2
+    return max(x, mx), max(y, my), w, h
 
 
-def resolve_fullscreen(requested: bool | None, monitor_index: int | None, has_secondary: bool) -> bool:
-    """Plein ecran par defaut UNIQUEMENT s'il y a un second moniteur (le videoprojecteur) ou si
-    --monitor en designe un explicitement. Avec un seul ecran, un plein ecran borderless
-    recouvrirait le poste de travail et la GUI: il faut le demander (--fullscreen)."""
-    if requested is not None:
-        return requested
-    return monitor_index is not None or has_secondary
+def fullscreen_blocked(on_gui_monitor: bool | None, is_primary: bool, monitor_index, requested) -> bool:
+    """Un plein ecran demande par la case / un preset est refuse sur l'ecran des reglages (il les recouvrirait) ; position de la
+    GUI inconnue (`on_gui_monitor` None) : sur l'ecran principal. `--monitor` ou `--fullscreen` explicites l'emportent."""
+    if monitor_index is not None or requested is True:
+        return False
+    return is_primary if on_gui_monitor is None else on_gui_monitor
 
 
 def hide_cursor(fullscreen: bool, on_primary: bool) -> bool:
@@ -2047,8 +2021,9 @@ def hide_cursor(fullscreen: bool, on_primary: bool) -> bool:
 
 
 class Window:
-    def __init__(self, monitor, windowed_size: tuple[int, int], fullscreen: bool):
+    def __init__(self, monitor, windowed_size: tuple[int, int], fullscreen: bool, shared: bool = False):
         self.monitor = monitor
+        self.shared = shared                  # le moniteur est aussi celui des reglages : la fenetre va dans le coin bas droit
         self.is_primary = _addr(monitor) == _addr(glfw.get_primary_monitor())
         self.mx, self.my = glfw.get_monitor_pos(monitor)
         mode = glfw.get_video_mode(monitor)
@@ -2071,9 +2046,10 @@ class Window:
         glfw.swap_interval(1)
         glfw.show_window(self.handle)
 
-    def retarget(self, monitor) -> None:
+    def retarget(self, monitor, avoid=None) -> None:
         """Vise un autre moniteur (le projecteur branche apres le lancement, par exemple)."""
         self.monitor = monitor
+        self.shared = monitor_contains(monitor, avoid)
         self.is_primary = _addr(monitor) == _addr(glfw.get_primary_monitor())
         self.mx, self.my = glfw.get_monitor_pos(monitor)
         mode = glfw.get_video_mode(monitor)
@@ -2089,8 +2065,9 @@ class Window:
         else:
             w, h = self.windowed_size
             glfw.set_window_attrib(self.handle, glfw.DECORATED, True)
+            x, y, w, h = windowed_rect(self.mx, self.my, self.mw, self.mh, (w, h), self.shared)
             glfw.set_window_size(self.handle, w, h)
-            glfw.set_window_pos(self.handle, self.mx + (self.mw - w) // 2, self.my + (self.mh - h) // 2)
+            glfw.set_window_pos(self.handle, x, y)
             glfw.set_input_mode(self.handle, glfw.CURSOR, glfw.CURSOR_NORMAL)
 
     def toggle_fullscreen(self) -> None:
@@ -2143,9 +2120,8 @@ def parse_args() -> argparse.Namespace:
                    help="Resolution de rendu ffmpeg, independante de la fenetre (defaut: 1280x720)")
     p.add_argument("--fps", type=int, default=30, help="Images par seconde du producteur ffmpeg (defaut: 30)")
     p.add_argument("--fullscreen", action=argparse.BooleanOptionalAction, default=None,
-                   help="Fenetre borderless plein ecran sur le moniteur cible. Defaut: active seulement s'il "
-                        "y a un SECOND moniteur (le projecteur); avec un seul ecran, fenetre normale "
-                        "(--fullscreen pour forcer, --no-fullscreen pour l'interdire)")
+                   help="Fenetre borderless plein ecran sur le moniteur cible. Defaut: NON, la projection s'ouvre "
+                        "en fenetre (--fullscreen pour la demander, aussi possible par la case de la GUI ou la touche F)")
     p.add_argument("--monitor", type=int, default=None,
                    help="Index glfw du moniteur cible (defaut: premier moniteur non principal)")
     p.add_argument("--sensitivity", type=float, default=None,
@@ -2198,7 +2174,7 @@ def main() -> None:
                   "(python audio2wave_gl.py --diagnostic donne le rapport complet).", file=sys.stderr)
             sys.exit(1)
     args.fullscreen_request = args.fullscreen        # None = pas demande : decide a l'ouverture de la projection
-    args.fullscreen = resolve_fullscreen(args.fullscreen, args.monitor, has_secondary_monitor())
+    args.fullscreen = resolve_fullscreen(args.fullscreen)
 
     if args.list_audio_devices:
         require_deps()
@@ -2333,6 +2309,8 @@ class Session:
         self.finished_event = threading.Event()
         self.proj_stop = threading.Event()                # fermeture de la projection seule (la GUI reste ouverte)
         self.projection: Projection | None = None         # avec --gui : la fenetre de rendu s'ouvre a la demande
+        self.gui_point_fn = None           # GUI : point de la fenetre de reglages (fil Tk) ; `gui_point` en est la copie lue par le fil GL
+        self.gui_point: tuple[int, int] | None = None
         self.renderer: Renderer | None = None
         self.window: Window | None = None
         self.mode = "live"                 # source du fond : "live" (ffmpeg), "snap" ou "ridge" (py_modes)
@@ -2393,9 +2371,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
     if args.synthetic:
         reader = FrameReader(SyntheticVideoStream(render_size[0], render_size[1], args.fps), frame_size)
     elif live_args.device:
-        producer_args = copy.copy(live_args)
-        sharpen_line(producer_args)                      # courbe de l'analyzer : points et fenetre assez fins (sans toucher a leur fenetre)
-        manager = ProducerManager(live, producer_args, frame_size, {})
+        manager = ProducerManager(live, live_args, frame_size, {})
         reader = manager.reader
     else:
         # --gui sans -d: pas de producteur tant qu'aucune entree n'est choisie dans la fenetre.
@@ -2433,14 +2409,13 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
 
 class Projection:
     """Fenetre de rendu (fil GL) ouverte et fermee a la demande, pour la GUI : `start()` / `stop()` autant de fois qu'on veut,
-    la GUI, l'audio et le producteur ne sont pas touches. Par defaut elle s'ouvre en plein ecran sur le second ecran (le
-    projecteur) ; sans second ecran, en fenetre (un plein ecran sur le poste de travail le recouvrirait, souris comprise).
-    `target` et `secondary` s'injectent pour les tests."""
+    la GUI, l'audio et le producteur ne sont pas touches. Par defaut elle s'ouvre EN FENETRE (sur un autre ecran que
+    les reglages s'il y en a un) ; le plein ecran se demande (--fullscreen, case, touche F).
+    `target` s'injecte pour les tests."""
 
-    def __init__(self, s: Session, target=None, secondary=None):
+    def __init__(self, s: Session, target=None):
         self.s = s
         self._target = target
-        self._secondary = secondary or has_secondary_monitor
         self.thread: threading.Thread | None = None
 
     def running(self) -> bool:
@@ -2452,8 +2427,11 @@ class Projection:
         if self.running():
             return "La projection est deja ouverte"
         a = s.args
-        second = bool(self._secondary())
-        a.fullscreen = resolve_fullscreen(getattr(a, "fullscreen_request", None), a.monitor, second)
+        try:
+            s.gui_point = s.gui_point_fn() if s.gui_point_fn else None      # appele depuis le fil de la GUI
+        except Exception:
+            s.gui_point = None
+        a.fullscreen = resolve_fullscreen(getattr(a, "fullscreen_request", None))
         s.proj_stop.clear()
         while True:                                     # commandes envoyees pendant que la projection etait fermee : perimees
             try:
@@ -2463,8 +2441,8 @@ class Projection:
         self.thread = threading.Thread(target=self._run, name="gl", daemon=True)
         self.thread.start()
         if a.fullscreen:
-            return "Projection ouverte en plein ecran" + (" sur le second ecran" if second else "")
-        return "Pas de second ecran detecte : projection en fenetre (branche le projecteur puis F pour le plein ecran)"
+            return "Projection ouverte en plein ecran"
+        return "Projection ouverte en fenetre (F ou la case Plein ecran pour le plein ecran)"
 
     def _run(self) -> None:
         try:
@@ -2622,8 +2600,9 @@ def gl_main(s: Session) -> None:
         if not glfw.init():
             print("Initialisation de glfw impossible.", file=sys.stderr)
             sys.exit(1)
-        monitor = pick_monitor(args.monitor)
-        window = Window(monitor, s.win_size, args.fullscreen)
+        avoid = getattr(s, "gui_point", None)
+        monitor = pick_monitor(args.monitor, avoid)
+        window = Window(monitor, s.win_size, args.fullscreen, shared=monitor_contains(monitor, avoid))
         ctx = moderngl.create_context()
         mode = glfw.get_video_mode(monitor)
         wx, wy = glfw.get_window_pos(window.handle)
@@ -2666,21 +2645,25 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 + ("" if params["fx_link"] >= 0.5 else
                    f" | logo {''.join(str(int(v)) for v in params['fxl_on'])} (separes du fond)"))
 
+    def gui_pt():
+        return getattr(s, "gui_point", None)
+
     def act(name: str) -> None:
         """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""
         if name == "quit":
             quit_flag["v"] = True
         elif name == "fullscreen":
             if not window.fullscreen:
-                window.retarget(pick_monitor(args.monitor))     # un projecteur branche depuis le lancement est pris en compte
+                window.retarget(pick_monitor(args.monitor, gui_pt()), gui_pt())     # un projecteur branche depuis le lancement est pris en compte
             window.toggle_fullscreen()
         elif name.startswith("fullscreen="):      # etat explicite (case « Plein ecran » de la GUI, preset qui la coche)
             want = name.endswith("1")
             if want and not window.fullscreen:
-                window.retarget(pick_monitor(args.monitor))
-                if window.is_primary and args.monitor is None and getattr(args, "fullscreen_request", None) is not True:
-                    # jamais de plein ecran sur le poste de travail sans l'avoir demande (--fullscreen) : il le recouvrirait
-                    s.status["msg"] = "Plein ecran refuse sur l'ecran principal : branche le projecteur (ou --fullscreen)"
+                window.retarget(pick_monitor(args.monitor, gui_pt()), gui_pt())
+                # seul l'ecran des reglages est interdit (un plein ecran le recouvrirait) ; point inconnu : l'ecran principal
+                on_gui = monitor_contains(window.monitor, gui_pt()) if gui_pt() is not None else None
+                if fullscreen_blocked(on_gui, window.is_primary, args.monitor, getattr(args, "fullscreen_request", None)):
+                    s.status["msg"] = "Plein ecran refuse sur l'ecran des reglages : projette sur un autre ecran (ou --fullscreen)"
                     print(s.status["msg"], file=sys.stderr)
                     return
             if window.fullscreen != want:

@@ -38,7 +38,9 @@ CENTER = {"logo_x": 0.5, "logo_y": 0.5}      # l'overlay du Full Randomizer est 
 MAX_COSTLY = 2                   # halo + fonte + cellules : jamais les trois ensemble
 BG_SOURCES = ("preset", "a2w", "video", "params")
 A2W_MODES = ("live", "snap", "ridge")
-OVERLAY_PARTS = ("overlay_preset", "params", "fx", "media")
+OVERLAY_PARTS = ("overlay_preset", "params", "fx", "media", "text")
+DEFAULT_TEXT = "CASUAL RAVERS"      # texte tire comme logo quand « texte » est coche (modifiable dans le panneau)
+MAX_TEXT = 200
 DEFAULTS = {
     "folders_fond": [],          # dossiers de la banque FOND (chemins)
     "folders_overlay": [],       # dossiers de la banque OVERLAY
@@ -46,6 +48,7 @@ DEFAULTS = {
     "categories_overlay": [],
     "bg_sources": list(BG_SOURCES),
     "overlay": list(OVERLAY_PARTS),
+    "text": DEFAULT_TEXT,
     "modes": list(A2W_MODES),    # modes audio2wave que la config aleatoire du fond peut tirer
     "lock_bg": False, "lock_media": False, "lock_fx": False,
 }
@@ -72,6 +75,8 @@ def clean_settings(raw) -> dict:
     for key, allowed in (("bg_sources", BG_SOURCES), ("overlay", OVERLAY_PARTS), ("modes", A2W_MODES)):
         if isinstance(raw.get(key), list):
             out[key] = [x for x in allowed if x in raw[key]]
+    if isinstance(raw.get("text"), str):
+        out["text"] = raw["text"].replace("\r", "").strip()[:MAX_TEXT]           # vide = pas de texte tire
     for key in ("lock_bg", "lock_media", "lock_fx"):
         if isinstance(raw.get(key), bool):
             out[key] = raw[key]
@@ -133,6 +138,31 @@ def media_for(asset: Asset) -> dict:
     if asset.kind == "image":
         return {"logo_source": "image", "logo_path": asset.path}
     return {"logo_source": "video", "logo_video": asset.path, "logo_key": ""}
+
+
+NAME_WORDS_A = ("Neon", "Acide", "Vapeur", "Cobalt", "Turbo", "Solaire", "Plasma", "Chrome", "Onyx", "Cosmique", "Fievre", "Rubis",
+                "Glacial", "Sauvage", "Electrique", "Opale", "Furtif", "Magnetique", "Abyssal", "Laser")
+NAME_WORDS_B = ("Panthere", "Orage", "Comete", "Mirage", "Tigre", "Cyclone", "Dragon", "Prisme", "Rafale", "Vortex", "Serpent", "Aurore",
+                "Meteore", "Tornade", "Faucon", "Eclipse", "Nebuleuse", "Pulsar", "Tempete", "Nova")
+
+
+def random_name(rng: random.Random, taken) -> str:
+    """Nom aleatoire (`Neon Comete`) pour une scene, jamais un nom de `taken` (casse ignoree) : `Neon Comete 2` en dernier recours."""
+    used = {str(x).lower() for x in taken}
+    for _ in range(50):
+        name = f"{rng.choice(NAME_WORDS_A)} {rng.choice(NAME_WORDS_B)}"
+        if name.lower() not in used:
+            return name
+    base = f"{rng.choice(NAME_WORDS_A)} {rng.choice(NAME_WORDS_B)}"
+    n = 2
+    while f"{base} {n}".lower() in used:
+        n += 1
+    return f"{base} {n}"
+
+
+def text_media(rng: random.Random, text: str) -> dict:
+    """Le texte comme logo : source texte, contenu donne, couleur tiree (lisible sur un fond sombre), centre ; la police reste celle du moment."""
+    return {"logo_source": "text", "text_content": text, "text_color": rng.choice(GLOW_COLORS), "text_align": "center"}
 
 
 def _pick(rng: random.Random, items: list, avoid=None, key=lambda x: x):
@@ -351,17 +381,23 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
     if settings["lock_media"]:
         media = current_media
         notes.append("media verrouille")
-    elif "media" in settings["overlay"] and pool:
-        # une video deja choisie pour le fond n'est pas aussi le logo (sauf si c'est la seule)
-        others = [a for a in pool if a.path != record.get("bg_video")] or pool
-        asset = _pick(rng, others, avoid=last.get("media"), key=lambda a: a.path)
-        media = media_for(asset)
-        record["media"] = asset.path
-        notes.append(f"media: {Path(asset.path).name}")
     else:
-        media = current_media                     # pas de media a tirer : celui d'avant reste (un preset remettrait le logo par defaut)
-        if "media" in settings["overlay"]:
-            notes.append("media: banque vide")
+        # une video deja choisie pour le fond n'est pas aussi le logo (sauf si c'est la seule)
+        assets = ([a for a in pool if a.path != record.get("bg_video")] or pool) if "media" in settings["overlay"] else []
+        choices = [("asset", a) for a in assets] + ([("text", settings["text"])] if "text" in settings["overlay"] and settings["text"].strip() else [])
+        picked = _pick(rng, choices, avoid=last.get("media"), key=lambda c: c[1].path if c[0] == "asset" else "text") if choices else None
+        if picked is None:
+            media = current_media                 # pas de media a tirer : celui d'avant reste (un preset remettrait le logo par defaut)
+            if "media" in settings["overlay"] or "text" in settings["overlay"]:
+                notes.append("media: banque vide")
+        elif picked[0] == "text":
+            media = text_media(rng, settings["text"])
+            record["media"] = "text"
+            notes.append(f"media: texte {settings['text'].strip().splitlines()[0][:30]}")
+        else:
+            media = media_for(picked[1])
+            record["media"] = picked[1].path
+            notes.append(f"media: {Path(picked[1].path).name}")
     overlay.update(media)
     scene.update({"name": "Full Randomizer", "overlay": centered(overlay, cur.get("overlay"))})
     return scene, "  |  ".join(notes), record

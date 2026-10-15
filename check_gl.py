@@ -225,6 +225,55 @@ def check_manager() -> None:
         check(gl.invalid_colors(NS(colors="red|blue", bg_color="0x102030"), cur) == [], "liste valide acceptee")
 
 
+class SineStream:
+    """Faux micro des modes Snap / Ridge (PCM s16le mono, 48 kHz)."""
+
+    def __init__(self):
+        self.t = 0
+
+    def read(self, n):
+        import array
+        import math
+        time.sleep(n / 2 / 48000)
+        k = n // 2
+        data = array.array("h", [int(12000 * math.sin(2 * math.pi * 220 * (self.t + i) / 48000)) for i in range(k)])
+        self.t += k
+        return data.tobytes()
+
+
+POPEN_LOG: list = []        # commandes lancees par les modes Snap / Ridge pendant les tests (faux micro installe)
+
+
+def fake_microphone(*modules):
+    """TEST SEULEMENT : le module `subprocess` de snap / ridge rend un faux micro (sinus) pour la capture dshow, tout le reste est
+    delegue (ffprobe...) ; chaque commande est notee dans POPEN_LOG. Rend la fonction qui remet le module d'origine. Le code de
+    production, lui, n'y touche plus (`start_headless`)."""
+    import subprocess
+    from types import SimpleNamespace as NS
+
+    class FakeSubprocess:
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def Popen(self, cmd, *a, **k):               # noqa: N802
+            POPEN_LOG.append(list(cmd) if not isinstance(cmd, str) else [cmd])
+            if "dshow" in list(cmd):
+                return NS(stdout=SineStream(), terminate=lambda: None, wait=lambda *a, **k: 0, poll=lambda: None, returncode=None)
+            return self._real.Popen(cmd, *a, **k)
+
+    originals = {m: m.subprocess for m in modules}
+    for m in modules:
+        m.subprocess = FakeSubprocess(m.subprocess)
+
+    def restore() -> None:
+        for m, real in originals.items():
+            m.subprocess = real
+    return restore
+
+
 def check_gui() -> None:
     print("GUI (fenetre d'audio2wave_live integree + panneaux casual-overlay)")
     try:
@@ -255,22 +304,11 @@ def check_gui() -> None:
     manager.suspend = lambda: setattr(manager, "suspended", True)
     manager.resume = lambda new_args: (setattr(manager, "suspended", False), manager.resumed.append(new_args))
 
-    class SineStream:                     # faux micro pour les modes Snap / Ridge (PCM s16le mono, 48 kHz)
-        def __init__(self):
-            self.t = 0
-
-        def read(self, n):
-            import array
-            import math
-            time.sleep(n / 2 / 48000)
-            k = n // 2
-            data = array.array("h", [int(12000 * math.sin(2 * math.pi * 220 * (self.t + i) / 48000)) for i in range(k)])
-            self.t += k
-            return data.tobytes()
-
-    def fake_capture(a, module):
-        stream = SineStream()
-        return NS(stdout=stream, terminate=lambda: None, wait=lambda: None), module.LiveCapture(stream, module.chunk_size(a))
+    import py_modes
+    restore_microphone = fake_microphone(py_modes.load_mode(gl.DEFAULT_A2W_DIR, "snap"), py_modes.load_mode(gl.DEFAULT_A2W_DIR, "ridge"))
+    import atexit
+    atexit.register(restore_microphone)
+    POPEN_LOG.clear()
 
     analyzer = NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0})
     audio = NS(synthetic=True, name="synthetique", analyzer=analyzer)
@@ -286,7 +324,7 @@ def check_gui() -> None:
 
         def start(self):
             self.on, self.starts = True, self.starts + 1
-            return "Projection ouverte en plein ecran sur le second ecran"
+            return "Projection ouverte en fenetre"
 
         def stop(self, wait=0.0):
             self.on, self.stops = False, self.stops + 1
@@ -294,8 +332,7 @@ def check_gui() -> None:
     fake_proj = FakeProjection()
     s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio, projection=fake_proj,
            commands=queue.SimpleQueue(), status={}, stop_event=threading.Event(),
-           finished_event=threading.Event(), mode="live", pysrc=None, mode_args={}, reader=manager.reader,
-           capture_factory=fake_capture)
+           finished_event=threading.Event(), mode="live", pysrc=None, mode_args={}, reader=manager.reader)
     original_gain = args.gain
     out: dict = {}
 
@@ -362,6 +399,14 @@ def check_gui() -> None:
                                     banner=any(t.startswith("LIVE") for t in texts),
                                     gain=find_scale(c["live_host"], "Gain (dB)") is not None,
                                     presets_top=presets_top_state(c["live_host"]))
+            # GuiController.apply_state en live: le panneau prend l'etat ET le producteur ffmpeg est relance avec (rien ne prend effet sans)
+            ctrl = c["panel"]["ctrl"]
+            skipped = ctrl.apply_state({"gain": 17.0, "pas_une_cle": 1})
+            for _ in range(8):
+                root.update()
+                time.sleep(0.05)
+            out["apply_live"] = (skipped, args.gain == 17.0, any(getattr(r, "gain", None) == 17.0 for r in requests),
+                                 ctrl.capture_state().get("gain") == 17.0)
             # une scene a fond audio2wave qui change de mode (Live -> Snap) charge son preset dans le panneau neuf
             out["stage"] = "scene"
             root.geometry("")                                   # taille naturelle (aucune geometrie imposee), comme a l'ouverture
@@ -421,8 +466,8 @@ def check_gui() -> None:
                                  sum(1 for w in walk(root) if w.winfo_class() == "TScrollbar"
                                      and str(w.cget("style")) == "Casual.Vertical.TScrollbar"))
             menus = [w for w in walk(root) if w.winfo_class() == "Menu"]
-            out["menus"] = (len(menus), sum(1 for m in menus if str(m.cget("activeforeground")).lower() != "#e7e9ee"
-                                            or str(m.cget("background")).lower() != "#242835"))
+            out["menus"] = (len(menus), sum(1 for m in menus if _contrast(*(
+                "#%02x%02x%02x" % tuple(v >> 8 for v in root.winfo_rgb(str(m.cget(k)))) for k in ("activebackground", "activeforeground"))) < 3.0))
             out["automation"] = sum(1 for w in walk(root) if w.winfo_class() == "Button"
                                     and w.cget("text") == "∿")
             proj_btn = c["projection"]["button"]()
@@ -565,10 +610,15 @@ def check_gui() -> None:
             s.status["msg"] = "test"
             # automations: etat de l'editeur d'audio2wave -> params (synchro toutes les 200 ms)
             auto = c["automation"]
-            out["auto_registered"] = set(auto.state) == set(gl.AUTOMATION_SPECS)
-            auto.state["bg_hue"]["enabled"].set(False)
-            auto.state["logo_x"]["enabled"].set(True)
-            auto.state["bg_tile"]["period"].set(33.0)
+            out["auto_registered"] = set(auto.snapshot()) == set(gl.AUTOMATION_SPECS)        # snapshot(): types simples, pas de tk.Variable
+            edit = auto.capture()                                  # ecritures par l'API publique (capture / apply), pas par `.state`
+            edit["bg_hue"]["enabled"] = False
+            edit["logo_x"]["enabled"] = True
+            edit["bg_tile"]["period"] = 33.0
+            auto.apply(edit)
+            snap = auto.snapshot()
+            out["auto_snapshot"] = (snap["bg_hue"]["enabled"], snap["logo_x"]["enabled"], snap["bg_tile"]["period"],
+                                    isinstance(snap["bg_hue"]["points"], list), snap["bg_hue"]["value"])
             c["auto_master_var"].set(0)
             root.after(600, step4b)
 
@@ -579,7 +629,9 @@ def check_gui() -> None:
             out["sync_master"] = params["auto_master"]
             # les curseurs suivent la valeur calculee par le moteur (ici posee a la main)
             c["auto_master_var"].set(1)
-            c["automation"].state["bg_speed"]["enabled"].set(True)
+            edit = c["automation"].capture()
+            edit["bg_speed"]["enabled"] = True
+            c["automation"].apply(edit)
             root.after(300, lambda: None)
             params["bg_speed"] = 1.23
             root.after(400, step4c)
@@ -1020,6 +1072,19 @@ def check_gui() -> None:
     xo = out.get("x_open", ())
     check(len(xo) == 4 and all(v for v in xo[:2]) and xo[2] == 3 and xo[3],
           "etendu (GUI): le bouton agrandit la fenetre, le panneau montre une ligne par entree, le bouton devient Reduire", str(xo))
+    check(out.get("x_fill") == (True, True, True, True),
+          "etendu (GUI): le bouton du nom remplit sa case (largeur restante, hauteur de la ligne), les autres boutons ont la meme hauteur",
+          f"{out.get('x_fill')} {out.get('x_fill_dbg')}")
+    xs = out.get("x_skinned", (0, False))
+    check(xs[0] >= 3 and xs[1], "etendu (GUI): les cases VJ sont habillees des l'ouverture du panneau", str(xs))
+    check(out.get("x_wheel_grip") == (True,) * 4,
+          "etendu (GUI): la molette defile la liste des scenes et la poignee l'agrandit / la reduit (la fenetre suit, minimum 80 px)",
+          str(out.get("x_wheel_grip")))
+    check(out.get("x_noreload") == (True,) * 5,
+          "etendu (GUI): case VJ, duree et scene active se mettent a jour sur place (aucun widget reconstruit, resume et ligne active a jour)",
+          str(out.get("x_noreload")))
+    xr = out.get("x_rebuild", (0, False, False, False))
+    check(xr[0] >= 12 and xr[1] and xr[2] and xr[3], "etendu (GUI): un panneau reconstruit reste habille et garde sa position d'ascenseur", str(xr))
     check(out.get("x_drop_dnd") is True, "etendu (GUI): glisser-deposer disponible (tkinterdnd2 charge dans la fenetre)")
     xd = out.get("x_drop", ())
     check(len(xd) == 3 and xd[0] is True and xd[1] == {"logo_source": "image", "logo_path": xd[1].get("logo_path", "") if xd[1] else ""}
@@ -1032,14 +1097,24 @@ def check_gui() -> None:
     check(out.get("x_drop_active") == ("image", True), "etendu (GUI): deposer sur la scene a l'ecran applique le media tout de suite",
           str(out.get("x_drop_active")))
     check(out.get("x_thumb") is True, "etendu (GUI): vignette du media (calculee dans un fil) disponible", str(out.get("x_thumb")))
+    check(out.get("x_bg_bad", (True, 0))[0] is False and out.get("x_bg_bad", (True, 0))[1] is None and out.get("x_bg") == (True,) * 4,
+          "etendu (GUI): colonne FOND video : une image est refusee, une video deposee remplace le fond de l'entree (meme fichier d'une entree a l'autre), retrait", str((out.get("x_bg_bad"), out.get("x_bg"))))
+    check(out.get("x_dup") == (True,) * 5,
+          "etendu (GUI): Dupliquer la derniere ajoute une copie de la scene (nom inedit) avec les medias, la duree et le VJ de l'entree", str(out.get("x_dup")))
+    check(out.get("x_plus") == (True,) * 6,
+          "etendu (GUI): le bouton + ajoute au set une scene aleatoire (nom aleatoire inedit, aucun preset enregistre, rien d'applique, overlay centre)", str(out.get("x_plus")))
+    check(out.get("x_thumb_shown") is True, "etendu (GUI): une vignette prete s'affiche sans autre changement (la signature en tient compte)",
+          str(out.get("x_thumb_shown")))
     xv = out.get("x_vj", ((), (), set()))
     check(xv[0] == (0, True) and xv[1] == 2 and xv[2] == {0, 2},
           "etendu (GUI): VJ = duree propre a l'entree, entrees exclues sautees (dans l'ordre et au hasard)", str(xv))
     check(out.get("x_vj_none") == (False, True), "etendu (GUI): moins de 2 entrees jouables = le VJ s'arrete avec un message",
           str(out.get("x_vj_none")))
+    check(out.get("x_longname") == (True,) * 5,
+          "etendu (GUI): un nom de scene tres long s'affiche en entier, les colonnes (nom, zones, duree) restent alignees", str(out.get("x_longname")))
     check(out.get("x_rename") == (True, True, True), "etendu (GUI): renommer une scene depuis le panneau", str(out.get("x_rename")))
     check(out.get("x_close") == (True, False) and out.get("x_end") is True,
-          "etendu (GUI): reduire rend sa taille d'origine a la fenetre et cache le panneau", str((out.get("x_close"), out.get("x_end"))))
+          "etendu (GUI): reduire rend sa taille d'origine a la fenetre et cache le panneau", str((out.get("x_close"), out.get("x_end"), out.get("x_grip_back"))))
     check("a2w_error" not in out, "medias audio2wave (GUI): aucune erreur", out.get("a2w_error", ""))
     check(out.get("a2w_cap") == ("snap", True, "video", True),
           "medias (GUI): a l'enregistrement d'une scene, une video audio2wave et un media d'overlay tapes sans Entree sont retenus",
@@ -1107,11 +1182,11 @@ def check_gui() -> None:
     check(out.get("r_other_set") and out.get("r_back") == (True, 0, 1),
           "Full Randomizer (GUI): reglages propres au set, retour a l'ordre normal = les entrees reviennent", f"{out.get('r_other_set')} {out.get('r_back')}")
     pb = out.get("presets_blocks", ((None, None), False, False))
-    check(pb[0][0] == 0 and pb[0][1] is not None and pb[0][0] < pb[0][1] and pb[1] and pb[2],
+    check(pb[0][0] is not None and pb[0][0] <= 2 and pb[0][1] is not None and pb[0][0] < pb[0][1] and pb[1] and pb[2],
           "coherence: les boutons de presets sont en tete de chaque bloc (LIVE, fond genere, OVERLAY)", str(pb))
     for key in ("snap", "ridge", "live_back"):
         pt = out.get(key, {}).get("presets_top", (None, None))
-        check(pt[0] == 0 and pt[1] is not None and pt[0] < pt[1],
+        check(pt[0] is not None and pt[0] <= 2 and pt[1] is not None and pt[0] < pt[1],
               f"coherence: presets en tete du panneau d'audio2wave ({key})", str(pt))
     for tag, (n, bad) in out.get("tips", {}).items():
         check(n > 20 and not bad, f"info-bulles: toutes dans la fenetre ({tag}, {n} affichees)", str(bad[:2]))
@@ -1170,12 +1245,18 @@ def check_gui() -> None:
     check(sb[0] == 0 and sb[1] >= 2, "GUI: les ascenseurs de la fenetre sont aux couleurs de la GUI (aucun ascenseur Windows clair)", str(sb))
     mn = out.get("menus", (0, -1))
     check(mn[0] >= 3 and mn[1] == 0, "GUI: les listes deroulantes gardent un texte clair au survol (pas le texte sombre d'audio2wave sur l'accent)", str(mn))
+    check(not any(Path(str(c[0])).stem.lower() == "ffplay" for c in POPEN_LOG) and any("dshow" in c for c in POPEN_LOG),
+          "Snap / Ridge: images remises au puits (start_headless + frame_sink), aucun ffplay lance, capture lancee par audio2wave",
+          f"{len(POPEN_LOG)} commandes : {sorted({Path(str(c[0])).stem for c in POPEN_LOG})}")
     pj = out.get("proj", {})
     check(pj.get("text0") == "Demarrer la projection" and pj.get("text1") == "Arreter la projection"
           and pj.get("text2") == "Demarrer la projection" and pj.get("started") == 1 and pj.get("stopped") == 1,
           "GUI: le bouton ouvre puis ferme la projection (et change de libelle)", str(pj))
     check(pj.get("queued") is False and pj.get("closed_queue") is True and "projection" in pj.get("closed_msg", ""),
           "GUI: une commande part au rendu quand la projection est ouverte, sinon rien ne s'empile et un message le dit", str(pj))
+    al = out.get("apply_live", ((), False, False, False))
+    check(al[0] == ["pas_une_cle"] and al[1] and al[2] and al[3],
+          "GuiController.apply_state (live): cles inconnues rendues, etat pris, producteur relance, capture_state le relit", str(al))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
     check(out.get("presets") and out.get("automation", 0) >= 1,
           "presets et automations d'audio2wave presents", f"{out.get('automation')} curseurs automatables")
@@ -1190,8 +1271,8 @@ def check_gui() -> None:
           "reglages logo/effets ecrits tout de suite dans les parametres")
     check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0,
           "halo holographique: la case ecrit holo_on")
-    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Affichage"],
-          "partie OVERLAY rangee en onglets", str(out.get("tabs")))
+    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise"],
+          "partie OVERLAY rangee en onglets (Affichage et analyse n'est plus un onglet d'effets)", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
           str(out.get("win_height")) + " " + str(out.get("win_dbg")))
     check(out.get("logo") == "", "logo vide = aucun logo")
@@ -1206,6 +1287,8 @@ def check_gui() -> None:
           "selecteur Source: le bloc texte remplace le bloc image et ecrit logo_source")
     check(out.get("typed") == "HELLO\nWORLD" and out.get("font") == "Impact",
           "texte tape (plusieurs lignes) et police ecrits dans les parametres", repr(out.get("typed")))
+    check(out.get("auto_snapshot") == (False, True, 33.0, True, None),
+          "AutomationManager.snapshot(): etat relu en types simples apres capture / apply (plus de lecture de .state)", str(out.get("auto_snapshot")))
     check(out.get("auto_registered"), "tous les reglages automatisables ont leur editeur de courbe (audio2wave)",
           f"{out.get('compact_buttons')} boutons")
     check(out.get("sync_enabled") == (False, True) and out.get("sync_period") == 33.0 and out.get("sync_master") == 0.0,
@@ -1572,11 +1655,21 @@ def check_text() -> None:
                gl.logo_signature(dict(base, logo_source="image"))}) == 6,
           "signature du logo: texte, police, couleur, alignement et source la regenerent")
 
-    # plein ecran par defaut: seulement s'il y a un second moniteur (sinon la GUI serait masquee)
-    check(gl.resolve_fullscreen(None, None, False) is False, "un seul ecran: fenetre normale par defaut")
-    check(gl.resolve_fullscreen(None, None, True) is True, "deux ecrans: plein ecran par defaut")
-    check(gl.resolve_fullscreen(None, 1, False) is True, "--monitor explicite: plein ecran")
-    check(gl.resolve_fullscreen(True, None, False) is True and gl.resolve_fullscreen(False, None, True) is False,
+    # fenetre par defaut (le plein ecran se demande)
+    check(gl.resolve_fullscreen(None) is False, "fenetre par defaut, jamais de plein ecran sans l'avoir demande")
+    check(gl.windowed_rect(0, 0, 1920, 1080, (1280, 720), False) == (320, 180, 1280, 720), "fenetre de projection centree sur un autre ecran")
+    sx, sy, sw, sh = gl.windowed_rect(0, 0, 1920, 1080, (1280, 720), True)
+    check((sx, sy, sw, sh) == (620, 300, 1280, 720) and sx + sw <= 1920 and sy + sh <= 1080,
+          "ecran partage avec les reglages: fenetre dans le coin bas droit", str((sx, sy, sw, sh)))
+    check(gl.windowed_rect(1920, 0, 1280, 720, (1280, 720), True)[2:] == (1240, 640) and gl.windowed_rect(1920, 0, 1280, 720, (1280, 720), True)[0] >= 1920,
+          "petit ecran: fenetre reduite et contenue dans le moniteur")
+    check(gl.fullscreen_blocked(True, False, None, None) is True and gl.fullscreen_blocked(False, True, None, None) is False,
+          "plein ecran refuse sur l'ecran des reglages seulement (meme si c'est le secondaire), permis sur le principal sans reglages")
+    check(gl.fullscreen_blocked(None, True, None, None) is True and gl.fullscreen_blocked(None, False, None, None) is False,
+          "position des reglages inconnue: refus sur l'ecran principal")
+    check(gl.fullscreen_blocked(True, True, 1, None) is False and gl.fullscreen_blocked(True, True, None, True) is False,
+          "--monitor / --fullscreen explicites l'emportent")
+    check(gl.resolve_fullscreen(True) is True and gl.resolve_fullscreen(False) is False,
           "--fullscreen / --no-fullscreen l'emportent")
     check(gl.hide_cursor(True, True) is False and gl.hide_cursor(True, False) is True
           and gl.hide_cursor(False, False) is False,
@@ -1963,16 +2056,17 @@ def check_gates() -> None:
     def build(name):
         mod = py_modes.load_mode(live_dir, name)
         a = py_modes.make_args(mod, name, "x", (1280, 720))
-        host = gl_gui.HostFrame(root)
+        host = tk.Frame(root)
         host.pack()
         if name == "snap":
-            mod.build_gui(a, (1280, 720), {}, {"capture": None}, ev, ev, root=host, on_switch_mode=lambda m: None)
+            ctrl = mod.build_gui(a, (1280, 720), {}, {"capture": None}, ev, ev, on_switch_mode=lambda m: None, parent=host,
+                                 **gl_gui.PANEL_OPTIONS)
         else:
-            mod.build_gui(a, (1280, 720), {}, ev, ev, root=host, on_switch_mode=lambda m: None)
-        gl_gui.tidy_mode_gui(host, name)
-        g = gg.install_mode_gates(host, name, "#888888")
+            ctrl = mod.build_gui(a, (1280, 720), {}, ev, ev, on_switch_mode=lambda m: None, parent=host, **gl_gui.PANEL_OPTIONS)
+        gl_gui.tidy_mode_gui(host, name, ctrl.widgets)
+        g = gg.install_mode_gates(host, name, "#888888", ctrl.widgets)
         root.update()
-        built[name] = (a, gui_colors.add_color_helpers(host, "#5fd4c8", "#0b1018"))
+        built[name] = (a, gui_colors.add_color_helpers(host, "#5fd4c8", "#0b1018", ctrl.widgets, name))
         root.update()
         return host, g
 
@@ -2396,7 +2490,30 @@ def check_sets_pure(sc, tmp) -> None:
             check(False, f"import refuse: {word}")
         except ValueError as exc:
             check(word in str(exc), f"import refuse avec un message clair: {word}", str(exc))
-    check(sc.unique_name("X" * 24, ["x" * 24]).endswith("(2)") and len(sc.unique_name("X" * 24, ["x" * 24])) <= 24
+    bgv_path = Path(tempfile.mkdtemp(prefix="casual_overlay_bgv_")) / "scenes.json"
+    bgb = sc.SceneBook(lambda: bgv_path)
+    bgb.put({"name": "A", "bg": "live", "mode": "snap", "live_overrides": {"gain": 1}, "fond": None, "overlay": {}})
+    check(bgb.set_entry_bg_video(0, "C:/v/fond.mp4") and bgb.rows()[0]["bg_video"] == "C:/v/fond.mp4"
+          and bgb.set_entry_bg_video(0, None) and bgb.rows()[0]["bg_video"] is None and not bgb.set_entry_bg_video(5, "x"),
+          "scenes: video de fond propre a l'entree (pose, retrait, rang inconnu refuse)")
+    swb = sc.scene_with_bg_video(bgb.rows()[0]["scene"], "C:/v/fond.mp4")
+    check(swb["bg"] == "video" and swb["mode"] is None and swb["live_overrides"] is None and swb["fond"]["bg_mode"] == "video"
+          and swb["fond"]["bg_video"] == "C:/v/fond.mp4" and swb["fond"]["bg_video_fit"] == "cover" and bgb.rows()[0]["scene"]["bg"] == "live"
+          and sc.scene_bg_video(swb) == "C:/v/fond.mp4" and sc.scene_bg_video(bgb.rows()[0]["scene"]) is None,
+          "scenes: la video de fond de l'entree remplace le fond de la scene (copie, la scene d'origine ne bouge pas)")
+    check(sc.bg_video_missing("Z:/absent/f.mp4") == "Z:/absent/f.mp4" and sc.bg_video_missing("relatif.mp4") is None and sc.bg_video_missing(None) is None,
+          "scenes: video de fond introuvable detectee (chemin absolu seulement)")
+    check(sc.SceneBook._entry({"bg_video": "  a.mp4 "}, "A")["bg_video"] == "a.mp4" and sc.SceneBook._entry({"bg_video": 5}, "A")["bg_video"] is None,
+          "scenes: bg_video valide a la lecture (export / import compris)")
+    import random as rnd_mod
+    import randomizer as rz
+    rn = rz.random_name(rnd_mod.Random(1), [])
+    taken = {f"{a} {b}".lower() for a in rz.NAME_WORDS_A for b in rz.NAME_WORDS_B}
+    rn2 = rz.random_name(rnd_mod.Random(1), taken)
+    check(rn and " " in rn and rz.random_name(rnd_mod.Random(1), []) == rn and rn.lower() not in {rz.random_name(rnd_mod.Random(2), [rn]).lower()}
+          and rn2.lower() not in taken and rn2[-1].isdigit(),
+          "randomizer: nom de scene aleatoire (determinisme par graine, jamais un nom pris, repli numerote)", f"{rn} / {rn2}")
+    check(sc.unique_name("X" * sc.MAX_NAME, ["x" * sc.MAX_NAME]).endswith("(2)") and len(sc.unique_name("X" * sc.MAX_NAME, ["x" * sc.MAX_NAME])) <= sc.MAX_NAME
           and sc.unique_name("Libre", ["autre"]) == "Libre", "noms uniques bornes a la longueur maximale")
 
 
@@ -2589,6 +2706,34 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_open"] = (h1 > h0 + 150, panel.winfo_ismapped(),
                      sum(1 for w in walk_(panel) if w.winfo_class() == "Button" and w.cget("text") == "Retirer"),
                      any(w.winfo_class() == "Button" and w.cget("text") == "\u25b4 Reduire" for w in walk_(c["scene_bar"])))
+    # presentation du panneau : boutons des noms qui remplissent leur case, cases habillees des l'ouverture, aucune reconstruction
+    root.update()
+    root.update()                                      # les <Configure> en attente : les images des boutons etires suivent la taille allouee
+    rows_ui = list(sc["panel_state"]["rows"].values())
+    first = rows_ui[0]
+    name_btn, frame = first["name"], first["frame"]
+    zone_h = max(w.winfo_height() for w in first["cards"])
+    img_w = name_btn._sk["img"].width()
+    checks = [w for w in walk_(panel) if w.winfo_class() == "Checkbutton"]
+    out["x_fill"] = (100 < name_btn.winfo_width() < 220 and abs(img_w - name_btn.winfo_width()) <= 2,
+                     abs(name_btn._sk["img"].height() - name_btn.winfo_height()) <= 2, abs(name_btn.winfo_height() - zone_h) <= 8,
+                     all(getattr(b, "_skin_stretch", False) and abs(b.winfo_height() - zone_h) <= 8
+                         for b in frame.winfo_children() if b.winfo_class() == "Button" and b is not name_btn))
+    out["x_fill_dbg"] = (name_btn.winfo_width(), img_w, name_btn.winfo_height(), name_btn._sk["img"].height(), zone_h, root.winfo_width())
+    out["x_skinned"] = (len(checks), all(getattr(w, "_sk", None) is not None and str(w.cget("indicatoron")) == "0" for w in checks))
+    before = [w for w in walk_(panel) if w.winfo_class() in ("Frame", "Button", "Checkbutton", "Menubutton")]
+    sc["entry_vj"](1, skip=True)
+    sc["entry_vj"](2, seconds=12.0)
+    sc["entry_vj"](1, skip=False)
+    sc["apply_entry"](1)
+    root.update()
+    after = [w for w in walk_(panel) if w.winfo_class() in ("Frame", "Button", "Checkbutton", "Menubutton")]
+    rows_ui = sc["panel_state"]["rows"]
+    out["x_noreload"] = (before == after, rows_ui[2]["dur"].cget("text").startswith("duree 12 s"),
+                         "scenes dans le VJ" in " ".join(str(w.cget("text")) for w in walk_(panel) if w.winfo_class() == "Label"),
+                         rows_ui[1]["name"].cget("bg").lower() == "#ffcf6b" and rows_ui[0]["name"].cget("bg").lower() != "#ffcf6b",
+                         rows_ui[1]["frame"].cget("bg") != rows_ui[0]["frame"].cget("bg"))
+    sc["entry_vj"](2, seconds=None)
     # drop d'un fichier sur une entree (chemin avec espace, comme le fait tkdnd : entre accolades)
     out["x_drop_dnd"] = sc["dnd"]["ok"]
     out["x_drop"] = (sc["drop"](1, "{" + str(png) + "}"), book.rows()[1]["media"], "logo test.png" in sc["msg"].get())
@@ -2607,7 +2752,53 @@ def gui_expand_steps(c, s, out) -> None:
         photo = sc["thumb"](media)
     out["x_thumb"] = (photo is not None and photo.width() == 56 and photo.height() == 34)
     s.thumb_dirty = True
-    c["vj"]["tick"].__call__ if False else None
+    sc["refresh_panel"]()                          # sans force : la vignette prete doit suffire a reconstruire le panneau
+    root.update()
+    card_imgs = [w for w in walk_(sc["panel_state"]["rows"][1]["frame"]) if w.winfo_class() == "Label" and str(w.cget("image"))]
+    out["x_thumb_shown"] = len(card_imgs) >= 1
+    # video de fond propre a l'entree : colonne FOND, depot, application (le meme fichier d'une entree a l'autre), retrait
+    bgfile = tmpd / "fond commun.mp4"
+    bgfile.write_bytes(b"x")
+    out["x_bg_bad"] = (sc["drop"](0, "{" + str(png) + "}", "bgvideo"), book.rows()[0]["bg_video"])
+    s.active_scene, s.active_entry = None, None
+    sc["drop"](0, "{" + str(bgfile) + "}", "bgvideo")
+    sc["drop"](2, "{" + str(bgfile) + "}", "bgvideo")
+    sc["apply_entry"](0)
+    root.update()
+    first_bg = (params["bg_mode"], params["bg_video"])
+    sc["apply_entry"](2)
+    root.update()
+    both = first_bg + (params["bg_mode"], params["bg_video"])
+    sc["refresh_panel"](force=True)
+    root.update()
+    zones = [w for w in walk_(sc["panel_state"]["rows"][0]["frame"]) if w.winfo_class() == "Label" and str(w.cget("text")) == "FOND  video"]
+    sc["bg_clear"](2)
+    out["x_bg"] = (both == ("video", str(bgfile), "video", str(bgfile)), len(zones) == 1, book.rows()[2]["bg_video"] is None,
+                   book.rows()[0]["bg_video"] == str(bgfile))
+    sc["bg_clear"](0)
+    # bouton + : une scene aleatoire au nom aleatoire, ajoutee au set, sans preset ni application
+    n_before, lib_before = len(book.rows()), set(book.names())
+    presets_before = (len(gl.OVERLAY_BOOK.all()), len(gl.BACKGROUND_BOOK.all()))
+    applied_before = (s.active_scene, s.active_entry)
+    new_name = sc["add_random"]()
+    out["x_plus"] = (len(book.rows()) == n_before + 1, book.rows()[-1]["name"] == new_name, new_name not in lib_before and new_name.strip() != "",
+                     (len(gl.OVERLAY_BOOK.all()), len(gl.BACKGROUND_BOOK.all())) == presets_before,
+                     (s.active_scene, s.active_entry) == applied_before, book.rows()[-1]["scene"]["overlay"].get("logo_x") == 0.5)
+    book.remove_entry(len(book.rows()) - 1)
+    book.delete(new_name)
+    # bouton Dupliquer la derniere : copie de la scene et des reglages de l'entree, a la suite
+    sc["entry_vj"](len(book.rows()) - 1, seconds=42.0)
+    last_row = book.rows()[-1]
+    n_rows = len(book.rows())
+    dup_name = sc["duplicate"](False)
+    new_row = book.rows()[-1]
+    out["x_dup"] = (len(book.rows()) == n_rows + 1, dup_name == new_row["name"] and dup_name != last_row["name"] and dup_name.startswith(last_row["name"]),
+                    new_row["scene"]["overlay"] == last_row["scene"]["overlay"] and new_row["scene"]["bg"] == last_row["scene"]["bg"],
+                    (new_row["media"], new_row["a2w"], new_row["seconds"], new_row["skip"]) == (last_row["media"], last_row["a2w"], 42.0, last_row["skip"]),
+                    book.get(last_row["name"]) is not None)
+    book.remove_entry(len(book.rows()) - 1)
+    book.delete(dup_name)
+    sc["entry_vj"](len(book.rows()) - 1, seconds=None)
     # duree propre et exclusion du VJ
     sc["entry_vj"](1, skip=True)
     sc["entry_vj"](0, seconds=7.0)
@@ -2630,7 +2821,64 @@ def gui_expand_steps(c, s, out) -> None:
     sc["entry_vj"](1, skip=False)
     sc["entry_vj"](2, skip=False)
     vst["running"] = False
+    # une reconstruction (vignette prete, Rescanner) : cases habillees quand meme, position de l'ascenseur gardee
+    for _ in range(9):
+        sc["add_entry"]("Scene A")
+    sc["refresh_panel"](force=True)
+    root.update()
+    cv = sc["panel_state"]["cv"]
+    cv.yview_moveto(0.5)
+    root.update()
+    pos = cv.yview()[0]
+    sc["refresh_panel"](force=True)
+    root.update()
+    root.update()
+    checks = [w for w in walk_(panel) if w.winfo_class() == "Checkbutton"]
+    out["x_rebuild"] = (len(checks), all(getattr(w, "_sk", None) is not None for w in checks), pos > 0.2,
+                        abs(sc["panel_state"]["cv"].yview()[0] - pos) < 0.02)
+    # molette sur la liste + poignee d'agrandissement
+    cv = sc["panel_state"]["cv"]
+    cv.yview_moveto(0)
+    root.update()
+    sc["panel_state"]["rows"][0]["name"].event_generate("<MouseWheel>", delta=-120, x=5, y=5)
+    root.update()
+    wheel_pos = cv.yview()[0]
+    grip = [w for w in walk_(panel) if w.winfo_class() == "Label" and str(w.cget("text")) == "⋯"][0]
+    body = cv.master
+    g0, gw0 = int(body.cget("height")), root.winfo_height()
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=560)
+    grip.event_generate("<ButtonRelease-1>", rooty=560)
+    root.update()
+    h1, win1 = int(body.cget("height")), root.winfo_height()
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=-5000)
+    grip.event_generate("<ButtonRelease-1>", rooty=-5000)
+    root.update()
+    small = int(body.cget("height"))
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=500 + g0 - small)       # on remet la hauteur d'origine (la suite compare les tailles)
+    grip.event_generate("<ButtonRelease-1>", rooty=500 + g0 - small)
+    root.update()
+    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + 60, small == 80)
+    out["x_grip_back"] = (int(body.cget("height")), g0, root.winfo_height(), gw0)
     # renommer depuis le panneau
+    # nom tres long : affiche en entier, colonnes alignees d'une ligne a l'autre
+    long_name = "Une scene au nom vraiment tres long pour verifier l'affichage complet " + "x" * 20
+    sc["rename_scene"]("Scene C", long_name)
+    sc["refresh_panel"](force=True)
+    root.update()
+    root.update()
+    rws = list(sc["panel_state"]["rows"].values())
+    named = [r for r in rws if r["name"].cget("text") == long_name]
+    cols = lambda key: {r[key].winfo_width() for r in rws}
+    btns = lambda: {tuple(b.winfo_width() for b in r["frame"].winfo_children() if b.winfo_class() == "Button" and b is not r["name"]) for r in rws}
+    out["x_longname"] = (len(named) == 1, len(cols("name")) == 1, len(cols("dur")) == 1,
+                         len({tuple(b.winfo_x() - r["frame"].winfo_x() for b in r["cards"]) for r in rws}) == 1,
+                         named[0]["name"].winfo_width() >= 300 if named else False)
+    sc["rename_scene"](long_name, "Scene C")
+    sc["refresh_panel"](force=True)
+    root.update()
     out["x_rename"] = (sc["rename_scene"]("Scene C", "Scene Zed"), "Scene Zed" in book.row_names(), sc["rename_scene"]("Scene Zed", "Scene C"))
     # reduire : la fenetre reprend sa taille
     sc["expand"](False)
@@ -3356,7 +3604,7 @@ def check_randomizer() -> None:
         for _ in range(n):
             scene, info, record = rz.draw_scene(r, settings, ctx(last=last, **kw))
             last = record
-            out_.append((scene, info))
+            out_.append((scene, info, record))
         return out_
     first = run({}, 5)
     again = run({}, 5)
@@ -3397,9 +3645,25 @@ def check_randomizer() -> None:
     only_a2w = run({"bg_sources": ["a2w"]}, 20)
     check(all(x[0]["bg"] == "live" and x[0]["mode"] == "snap" and x[0]["live_overrides"] in ({"gain": 35.0}, {"gain": 15.0}) for x in only_a2w),
           "tirage: preset audio2wave du mode courant (jamais `default` vide, jamais un autre mode)")
-    cats = run({"categories_overlay": ["logos"], "bg_sources": ["params"]}, 30)
+    cats = run({"categories_overlay": ["logos"], "bg_sources": ["params"], "overlay": ["params", "media"]}, 30)
     media_names = {Path(x[0]["overlay"].get("logo_path", "")).name for x in cats}
     check(media_names <= {"a.png", "b.JPG"} and media_names, "tirage: media pris seulement dans les categories cochees", str(media_names))
+    # texte tire comme overlay (CASUAL RAVERS par defaut), au meme titre qu'un fichier de la banque
+    check(rz.clean_settings({})["text"] == "CASUAL RAVERS" and "text" in rz.clean_settings({})["overlay"]
+          and rz.clean_settings({"text": "  MON TEXTE  "})["text"] == "MON TEXTE" and rz.clean_settings({"text": 5})["text"] == "CASUAL RAVERS",
+          "tirage: texte par defaut CASUAL RAVERS, reglage valide")
+    txt = run({"overlay": ["params", "text"], "bg_sources": ["params"]}, 12)
+    check(all(x[0]["overlay"].get("logo_source") == "text" and x[0]["overlay"].get("text_content") == "CASUAL RAVERS"
+              and x[0]["overlay"]["logo_x"] == 0.5 and x[2].get("media") == "text" for x in txt),
+          "tirage: le texte est tire comme logo (centre, couleur), meme sans media de banque", str(txt[0][0]["overlay"]))
+    mixed_pick = run({"overlay": ["params", "media", "text"], "bg_sources": ["params"], "text": "HELLO"}, 60, seed=11)
+    kinds = {x[0]["overlay"].get("logo_source") for x in mixed_pick}
+    check("text" in kinds and kinds & {"image", "video"}
+          and all(a[2].get("media") != b[2].get("media") for a, b in zip(mixed_pick, mixed_pick[1:])),
+          "tirage: texte et fichiers de la banque alternent, jamais le meme media deux fois de suite", str(kinds))
+    check(all(x[0]["overlay"].get("logo_source") != "text" or x[0]["overlay"]["text_content"] == "HELLO" for x in mixed_pick)
+          and run({"overlay": ["params", "text"], "text": "", "bg_sources": ["params"]}, 3)[0][0]["overlay"].get("text_content") == "HELLO",
+          "tirage: texte vide = jamais de texte (le media du moment reste)")
     seq = run({"bg_sources": ["preset"]}, 60, seed=5)
     same_media = sum(1 for a, b in zip(seq, seq[1:]) if a[0]["overlay"].get("logo_path") == b[0]["overlay"].get("logo_path")
                      and a[0]["overlay"].get("logo_video") == b[0]["overlay"].get("logo_video"))
@@ -3454,7 +3718,7 @@ def check_randomizer() -> None:
           "media non coche: le media courant reste (un preset ne remet pas le logo par defaut)")
     # une scene tiree est applicable comme une scene enregistree
     bad = None
-    for scene, _info in run({}, 30, seed=2):
+    for scene, _info, _rec in run({}, 30, seed=2):
         values = sc.scene_values(scene, gl.load_params())
         if not (values["bg_mode"] == scene["bg"] and all(k in gl.DEFAULT_PARAMS or k == "_automation" for k in values)):
             bad = scene
@@ -3724,38 +3988,36 @@ def check_dialogs() -> None:
 
 
 def check_audio2wave_api() -> None:
-    """Garde de version : un depot audio2wave sans les points d'extension attendus donne un message clair, pas un AttributeError."""
-    print("garde de version d'audio2wave")
+    """Garde de version : un depot audio2wave sans l'API hote (`common.API_VERSION` >= 2) donne un message clair, pas un AttributeError."""
+    print("garde de version d'audio2wave (common.API_VERSION)")
     import types
     import gl_gui
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
-    check(gl_gui.audio2wave_api_missing(live) == [], "audio2wave: le depot voisin expose set_gui_accent et default_on_editor_open",
-          str(gl_gui.audio2wave_api_missing(live)))
+    import common
+    check(isinstance(common.API_VERSION, int) and common.API_VERSION >= gl_gui.AUDIO2WAVE_API_MIN,
+          "audio2wave: le depot voisin annonce une API_VERSION assez recente", str(getattr(common, "API_VERSION", None)))
+    check(gl_gui.audio2wave_api_missing(live) == [], "audio2wave: rien ne manque", str(gl_gui.audio2wave_api_missing(live)))
     gl_gui.require_audio2wave_api(live)
     check(True, "audio2wave: require_audio2wave_api laisse passer un depot a jour")
-    old_live = types.SimpleNamespace(AutomationManager=type("AutomationManager", (), {}), __file__="C:/x/audio2wave/audio2wave_live.py")
-    nothing = types.SimpleNamespace()
-    missing = gl_gui.audio2wave_api_missing(old_live, nothing, nothing)
-    check(len(missing) == 3 and "set_gui_accent" in missing[0] and "default_on_editor_open" in missing[1] and "preset_registry" in missing[2],
-          "audio2wave ancien: les trois points d'extension manquants sont nommes", str(missing))
-    half = gl_gui.audio2wave_api_missing(old_live, types.SimpleNamespace(set_gui_accent=lambda *a: None),
-                                         types.SimpleNamespace(store_for=lambda *a: None))
-    check(len(half) == 1 and "default_on_editor_open" in half[0], "audio2wave ancien: un seul manque = un seul nom", str(half))
-    no_registry = gl_gui.audio2wave_api_missing(live, None, nothing)
-    check(len(no_registry) == 1 and "preset_registry" in no_registry[0], "audio2wave sans preset_registry: signale (un seul manque)", str(no_registry))
+    old_live = types.SimpleNamespace(__file__="C:/x/audio2wave/audio2wave_live.py")
+    for label, fake in (("sans API_VERSION", types.SimpleNamespace()), ("API_VERSION 1", types.SimpleNamespace(API_VERSION=1)),
+                        ("API_VERSION illisible", types.SimpleNamespace(API_VERSION="2"))):
+        missing = gl_gui.audio2wave_api_missing(old_live, fake)
+        check(len(missing) == 1 and "API_VERSION" in missing[0], f"audio2wave ancien ({label}): signale, sans AttributeError", str(missing))
+    check(gl_gui.audio2wave_api_missing(old_live, types.SimpleNamespace(API_VERSION=gl_gui.AUDIO2WAVE_API_MIN)) == []
+          and gl_gui.audio2wave_api_missing(old_live, types.SimpleNamespace(API_VERSION=gl_gui.AUDIO2WAVE_API_MIN + 3)) == [],
+          "audio2wave: la version exigee ou plus recente passe")
     try:
-        gl_gui.require_audio2wave_api(old_live, nothing, nothing)
+        gl_gui.require_audio2wave_api(old_live, types.SimpleNamespace(API_VERSION=1))
         message = ""
     except SystemExit as exc:
         message = str(exc)
-    check("Mets a jour le depot audio2wave" in message and "set_gui_accent" in message and "default_on_editor_open" in message
-          and "preset_registry" in message and gl_gui.AUDIO2WAVE_REQUIRED in message and "AttributeError" not in message,
-          "audio2wave ancien: arret avec un message clair (quoi, ou et comment mettre a jour)", message[:160])
-    check(gl_gui.audio2wave_api_missing(types.SimpleNamespace(), None, None) != [], "audio2wave sans AutomationManager ni common: signale, ne plante pas")
+    check("Mets a jour le depot audio2wave" in message and "API_VERSION" in message and gl_gui.AUDIO2WAVE_REQUIRED in message
+          and "AttributeError" not in message, "audio2wave ancien: arret avec un message clair (quoi, ou et comment mettre a jour)", message[:200])
 
 
 def check_projection() -> None:
-    """Projection a la demande : la GUI s'ouvre seule, la fenetre de rendu part d'un bouton (second ecran, plein ecran)."""
+    """Projection a la demande : la GUI s'ouvre seule, la fenetre de rendu part d'un bouton (en fenetre par defaut)."""
     print("projection a la demande")
     import types
     runs: list[str] = []
@@ -3771,13 +4033,13 @@ def check_projection() -> None:
             if boom:
                 raise boom
             target(s)
-        return s, gl.Projection(s, target=run, secondary=lambda: second)
+        return s, gl.Projection(s, target=run)
 
     s, p = make(True)
     s.commands.put("flash")
     msg = p.start()
-    check(p.running() and s.args.fullscreen is True and "plein ecran" in msg and "second ecran" in msg and s.commands.empty(),
-          "projection: deux ecrans = plein ecran sur le second, commandes perimees jetees", msg)
+    check(p.running() and s.args.fullscreen is False and "fenetre" in msg and s.commands.empty(),
+          "projection: par defaut en fenetre meme avec deux ecrans, commandes perimees jetees", msg)
     check("deja ouverte" in p.start() and runs == ["run"], "projection: un second demarrage n'ouvre rien de plus")
     p.stop(wait=3.0)
     check(not p.running() and not s.finished_event.is_set(), "projection: l'arret ferme la fenetre sans fermer le programme")
@@ -3787,7 +4049,7 @@ def check_projection() -> None:
     p.stop(wait=3.0)
     s, p = make(False)
     msg = p.start()
-    check(s.args.fullscreen is False and "Pas de second ecran" in msg, "projection: un seul ecran = en fenetre, jamais sur le poste de travail", msg)
+    check(s.args.fullscreen is False and "fenetre" in msg, "projection: un seul ecran = en fenetre, jamais sur le poste de travail", msg)
     p.stop(wait=3.0)
     s, p = make(False, request=True)
     p.start()
@@ -3808,55 +4070,47 @@ def check_projection() -> None:
     check(not p.running() and "pilote" in s.status.get("msg", ""), "projection: une erreur du rendu est signalee, la GUI continue")
 
 
+def _render_stats(live, args, seconds: int = 2) -> tuple:
+    """Rend le filtre d'audio2wave sur du bruit (vrai ffmpeg) : (part de pixels allumes, colonnes allumees) de la derniere image."""
+    import subprocess
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi", "-i", f"anoisesrc=d={seconds + 1}:a=0.3",
+           "-filter_complex", live.build_filter(args), "-map", "[v]", "-t", str(seconds), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    data = subprocess.run(cmd, capture_output=True).stdout
+    w, h = live.resolve_size(args)
+    n = len(data) // (w * h * 3)
+    frame = np.frombuffer(data[:n * w * h * 3], np.uint8).reshape(n, h, w, 3)[-1]
+    return float((frame > 0).mean()), int((frame.max(axis=(0, 2)) > 0).sum())
+
+
 def check_bar_gap() -> None:
-    """Analyzer en barres : un espace entre barres trop grand efface tout (separateur noir plus large que la barre)."""
-    import types
-    print("espace entre barres (analyzer)")
-    a = types.SimpleNamespace(style="analyzer", shape="bar", bar_gap=1.4)
-    note = gl.limit_bar_gap(a)
-    check(a.bar_gap == gl.BAR_GAP_MAX and note is not None and "1.40" in note, "analyzer en barres a 1,4 : plafonne, avec un message", str(note))
-    for style, shape, gap in (("analyzer", "bar", 0.25), ("analyzer", "line", 1.4), ("radio", "line", 1.4), ("radio", "bar", 1.4)):
-        b = types.SimpleNamespace(style=style, shape=shape, bar_gap=gap)
-        check(gl.limit_bar_gap(b) is None and b.bar_gap == gap, f"{style} / {shape} / {gap}: rien a plafonner (l'espace n'agit qu'en analyzer + barres)")
-    live = gl.load_live(gl.DEFAULT_A2W_DIR)
-    import copy
-    base = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
-    base.style, base.shape, base.bar_gap = "analyzer", "bar", 1.4
-    cmd_raw = " ".join(live.producer_command(base))
-    fixed = copy.copy(base)
-    gl.limit_bar_gap(fixed)
-    cmd_fixed = " ".join(live.producer_command(fixed))
+    """Analyzer en barres : audio2wave plafonne lui-meme `bar_gap` (a 1,4 le separateur noir couvrait toute la barre)."""
     import re
-    t_raw = int(re.search(r"drawgrid=[^:]*:h=ih:t=(\d+)", cmd_raw).group(1))
-    t_fixed = int(re.search(r"drawgrid=[^:]*:h=ih:t=(\d+)", cmd_fixed).group(1))
+    print("espace entre barres (analyzer, corrige a la source)")
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    base = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
+    base.style, base.shape = "analyzer", "bar"
     cell = 1280 // 128
-    check(t_raw >= cell and t_fixed < cell, "analyzer en barres: le separateur est plus large que la barre a 1,4, plus etroit apres plafonnement",
-          f"cellule {cell} px : {t_raw} -> {t_fixed}")
+    thick = {}
+    for gap in (0.25, 1.4):
+        base.bar_gap = gap
+        thick[gap] = int(re.search(r"drawgrid=[^:]*:h=ih:t=(\d+)", " ".join(live.producer_command(base))).group(1))
+    check(thick[1.4] < cell and thick[0.25] < cell, "bar_gap 1,4 reste plafonne par audio2wave: separateur plus etroit que la barre",
+          f"cellule {cell} px : {thick}")
+    base.bar_gap = 1.4
+    lit, cols = _render_stats(live, base)
+    check(lit > 0.05 and cols > 300, "bar_gap 1,4: le vrai filtre dessine encore des barres (plus d'ecran noir)", f"{lit:.3f} {cols}")
 
 
 def check_line_resolution() -> None:
-    """Analyzer en courbe : assez de points et de frequences pour une courbe nette."""
-    import copy
+    """Analyzer en courbe : audio2wave sort lui-meme 400 points sur une fenetre de 2048."""
     import re
-    import types
-    print("resolution de l'analyzer en courbe")
-    a = types.SimpleNamespace(style="analyzer", shape="line", bars=128, win_size=None)
-    check(gl.sharpen_line(a) is True and a.bars == gl.LINE_MIN_POINTS and a.win_size == gl.LINE_MIN_WIN,
-          "courbe a 128 points / fenetre auto: portee a 400 points et fenetre de 2048")
-    fine = types.SimpleNamespace(style="analyzer", shape="line", bars=400, win_size=4096)
-    check(gl.sharpen_line(fine) is False and fine.win_size == 4096, "courbe deja fine: rien ne change (on ne reduit jamais)")
-    for style, shape in (("analyzer", "bar"), ("radio", "line")):
-        o = types.SimpleNamespace(style=style, shape=shape, bars=128, win_size=None)
-        check(gl.sharpen_line(o) is False and o.bars == 128 and o.win_size is None, f"{style} / {shape}: inchange")
+    print("resolution de l'analyzer en courbe (corrigee a la source)")
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
     base = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
     base.style, base.shape = "analyzer", "line"
-    before = " ".join(live.producer_command(base))
-    sharp = copy.copy(base)
-    gl.sharpen_line(sharp)
-    after = " ".join(live.producer_command(sharp))
-    pick = lambda cmd: (int(re.search(r"showfreqs=s=(\d+)x", cmd).group(1)), int(re.search(r"win_size=(\d+)", cmd).group(1)))
-    check(pick(before)[0] < 400 and pick(after) == (400, 2048), "commande ffmpeg: courbe de 400 points sur une fenetre de 2048", f"{pick(before)} -> {pick(after)}")
+    cmd = " ".join(live.producer_command(base))
+    got = (int(re.search(r"showfreqs=s=(\d+)x", cmd).group(1)), int(re.search(r"win_size=(\d+)", cmd).group(1)))
+    check(got == (400, 2048), "courbe de l'analyzer: 400 points sur une fenetre de 2048, sans rien faire cote overlay", str(got))
 
 
 def check_contract() -> None:
@@ -3875,34 +4129,47 @@ def check_contract() -> None:
           f"code {res.returncode} : " + " | ".join(lines[:6]))
 
 
-def check_menu_style() -> None:
-    """Menus deroulants : texte clair au survol, fond teinte de l'accent de la zone (le texte noir sur le bleu se lisait mal)."""
-    import tkinter as tk
-    import skin
+def _contrast(a: str, b: str) -> float:
+    """Rapport de contraste WCAG entre deux couleurs #rrggbb."""
     import theme
-    print("menus deroulants (skin.style_menu)")
+
+    def lum(c: str) -> float:
+        r, g, bl = (v / 255 for v in theme.hex_to_rgb(c))
+        f = lambda x: x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl)
+    la, lb = lum(a), lum(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def check_menu_style() -> None:
+    """Menus deroulants et selects : le survol (fond d'accent) garde un texte lisible. C'est audio2wave qui le choisit
+    (`common.readable_fg` dans `style_gui` et `style_option_menu`), a partir de l'accent pose par `set_gui_accent`."""
+    import tkinter as tk
+    import common
+    import gl_gui
+    import theme
+    print("menus deroulants et selects (survol lisible, corrige a la source)")
+    saved = (common.GUI_ACCENT, common.GUI_ACCENT_FG)
     root = tk.Tk()
     try:
-        root.option_add("*Menu.activeBackground", theme.LIVE)          # ce que pose audio2wave (accent plein)
-        root.option_add("*Menu.activeForeground", theme.ON_ACCENT)     # ... et son texte sombre
-        frame = tk.Frame(root)
-        frame.pack()
-        skin.zone(frame, theme.OVERLAY)
+        gl_gui.apply_a2w_palette()
+        common.style_gui(root)
         var = tk.StringVar(value="a")
-        option = tk.OptionMenu(frame, var, "a", "b")
-        option.configure(activeforeground=theme.ON_ACCENT)             # ce que pose audio2wave.style_option_menu
-        plain = tk.Menu(frame, tearoff=0)
-        plain.add_command(label="x", background="#ff0000", foreground="#ffffff")
-        skin.apply(root)
+        option = tk.OptionMenu(root, var, "a", "b")
+        common.style_option_menu(option)
         menu = option["menu"]
-        check(str(menu.cget("activeforeground")).lower() == theme.FG and str(menu.cget("activebackground")).lower() != theme.LIVE
-              and str(menu.cget("background")).lower() == theme.PANEL, "menu: survol en texte clair sur un fond teinte (plus d'accent plein + texte sombre)",
-              f"{menu.cget('activeforeground')} {menu.cget('activebackground')}")
-        check(str(menu.cget("activebackground")).lower() == theme.mix(theme.PANEL, theme.OVERLAY, 0.5), "menu: la teinte du survol suit l'accent de la zone")
-        check(str(option.cget("activeforeground")).lower() == theme.FG and str(option.cget("fg")).lower() == theme.FG,
-              "select: le bouton garde un texte clair au survol (activeforeground)", f"{option.cget('activeforeground')} {option.cget('fg')}")
-        check(str(plain.entrycget(0, "background")).lower() == "#ff0000", "menu: une entree qui porte sa couleur la garde")
+        plain = tk.Menu(root, tearoff=0)
+        pairs = {"menu du select": (menu.cget("activebackground"), menu.cget("activeforeground")),
+                 "bouton du select": (option.cget("activebackground"), option.cget("activeforeground")),
+                 "menu": (plain.cget("activebackground"), plain.cget("activeforeground"))}
+        for label, (bg, fg) in pairs.items():
+            bg, fg = (root.winfo_rgb(x) for x in (bg, fg))
+            bg, fg = ("#%02x%02x%02x" % tuple(v >> 8 for v in c) for c in (bg, fg))
+            check(_contrast(bg, fg) >= 3.0 and fg != "#0b1018" and fg != theme.ON_ACCENT,
+                  f"survol lisible sur l'accent bleu: {label} (texte {fg} sur {bg})", f"contraste {_contrast(bg, fg):.2f}")
+        check(common.readable_fg(theme.LIVE) in (theme.FG, common.GUI_FG), "common.readable_fg donne du texte clair sur le bleu LIVE")
     finally:
+        common.set_gui_accent(*saved)
         root.destroy()
 
 

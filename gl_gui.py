@@ -4,24 +4,26 @@ La partie "Live" (le visuel de fond ffmpeg) N'EST PAS reecrite ici : c'est la fe
 reglages d'audio2wave_live.py (`build_gui`, importee du depot audio2wave comme dependance),
 avec ses presets, ses automations de courbes, ses info-bulles et son theme. Ce module :
 
-  1. l'appelle telle quelle sur la fenetre Tk, avec ses trois evenements habituels
-     (`restart_event`, `stop_event`, `finished_event`) ;
-  2. la nettoie de ce qui n'a pas de sens ici (taille de fenetre) ; les boutons Live / Snap / Ridge
-     changent la source du fond (modes Snap et Ridge d'audio2wave via py_modes.py, fenetre reconstruite) ;
+  1. l'appelle sur un conteneur dedie de la fenetre Tk avec l'API hote d'audio2wave (`parent`, `embedded`,
+     `compact`, `presets_first`) et garde le `GuiController` qu'elle renvoie (`capture_state`, `apply_state`,
+     `commit_pending`, `widgets`) : on ne fouille plus ses widgets pour lire ou charger un etat ;
+  2. habille ce qu'elle a de propre (titres de section en bandeaux, taille du rendu figee) ; les boutons
+     Live / Snap / Ridge changent la source du fond (modes Snap et Ridge d'audio2wave via py_modes.py,
+     `start_headless`, fenetre reconstruite) ;
   3. fait le pont entre son `restart_event` et `ProducerManager` : a chaque reglage, `build_gui`
-     a deja mute les options live et positionne l'evenement, on en prend une copie et on
-     remplace le producteur ffmpeg a chaud, sans toucher a la fenetre GL (aucun redemarrage
-     si la commande ffmpeg est inchangee) ;
+     a deja mute les options live et positionne l'evenement (apres son anti-rebond : `on_change` se
+     declencherait a chaque ecriture, sans lui), on en prend une copie et on remplace le producteur ffmpeg
+     a chaud, sans toucher a la fenetre GL (aucun redemarrage si la commande ffmpeg est inchangee) ;
   4. ajoute a droite ses propres panneaux, dans la meme fenetre (partie OVERLAY, bandeau violet ;
-     la partie LIVE a un bandeau turquoise) :
+     la partie LIVE a un bandeau bleu) :
         PRESETS OVERLAY + FOND (motif genere) + EFFETS + HALO HOLOGRAPHIQUE
         LOGO               + ANALYSE AUDIO + AFFICHAGE + mesures.
 
-Sous-ensembles sans aucune modification du depot audio2wave : tout passe par le contrat public
-de `build_gui(args, width, height, status, restart_event, stop_event, finished_event, root)`.
+Rien n'est modifie dans le depot audio2wave : tout passe par son API hote (`common.API_VERSION` >= 2,
+voir `require_audio2wave_api`).
 
-tkinter garde le fil principal, la fenetre GL tourne dans un fil (comme run() dans les
-scripts d'audio2wave): toute action qui doit s'executer dans le fil GL passe par
+tkinter garde le fil principal ; la fenetre GL (`Projection`, ouverte par le bouton) tourne dans un fil
+(comme run() dans les scripts d'audio2wave): toute action qui doit s'executer dans le fil GL passe par
 `session.commands`.
 """
 
@@ -73,6 +75,10 @@ SCENE_COLOR = "#ffcf6b"          # barre des scenes (ambre)
 BANNER_FG = "#0b1018"
 
 # Titres de section d'audio2wave (texte d'origine -> libelle affiche)
+# Options de mise en page des trois `build_gui` d'audio2wave (API hote) : ni titre / redimensionnement / `protocol` (`embedded`),
+# marges serrees (`compact`), bloc des presets en tete (`presets_first`).
+PANEL_OPTIONS = {"embedded": True, "compact": True, "presets_first": True}
+
 LIVE_SECTIONS = {"SOURCE": "SOURCE", "SPECTRE": "SPECTRE", "COULEURS": "COULEURS", "SORTIE": "SORTIE",
                  "PRESETS": "PRESETS LIVE  (audio2wave)"}
 
@@ -85,23 +91,6 @@ def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> 
     label.grid_configure(sticky="ew", pady=(8, 3))
 
 
-class HostFrame(tk.Frame):
-    """Cadre qui tient le role de `root` pour les `build_gui` d'audio2wave (Live, Snap, Ridge).
-
-    Ils appellent `root.title / resizable / protocol` (sans objet ici : la vraie fenetre est geree par
-    `build_window`), vident `root.winfo_children()` puis y posent leurs widgets en grille. Comme ce cadre
-    est dans un canvas defilant, un panneau plus haut que l'ecran (Snap : ~950 px) reste utilisable."""
-
-    def title(self, *_a, **_k) -> str:
-        return ""
-
-    def resizable(self, *_a, **_k) -> None:
-        return None
-
-    def protocol(self, *_a, **_k) -> None:
-        return None
-
-
 MIN_WIN_W, MIN_WIN_H = 940, 420   # en dessous, le panneau d'audio2wave seul ne tient plus
 LIVE_MAX_HEIGHT = 600            # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
@@ -109,39 +98,31 @@ MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
 
 
-AUDIO2WAVE_REQUIRED = "branche add-snap-waveform-photo, commit 3bf25c9 ou plus recent"
+AUDIO2WAVE_API_MIN = 2           # `common.API_VERSION` exige (API hote : GuiController, parent / embedded..., start_headless, snapshot)
+AUDIO2WAVE_REQUIRED = "branche add-snap-waveform-photo, commit 86e0458 ou plus recent"
 
 
-def audio2wave_api_missing(live, common=None, registry=None) -> list[str]:
-    """Points d'extension d'audio2wave dont casual-overlay a besoin et qui manquent (liste vide = depot assez recent) :
-    `common.set_gui_accent` (accent de la palette), `AutomationManager.default_on_editor_open` (crochet de la fenetre courbe) et
-    `preset_registry.store_for` (acces unifie aux presets des trois modes).
-    `live` = le module `audio2wave_live` ; `common` et `registry` s'injectent pour les tests."""
+def audio2wave_api_missing(live=None, common=None) -> list[str]:
+    """Liste vide si le depot audio2wave expose l'API hote attendue, sinon ce qui manque (une phrase). On compare `common.API_VERSION`
+    a `AUDIO2WAVE_API_MIN` au lieu de tester chaque nom (`hasattr`) : c'est audio2wave qui garantit les noms (`check_contract.py`).
+    `live` n'est plus utilise (gardee pour les appelants) ; `common` s'injecte pour les tests."""
     if common is None:
         try:
             import common
         except ImportError:
-            common = None
-    if registry is None:
-        try:
-            import preset_registry as registry
-        except ImportError:
-            registry = None
-    missing = []
-    if common is None or not callable(getattr(common, "set_gui_accent", None)):
-        missing.append("common.set_gui_accent(accent, accent_fg)")
-    if not hasattr(getattr(live, "AutomationManager", None), "default_on_editor_open"):
-        missing.append("AutomationManager.default_on_editor_open (crochet de la fenetre courbe)")
-    if registry is None or not callable(getattr(registry, "store_for", None)):
-        missing.append("preset_registry.store_for(mode) (acces unifie aux presets)")
-    return missing
+            return ["le module common d'audio2wave (introuvable)"]
+    version = getattr(common, "API_VERSION", None)
+    if not isinstance(version, int) or version < AUDIO2WAVE_API_MIN:
+        found = f"version {version}" if isinstance(version, int) else "pas de common.API_VERSION"
+        return [f"common.API_VERSION >= {AUDIO2WAVE_API_MIN} ({found})"]
+    return []
 
 
-def require_audio2wave_api(live, common=None, registry=None) -> None:
+def require_audio2wave_api(live=None, common=None) -> None:
     """Arrete le programme avec un message clair si le depot audio2wave est trop ancien (au lieu d'un AttributeError obscur)."""
-    missing = audio2wave_api_missing(live, common, registry)
+    missing = audio2wave_api_missing(live, common)
     if missing:
-        where = Path(getattr(live, "__file__", ".")).resolve().parent
+        where = Path(getattr(live, "__file__", ".")).resolve().parent if live is not None else "depot voisin"
         raise SystemExit("Le depot audio2wave est trop ancien pour cette version de casual-overlay : il manque "
                          + " et ".join(missing) + f".\nMets a jour le depot audio2wave ({where}) : git pull, {AUDIO2WAVE_REQUIRED}.")
 
@@ -151,7 +132,7 @@ def apply_a2w_palette() -> None:
     tous les modules audio2wave deja importes ; Snap et Ridge, importes plus tard, lisent la valeur de `common`). A appeler avant
     de construire leurs widgets (leur `style_gui`, leurs labels et curseurs la lisent a la creation)."""
     import common
-    common.set_gui_accent(theme.LIVE, theme.ON_ACCENT)
+    common.set_gui_accent(theme.LIVE, theme.FG)
 
 
 def install_curve_skin(live) -> None:
@@ -176,64 +157,31 @@ def install_curve_skin(live) -> None:
     live.AutomationManager.default_on_editor_open = on_editor_open
 
 
-def presets_to_top(host) -> None:
-    """Remonte les PRESETS du panneau d'audio2wave en tete (comme les presets overlay et fond) : le bandeau, `Charger`,
-    `Sauvegarder sous` (et `Mode VJ` de Snap) passent sur les premieres lignes de la grille, le reste descend ; la ligne de
-    statut du bas reste en bas. Pure remise en page : aucun widget n'est cree ni modifie."""
-    band = next((w for w in host.winfo_children() if w.grid_info() and w.winfo_class() == "Label"
-                 and str(w.cget("text")).startswith("PRESETS")), None)
-    if band is None:
-        return
-    top = int(band.grid_info()["row"])
-    last = top
-    names = ("Charger", "Sauvegarder sous", "Mode VJ")
-    while any(w.winfo_class() == "Label" and w.cget("text") in names for w in host.grid_slaves(row=last + 1)):
-        last += 1
-    height = last - top + 1                          # lignes du bloc des presets
-    spacer = top - 1                                 # filet au-dessus du bandeau : il passe sous le bloc
-    for w in [w for w in host.winfo_children() if w.grid_info() and str(w.grid_info().get("in")) == str(host)]:   # pas ceux ranges dans un conteneur (pastilles de couleur)
-        row = int(w.grid_info()["row"])
-        if row == spacer:
-            w.grid_configure(row=height)
-        elif row < spacer:
-            w.grid_configure(row=row + height + 1)
-        elif top <= row <= last:
-            w.grid_configure(row=row - top)
-
-
-def tidy_mode_gui(host, mode: str) -> None:
-    """Retire ou renomme, dans la fenetre d'un mode d'audio2wave, ce qui n'a pas de sens ici.
+def tidy_mode_gui(host, mode: str, widgets: dict) -> None:
+    """Retire ou renomme, dans le panneau d'un mode d'audio2wave, ce qui n'a pas de sens ici.
 
     Tous les modes : le titre ("Reglages Live"...) disparait (un bandeau le remplace) et les titres de
-    section deviennent des bandeaux. Live seulement : la taille de fenetre devient la taille du rendu, figee
+    section (`widgets["section_titles"]`, plus le bandeau des presets) deviennent des bandeaux. Live seulement : la taille de fenetre devient la taille du rendu, figee
     (la texture video est fixee au lancement ; Snap et Ridge n'ont pas ce champ, leur taille est fixee
     par `py_modes.make_args`). Les boutons de bascule Live / Snap / Ridge sont GARDES : ils pilotent
     `on_switch_mode`, donc le changement de source."""
 
     import audio2wave as a2w
 
-    def walk(widget) -> None:
-        for child in widget.winfo_children():
-            cls = child.winfo_class()
-            if cls == "Label":
-                text = child.cget("text")
-                span = int(child.grid_info().get("columnspan", 1) or 1) if child.winfo_manager() == "grid" else 1
-                if text in ("Reglages Live", "Reglages Snap", "Reglages Ridge"):
-                    child.grid_remove()
-                elif mode == "live" and text in LIVE_SECTIONS:
-                    # Les petits titres de section d'audio2wave deviennent des bandeaux pleine largeur,
-                    # pour que les parties de la fenetre se distinguent d'un coup d'oeil.
-                    style_band(child, a2w, LIVE_SECTIONS[text])
-                elif mode != "live" and ((text.isupper() and span >= 2) or text == "Presets"):
-                    # Titres de section de Snap / Ridge (un titre couvre au moins deux colonnes ; 'BPM', 1 colonne,
-                    # est un libelle de curseur).
-                    style_band(child, a2w, f"PRESETS {mode.upper()}  (audio2wave)" if text.upper() == "PRESETS"
-                               else text.upper())
-                elif text == "Taille fenetre":
-                    child.config(text="Taille du rendu")
-            walk(child)
-
-    walk(host)
+    titles = list(widgets.get("section_titles", []))
+    titles += [w for w in widgets.get("presets", []) if w.winfo_class() == "Label" and str(w.cget("text")).upper() == "PRESETS"
+               and w not in titles]
+    for label in titles:
+        text = str(label.cget("text"))
+        if mode == "live":
+            style_band(label, a2w, LIVE_SECTIONS.get(text, text))
+        else:
+            style_band(label, a2w, f"PRESETS {mode.upper()}  (audio2wave)" if text.upper() == "PRESETS" else text.upper())
+    for child in gui_gates.leaves(host):          # le titre de la fenetre ("Reglages Live"...) : pas de section_titles pour lui
+        if child.winfo_class() == "Label" and child.cget("text") in ("Reglages Live", "Reglages Snap", "Reglages Ridge"):
+            child.grid_remove()
+        elif child.winfo_class() == "Label" and child.cget("text") == "Taille fenetre":
+            child.config(text="Taille du rendu")
     # Ligne "Taille fenetre" (champs largeur / hauteur + Plein ecran) : taille du rendu figee, plein ecran gere par notre
     # fenetre GL. On cible la LIGNE (et non "tous les champs de 6 caracteres" : le crossover de Snap en a aussi).
     size_label = gui_gates.find(host, "Label", "Taille du rendu")
@@ -273,8 +221,7 @@ def activate_mode(s, live, new: str) -> str | None:
             if args is None:
                 args = s.mode_args[new] = py_modes.make_args(mod, new, device, s.render_size)
             args.device = device or None
-            src = py_modes.PyModeSource(new, mod, args, s.render_size, gl.FrameReader,
-                                        capture_factory=getattr(s, "capture_factory", None))
+            src = py_modes.PyModeSource(new, mod, args, s.render_size, gl.FrameReader)
             src.start()
         except Exception as exc:
             return f"{new}: demarrage impossible ({exc})"
@@ -347,6 +294,14 @@ def a2w_from_file(path: str) -> str | None:
     return str(Path(path)) if Path(path).suffix.lower() in VIDEO_EXT + (".m4v",) else None
 
 
+def _has_content(img) -> bool:
+    """Une image qui montre quelque chose : pas entierement transparente ni quasi noire."""
+    rgba = img.resize((16, 16))
+    alpha = rgba.getchannel("A").getextrema()[1]
+    lum = rgba.convert("L").getextrema()[1]
+    return alpha > 16 and lum > 24
+
+
 def make_thumb(media: dict):
     """Vignette PIL (THUMB_W x THUMB_H, fond sombre) d'un media image ou video, ou None. Sans Tk : appelable dans un fil.
     Une video : premiere image (ffmpeg, 6 s maximum) ; texte : pas de vignette."""
@@ -369,13 +324,21 @@ def make_thumb(media: dict):
             ffmpeg = shutil.which("ffmpeg")
             if ffmpeg:
                 codecs = ([["-c:v", "libvpx-vp9"]] if Path(path).suffix.lower() == ".webm" else []) + [[]]
-                for codec in codecs:                       # webm VP9 : le decodeur natif ignore l'alpha
-                    out = subprocess.run([ffmpeg, "-v", "error", *codec, "-i", path, "-frames:v", "1", "-f", "image2pipe",
-                                          "-vcodec", "png", "-"], capture_output=True, timeout=6,
-                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                    if out.returncode == 0 and out.stdout:
-                        img = Image.open(io.BytesIO(out.stdout)).convert("RGBA")
+                fallback = None
+                for at in ("0", "0.6", "1.5"):             # la 1re image d'une animation est souvent vide (fond transparent, noir)
+                    for codec in codecs:                   # webm VP9 : le decodeur natif ignore l'alpha
+                        out = subprocess.run([ffmpeg, "-v", "error", *codec, "-ss", at, "-i", path, "-frames:v", "1", "-f", "image2pipe",
+                                              "-vcodec", "png", "-"], capture_output=True, timeout=6,
+                                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                        if out.returncode == 0 and out.stdout:
+                            frame = Image.open(io.BytesIO(out.stdout)).convert("RGBA")
+                            fallback = fallback or frame
+                            if _has_content(frame):
+                                img = frame
+                            break
+                    if img is not None:
                         break
+                img = img or fallback
         if img is None:
             return None
         img.thumbnail((THUMB_W, THUMB_H))
@@ -586,7 +549,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     vbar = skin.scrollbar(live_wrap, command=canvas.yview)
     canvas.configure(yscrollcommand=vbar.set)
     canvas.pack(side="left", fill="both", expand=True)
-    host = HostFrame(canvas)
+    host = tk.Frame(canvas)             # conteneur DEDIE du panneau d'audio2wave (`parent=` de leur build_gui)
     host_item = canvas.create_window((0, 0), window=host, anchor="nw")
     # Le fond est EXCLUSIF : soit le visuel d'audio2wave (son panneau, `host`), soit le fond genere (`pattern_holder`). Les deux
     # sont des fenetres du meme canvas, une seule est affichee (voir `show_bg`) ; le choix est en haut, hors du canvas.
@@ -599,35 +562,24 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     restart_event = threading.Event()
     live_status = {"text": ""}
+    panel = {"ctrl": None}              # `common.GuiController` du panneau d'audio2wave : capture_state / apply_state / commit_pending / widgets
     if mode == "live":
-        live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
-                       s.finished_event, root=host, on_switch_mode=on_switch)
+        panel["ctrl"] = live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
+                                       s.finished_event, on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
     else:
         src = s.pysrc
         never = threading.Event()     # leur refresh() ferme la fenetre quand cet evenement est positionne: jamais ici
         if mode == "snap":
-            src.module.build_gui(src.args, s.render_size, src.status, src.capture_state, src.stop_event, never,
-                                 root=host, on_switch_mode=on_switch)
+            panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.capture_state, src.stop_event, never,
+                                                 on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
         else:
-            src.module.build_gui(src.args, s.render_size, src.status, src.stop_event, never,
-                                 root=host, on_switch_mode=on_switch)
+            panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.stop_event, never,
+                                                 on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
     root.title("casual-overlay GL - reglages")
-    tidy_mode_gui(host, mode)
-    gui_colors.add_color_helpers(host, a2w.GUI_ACCENT, a2w.GUI_ACCENT_FG)      # pastilles + selecteur sur les champs couleur
-    gui_gates.install_mode_gates(host, mode, a2w.GUI_MUTED_FG)     # grise ce qui n'a pas de sens dans ce mode
-
-    # Le panneau d'audio2wave est a l'aise (lignes de 4 a 7 px de marge): on resserre ses marges
-    # verticales pour gagner de la hauteur, sans toucher a ses widgets ni a son code.
-    for w in host.winfo_children():
-        info = w.grid_info()
-        if not info:
-            continue
-        pady = info["pady"]
-        values = [pady] if isinstance(pady, (int, str)) else list(pady)
-        tight = tuple(max(1, round(float(v) * 0.35)) for v in values)
-        w.grid_configure(pady=tight[0] if len(tight) == 1 else tight)
-
-    presets_to_top(host)             # PRESETS LIVE / SNAP / RIDGE en tete, comme les presets overlay et fond
+    widgets = panel["ctrl"].widgets
+    tidy_mode_gui(host, mode, widgets)
+    gui_colors.add_color_helpers(host, a2w.GUI_ACCENT, a2w.GUI_ACCENT_FG, widgets, mode)      # pastilles + selecteur sur les champs couleur
+    gui_gates.install_mode_gates(host, mode, a2w.GUI_MUTED_FG, widgets)     # grise ce qui n'a pas de sens dans ce mode
     cap = max(420, min(LIVE_MAX_HEIGHT, root.winfo_screenheight() - 200))
 
     def cap_now() -> int:
@@ -659,7 +611,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def on_wheel(e) -> None:
         step = -1 if e.delta > 0 else 1
-        if str(e.widget).startswith(str(canvas)) and active_panel().winfo_reqheight() > visible_height() + 1:
+        pcv = panel_state["cv"]                           # liste des scenes du panneau etendu : elle defile sous la souris
+        if pcv is not None and (str(e.widget) == str(pcv) or str(e.widget).startswith(str(pcv) + ".")):
+            pcv.yview_scroll(step, "units")
+        elif str(e.widget).startswith(str(canvas)) and active_panel().winfo_reqheight() > visible_height() + 1:
             canvas.yview_scroll(step, "units")            # le panneau d'audio2wave defile d'abord...
         elif page_bar.winfo_ismapped():
             page_canvas.yview_scroll(step, "units")       # ...sinon c'est la page
@@ -679,6 +634,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
     projection = getattr(s, "projection", None)           # avec --gui : la fenetre de rendu s'ouvre au bouton
+    s.gui_point_fn = lambda: (root.winfo_rootx() + root.winfo_width() // 2, root.winfo_rooty() + root.winfo_height() // 2)
     proj_ui: dict = {"btn": None}
 
     def send(name: str) -> None:
@@ -706,10 +662,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         new = copy.copy(args)                       # build_gui a fini de muter `args`: copie coherente
         new.size = f"{render_w}x{render_h}"         # resolution du rendu fixe
-        gl.sharpen_line(new)                        # analyzer en courbe : escalier flou avec leurs defauts (128 points, fenetre de 512)
-        gap_note = gl.limit_bar_gap(new)            # un espace entre barres >= 1 efface l'analyzer : on le plafonne pour le producteur
-        if gap_note:
-            s.status["msg"] = gap_note
         if not new.device:
             live_status["text"] = "Choisis une entree audio"
             return
@@ -740,7 +692,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # ------------------------------------------------------ 3. nos panneaux, a droite
     separator = tk.Frame(page, bg=OVERLAY_COLOR, width=3)       # frontiere LIVE | OVERLAY (mise en page cote a cote)
     # Partie OVERLAY: les presets restent toujours visibles en haut, le reste est range en ONGLETS (Effets,
-    # Logo, Aura, Affichage). Une seule colonne de reglages a la fois: la fenetre fait environ la moitie de la
+    # Logo, Aura...). Une seule colonne de reglages a la fois: la fenetre fait environ la moitie de la
     # hauteur qu'avec des colonnes empilees (qui depassait la hauteur d'un ecran des qu'un bloc s'ouvrait).
     right = tk.Frame(page)
     preset_bar = tk.Frame(right)
@@ -767,7 +719,32 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     tab_fond.pack(side="top", fill="x", before=canvas)
     tab_fx, tab_logo = new_tab("Effets"), new_tab("Logo")
     tab_aura, tab_melt = new_tab("Aura du logo"), new_tab("Fonte du logo")
-    tab_cell, tab_noise, tab_aff = new_tab("Cellules"), new_tab("Noise"), new_tab("Affichage")
+    tab_cell, tab_noise = new_tab("Cellules"), new_tab("Noise")
+    # « Affichage et analyse » (entree d'analyse, plein ecran, automations, mesures...) n'a rien a voir avec les effets du logo :
+    # section repliable SOUS les onglets, pas un onglet.
+    aff_bar = tk.Frame(right)
+    aff_bar.pack(fill="x", pady=(6, 0))
+    tab_aff = tk.Frame(right)
+
+    def aff_text() -> str:
+        return "AFFICHAGE ET ANALYSE  " + ("▾" if getattr(s, "aff_open", False) else "▸")
+
+    def toggle_aff(flag: bool | None = None) -> None:
+        want = (not getattr(s, "aff_open", False)) if flag is None else bool(flag)
+        if want == bool(getattr(s, "aff_open", False)) and aff_toggle.cget("text") == aff_text():
+            return
+        s.aff_open = want
+        if want:
+            tab_aff.pack(fill="x", after=aff_bar)
+        else:
+            tab_aff.pack_forget()
+        aff_toggle.configure(text=aff_text())
+
+    aff_toggle = tk.Button(aff_bar, text=aff_text(), anchor="w", padx=8, command=toggle_aff)
+    aff_toggle.pack(side="left", fill="x", expand=True)
+    if getattr(s, "aff_open", False):
+        tab_aff.pack(fill="x", after=aff_bar)
+    Tooltip(aff_toggle, "Entree d'analyse des effets, plein ecran, barres de debug, sauvegarde, automations, mesures et diagnostic.")
     zone_p, zone_f, zone_fx = Zone(preset_bar), Zone(tab_fond), Zone(tab_fx)
     zone_logo, zone_aura, zone_melt = Zone(tab_logo), Zone(tab_aura), Zone(tab_melt)
     zone_cell, zone_noise, zone_aff = Zone(tab_cell), Zone(tab_noise), Zone(tab_aff)
@@ -1671,74 +1648,47 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             automation.apply(automation_state)
         sync_widgets()
 
-    def live_menus() -> list:
-        return [w for w in gui_gates.leaves(host) if w.winfo_class() == "Menubutton" and isinstance(w["menu"], tk.Menu)]
-
-    def preset_menu():
-        """(bouton, index de la ligne `default`, nom de sa variable Tcl) du menu des presets d'audio2wave."""
-        for mb in live_menus():
-            menu = mb["menu"]
-            last = menu.index("end")
-            for i in range(0 if last is None else last + 1):
-                if menu.type(i) == "command" and menu.entrycget(i, "label") == "default":
-                    return mb, i, str(mb.cget("textvariable"))
-        return None
-
     def apply_live_overrides(overrides: dict) -> bool:
-        """Applique l'etat `overrides` au panneau d'audio2wave courant : la ligne `default` de leur menu vaut `overrides` le
-        temps du clic (voir `preset_registry.ModeStore.override_default`). Rien n'est ecrit dans leurs presets."""
-        found = preset_menu()
-        if found is None:
+        """Applique l'etat `overrides` au panneau d'audio2wave courant (`GuiController.apply_state` : comme charger un preset, sans
+        clic de menu ni ecriture dans leurs presets ; en live il relance aussi le producteur). Faux si le panneau manque."""
+        ctrl = panel["ctrl"]
+        if ctrl is None:
             return False
-        mb, index, _ = found
-        overrides = scenes.strip_live_overrides(overrides)      # ni l'entree audio, ni le plein ecran / la taille
-        with mode_store(live, s.mode).override_default(overrides):
-            mb["menu"].invoke(index)
+        skipped = ctrl.apply_state(scenes.strip_live_overrides(overrides))      # ni l'entree audio, ni le plein ecran / la taille
+        if skipped:
+            print(f"Etat audio2wave: cles ignorees par le panneau {s.mode}: {', '.join(sorted(skipped))}", file=sys.stderr)
         return True
 
     def capture_live_overrides() -> dict | None:
-        """Etat du panneau d'audio2wave courant (automations comprises), sans l'ajouter a leurs presets : on se sert de leur
-        bouton Sauvegarder sous un nom temporaire, on lit le resultat, puis on le retire (fichier et menu)."""
-        found = preset_menu()
-        label = root.getvar(found[2]) if found and found[2] else None
-        if not save_live_preset(scenes.TEMP_LIVE_PRESET):
+        """Etat du panneau d'audio2wave courant, automations comprises (`GuiController.capture_state`, qui valide d'abord ce qui est
+        en saisie) : rien n'est ecrit dans leurs presets, aucun widget n'est actionne."""
+        ctrl = panel["ctrl"]
+        return None if ctrl is None else json.loads(json.dumps(ctrl.capture_state()))
+
+    def save_live_preset(name: str) -> str | None:
+        """Enregistre l'etat du panneau d'audio2wave courant comme preset `name` par leur champ « Sauvegarder sous » (le widget nomme
+        `widgets["save_name"]` + Entree : leur menu se met a jour, ce que `ModeStore.save` seul ne fait pas). Rend le nom reellement
+        enregistre (`preset_registry.normalize_name`), ou None si le panneau l'a refuse (nom vide ou preset integre)."""
+        import preset_registry
+        ctrl = panel["ctrl"]
+        stored = preset_registry.normalize_name(name)
+        if ctrl is None or not stored:
             return None
         store = mode_store(live, s.mode)
-        overrides = store.user().get(scenes.TEMP_LIVE_PRESET)
-        store.delete(scenes.TEMP_LIVE_PRESET)
-        for mb in live_menus():
-            menu = mb["menu"]
-            last = menu.index("end")
-            for i in range(-1 if last is None else last, -1, -1):
-                if menu.type(i) == "command" and menu.entrycget(i, "label") == scenes.TEMP_LIVE_PRESET:
-                    menu.delete(i)
-        if found and found[2] and label is not None:
-            root.setvar(found[2], label)               # le menu montre a nouveau ce qui etait choisi avant
-        return overrides
-
-    def save_live_preset(name: str) -> bool:
-        """Enregistre l'etat du panneau d'audio2wave courant sous `name` via son propre champ 'Sauvegarder sous'. Leurs trois modes
-        passent le nom en minuscules (`.strip().lower()`) : le preset s'appelle donc `name.lower()`, et c'est ce nom qu'on cherche
-        dans leur menu (avec « Mon live » on ne le trouvait jamais : l'enregistrement etait fait mais declare en echec)."""
-        name = name.strip().lower()
-        label = gui_gates.find(host, "Label", "Sauvegarder sous")
-        if label is None:
-            return False
-        widgets = [x for w in gui_gates.row_widgets(host, label) for x in gui_gates.leaves(w)]
-        entry = next((x for x in widgets if x.winfo_class() == "Entry"), None)
-        button = next((x for x in widgets if x.winfo_class() == "Button" and x.cget("text") == "Sauvegarder"), None)
-        if entry is None or button is None:
-            return False
-        entry.delete(0, "end")
-        entry.insert(0, name)
-        button.invoke()
-        return any(menu_has(mb, name) for mb in live_menus())
-
-    def menu_has(mb, name: str) -> bool:
-        menu = mb["menu"]
-        last = menu.index("end")
-        return last is not None and any(menu.type(i) == "command" and menu.entrycget(i, "label") == name
-                                        for i in range(last + 1))
+        entry = ctrl.widgets.get("save_name")
+        if entry is not None and entry.winfo_viewable():
+            entry.delete(0, "end")
+            entry.insert(0, name)
+            entry.focus_force()                         # un evenement clavier n'arrive qu'au widget qui a le focus
+            entry.event_generate("<Return>")
+            if stored in store.user():
+                return stored
+        # Panneau masque (fond genere affiche) ou Entree sans effet : on ecrit par le magasin (leur menu ne le montre qu'a la
+        # prochaine construction du panneau ; besoin cote audio2wave : un rafraichissement du menu par le controleur).
+        try:
+            return store.save(name, ctrl.capture_state())
+        except Exception:
+            return None
 
     def current_index(rows: list[dict]) -> int | None:
         """Rang (dans le set actif) de la scene active ; le nom fait foi (une scene peut etre deplacee ou retiree)."""
@@ -1761,12 +1711,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 fn()
             except tk.TclError:
                 pass
-        for w in gui_gates.leaves(host):
-            if w.winfo_class() == "Entry":
-                try:
-                    w.event_generate("<FocusOut>")
-                except tk.TclError:
-                    pass
+        if panel["ctrl"] is not None:
+            panel["ctrl"].commit_pending()          # leurs champs de fichier / texte (video de Snap...) et leur redemarrage differe
 
     def capture_scene_now(name: str) -> None:
         flush_pending_inputs()
@@ -1821,8 +1767,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             rnd["bank_key"] = key
         return rnd["bank"]
 
-    def random_draw() -> bool:
-        """Tire une scene et l'applique (le VJ ajoute le flash et relance le minuteur)."""
+    def random_scene() -> tuple[dict, str, dict]:
+        """Tire une scene (sans l'appliquer) avec les reglages du hasard du set actif."""
         sync_automation_now()
         settings = scene_book.vj()["random"]
         try:
@@ -1840,12 +1786,59 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         ctx = randomizer.Context(bank_fond=banks["fond"], bank_overlay=banks["overlay"], bg_presets=gl.BACKGROUND_BOOK.all(),
                                  overlay_presets=gl.OVERLAY_BOOK.all(), a2w_presets=a2w_presets, a2w_modes=a2w_modes, mode=s.mode,
                                  current_scene=scenes.capture_scene("Full Randomizer", params, s.mode, None), last=rnd["last"])
-        scene, info, record = randomizer.draw_scene(rnd["rng"], settings, ctx)
+        return randomizer.draw_scene(rnd["rng"], settings, ctx)
+
+    def random_draw() -> bool:
+        """Tire une scene et l'applique (le VJ ajoute le flash et relance le minuteur)."""
+        scene, info, record = random_scene()
         rnd["last"], rnd["scene"], rnd["info"] = record, scene, info
         apply_scene_dict(scene)
         s.active_scene, s.active_entry = "Full Randomizer", None
         scene_msg.set("Full Randomizer : " + info)
         return True
+
+    def add_random_scene() -> str:
+        """Bouton « + » : une scene tiree au hasard, sous un nom aleatoire, ajoutee a la fin du set actif. Aucun preset n'est enregistre
+        et rien n'est applique (le spectacle en cours n'est pas perturbe). Rend le nom de la scene."""
+        scene, info, record = random_scene()
+        rnd["last"] = record
+        name = randomizer.random_name(rnd["rng"], scene_book.names())
+        scene_book.put(dict(scene, name=name))
+        scene_msg.set(f"Scene aleatoire '{name}' ajoutee au set (aucun preset enregistre) : {info}")
+        refresh_scene_bar()
+        return name
+
+    def duplicate_last_scene(ask: bool = True) -> str | None:
+        """Bouton « Dupliquer la derniere » : copie de la derniere scene du set (scene + media, videos, duree, VJ de l'entree) sous un nom
+        inedit, ajoutee a la suite. Rend le nouveau nom (None : set vide). `ask` : propose ensuite de la renommer."""
+        rows = scene_book.rows()
+        if not rows:
+            scene_msg.set("Le set est vide : rien a dupliquer (utilise + ou Nouvelle scene)")
+            return None
+        last = rows[-1]
+        name = scenes.unique_name(f"{last['name']} (2)", scene_book.names())
+        scene_book.put(dict(json.loads(json.dumps(last["scene"])), name=name))
+        index = len(scene_book.rows()) - 1
+        if last["media"]:
+            scene_book.set_entry_media(index, dict(last["media"]))
+        for key, path in (last["a2w"] or {}).items():
+            scene_book.set_entry_a2w(index, key, path)
+        if last.get("bg_video"):
+            scene_book.set_entry_bg_video(index, last["bg_video"])
+        scene_book.set_entry_vj(index, seconds=last["seconds"], skip=last["skip"])
+        scene_msg.set(f"Scene '{last['name']}' dupliquee en '{name}' : change ses medias, sa duree ou son nom")
+        refresh_scene_bar()
+        def show_last() -> None:                                       # la nouvelle ligne est visible
+            cv = panel_state.get("cv")                                 # (le panneau a pu etre reconstruit entre-temps)
+            try:
+                if cv is not None:
+                    cv.yview_moveto(1.0)
+            except tk.TclError:
+                pass
+        after(80, show_last)
+        if ask:
+            rename_scene_dialog(name)
+        return name
 
     def random_draw_now() -> None:
         """Bouton « Tirer maintenant » : un tirage tout de suite (le VJ, s'il tourne, repart pour une duree pleine)."""
@@ -1893,15 +1886,17 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return error
         scene = rnd["scene"]
         names = {k: (names.get(k) or "").strip()[:scenes.MAX_NAME] for k in ("fond", "overlay", "a2w", "scene")}
-        names["a2w"] = names["a2w"].lower()               # audio2wave range ses presets en minuscules
+        import preset_registry
+        names["a2w"] = preset_registry.normalize_name(names["a2w"])          # la regle des trois fenetres d'audio2wave
         saved = []
         if keep_a2w_mode(scene) is not None and (names["a2w"] or names["scene"]):
             # Fond audio2wave : ce qui est a l'ecran est l'etat reel de leur panneau (le tirage, mais aussi ce qui a pu etre retouche
             # depuis, et un tirage « fond verrouille » ou preset de fond live n'a pas d'etat propre) : c'est lui qu'on retient.
-            if names["a2w"] and not save_live_preset(names["a2w"]):
-                return f"Preset {s.mode} d'audio2wave non enregistre : leur panneau n'a pas repondu (rien n'a ete ecrit)"
             if names["a2w"]:
-                saved.append(f"preset {s.mode} '{names['a2w']}'")
+                stored = save_live_preset(names["a2w"])
+                if stored is None:
+                    return f"Preset {s.mode} d'audio2wave non enregistre : leur panneau l'a refuse (rien n'a ete ecrit)"
+                saved.append(f"preset {s.mode} '{stored}'")
             state = capture_live_overrides()
             if state is not None:
                 scene = dict(scene, mode=s.mode, live_overrides=scenes.strip_live_overrides(state))
@@ -1989,8 +1984,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def vj_tick() -> None:
         if vj["running"] and time.monotonic() >= vj["t_next"]:
             vj_advance()
-        if getattr(s, "thumb_dirty", False):               # une vignette est prete (calculee dans un fil)
-            s.thumb_dirty = False
+        if getattr(s, "thumb_dirty", False) and time.monotonic() - panel_state.get("thumb_at", 0.0) >= 0.8:
+            s.thumb_dirty = False                          # une vignette est prete (calculee dans un fil) : au plus un rafraichissement
+            panel_state["thumb_at"] = time.monotonic()     # toutes les 0,8 s, les vignettes arrivent en rafale
             refresh_scene_panel()
         update_vj_button()
         after(250, vj_tick)
@@ -2017,20 +2013,27 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def apply_entry_core(index: int) -> None:
         row = scene_book.rows()[index]
-        apply_scene_core(row["name"], row["media"], index, row["a2w"])
+        apply_scene_core(row["name"], row["media"], index, row["a2w"], row.get("bg_video"))
 
-    def apply_scene_core(name: str, media: dict | None = None, index: int | None = None, a2w: dict | None = None) -> None:
+    def apply_scene_core(name: str, media: dict | None = None, index: int | None = None, a2w: dict | None = None,
+                         bgv: str | None = None) -> None:
         scene = scene_book.get(name)
         if scene is None:
             scene_msg.set(f"scene inconnue: {name}")
             return
-        apply_scene_dict(scene, media, index, a2w)
+        apply_scene_dict(scene, media, index, a2w, bgv)
 
-    def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None) -> None:
-        """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire)."""
+    def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None,
+                         bgv: str | None = None) -> None:
+        """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire). `bgv` : video de fond propre a l'entree."""
         sync_automation_now()
-        values = scenes.scene_values(scene, params)
         note = ""
+        if bgv:
+            if scenes.bg_video_missing(bgv):
+                note = f" (video de fond introuvable: {Path(bgv).name})"      # la scene garde son propre fond
+            else:
+                scene = scenes.scene_with_bg_video(scene, bgv)
+        values = scenes.scene_values(scene, params)
         if media:
             missing = scenes.media_missing(media)
             if missing:
@@ -2326,6 +2329,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 return False
             scene_book.set_entry_media(index, media)
             scene_msg.set(f"Overlay de '{name}' : {scenes.media_label(media)}{extra}")
+        elif target == "bgvideo":
+            path = a2w_from_file(files[0])
+            if path is None:
+                scene_msg.set(f"Il faut une video pour le fond: {Path(files[0]).name}")
+                return False
+            scene_book.set_entry_bg_video(index, path)
+            scene_msg.set(f"Fond de '{name}' : video {Path(path).name}{extra}")
         else:
             scene = rows[index]["scene"]
             if not (scene.get("bg") == "live" and scene.get("mode") == "snap"):
@@ -2343,6 +2353,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             refresh_scene_bar()
         return True
 
+    def bg_clear(index: int) -> None:
+        if scene_book.set_entry_bg_video(index, None):
+            scene_msg.set("Video de fond retiree : la scene garde son fond")
+        refresh_scene_bar()
+
     def a2w_clear(index: int, key: str) -> None:
         if scene_book.set_entry_a2w(index, key, None):
             scene_msg.set(f"{A2W_TARGETS[key].capitalize()} retiree : la scene garde la sienne")
@@ -2354,10 +2369,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if not 0 <= index < len(rows):
             return
         menu = tk.Menu(root, tearoff=0)
-        skin.style_menu(menu)
         scene = rows[index]["scene"]
         snap = scene.get("bg") == "live" and scene.get("mode") == "snap"
         menu.add_command(label="Overlay (logo / texte / video du logo)", command=lambda: drop_media(index, data, "overlay"))
+        menu.add_command(label="Fond : video", command=lambda: drop_media(index, data, "bgvideo"))
         for key, label in A2W_TARGETS.items():
             menu.add_command(label=f"audio2wave : {label}" + ("" if snap else "  (scene Snap seulement)"),
                              state="normal" if snap else "disabled", command=lambda k=key: drop_media(index, data, k))
@@ -2446,6 +2461,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def set_entry_vj(index: int, **kw) -> None:
         scene_book.set_entry_vj(index, **kw)
+        if set(kw) <= {"skip", "seconds"} and panel_update_in_place(index, kw):
+            return                                   # ni la barre ni le panneau ne dependent d'autre chose : aucun rechargement
         refresh_scene_bar()
 
     def set_vj_option(**kw) -> None:
@@ -2454,19 +2471,39 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     # ---- Panneau etendu : le set en detail (media lie, duree et participation au VJ de chaque entree, ordre, renommer)
     PANEL_BODY_H = 200
+    PANEL_BODY_MIN = 80
+    NAME_MIN, NAME_MAX = 14, 70                     # largeur (caracteres) du bouton du nom : la plus longue entree, bornee
+    DUR_W = 13
+    BTN_W = {"▲": 3, "▼": 3, "Renommer": 9, "Retirer": 8}
     BOLD = ("Segoe UI", 9, "bold")
 
-    def build_panel_row(parent, row: dict, active: bool) -> None:
-        bg = "#3b3320" if active else a2w.GUI_BG
+    def row_bg(active: bool) -> str:
+        return "#3b3320" if active else a2w.GUI_BG
+
+    def card_bg(active: bool) -> str:
+        return "#4a3f26" if active else a2w.GUI_PANEL_BG
+
+    def dur_label(row: dict) -> str:
+        return "duree " + ("du set" if row["seconds"] is None else f"{row['seconds']:.0f} s") + " \u25be"
+
+    def build_panel_row(parent, row: dict, active: bool) -> dict:
+        """Une ligne du panneau ; rend ses references (`frame`, `num`, `name`, `dur`, `cards`, `active`) pour la repeindre sur place."""
+        bg = row_bg(active)
         i = row["index"]
+        refs: dict = {"index": i, "cards": [], "active": active}
         fr = tk.Frame(parent, bg=bg)
         fr.pack(fill="x", pady=1, padx=2)
-        tk.Label(fr, text=str(i + 1), width=3, bg=bg, fg=SCENE_COLOR, font=BOLD).pack(side="left")
-        name_btn = tk.Button(fr, text=row["name"] if len(row["name"]) <= 16 else row["name"][:15] + ".", width=16, anchor="w",
-                  command=lambda k=i: apply_entry(k), relief="flat", bd=0, cursor="hand2", font=BOLD,
-                  bg=SCENE_COLOR if active else a2w.GUI_PANEL_BG, fg=BANNER_FG if active else a2w.GUI_FG,
-                  activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
-        name_btn.pack(side="left", padx=4)
+        refs["frame"] = fr
+        refs["num"] = tk.Label(fr, text=str(i + 1), width=3, bg=bg, fg=SCENE_COLOR, font=BOLD)
+        refs["num"].pack(side="left")
+        shown = row["name"]                             # en entier (largeur commune a toutes les lignes : panel_state["name_w"])
+        name_btn = tk.Button(fr, text=shown, command=lambda k=i: apply_entry(k), relief="flat", bd=0, cursor="hand2", font=BOLD,
+                             bg=SCENE_COLOR if active else a2w.GUI_PANEL_BG, fg=BANNER_FG if active else a2w.GUI_FG,
+                             activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+        name_btn._skin_stretch = True                  # remplit la hauteur de la ligne ; meme largeur sur toutes les lignes
+        name_btn.configure(width=panel_state["name_w"])
+        name_btn.pack(side="left", fill="y", padx=4, pady=2)
+        refs["name"] = name_btn
         scene = row["scene"]
         snap = scene.get("bg") == "live" and scene.get("mode") == "snap"
         own_a2w = row["a2w"] or {}
@@ -2474,10 +2511,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
         def zone(title: str, width: int, own: dict | None, inherited: dict | None, clear, target: str, enabled: bool = True) -> None:
             """Une zone de depot : media propre a l'entree (vif, avec sa croix), sinon celui que la scene a capture (en sourdine)."""
-            cbg = "#4a3f26" if active else a2w.GUI_PANEL_BG            # carte de la zone
+            cbg = card_bg(active)                                      # carte de la zone
             z = tk.Frame(fr, bg=cbg, width=width, height=THUMB_H + 16, highlightthickness=0)
             z.pack(side="left", padx=3)
             z.pack_propagate(False)
+            refs["cards"].append(z)
             tk.Label(z, text=title, bg=cbg, fg=SCENE_COLOR if enabled else a2w.GUI_MUTED_FG, font=("Segoe UI", 7, "bold"),
                      anchor="w", padx=4).pack(fill="x")
             inner = tk.Frame(z, bg=cbg)
@@ -2510,14 +2548,17 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if own_media.get("logo_source", "image") == "image" and not own_media.get("logo_path"):
             own_media = None                               # la scene n'a pas de logo
         zone("OVERLAY", 215, media, own_media, lambda k=i: media_clear(k), "overlay")
+        zone("FOND  video", 165, as_video(row.get("bg_video")), as_video(scenes.scene_bg_video(scene)),
+             lambda k=i: bg_clear(k), "bgvideo")
         zone("AUDIO2WAVE  video int.", 165, as_video(own_a2w.get("video")), as_video(scene_a2w.get("video")),
              lambda k=i: a2w_clear(k, "video"), "video", snap)
         zone("AUDIO2WAVE  video ext.", 165, as_video(own_a2w.get("video2")), as_video(scene_a2w.get("video2")),
              lambda k=i: a2w_clear(k, "video2"), "video2", snap)
-        dur = tk.Menubutton(fr, text="duree " + ("du set" if row["seconds"] is None else f"{row['seconds']:.0f} s") + " \u25be",
-                            relief="flat", bd=0, padx=6, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG,
-                            activebackground=a2w.GUI_BG, activeforeground=a2w.GUI_FG)
-        dur.pack(side="left", padx=4)
+        dur = tk.Menubutton(fr, text=dur_label(row), relief="flat", bd=0, padx=6, cursor="hand2", bg=a2w.GUI_PANEL_BG,
+                            fg=a2w.GUI_MUTED_FG, activebackground=a2w.GUI_BG, activeforeground=a2w.GUI_FG)
+        dur.configure(width=DUR_W)                       # colonnes alignees : meme largeur sur toutes les lignes
+        dur.pack(side="left", fill="y", padx=4, pady=2)
+        refs["dur"] = dur
         dmenu = tk.Menu(dur, tearoff=0)
         dmenu.add_command(label="Duree du set", command=lambda k=i: set_entry_vj(k, seconds=None))
         for value in scenes.VJ_SECONDS:
@@ -2536,11 +2577,44 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                               ("\u25bc", lambda k=i: move_entry_now(k, 1), i < n - 1),
                               ("Renommer", lambda nm=row["name"]: rename_scene_dialog(nm), True),
                               ("Retirer", lambda k=i: remove_entry_now(k), True)):
-            tk.Button(fr, text=text, command=cmd, state="normal" if ok else "disabled", relief="flat", bd=0, padx=6,
-                      cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, disabledforeground=a2w.GUI_MUTED_FG,
-                      activebackground=SCENE_COLOR, activeforeground=BANNER_FG).pack(side="left", padx=1)
+            b = tk.Button(fr, text=text, command=cmd, state="normal" if ok else "disabled", relief="flat", bd=0, padx=6, width=BTN_W[text],
+                          cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, disabledforeground=a2w.GUI_MUTED_FG,
+                          activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+            b._skin_stretch = True                         # meme hauteur que la ligne (et que le bouton du nom)
+            b.pack(side="left", fill="y", padx=1, pady=2)
         register_drop(fr, i)
         register_drop(name_btn, i)
+        return refs
+
+    def restyle_row(refs: dict, active: bool) -> None:
+        """Repeint une ligne quand seule la scene active change : fond de ligne, cartes, bouton du nom (aucun widget reconstruit)."""
+        if refs["active"] == active:
+            return
+        old_card, new_card = card_bg(refs["active"]).lower(), card_bg(active)
+        bg = row_bg(active)
+        refs["active"] = active
+        try:
+            refs["frame"].configure(bg=bg)
+            refs["num"].configure(bg=bg)
+            for w in refs["frame"].winfo_children():
+                if w is refs["name"]:
+                    w.configure(bg=SCENE_COLOR if active else a2w.GUI_PANEL_BG, fg=BANNER_FG if active else a2w.GUI_FG)
+                    skin.retint(w, bg)
+                elif w in refs["cards"]:
+                    stack = [w]
+                    while stack:
+                        node = stack.pop()
+                        cls = node.winfo_class()
+                        if cls in ("Frame", "Label") and str(node.cget("bg")).lower() == old_card:
+                            node.configure(bg=new_card)
+                        elif cls == "Button":
+                            node.configure(bg=new_card)
+                            skin.retint(node, new_card)
+                        stack.extend(node.winfo_children())
+                elif w.winfo_class() in ("Button", "Checkbutton", "Menubutton"):
+                    skin.retint(w, bg)
+        except tk.TclError:
+            pass                                           # widget detruit entre-temps (reconstruction du panneau)
 
     def build_random_body(inner, settings: dict) -> None:
         """Corps du panneau etendu en ordre « Full Randomizer » : banques d'assets, sources du fond et de l'overlay, verrous."""
@@ -2605,7 +2679,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             tk.Label(fr, text=count if bank else ("vide : ajoute un dossier" if not rs[fkey] else "aucun fichier trouve"),
                      bg=bg, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
             if which == "overlay":
-                scan_btn = tk.Button(fr, text="Rescanner", command=lambda: (random_bank(True), refresh_scene_panel()), relief="flat",
+                scan_btn = tk.Button(fr, text="Rescanner", command=lambda: (random_bank(True), refresh_scene_panel(force=True)), relief="flat",
                                      bd=0, padx=8, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG)
                 scan_btn.pack(side="left", padx=2)
                 Tooltip(scan_btn, "Relit les dossiers des deux banques (nouveaux fichiers ajoutes depuis).")
@@ -2645,8 +2719,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                                 ("params", "config aleatoire", "Une configuration entierement nouvelle : logo (taille, position, contour), effets, halo / "
                                                                "fonte / cellules et noise tires au hasard, sans partir d'un preset."),
                                 ("fx", "effets du logo", "Halo, fonte, cellules, noise et effets allumes au hasard (au plus deux effets couteux)."),
-                                ("media", "media de la banque OVERLAY", "Une image, animation ou video de la banque OVERLAY comme logo.")):
+                                ("media", "media de la banque OVERLAY", "Une image, animation ou video de la banque OVERLAY comme logo."),
+                                ("text", "texte", "Le texte ci-contre comme logo (couleur tiree au hasard), au meme titre qu'un fichier de la banque.")):
             check(fr, label, key in rs["overlay"], member("overlay", key), tip)
+        text_var = tk.StringVar(value=rs["text"])
+        text_entry = tk.Entry(fr, textvariable=text_var, width=24)
+        text_entry.pack(side="left", padx=(0, 6))
+        Tooltip(text_entry, "Texte tire comme logo (defaut CASUAL RAVERS). Entree ou changer de champ pour valider ; vide = jamais de texte.")
+        for ev in ("<Return>", "<FocusOut>"):
+            text_entry.bind(ev, lambda e: set_random_option(text=text_var.get()) if text_var.get().strip()[:randomizer.MAX_TEXT] != scene_book.vj()["random"]["text"] else None)
         # ---- verrous
         fr = line("VERROUS")
         for key, label, tip in (("lock_bg", "fond", "Le fond reste celui du moment pendant que l'overlay varie."),
@@ -2667,15 +2748,55 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         tk.Label(fr, text=rnd["info"], bg=bg, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=760).pack(
             side="left", padx=10, fill="x")
 
-    def refresh_scene_panel() -> None:
-        for child in scene_panel.winfo_children():
-            child.destroy()
+    panel_state: dict = {"sig": None, "rows": {}, "cv": None, "summary": None, "dur": {}, "name_w": 18}
+
+    def panel_summary(rows: list[dict], settings: dict) -> str:
+        played = [r for r in rows if not r["skip"]]
+        secs = settings["seconds"]
+        loop = sum(r["seconds"] or secs for r in played)
+        if settings["order"] == "alea":
+            return f"Full Randomizer : un tirage toutes les {secs:.0f} s"
+        return (f"{len(played)}/{len(rows)} scenes dans le VJ, boucle ~ "
+                + (f"{loop / 60:.1f} min" if loop >= 90 else f"{loop:.0f} s"))
+
+    def panel_signature(rows: list[dict], settings: dict) -> str:
+        """Tout ce qui, hors la scene active, change ce que le panneau affiche : s'il est identique, on ne reconstruit rien."""
+        return json.dumps([settings, rows, rnd["info"] if settings["order"] == "alea" else "",
+                           [len(b) for b in rnd["bank"].values()], sum(1 for v in getattr(s, "thumb_cache", {}).values() if v != "pending"), dnd["ok"],
+                           scene_book.active_set_name()], sort_keys=True, default=str)
+
+    def refresh_scene_panel(force: bool = False) -> None:
+        """Construit / met a jour le panneau etendu. Rien n'est reconstruit si seul l'ordre d'affichage actif a change (la ligne
+        active est alors repeinte sur place) ; une reconstruction garde la position de l'ascenseur et rehabille les widgets."""
         if not getattr(s, "scenes_expanded", False):
+            for child in scene_panel.winfo_children():
+                child.destroy()
             scene_panel.pack_forget()
+            panel_state.update(sig=None, rows={}, cv=None, summary=None, dur={})
             return
-        scene_panel.pack(fill="x")
         rows = scene_book.rows()
         settings = scene_book.vj()
+        current = current_index(rows)
+        sig = panel_signature(rows, settings)
+        if not force and sig == panel_state["sig"] and scene_panel.winfo_children():
+            for refs in panel_state["rows"].values():
+                restyle_row(refs, refs["index"] == current)
+            return
+        from tkinter import font as tkfont
+        face = tkfont.Font(root=root, font=BOLD)
+        longest = max([face.measure(r["name"]) for r in rows] + [0])
+        panel_state["name_w"] = max(NAME_MIN, min(NAME_MAX, -(-longest // max(face.measure("0"), 1)) + 2))
+        frac = 0.0
+        cv_old = panel_state["cv"]
+        if cv_old is not None:
+            try:
+                frac = cv_old.yview()[0]
+            except tk.TclError:
+                frac = 0.0
+        for child in scene_panel.winfo_children():
+            child.destroy()
+        panel_state.update(sig=sig, rows={}, cv=None, summary=None, dur={})
+        scene_panel.pack(fill="x")
         head = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)
         head.pack(fill="x")
         tk.Label(head, text=f" SET  {scene_book.active_set_name()}", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=BOLD).pack(
@@ -2698,41 +2819,126 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             dm.add_command(label=f"{value} s" if value < 60 else f"{value // 60} min",
                            command=lambda v=value: set_vj_option(seconds=float(v)))
         default["menu"] = dm
-        played = [r for r in rows if not r["skip"]]
-        loop = sum(r["seconds"] or secs for r in played)
-        tk.Label(head, text=(f"Full Randomizer : un tirage toutes les {secs:.0f} s" if settings["order"] == "alea" else
-                             f"{len(played)}/{len(rows)} scenes dans le VJ, boucle ~ "
-                             + (f"{loop / 60:.1f} min" if loop >= 90 else f"{loop:.0f} s")),
-                 bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
+        summary = tk.StringVar(value=panel_summary(rows, settings))
+        panel_state["summary"] = summary
+        tk.Label(head, textvariable=summary, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
         tk.Label(head, text="glisser-deposer d'un fichier sur une zone (overlay / audio2wave) = lier ce media"
                  if dnd["ok"] else "glisser-deposer indisponible (pip install tkinterdnd2)", bg=a2w.GUI_PANEL_BG,
                  fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
-        body = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=PANEL_BODY_H)
+        body = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=getattr(s, "panel_body_h", PANEL_BODY_H))
         body.pack(fill="x")
         body.pack_propagate(False)
+        foot = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)           # sous la liste : ajouter a la suite
+        foot.pack(fill="x")
+        plus = tk.Button(foot, text="+", command=add_random_scene, relief="flat", bd=0, padx=14, cursor="hand2", bg=SCENE_COLOR,
+                         fg=BANNER_FG, font=BOLD, activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+        plus.pack(side="left", padx=(8, 4), pady=3)
+        Tooltip(plus, "Ajoute a la suite du set une scene tiree au hasard (reglages du Full Randomizer), sous un nom aleatoire. "
+                      "Aucun preset n'est enregistre et la scene n'est pas appliquee.")
+        dup = tk.Button(foot, text="Dupliquer la derniere", command=duplicate_last_scene, relief="flat", bd=0, padx=10, cursor="hand2",
+                        bg=a2w.GUI_BG, fg=a2w.GUI_FG)
+        dup.pack(side="left", padx=4, pady=3)
+        Tooltip(dup, "Ajoute a la suite une copie de la derniere scene (meme fond, overlay, medias, duree) puis propose de la renommer. "
+                     "Change ensuite ses medias en glissant un fichier sur sa ligne, sa duree ou sa case VJ.")
+        grip = tk.Label(scene_panel, text="⋯", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, cursor="sb_v_double_arrow", pady=0)
+        grip.pack(fill="x")
+        Tooltip(grip, "Glisse vers le haut ou le bas pour agrandir ou reduire la liste (la fenetre suit).")
+        drag: dict = {}
+
+        def grip_press(e) -> None:
+            drag.update(y=e.y_root, h=int(body.cget("height")))
+
+        def grip_move(e) -> None:
+            if not drag:
+                return
+            want = max(PANEL_BODY_MIN, drag["h"] + e.y_root - drag["y"])
+            old = int(body.cget("height"))
+            delta = want - old
+            want = min(want, max(root.winfo_screenheight() - 200, PANEL_BODY_MIN))
+            delta = want - old
+            if delta == 0:
+                return
+            # la fenetre suit tant qu'elle tient dans l'ecran ; au-dela la liste grandit quand meme (la page du dessous se reduit,
+            # elle defile) et ce « trop-plein » est rendu en premier quand on reduit
+            overflow = getattr(s, "panel_overflow", 0)
+            if delta > 0:
+                win = min(delta, max(root.winfo_screenheight() - 80 - root.winfo_height(), 0))
+                overflow += delta - win
+            else:
+                take = min(overflow, -delta)
+                overflow -= take
+                win = delta + take
+            s.panel_overflow = overflow
+            body.configure(height=old + delta)
+            s.panel_body_h = old + delta
+            if win:
+                root.geometry(f"{root.winfo_width()}x{max(MIN_WIN_H, root.winfo_height() + win)}")
+                s.scene_panel_h = getattr(s, "scene_panel_h", 0) + win       # a la fermeture, la fenetre rend exactement ce qu'elle a pris
+
+        grip.bind("<ButtonPress-1>", grip_press)
+        grip.bind("<B1-Motion>", grip_move)
+        grip.bind("<ButtonRelease-1>", lambda e: drag.clear())
         bar = skin.scrollbar(body)
-        cv = tk.Canvas(body, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollcommand=bar.set)
+        hbar = skin.scrollbar(body, orient="horizontal")             # seulement si un nom tres long depasse la largeur
+        cv = tk.Canvas(body, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollcommand=bar.set, xscrollcommand=hbar.set)
         bar.config(command=cv.yview)
+        hbar.config(command=cv.xview)
         bar.pack(side="right", fill="y")
         cv.pack(side="left", fill="both", expand=True)
         inner = tk.Frame(cv, bg=a2w.GUI_BG)
         item = cv.create_window((0, 0), window=inner, anchor="nw")
-        cv.bind("<Configure>", lambda e: cv.itemconfigure(item, width=e.width))
-        inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+
+        def fit_width(_e=None) -> None:
+            need = inner.winfo_reqwidth()
+            cv.itemconfigure(item, width=max(cv.winfo_width(), need))
+            if need > cv.winfo_width() + 1:
+                if not hbar.winfo_ismapped():
+                    hbar.pack(side="bottom", fill="x", before=cv)
+            else:
+                if hbar.winfo_ismapped():
+                    hbar.pack_forget()
+                cv.xview_moveto(0)
+        cv.bind("<Configure>", fit_width)
+        restore = {"until": time.monotonic() + 0.5 if frac else 0.0}
+
+        def on_inner(_e=None) -> None:
+            fit_width()
+            cv.configure(scrollregion=cv.bbox("all"))
+            if time.monotonic() < restore["until"]:        # la mise en page se fait en plusieurs passes : on remet la position a chacune
+                cv.yview_moveto(frac)
+        inner.bind("<Configure>", on_inner)
+        panel_state["cv"] = cv
         if settings["order"] == "alea":
             build_random_body(inner, settings)
-            return
-        if not rows:
-            tk.Label(inner, text="Ce set est vide : '+ Scene' pour en ajouter.", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG).pack(pady=20)
-        current = current_index(rows)
-        for row in rows:
-            build_panel_row(inner, row, row["index"] == current)
+        else:
+            if not rows:
+                tk.Label(inner, text="Ce set est vide : '+ Scene' pour en ajouter.", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG).pack(pady=20)
+            for row in rows:
+                refs = build_panel_row(inner, row, row["index"] == current)
+                panel_state["rows"][row["index"]] = refs
+                panel_state["dur"][row["index"]] = refs["dur"]
+        skin.apply(scene_panel)                    # TOUJOURS : un panneau reconstruit sans habillage (vignettes pretes, Rescanner...) laissait les cases brutes
+
+    def panel_update_in_place(index: int, kw: dict) -> bool:
+        """Duree propre ou case VJ d'une entree : on met a jour le resume et le bouton de duree, sans reconstruire le panneau."""
+        summary, btn = panel_state["summary"], panel_state["dur"].get(index)
+        if summary is None or not getattr(s, "scenes_expanded", False) or btn is None:
+            return False
+        rows = scene_book.rows()
+        if not 0 <= index < len(rows):
+            return False
+        summary.set(panel_summary(rows, scene_book.vj()))
+        if "seconds" in kw:
+            btn.configure(text=dur_label(rows[index]))
+        panel_state["sig"] = panel_signature(rows, scene_book.vj())
+        return True
 
     def set_expanded(flag: bool) -> None:
         """Ouvre / ferme le panneau etendu : la fenetre grandit (ou reprend sa taille) de la hauteur du panneau."""
         if bool(getattr(s, "scenes_expanded", False)) == bool(flag):
             return
         s.scenes_expanded = bool(flag)
+        s.panel_overflow = 0
         refresh_scene_bar()
         if root.winfo_ismapped():
             root.update_idletasks()
@@ -2773,8 +2979,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             btn = tk.Button(scene_bar, text=proj_text(), command=toggle_projection, padx=10)
             btn.pack(side="left", padx=(8, 4), pady=5)
             proj_ui["btn"] = btn
-            Tooltip(btn, "Ouvre la fenetre de projection : plein ecran sur le second ecran (le projecteur) ; sans second ecran, "
-                         "en fenetre. Echap dans cette fenetre la ferme sans fermer les reglages.")
+            Tooltip(btn, "Ouvre la fenetre de projection : en fenetre, sur un autre ecran que les reglages s'il y en a un "
+                         "(plein ecran : case Plein ecran ou touche F). Echap dans cette fenetre la ferme sans fermer les reglages.")
         scenes_title = tk.Label(scene_bar, text="SCENES")
         skin.title(scenes_title, SCENE_COLOR)
         scenes_title.pack(side="left", padx=(8, 6), pady=5)
@@ -3054,10 +3260,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         after(150, lambda: apply_live_overrides(pending) or scene_msg.set("panneau audio2wave de la scene introuvable"))
     if on_ready is not None:
         root.after(50, lambda: on_ready({
-            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
+            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": tab_aff, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,
             "live_wrap": live_wrap, "right_panel": right, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
@@ -3070,8 +3276,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "poll": poll_scene_requests, "msg": scene_msg, "start_adding": start_adding, "entry_var": scene_entry_var,
                        "new_from_entry": new_scene_from_entry, "switch_set": switch_set, "create_set": create_set,
                        "rename_set": rename_set_now, "delete_set": delete_set_now, "export": export_set_now,
-                       "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel,
-                       "drop": drop_media, "a2w_clear": a2w_clear, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
+                       "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel, "refresh_panel": refresh_scene_panel, "panel_state": panel_state,
+                       "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
                        "move_entry": move_entry_now, "media_current": media_from_current, "media_clear": media_clear},
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
