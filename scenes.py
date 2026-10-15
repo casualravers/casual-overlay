@@ -21,6 +21,8 @@ import audio2wave_gl as gl
 import randomizer
 
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
+MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : quatre emplacements
+MASTER_SLOTS = 4
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
 MAX_NAME = 200                    # pas de limite pratique : les noms longs sont affiches en entier ou raccourcis a l'ecran
@@ -40,6 +42,45 @@ def live_preset_name(name: str) -> str:
     """Nom que portaient les presets d'audio2wave crees par les premieres versions des scenes (migration)."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "scene"
     return f"scene-{slug}"
+
+
+class MasterBook:
+    """Memoires de masters : `MASTER_SLOTS` emplacements, chacun `{"name", "values"}` ou vide (None). `values` ne garde que les cles de
+    `gl.MEMORY_KEYS` (reglages de salle sans etats du moment), validees par `coerce_params`. Fichier JSON illisible = emplacements vides."""
+
+    def __init__(self, path_getter) -> None:
+        self._path_getter = path_getter
+
+    @property
+    def path(self) -> Path:
+        return Path(self._path_getter())
+
+    def slots(self) -> list:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = data.get("slots") if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            raw = None
+        out: list = [None] * MASTER_SLOTS
+        for i, slot in enumerate(raw[:MASTER_SLOTS] if isinstance(raw, list) else []):
+            if isinstance(slot, dict) and isinstance(slot.get("values"), dict) and isinstance(slot.get("name"), str):
+                values = {k: v for k, v in gl.coerce_params(slot["values"]).items() if k in gl.MEMORY_KEYS and k in slot["values"]}
+                out[i] = {"name": slot["name"][:MAX_NAME] or f"M{i + 1}", "values": values}
+        return out
+
+    def save(self, index: int, name: str, params: dict) -> bool:
+        if not 0 <= index < MASTER_SLOTS:
+            return False
+        slots = self.slots()
+        slots[index] = {"name": (name or "").strip()[:MAX_NAME] or f"M{index + 1}",
+                        "values": json.loads(json.dumps({k: params[k] for k in gl.MEMORY_KEYS if k in params}))}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"version": 1, "slots": slots}, indent=2), encoding="utf-8")
+        return True
+
+    def get(self, index: int) -> dict | None:
+        slots = self.slots()
+        return slots[index] if 0 <= index < len(slots) else None
 
 
 class SceneBook:

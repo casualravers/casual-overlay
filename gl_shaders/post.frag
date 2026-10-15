@@ -23,6 +23,17 @@ uniform float u_nz_beat;
 uniform float u_nz_since;
 uniform float u_nz_amount;
 uniform vec4  u_nz_fx;
+uniform float u_csym;         // symetrie : 0 aucune, 1 miroir gauche, 2 miroir haut, 3 quatre quadrants, 4 kaleidoscope
+uniform float u_cseg;         // segments du kaleidoscope
+uniform float u_crot;         // rotation du kaleidoscope (radians)
+uniform float u_cpix;         // pixelisation 0..1
+uniform float u_cwarp;        // deformation globale 0..1
+uniform float u_ctime;        // temps de la composition (integre cote CPU)
+uniform float u_trail;        // trainee : part de l'image precedente conservee
+uniform sampler2D u_prev;     // image finale precedente
+uniform float u_hue;          // teinte globale (radians) : rotation de couleur appliquee a tout (fond et logo)
+uniform float u_strobe;      // eclair blanc court du strobe (1 -> 0 en 70 ms)
+uniform float u_bg_level;     // master du fond : 0 = noir (logo seul), 1 = normal
 uniform float u_flash;        // transition du VJ : 1 -> 0 en ~0,5 s (flash blanc + bandes de glitch)
 
 // Intensite effective de chaque effet (interrupteur x intensite x intensite globale), une fois par
@@ -49,6 +60,7 @@ uniform float u_hud;              // 1 = affiche les barres de debug
 uniform float u_fx_state[5];      // etat des 5 interrupteurs (pour le HUD)
 
 in vec2 v_uv;
+vec2 cuv;                       // UV apres la composition (symetrie, pixelisation, deformation) : tout le reste les utilise
 out vec4 f_color;
 
 float hash(vec2 p) {
@@ -60,7 +72,7 @@ float hash(vec2 p) {
 // grand des trois, pour ne pas laisser de frange sombre sur les bords d'un logo.
 vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp) {
     float aspect = u_res.x / u_res.y;
-    vec2 uv = v_uv;
+    vec2 uv = cuv;
 
     // 1. Wobble : ondulation sinusoidale des UV, amplitude = basses.
     float bass_e = max(u_bass, u_nz * u_nz_fx.x);
@@ -184,21 +196,61 @@ void holo(vec2 uv, out vec2 disp, out vec3 light) {
                + 0.6 * dust_layer(px, c, 8.0 * scale, 1.2, 0.35, 23.0);
     light += holo_palette(hue + 0.3) * dust * flow * (0.25 + 0.75 * v) * smoothstep(0.0, 0.25, v) * u_holo_dust * u_holo * 2.6 * open_;
 }
+vec2 comp_uv(vec2 uv) {
+    vec2 p = uv;
+    float aspect = u_res.x / u_res.y;
+    if (u_cwarp > 0.001) {                                  // deformation globale : ondes lentes sur tout le cadre
+        p += u_cwarp * 0.03 * vec2(sin(p.y * 9.0 + u_ctime * 1.3) + 0.5 * sin(p.y * 23.0 - u_ctime * 2.1),
+                                   sin(p.x * 7.0 - u_ctime * 1.1) + 0.5 * sin(p.x * 19.0 + u_ctime * 1.7));
+    }
+    if (u_cpix > 0.001) {                                   // pixelisation : de 300 a 12 cellules en hauteur
+        float n = mix(300.0, 12.0, u_cpix);
+        vec2 g = vec2(n * aspect, n);
+        p = (floor(p * g) + 0.5) / g;
+    }
+    if (u_csym > 0.5 && u_csym < 3.5) {                     // miroirs : on garde la moitie gauche / haute
+        if (u_csym < 1.5 || u_csym > 2.5) p.x = 0.5 - abs(p.x - 0.5);
+        if (u_csym > 1.5) p.y = 0.5 - abs(p.y - 0.5);
+    } else if (u_csym > 3.5) {                              // kaleidoscope : le plan est replie en u_cseg secteurs
+        vec2 q = (p - 0.5) * vec2(aspect, 1.0);
+        float r = length(q);
+        float seg = 6.2831853 / max(u_cseg, 2.0);
+        float a = atan(q.y, q.x) + u_crot;
+        a = abs(mod(a, seg) - seg * 0.5);
+        q = r * vec2(cos(a), sin(a));
+        p = q / vec2(aspect, 1.0) + 0.5;
+    }
+    return clamp(p, 0.0, 1.0);
+}
+
+vec3 hue_rotate(vec3 c, float a) {           // rotation autour de l'axe du gris (1,1,1)
+    vec3 k = vec3(0.57735027);
+    return c * cos(a) + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - cos(a));
+}
+
 void main() {
+    cuv = comp_uv(v_uv);
     // Halo holographique: deformation du fond + lumiere (jamais sur le logo: pose dessus, intact).
     vec2 disp = vec2(0.0);
     vec3 light = vec3(0.0);
     if (u_holo > 0.001 && u_logo_on > 0.5) {
-        holo(v_uv, disp, light);
+        holo(cuv, disp, light);
     }
     // Fond et logo deformes chacun avec leurs reglages, puis logo pose par-dessus (alpha premultiplie).
-    vec3 col = layer_fx(u_scene, u_fx_bg, vec2(0.5), 0.0, disp).rgb + light;
+    vec3 col = layer_fx(u_scene, u_fx_bg, vec2(0.5), 0.0, disp).rgb * u_bg_level + light;
     if (u_logo_on > 0.5) {
         vec4 lg = layer_fx(u_logo, u_fx_logo, u_center_logo, u_salt_logo, vec2(0.0));
         col = lg.rgb + col * (1.0 - lg.a);
     }
 
-    col = mix(col, vec3(1.0), u_flash * 0.8);         // flash de transition du VJ
+    if (abs(u_hue) > 0.001) {
+        col = clamp(hue_rotate(col, u_hue), 0.0, 1.0);
+    }
+    if (u_trail > 0.001) {                                  // trainee : l'image precedente (finale) s'estompe de u_trail par image
+        col = max(col, texture(u_prev, gl_FragCoord.xy / u_res).rgb * u_trail);
+    }
+    col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe));
+    //        // flash de transition du VJ
 
     // HUD : barres bass / mid / high / rms / beat en bas a gauche + 5 pastilles d'effets.
     if (u_hud > 0.5) {
