@@ -939,10 +939,13 @@ def check_gui() -> None:
     _scenes.SCENES_PATH = _tmp_presets / "scenes.json"
     real_masters_path = _scenes.MASTERS_PATH
     _scenes.MASTERS_PATH = _tmp_presets / "masters.json"
+    real_autosave_path = gl.AUTOSAVE_PATH
+    gl.AUTOSAVE_PATH = _tmp_presets / "autosave.json"
     live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
         gl_gui.run_gui(s, live, on_ready)
     finally:
+        gl.AUTOSAVE_PATH = real_autosave_path
         gl.OVERLAY_PRESETS_PATH = real_presets_path
         gl.BACKGROUND_PRESETS_PATH = real_bg_presets_path
         _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
@@ -1103,10 +1106,10 @@ def check_gui() -> None:
     xs = out.get("x_skinned", (0, False))
     check(xs[0] >= 3 and xs[1], "etendu (GUI): les cases VJ sont habillees des l'ouverture du panneau", str(xs))
     check(out.get("x_aff_scroll") == (True,) * 3,
-          "section Affichage et analyse: l'ouvrir dans une fenetre de taille imposee rend la page defilable (ascenseur et zone de defilement)",
+          "section Affichage et analyse: onglet de l'espace de controle global (partie VJ), pose dans le panneau etendu",
           str(out.get("x_aff_scroll")))
     check(out.get("x_master_panel") == (True,) * 6,
-          "panneau etendu: espace de controle global a droite de la liste (7 onglets, curseurs qui ecrivent les masters, strobe, verrou), plus rien dans la barre",
+          "panneau etendu: espace de controle global a droite de la liste (8 onglets, curseurs qui ecrivent les masters, strobe, verrou), plus rien dans la barre",
           str(out.get("x_master_panel")))
     check(out.get("x_memory") == (True, 200.0, 3.0, True, True),
           "memoires de masters (GUI): une memoire enregistree se rappelle d'un clic (teinte, symetrie), sans les etats du moment", str(out.get("x_memory")))
@@ -1114,6 +1117,16 @@ def check_gui() -> None:
           "historique (GUI): chaque scene jouee est notee, Retour rejoue la precedente, le verrou l'interdit", str((out.get("x_history"), out.get("x_history_lock"))))
     check(out.get("x_build") == (True,) * 4, "montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc", str(out.get("x_build")))
     check(out.get("x_silence") == (True,) * 3, "mode silence (GUI): la case ecrit silence_on", str(out.get("x_silence")))
+    check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
+          str(out.get("x_panic")))
+    check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
+    check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %, cadence du strobe en mode Cadence",
+          str(out.get("x_tap")))
+    check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
+          str((out.get("x_help"), out.get("x_help_once"))))
+    check(out.get("x_console") == (True, True, True), "console VJ: grosses commandes (PANIQUE, Drop, Suivante) et ligne d'etat", str(out.get("x_console")))
+    check(out.get("x_title") is True, "titre de la fenetre: l'etat du spectacle (scene, VJ) lisible dans la barre des taches")
+    check(out.get("x_autosave") is True, "auto-sauvegarde: reglages (sans etats du moment), scene et set ecrits", str(out.get("x_autosave")))
     check(out.get("x_wheel_grip") == (True,) * 4,
           "etendu (GUI): la molette defile la liste des scenes et la poignee l'agrandit / la reduit (la fenetre suit, minimum 80 px)",
           str(out.get("x_wheel_grip")))
@@ -2743,18 +2756,17 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_open"] = (h1 > h0 + 150, panel.winfo_ismapped(),
                      sum(1 for w in walk_(panel) if w.winfo_class() == "Button" and w.cget("text") == "Retirer"),
                      any(w.winfo_class() == "Button" and w.cget("text") == "\u25b4 Reduire" for w in walk_(c["scene_bar"])))
-    # « Affichage et analyse » ouvert dans une fenetre de taille imposee : la page doit devenir defilable (ascenseur + zone de defilement)
+    # « Affichage et analyse » est un onglet de l'espace de controle global (partie VJ), plus une section de l'overlay ni du LIVE
     c["aff_toggle"](True)
-    t_end = time.monotonic() + 1.0
+    t_end = time.monotonic() + 0.6
     while time.monotonic() < t_end:
         root.update()
         time.sleep(0.05)
-    pcv, pbar = c["page_canvas"], c["page_bar"]
-    scroll_h = int(str(pcv.cget("scrollregion")).split()[3])
-    out["x_aff_scroll"] = (pbar.winfo_ismapped(), scroll_h > pcv.winfo_height(), pcv.yview()[1] < 1.0)
-    c["aff_toggle"](False)
-    root.update()
-    # espace de controle global (a droite de la liste) : onglets, curseurs des masters, strobe, verrou ; plus rien dans la barre
+    aff = c["aff_frame"]
+    nb_aff = c["vj"]["master_box"]().winfo_children()[0]
+    out["x_aff_scroll"] = (aff.winfo_ismapped(), nb_aff.tab(nb_aff.select(), "text") == "Affichage",
+                           str(aff.pack_info().get("in")).startswith(str(c["vj"]["master_box"]())))
+    root.update()    # espace de controle global (a droite de la liste) : onglets, curseurs des masters, strobe, verrou ; plus rien dans la barre
     mpanel = c["vj"]["master_box"]()                       # construit une fois, parent = la barre (pas la liste)
     for nb_ in (w for w in walk_(mpanel) if w.winfo_class() == "TNotebook"):         # les onglets se remplissent a la premiere selection
         for i_ in range(nb_.index("end")):
@@ -2777,7 +2789,7 @@ def gui_expand_steps(c, s, out) -> None:
     tabs = [nb for nb in walk_(mpanel) if nb.winfo_class() == "TNotebook"]
     tab_names = [tabs[0].tab(i, "text") for i in range(tabs[0].index("end"))] if tabs else []
     bar_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() in ("Button", "Menubutton")]
-    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique"] and len(knobs) >= 18,
+    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique", "Affichage"] and len(knobs) >= 18,
                              got == (1.5, 0.5, 0.4, 0.3, 90.0), list_right,
                              not any(t.startswith(("Strobe", "Verrou", "Teinte", "Reac", "Tempo", "Overlay", "Fond", "Montee")) for t in bar_texts),
                              any(w.winfo_class() == "Button" and w.cget("text").startswith("Strobe") for w in walk_(mpanel)),
@@ -2826,6 +2838,65 @@ def gui_expand_steps(c, s, out) -> None:
     on = params["silence_on"]
     sil.invoke() if sil is not None else None
     out["x_silence"] = (sil is not None, on == 1.0, params["silence_on"] == 0.0)
+    # garde-fous d'exploitation : panique (bouton et touche X), tap tempo, aide, console, titre d'etat, auto-sauvegarde
+    for k_, v_ in (("comp_sym", 3), ("hue_master", 90.0), ("build", 0.6), ("strobe_on", 1.0), ("silence_on", 1.0), ("holo_on", 1.0)):
+        params[k_] = v_
+    params["fx_on"] = [1, 1, 1, 1, 1]
+    vjc["state"]["running"] = True
+    s.scene_lock = True
+    panic_btn = next((w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text") == "PANIQUE"), None)
+    if panic_btn is not None:
+        panic_btn.invoke()
+    root.update()
+    out["x_panic"] = (panic_btn is not None,
+                      params["comp_sym"] == 0 and params["hue_master"] == 0.0 and params["build"] == 0.0 and params["strobe_on"] == 0.0
+                      and params["silence_on"] == 0.0 and params["holo_on"] == 0.0 and params["fx_on"] == [0] * 5,
+                      vjc["state"]["running"] is False and not s.scene_lock, "PANIQUE" in c["scenes"]["msg"].get())
+    params["comp_sym"], params["fx_on"] = 2, [1, 1, 1, 1, 1]
+    s.scene_requests.put("panic")                       # la touche X de la fenetre de rendu : le fil GL a coupe, la GUI suit
+    t_end = time.monotonic() + 0.6
+    while time.monotonic() < t_end:
+        root.update()
+        time.sleep(0.05)
+    out["x_panic_key"] = (params["comp_sym"] == 0 and params["fx_on"] == [0] * 5, s.scene_requests.empty())
+    params["tempo"], params["strobe_mode"] = 1.0, "rate"
+    for _ in range(4):
+        vjc["tap"]()
+        t_end = time.monotonic() + 0.5
+        while time.monotonic() < t_end:
+            root.update()
+            time.sleep(0.02)
+    out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, 1.7 <= params["strobe_rate"] <= 2.3, "BPM" in c["scenes"]["msg"].get())
+    params["tempo"], params["strobe_mode"], params["strobe_rate"] = 1.0, "manual", 8.0
+    c["scenes"]["ui"]["help"]()
+    root.update()
+    tops = [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
+    help_texts = [w.cget("text") for top in tops for w in walk_(top) if w.winfo_class() == "Label"]
+    out["x_help"] = (len(tops) == 1 and any("X : PANIQUE" in t_ and "K : verrou" in t_ for t_ in help_texts))
+    for top in tops:
+        top.destroy()
+    c["scenes"]["ui"]["help"]()
+    c["scenes"]["ui"]["help"]()                          # un deuxieme appel ne multiplie pas les fenetres
+    root.update()
+    out["x_help_once"] = sum(1 for w in root.winfo_children() if w.winfo_class() == "Toplevel") == 1
+    for top in [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]:
+        top.destroy()
+    vjc["console"]()
+    root.update()
+    cons = [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
+    cbtn = [w.cget("text") for top in cons for w in walk_(top) if w.winfo_class() == "Button"]
+    clab = [w.cget("text") for top in cons for w in walk_(top) if w.winfo_class() == "Label"]
+    out["x_console"] = (len(cons) == 1, "PANIQUE" in cbtn and "Drop" in cbtn and any(t_.startswith("Suivante") for t_ in cbtn),
+                        any("VJ" in t_ for t_ in clab))
+    for top in cons:
+        top.destroy()
+    root.update()
+    vjc["tick"]()
+    out["x_title"] = root.title().startswith("casual-overlay GL - ") and "VJ" in root.title()
+    vjc["autosave"]()
+    snap_ = gl.read_autosave()
+    out["x_autosave"] = (snap_ is not None and "comp_sym" in snap_["params"] and "strobe_on" not in snap_["params"]
+                         and "scene" in snap_ and "set" in snap_)
     # presentation du panneau : boutons des noms qui remplissent leur case, cases habillees des l'ouverture, aucune reconstruction
     root.update()
     root.update()                                      # les <Configure> en attente : les images des boutons etires suivent la taille allouee
@@ -4407,9 +4478,30 @@ def check_projection() -> None:
     check(not p.running() and "Projection impossible" in s.status.get("msg", ""),
           "projection: un echec d'ouverture (SystemExit) est signale, la GUI continue", s.status.get("msg", ""))
     s, p = make(True, boom=RuntimeError("pilote"))
+    p.RESTART_DELAY_S = 0.02
     p.start()
-    time.sleep(0.3)
-    check(not p.running() and "pilote" in s.status.get("msg", ""), "projection: une erreur du rendu est signalee, la GUI continue")
+    time.sleep(0.8)
+    check(not p.running() and "pilote" in s.status.get("msg", "") and "trop de reprises" in s.status.get("msg", ""),
+          "projection: une erreur repetee est signalee apres 3 reprises, la GUI continue", s.status.get("msg", ""))
+    # reprise automatique : la fenetre qui meurt une fois est relancee toute seule, une fermeture voulue ne l'est pas
+    calls: list[str] = []
+
+    def flaky(s):
+        calls.append("run")
+        if len(calls) == 1:
+            raise RuntimeError("pilote graphique")
+        s.proj_stop.wait(5)
+
+    args_ = types.SimpleNamespace(fullscreen=None, fullscreen_request=None, monitor=None, gui=True)
+    s = gl.Session(args_, {}, None, None, (1280, 720), (1280, 720), None, None, None)
+    p = gl.Projection(s, target=flaky)
+    p.RESTART_DELAY_S = 0.02
+    p.start()
+    time.sleep(0.5)
+    check(p.running() and calls == ["run", "run"] and "relancee" in s.status.get("msg", ""),
+          "projection: la fenetre GL qui meurt est relancee toute seule", f"{calls} {s.status.get('msg', '')}")
+    p.stop(wait=3.0)
+    check(not p.running() and calls == ["run", "run"], "projection: une fermeture voulue ne relance rien")
     # une seule fenetre a la fois : un second gl_main (fermeture pas finie, double declenchement) renonce au lieu d'en ouvrir une autre
     s, p = make(True)
     gl._GL_SLOT.acquire()
@@ -4642,8 +4734,140 @@ def check_skin() -> None:
     finally:
         root.destroy()
     import build_portable
-    check("skin.py" in build_portable.APP_FILES and "theme.py" in build_portable.APP_FILES,
-          "version portable: skin.py et theme.py embarques")
+    check(all(f in build_portable.APP_FILES for f in ("skin.py", "theme.py", "sessionlog.py")),
+          "version portable: skin.py, theme.py et sessionlog.py embarques")
+
+
+def check_safeguards() -> None:
+    """Garde-fous d'exploitation : limiteur de strobe, panique, tap tempo, auto-sauvegarde, journal, master des effets."""
+    print("garde-fous d'exploitation")
+    import json
+    import tempfile
+    # --- limiteur de strobe : cadence maximale et duree maximale d'une rafale
+    lim = gl.StrobeLimiter()
+    fired = [t for t in (i * 0.02 for i in range(100)) if lim.allow(t, 10.0, 60.0)]        # 50 Hz demandes pendant 2 s
+    check(18 <= len(fired) <= 21 and all(b - a >= 0.1 - 1e-6 for a, b in zip(fired, fired[1:])),
+          "limiteur: 50 Hz demandes = 10 Hz au maximum, jamais deux eclairs a moins de 100 ms", str(len(fired)))
+    lim = gl.StrobeLimiter()
+    seq = [(i * 0.1, lim.allow(i * 0.1, 10.0, 2.0)) for i in range(80)]                     # 10 Hz continus pendant 8 s, duree max 2 s
+    ok_times = [t for t, a in seq if a]
+    gap = [(t, a) for t, a in seq if 2.2 < t < 4.9]
+    check(max(ok_times[:20]) <= 2.1 and not any(a for _, a in gap) and any(a for t, a in seq if t > 5.2) and lim.trips >= 1,
+          "limiteur: une rafale continue est coupee apres la duree maximale, pause forcee de 3 s, puis le strobe revient",
+          f"derniers eclairs {ok_times[:3]}..{ok_times[-1]:.1f}, coupures {lim.trips}")
+    lim = gl.StrobeLimiter()
+    first = [lim.allow(i * 0.1, 10.0, 1.5) for i in range(16)]
+    again = lim.allow(20.0, 10.0, 1.5)
+    check(again and first.count(True) >= 10, "limiteur: une pause de plus d'une seconde remet la rafale a zero")
+    check(gl.StrobeLimiter().allow(0.0, 1000.0, 0.0) and gl.DEFAULT_PARAMS["strobe_max_hz"] <= 10.0 and gl.DEFAULT_PARAMS["strobe_max_s"] <= 10.0
+          and all(k in gl.ROOM_KEYS for k in ("strobe_max_hz", "strobe_max_s", "fx_master")),
+          "limiteur: valeurs hors plage bornees, defauts prudents, reglages de salle")
+    # le Renderer applique le limiteur a tous les eclairs (ici : cadence demandee 20 Hz, limite 2 Hz)
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone (garde-fous)", str(exc))
+        return
+    size = (320, 180)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="rate", strobe_rate=20.0, strobe_max_hz=2.0, strobe_max_s=60.0)
+    seen, t_end = set(), time.monotonic() + 1.3
+    while time.monotonic() < t_end:
+        r._strobe(pst, {"beats": 0})
+        seen.add(r._strobe_last)
+        time.sleep(0.01)
+    check(1 <= len(seen) - 1 <= 3, "strobe: la cadence demandee (20 Hz) est plafonnee par le limiteur (2 Hz) dans le rendu", f"{len(seen) - 1} eclairs en 1,3 s")
+    # --- master des effets
+    r.video_tex.write(np.full((size[1], size[0], 3), 60, np.uint8).tobytes())
+    r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+    loud = {"bass": 1.0, "mid": 0.8, "high": 0.8, "rms": 0.8, "beat": 1.0, "since_beat": 0.0, "beats": 4}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.25, logo_glow=0.0, logo_pulse=0.0, logo_jitter=0.0,
+                bg_mode="pattern", bg_palette="classic", holo_on=0.0, fx_link=1.0)
+
+    def render(**kw):
+        r.draw(fbo, size, loud, dict(base, **kw), 1.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    effects_on = dict(fx_on=[1, 1, 1, 1, 0], fx_int=[1.0, 1.0, 1.0, 1.0, 1.0], master=1.0)
+    none = render(fx_on=[0, 0, 0, 0, 0])
+    full = render(**effects_on)
+    zero = render(**effects_on, fx_master=0.0)
+    half = render(**effects_on, fx_master=0.5)
+    check(not np.array_equal(full, none) and np.array_equal(zero, none),
+          "master des effets 0 %: plus aucun effet (image identique a tous les effets coupes)")
+    check(not np.array_equal(half, full) and not np.array_equal(half, none), "master des effets 50 %: effets attenues")
+    # --- panique
+    dirty = json.loads(json.dumps(gl.DEFAULT_PARAMS))
+    dirty.update(comp_sym=4, comp_pix=0.5, comp_trail=0.9, comp_warp=0.7, hue_master=120.0, hue_cycle=30.0, build=0.8, strobe_on=1.0,
+                 bg_master=0.0, overlay_master=0.0, tempo=0.2, silence_on=1.0, idle=1.0, fx_master=0.0, holo_on=1.0, melt_on=1.0, cell_on=1.0,
+                 bg_mode="video", bg_video="C:/introuvable/fond.mp4")
+    dirty["fx_on"], dirty["fxl_on"], dirty["noise_fx"] = [1] * 5, [1] * 4, [1] * 5
+    dirty.update(logo_x=0.3, logo_path="C:/logo.png", text_content="GARDE")
+    changed = gl.panic(dirty)
+    clean_ok = (dirty["comp_sym"] == 0 and dirty["comp_pix"] == 0 and dirty["comp_trail"] == 0 and dirty["comp_warp"] == 0
+                and dirty["hue_master"] == 0 and dirty["hue_cycle"] == 0 and dirty["build"] == 0 and dirty["strobe_on"] == 0
+                and dirty["bg_master"] == 1 and dirty["overlay_master"] == 1 and dirty["tempo"] == 1 and dirty["fx_master"] == 1
+                and dirty["silence_on"] == 0 and dirty["idle"] == 0 and not any(dirty["fx_on"]) and not any(dirty["fxl_on"])
+                and not any(dirty["noise_fx"]) and dirty["holo_on"] == dirty["melt_on"] == dirty["cell_on"] == 0)
+    check(clean_ok and len(changed) > 15, "panique: effets, strobe, montee, composition, teinte, silence coupes, masters a 100 %", str(changed[:6]))
+    check(dirty["bg_mode"] == "live" and dirty["logo_x"] == 0.3 and dirty["logo_path"] == "C:/logo.png" and dirty["text_content"] == "GARDE",
+          "panique: un fond video sans fichier (ecran noir) repasse en live ; logo, texte et position intacts")
+    check(gl.panic(dirty) == [], "panique: deuxieme appui sans effet (idempotente)")
+    check(not any(k in gl.PANIC_RESET for k in ("logo_x", "logo_path", "bg_video", "logo_opacity", "auto_master")),
+          "panique: ne touche ni au logo, ni au fond choisi, ni aux automations")
+    # --- tap tempo
+    check(abs(gl.tap_bpm([0.0, 0.5, 1.0, 1.5]) - 120.0) < 1e-6 and gl.tap_bpm([0.0]) is None and gl.tap_bpm([]) is None,
+          "tap tempo: 120 BPM a 0,5 s d'intervalle ; un seul appui = pas de BPM")
+    check(abs(gl.tap_bpm([0.0, 0.5, 5.0, 5.4, 5.8]) - 150.0) < 1e-6, "tap tempo: un trou de plus de 2 s recommence la serie")
+    check(abs(gl.tap_bpm([0, 1, 1.5, 2, 2.5, 3, 3.5, 4]) - 120.0) < 1e-6,
+          "tap tempo: seuls les derniers appuis comptent (le debut hesitant est oublie)")
+    # --- auto-sauvegarde
+    tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_autosave_"))
+    snap = tmp / "autosave.json"
+    check(gl.read_autosave(snap) is None, "auto-sauvegarde: aucun instantane = None")
+    params = json.loads(json.dumps(gl.DEFAULT_PARAMS))
+    params.update(hue_master=77.0, strobe_on=1.0, build=0.5, text_content="SOIREE")
+    check(gl.write_autosave(params, {"scene": "Purple", "set": "Soiree"}, snap), "auto-sauvegarde: ecriture")
+    got = gl.read_autosave(snap)
+    check(got is not None and got["params"]["hue_master"] == 77.0 and "strobe_on" not in got["params"] and "build" not in got["params"]
+          and got["scene"] == "Purple" and not (tmp / "autosave.tmp").exists(),
+          "auto-sauvegarde: reglages sans etats du moment, scene et set, ecriture atomique (pas de .tmp)")
+    base_params = json.loads(json.dumps(gl.DEFAULT_PARAMS))
+    recovered, msg = gl.recover_autosave(base_params, snap)
+    check(recovered["hue_master"] == 77.0 and recovered["text_content"] == "SOIREE" and "Purple" in msg and "restaures" in msg
+          and not snap.exists() and (tmp / "autosave.precedent.json").exists(),
+          "reprise apres arret brutal: reglages restaures, scene signalee, instantane mis de cote", msg)
+    again, msg2 = gl.recover_autosave(base_params, snap)
+    check(again is base_params and msg2 == "", "reprise: sans instantane, rien ne change")
+    snap.write_text("{ pas du json", encoding="utf-8")
+    bad, msg3 = gl.recover_autosave(base_params, snap)
+    check(bad is base_params and msg3 == "", "reprise: un instantane illisible est ignore sans erreur")
+    gl.clear_autosave(snap)
+    gl.write_autosave(params, None, snap)
+    gl.clear_autosave(snap)
+    check(not snap.exists(), "sortie propre: l'instantane est efface")
+    check(not gl.write_autosave(params, None, tmp / "absent" / "x" / "\0bad"), "auto-sauvegarde: un chemin impossible ne leve pas d'erreur")
+    # --- journal de session
+    import sessionlog
+    log_path = tmp / "casual-overlay.log"
+    sessionlog.setup(log_path)
+    sessionlog.event("Scene : Purple")
+    try:
+        raise ValueError("boum")
+    except ValueError as exc:
+        sessionlog.error("Erreur de test", exc)
+    for h in list(sessionlog.logger().handlers):
+        h.flush()
+    text = log_path.read_text(encoding="utf-8")
+    check("INFO" in text and "Scene : Purple" in text and "ERROR" in text and "ValueError: boum" in text and "Traceback" in text,
+          "journal: evenements et erreurs (avec la trace) ecrits dans le fichier")
+    check(any("Scene : Purple" in line for line in sessionlog.tail(10, log_path)), "journal: tail rend les dernieres lignes")
+    for h in list(sessionlog.logger().handlers):                    # le journal de test ne reste pas branche
+        sessionlog.logger().removeHandler(h)
+        h.close()
+    sessionlog.event("ignore : aucun fichier branche")              # sans fichier, un evenement ne leve rien
+    check(True, "journal: sans fichier branche, un evenement est ignore sans erreur")
 
 
 def main() -> None:
@@ -4656,6 +4880,7 @@ def main() -> None:
     check_cells()
     check_noise()
     check_masters()
+    check_safeguards()
     check_scenes()
     check_bg_video()
     check_fond_saveable()

@@ -141,7 +141,7 @@ Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--s
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
 
 Touches : Echap quitte, F fenetre/plein ecran, H barres de debug, B fond spectre/motif/video, T automations, 1-5 effets
-(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, M fonte acide du logo, V cellules du logo, F1-F9 scenes, Espace VJ lecture/pause, fleche droite scene suivante (avec --gui), +/- ou PageUp/PageDown intensite globale, haut/bas
+(wobble/ripple/chroma/glitch/logo; Maj+1-4 = meme effet sur la couche du logo, L = lier/separer fond et logo), C halo holographique, M fonte acide du logo, V cellules du logo, F1-F9 scenes, Espace VJ lecture/pause, fleche droite scene suivante (avec --gui), S strobe, K verrou, Retour arriere scene precedente, **X panique**, **.** tap tempo, **/** aide, +/- ou PageUp/PageDown intensite globale, haut/bas
 sensibilite du kick, R recharge shaders + reglages, P sauve dans
 `~/.audio2wave/gl_params.json` (recharge au lancement).
 
@@ -446,7 +446,7 @@ visuel d'audio2wave, il ne le complete pas) :
   - **Flash** : `Renderer.flash_t` (instant monotonic), pose par la commande `"flash"` dans le fil GL ; `u_flash` = carre de
     `1 - age / 0,55 s` dans `post.frag` : melange vers le blanc (0,8) + force des bandes de glitch (0,9) meme avec les effets
     coupes. Ne passe pas par `params` (`save_params` ecrit tout `params` dans `gl_params.json`).
-  - **Espace de controle global** (`build_master_panel`, a droite de la liste du panneau etendu, donc visible seulement panneau ouvert ; touches S, K et Retour arriere dans la fenetre de rendu restent actives) : un `ttk.Notebook` de sept onglets (l'onglet choisi survit aux reconstructions, `s.master_tab`), tout en **curseurs** (double-clic sur le nom = valeur d'origine) :
+  - **Espace de controle global** (`build_master_panel`, a droite de la liste du panneau etendu, donc visible seulement panneau ouvert ; touches S, K et Retour arriere dans la fenetre de rendu restent actives) : un `ttk.Notebook` de huit onglets (le dernier, *Affichage*, = analyse audio, plein ecran, diagnostic) (l'onglet choisi survit aux reconstructions, `s.master_tab`), tout en **curseurs** (double-clic sur le nom = valeur d'origine) :
     - **Masters** : Reac, Tempo, Overlay, Fond, Teinte (details ci-dessous). **Live** : Strobe (bouton maintenu, trois modes en boutons radio, curseur de cadence 1 a 20 Hz), Verrou, **Montee / Drop** (`start_build` / `do_drop`, `params["build"]` 0..1 sur `build_time` s : reactivite x(1+build), eclairs automatiques de 2 a 16 Hz dans `Renderer._strobe`, teinte +120 degres ; le Drop met `build` a 0, envoie `flash` et un eclair blanc).
     - **Audio** : sensibilite du kick (`sensitivity`, comme les fleches haut / bas) avec un **voyant** (`led_tick`, 60 ms, allume si `beat` > 0,4) et le **mode silence** (`SilenceGuard` dans la boucle de rendu : niveau = max de rms / basses / mediums / aigus normalises < `silence_level` pendant `silence_delay` s -> `params["idle"]` monte vers 1 en 1,5 s ; en idle `effective_tempo` = tempo x (1 - idle x (1 - `silence_tempo`)) (courbes d'automation comprises) et l'overlay est efface : fond seul ; le son qui revient fait redescendre `idle`).
     - **Compo** (composition globale, tout dans `post.frag`, `comp_uv` calcule `cuv` utilise a la place de `v_uv`) : symetrie en boutons radio (`comp_sym` : 0 aucune, 1 miroir gauche, 2 miroir haut, 3 quatre quadrants, 4 kaleidoscope a `comp_seg` segments, rotation `comp_rot` degres/s), pixelisation (`comp_pix`), deformation globale (`comp_warp`), **trainee** (`comp_trail` : l'image finale est ecrite dans l'une de deux textures hors ecran, l'autre sert d'« image precedente » ; l'ecran de la fenetre est multi-echantillonne et ne peut pas etre lu en texture ni copie vers une texture : `copy_framebuffer(target, dest)` recopie ensuite sur la cible).
@@ -591,6 +591,47 @@ visuel d'audio2wave, il ne le complete pas) :
   valeurs (motif / audio2wave, automations, micro intact), barre, F1/F2/F8, nom deja pris, mise a jour au meme rang, VJ (ordre, reglages persistants, minuteur reel, flash, Espace / fleche droite, pause a la main),
   suppression du preset, **changement de mode Live -> Snap avec chargement du preset `club`**.
 
+### Garde-fous d'exploitation (soiree : fiabilite, robustesse, aisance)
+
+- **Panique** (`gl.panic(params)`, `PANIC_RESET`; bouton rouge **PANIQUE** tout a droite de la barre, touche **X** dans la fenetre de rendu, bouton de la console) :
+  coupe d'un geste montee, strobe arme, composition (symetrie, pixel, trainee, deformation, rotation), teinte globale et cycle, respirations,
+  mode silence (`silence_on` et `idle`), effets 1-5 du fond et du logo, noise, halo / fonte / cellules ; remet les masters (reac, tempo,
+  overlay, fond, effets) a 100 % ; un fond `video` sans fichier (ecran noir) repasse en `live`. **Ne touche pas** au logo, au texte, aux
+  medias, au fond choisi ni aux automations. Idempotente, rend la liste des reglages changes (journal). La touche X agit **dans le fil GL**
+  (immediat, flash) puis met `"panic"` dans `s.scene_requests` : la GUI (`do_panic(from_gl=True)`) met le VJ en pause, **retire le verrou**,
+  arrete la montee et resynchronise curseurs (`sync_widgets`, `sync_master_panel`). Le bouton fait la meme chose cote GUI (`do_panic`).
+- **Limiteur de strobe** (`StrobeLimiter`, pure, temps injecte ; reglages de salle `strobe_max_hz` 10 et `strobe_max_s` 8, curseurs « Limite » et
+  « Duree max » de l'onglet *Live*) : applique dans `Renderer._strobe` a **tous** les eclairs (appui, kick, cadence, montee) : jamais plus de
+  `strobe_max_hz` eclairs par seconde, et une rafale continue (eclairs espaces de moins de 1 s) est coupee apres `strobe_max_s` secondes
+  (pause forcee `STROBE_COOLDOWN_S` = 3 s, evenement journalise). Le flash du VJ / du Drop (un seul eclair) n'est pas concerne.
+- **Master des effets** (`fx_master` 0..2, curseur « Effets » de l'onglet *Masters*, reglage de salle) : `Renderer.draw` en multiplie, sur une copie
+  des reglages, `master` (les 4 deformations), `melt_depth`, `cell_amount`, `noise_amount` et le halo (intensite, deformation, poussiere).
+  0 % = image identique a tous les effets coupes ; ne touche pas aux composition / teinte (masters a part).
+- **Tap tempo** (`gl.tap_bpm(taps)`, pure : moyenne des 6 derniers intervalles, un trou de plus de 2 s recommence ; bouton de l'onglet *Masters*,
+  touche **point** dans la fenetre de rendu, console) : BPM -> master du tempo (**120 BPM = 100 %**, 30..300 BPM) ; en strobe a cadence fixe
+  (`strobe_mode` = `rate`) la cadence suit (BPM / 60 Hz, bornee a 1..20 puis par le limiteur). Ce n'est toujours pas un BPM detecte.
+- **Reprise automatique de la projection** (`Projection._run`) : une erreur qui tue la fenetre GL (pas `SystemExit`, pas une fermeture voulue :
+  `proj_stop` / `stop_event`) relance `gl_main` apres `RESTART_DELAY_S` = 1 s avec les reglages du moment (ils vivent dans `s.params`) ; au plus
+  `MAX_RESTARTS` = 3 reprises en `RESTART_WINDOW_S` = 120 s, ensuite le statut dit « trop de reprises : bouton Demarrer pour reessayer ». Verifie
+  en vrai : une boucle de rendu qui plante est relancee et retombe a 60 fps.
+- **Journal de session** (`sessionlog.py`, stdlib ; `~/.audio2wave/casual-overlay.log`, rotation 3 x 500 Ko) : branche par `run_app` seulement (les
+  tests n'ecrivent jamais dans le vrai fichier ; sans fichier branche tout se tait). Evenements (lancement, scene appliquee... verrou, VJ, panique,
+  strobe limite, projection ouverte / fermee / relancee, arret propre ou anormal) et **toutes les erreurs avec leur trace** : callbacks Tk
+  (`root.report_callback_exception` dans `run_gui`), exceptions non rattrapees du fil principal et des autres fils (`install_hooks`),
+  fenetre GL morte. `sessionlog.tail(n)` rend les dernieres lignes.
+- **Auto-sauvegarde** (`write_autosave` / `read_autosave` / `clear_autosave` / `recover_autosave`, `~/.audio2wave/autosave.json`) : toutes les
+  minutes la GUI (`autosave_tick`) ecrit atomiquement les reglages (sans `TRANSIENT_KEYS`) + scene et set actifs. **Sortie propre = fichier efface** ;
+  un fichier present au lancement signale un arret brutal : `run_app` charge ces reglages a la place de `gl_params.json`, met l'ancien fichier
+  de cote (`autosave.precedent.json`, jamais efface) et le dit dans le statut. Les scenes, sets, presets et masters sont deja ecrits a chaque
+  geste : seul l'etat des curseurs du moment en dependait.
+- **Aide et console** : touche **/** ou **?** (hors champ de saisie) ou menu « reglages VJ » -> fenetre des raccourcis (`SHORTCUTS_HELP`, une seule
+  fenetre) ; **Console VJ** (menu « reglages VJ », `console_window`, fenetre toujours au premier plan) = grosses commandes (Retour, VJ, Suivante,
+  Strobe maintenu, Montee, Drop, Verrou, Tap tempo, aide, PANIQUE) + ligne d'etat + niveaux basses / mediums / aigus et voyant du kick.
+  `status_text()` (scene, VJ en marche avec le temps restant / en pause / VERROUILLE, BPM, projection fermee) sert la console **et le titre de
+  la fenetre des reglages** (lisible dans la barre des taches), mis a jour par `update_master_panel` (250 ms).
+- `check_gl.py` (`check_safeguards`, etapes `x_panic`, `x_panic_key`, `x_tap`, `x_help`, `x_console`, `x_title`, `x_autosave`, projection : reprise
+  et arret voulu) ; le harnais redirige `gl.AUTOSAVE_PATH` vers un dossier temporaire. `sessionlog.py` est dans `APP_FILES` du portable
+  (sinon la version portable ne demarrerait pas).
 ### Effets par couche (fond / logo decorreles)
 
 Le rendu a 3 passes : `scene.frag` tourne **deux fois** (`u_pass` 0 = fond opaque dans `scene_fbo`,
@@ -678,7 +719,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    bouton de courbe dans une 3e colonne, sur la meme ligne) : *Fond* (**en tete de la partie LIVE** : un choix Audio2wave / Fond genere (`tab_fond`, hors du canvas) ; dessous, **exclusivement** l'un des deux, deux fenetres du meme canvas defilant (`host_item` = panneau d'audio2wave, `pattern_item` = `pattern_holder` avec presets fond + reglages), basculees par `show_bg` (`state` hidden / normal : le panneau masque n'est pas detruit, les scenes et les tests continuent de l'actionner) ; la taille du canvas ne depend pas du fond affiche (la fenetre ne saute pas) et `cap` en retire la hauteur de l'en-tete ; reglages du fond genere +
    reglages du motif), *Effets* (les 5 effets, intensite globale, sensibilite, effets propres au logo), *Logo*
    (source Image/Texte/Video, position, opacite), *Aura du logo* (halo holographique + reaction a l'audio :
-   pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Noise* (hasard sur les effets coches) ; **hors des onglets**, sous eux, une section repliable (fermee par defaut, `s.aff_open`) *Affichage et analyse* (entree d'analyse sounddevice, boutons plein ecran / barres
+   pulsation, tremblement, contour), *Fonte du logo* (fonte acide), *Cellules*, *Noise* (hasard sur les effets coches) ; **dans la partie VJ** (pas dans l'overlay) : onglet *Affichage* de l'espace de controle global du panneau etendu (le contenu `tab_aff` est construit avec la fenetre, parent = la barre, puis pose dans l'onglet par `pack(in_=...)` ; `toggle_aff(True)` ouvre le panneau sur cet onglet, `False` le referme) *Affichage et analyse* (entree d'analyse sounddevice, boutons plein ecran / barres
    debug / recharger shaders / sauver, automations, mesures bass/mid/high/beat et statut fps/logo/messages).
    **Hauteur** : la fenetre depassait la hauteur d'un ecran (deux colonnes empilees : 850 px au repos, plus de
    1100 px avec le motif ouvert + les effets du logo delies + le halo deplie). Les onglets l'ont ramenee a
