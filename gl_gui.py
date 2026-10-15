@@ -35,6 +35,7 @@ import random
 import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, filedialog, simpledialog, ttk
@@ -646,6 +647,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             elif name in ("reload", "hud", "fullscreen"):
                 s.status["msg"] = "Disponible quand la projection est ouverte"
             return
+        if name == "fullscreen":
+            # Le bouton demande un ETAT (comme la case Plein ecran), pas une bascule : sur l'ecran des reglages il est refuse avec un
+            # message au lieu de recouvrir la fenetre de reglages (seule la touche F, dans la fenetre de rendu, bascule sans garde).
+            window = getattr(s, "window", None)
+            name = f"fullscreen={0 if window is not None and window.fullscreen else 1}"
         s.commands.put(name)
 
     # ------------------------------------------------ 2. pont restart_event -> ProducerManager (mode Live)
@@ -1790,6 +1796,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def random_draw() -> bool:
         """Tire une scene et l'applique (le VJ ajoute le flash et relance le minuteur)."""
+        if scene_locked():
+            return False
         scene, info, record = random_scene()
         rnd["last"], rnd["scene"], rnd["info"] = record, scene, info
         apply_scene_dict(scene)
@@ -1842,6 +1850,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def random_draw_now() -> None:
         """Bouton « Tirer maintenant » : un tirage tout de suite (le VJ, s'il tourne, repart pour une duree pleine)."""
+        if scene_locked():
+            return
         s.commands.put("flash")
         random_draw()
         if vj["running"]:
@@ -1949,6 +1959,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def vj_advance() -> None:
         """Entree suivante du set (ordre choisi) + flash, et le minuteur repart. Ordre `alea` : une scene tiree au hasard."""
+        if scene_locked():
+            return
         rows = scene_book.rows()
         if scene_book.vj()["order"] == "alea":
             s.commands.put("flash")
@@ -1968,7 +1980,44 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         vj["t_next"] = time.monotonic() + (rows[index]["seconds"] or settings["seconds"])     # duree propre a l'entree
         update_vj_button()
 
+    def scene_locked(say: bool = True) -> bool:
+        """Verrou de scene : la scene courante est gelee (ni VJ, ni touche, ni F1..F9, ni tirage) ; les masters restent actifs."""
+        locked = bool(getattr(s, "scene_lock", False))
+        if locked and say:
+            scene_msg.set("Scene verrouillee (bouton Verrou ou touche K pour deverrouiller)")
+        return locked
+
+    def update_lock_button() -> None:
+        btn = vj_ui.get("lock")
+        if btn is None:
+            return
+        try:
+            on = bool(getattr(s, "scene_lock", False))
+            btn.config(text="Verrou ●" if on else "Verrou", bg=SCENE_COLOR if on else a2w.GUI_BG, fg=BANNER_FG if on else a2w.GUI_FG)
+        except tk.TclError:
+            vj_ui.pop("lock", None)
+
+    def toggle_scene_lock() -> None:
+        """Bouton Verrou / touche K : gele la scene (le VJ se met en pause) ; deverrouiller relance le VJ s'il tournait avant."""
+        if getattr(s, "scene_lock", False):
+            s.scene_lock = False
+            if getattr(s, "lock_resume", False):
+                vj["running"] = True
+                vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
+            s.lock_resume = False
+            scene_msg.set("Scene deverrouillee" + (" : VJ relance" if vj["running"] else ""))
+        else:
+            s.lock_resume = bool(vj["running"])
+            vj["running"] = False
+            s.scene_lock = True
+            scene_msg.set("Scene verrouillee : le VJ est en pause, les masters restent actifs")
+        update_vj_button()
+        update_lock_button()
+        refresh_scene_bar()                                 # l'indicateur « Verrou » de la barre apparait / disparait
+
     def vj_toggle() -> None:
+        if not vj["running"] and scene_locked():
+            return
         if vj["running"]:
             vj["running"] = False
             scene_msg.set("VJ en pause")
@@ -1982,17 +2031,30 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         update_vj_button()
 
     def vj_tick() -> None:
-        if vj["running"] and time.monotonic() >= vj["t_next"]:
-            vj_advance()
-        if getattr(s, "thumb_dirty", False) and time.monotonic() - panel_state.get("thumb_at", 0.0) >= 0.8:
-            s.thumb_dirty = False                          # une vignette est prete (calculee dans un fil) : au plus un rafraichissement
-            panel_state["thumb_at"] = time.monotonic()     # toutes les 0,8 s, les vignettes arrivent en rafale
-            refresh_scene_panel()
-        update_vj_button()
-        after(250, vj_tick)
+        """Minuteur du VJ (250 ms). Chaque etape est isolee et la suivante est TOUJOURS programmee : une erreur (affichee sur la console)
+        ne doit jamais tuer le minuteur, sinon Play ne ferait plus rien et le VJ ne passerait plus jamais a la scene suivante."""
+        try:
+            if vj["running"] and time.monotonic() >= vj["t_next"]:
+                vj_advance()
+        except Exception:
+            traceback.print_exc()
+            vj["t_next"] = time.monotonic() + max(float(scene_book.vj()["seconds"]), 5.0)     # pas de boucle d'erreurs a 4 Hz
+        try:
+            if getattr(s, "thumb_dirty", False) and time.monotonic() - panel_state.get("thumb_at", 0.0) >= 0.8:
+                s.thumb_dirty = False                      # une vignette est prete (calculee dans un fil) : au plus un rafraichissement
+                panel_state["thumb_at"] = time.monotonic() # toutes les 0,8 s, les vignettes arrivent en rafale
+                refresh_scene_panel()
+            update_vj_button()
+            update_master_panel()
+        except Exception:
+            traceback.print_exc()
+        finally:
+            after(250, vj_tick)
 
     def apply_scene(name: str, index: int | None = None) -> None:
         """Choix a la main (par nom, ou par rang dans le set) : met le VJ en pause (on ne se bat pas avec le minuteur)."""
+        if scene_locked():
+            return
         rows = scene_book.rows()
         if index is None:
             index = next((r["index"] for r in rows if r["name"].lower() == name.lower()), None)
@@ -2026,6 +2088,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None,
                          bgv: str | None = None) -> None:
         """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire). `bgv` : video de fond propre a l'entree."""
+        record_history(scene, media, index, a2w, bgv)
         sync_automation_now()
         note = ""
         if bgv:
@@ -2116,6 +2179,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 continue
             if index == "vjnext":
                 vj_advance()
+                continue
+            if index == "lock":
+                toggle_scene_lock()
+                continue
+            if index == "back":
+                back_scene()
                 continue
             if 0 <= index < len(scene_book.rows()):
                 apply_entry(index)
@@ -2825,8 +2894,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         tk.Label(head, text="glisser-deposer d'un fichier sur une zone (overlay / audio2wave) = lier ce media"
                  if dnd["ok"] else "glisser-deposer indisponible (pip install tkinterdnd2)", bg=a2w.GUI_PANEL_BG,
                  fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
-        body = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=getattr(s, "panel_body_h", PANEL_BODY_H))
-        body.pack(fill="x")
+        wrap = tk.Frame(scene_panel, bg=a2w.GUI_BG)                 # la liste a gauche, l'espace de controle global a droite
+        wrap.pack(fill="x")
+        mbox = master_box()
+        mbox.pack(in_=wrap, side="right", fill="y")
+        mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
+        body = tk.Frame(wrap, bg=a2w.GUI_BG, height=getattr(s, "panel_body_h", PANEL_BODY_H))
+        body.pack(side="left", fill="both", expand=True)
         body.pack_propagate(False)
         foot = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)           # sous la liste : ajouter a la suite
         foot.pack(fill="x")
@@ -2954,6 +3028,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def toggle_projection() -> None:
         if projection is None:
             return
+        now = time.monotonic()
+        if now - proj_ui.get("t", 0.0) < 0.6:          # double declenchement (double clic, Espace sur le bouton) : ignore
+            return
+        proj_ui["t"] = now
         if projection.running():
             projection.stop()
             scene_msg.set("Projection fermee")
@@ -2970,6 +3048,417 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 btn.configure(text=proj_text())
         except tk.TclError:
             proj_ui["btn"] = None
+
+    master_book = scenes.MasterBook(lambda: scenes.MASTERS_PATH)
+    history_ui: dict = {"replay": False, "list": None}
+    build_ui: dict = {"t0": None}
+    SYM_MODES = (("Aucune", 0), ("Miroir G", 1), ("Miroir H", 2), ("Quadrants", 3), ("Kaleido", 4))
+
+    def strobe_text() -> str:
+        mode = params.get("strobe_mode", "manual")
+        suffix = {"kick": " kick", "rate": f" {float(params.get('strobe_rate', 8.0)):g}Hz"}.get(mode, "")
+        return "Strobe" + suffix + (" \u25cf" if mode != "manual" and float(params.get("strobe_on", 0.0)) >= 0.5 else "")
+
+    def build_text() -> str:
+        if build_ui["t0"] is None:
+            return "Montee"
+        return f"Montee {round(float(params['build']) * 100)}%"
+
+    def update_master_panel() -> None:
+        """Libelles des boutons du panneau de controle (les touches S / K peuvent les avoir changes) et voyant du mode silence."""
+        sb = vj_ui.get("strobe")
+        if sb is not None:
+            try:
+                if sb.cget("text") != strobe_text():
+                    sb.configure(text=strobe_text())
+            except tk.TclError:
+                vj_ui.pop("strobe", None)
+        update_lock_button()
+        idle = vj_ui.get("idle")
+        if idle is not None:
+            try:
+                idle.configure(text=f"idle {round(float(params['idle']) * 100)} %")
+            except tk.TclError:
+                vj_ui.pop("idle", None)
+
+    def sync_master_panel() -> None:
+        """Curseurs et boutons radio relus depuis `params` (apres le rappel d'une memoire de masters)."""
+        for key, var, factor, dec, text, unit in vj_ui.get("knobs", []):
+            try:
+                var.set(round(float(params[key]) * factor, dec))
+            except (tk.TclError, KeyError, ValueError):
+                pass
+        for key, var in vj_ui.get("vars", {}).items():
+            try:
+                var.set(params[key] if isinstance(params[key], str) else int(round(float(params[key]))))
+            except (tk.TclError, KeyError, ValueError):
+                pass
+        update_master_panel()
+
+    # ---- historique des scenes jouees et retour a la precedente
+    def record_history(scene: dict, media, index, a2w, bgv) -> None:
+        if history_ui["replay"]:
+            return
+        hist = s.__dict__.setdefault("scene_history", [])
+        hist.append({"name": scene.get("name", "?"), "scene": json.loads(json.dumps(scene)), "media": media, "index": index,
+                     "a2w": a2w, "bgv": bgv})
+        del hist[:-50]
+        refresh_history()
+
+    def refresh_history() -> None:
+        box = history_ui.get("list")
+        if box is None:
+            return
+        try:
+            box.delete(0, "end")
+            for i, entry in enumerate(reversed(getattr(s, "scene_history", [])[-12:])):
+                box.insert("end", ("\u25b6 " if i == 0 else "   ") + entry["name"])
+        except tk.TclError:
+            history_ui["list"] = None
+
+    def replay_entry(entry: dict, flash: bool = True) -> None:
+        paused = vj["running"]
+        vj["running"] = False                              # comme un choix a la main : le VJ se met en pause
+        if flash:
+            s.commands.put("flash")
+        history_ui["replay"] = True
+        try:
+            apply_scene_dict(entry["scene"], entry["media"], entry["index"], entry["a2w"], entry["bgv"])
+        finally:
+            history_ui["replay"] = False
+        if paused:
+            scene_msg.set(scene_msg.get() + "  (VJ en pause)")
+        update_vj_button()
+
+    def back_scene() -> None:
+        """Bouton Retour / Retour arriere dans la fenetre de rendu : rejoue la scene d'avant (media, videos et fond propres a l'entree compris)."""
+        if scene_locked():
+            return
+        hist = getattr(s, "scene_history", [])
+        if len(hist) < 2:
+            scene_msg.set("Pas de scene precedente")
+            return
+        hist.pop()                                         # la scene courante
+        replay_entry(hist[-1])
+        refresh_history()
+
+    def history_pick(_evt=None) -> None:
+        box = history_ui.get("list")
+        if box is None or scene_locked():
+            return
+        sel = box.curselection()
+        hist = getattr(s, "scene_history", [])[-12:]
+        if sel and sel[0] < len(hist):
+            entry = hist[::-1][sel[0]]
+            replay_entry(entry)
+            record_history(entry["scene"], entry["media"], entry["index"], entry["a2w"], entry["bgv"])
+
+    # ---- montee / drop
+    def build_tick() -> None:
+        if build_ui["t0"] is None:
+            return
+        total = max(float(params.get("build_time", 8.0)), 1.0)
+        params["build"] = min((time.monotonic() - build_ui["t0"]) / total, 1.0)
+        btn = vj_ui.get("build")
+        if btn is not None:
+            try:
+                btn.configure(text=build_text())
+            except tk.TclError:
+                vj_ui.pop("build", None)
+        after(50, build_tick)
+
+    def start_build() -> None:
+        if build_ui["t0"] is not None:                    # deuxieme appui = drop
+            do_drop()
+            return
+        build_ui["t0"] = time.monotonic()
+        params["build"] = 0.0
+        scene_msg.set(f"Montee sur {float(params.get('build_time', 8.0)):.0f} s : reactivite, strobe et teinte montent (bouton Drop pour relacher)")
+        build_tick()
+
+    def do_drop() -> None:
+        """Relache d'un coup : flash blanc et tout retombe aux reglages normaux."""
+        was = build_ui["t0"] is not None
+        build_ui["t0"] = None
+        params["build"] = 0.0
+        if was:
+            s.commands.put("flash")
+            params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+        btn = vj_ui.get("build")
+        if btn is not None:
+            try:
+                btn.configure(text=build_text())
+            except tk.TclError:
+                vj_ui.pop("build", None)
+        scene_msg.set("DROP" if was else "Pas de montee en cours")
+
+    def master_box() -> tk.Frame:
+        """L'espace de controle global est construit une seule fois (parent persistant : la barre) puis replace a droite de chaque
+        nouvelle liste ; le reconstruire a chaque rafraichissement du panneau gelait la fenetre pendant plus d'une seconde."""
+        box = vj_ui.get("master_box")
+        try:
+            if box is not None and box.winfo_exists():
+                return box
+        except tk.TclError:
+            pass
+        box = vj_ui["master_box"] = build_master_panel(scene_top)
+        skin.apply(box)
+        return box
+
+    def build_master_panel(parent) -> tk.Frame:
+        """Espace de controle global (a droite de la liste du panneau etendu), en onglets : masters, live (strobe, verrou, montee), audio
+        (sensibilite du kick, mode silence), composition (symetries, pixelisation, trainee, deformation), auto (cycle de teinte,
+        respiration), memoires de masters et historique des scenes. Reglages de salle, relus a chaque image par le rendu : jamais captures
+        par les scenes ni les presets."""
+        box = tk.Frame(parent, bg=a2w.GUI_PANEL_BG)
+        nb = ttk.Notebook(box)
+        nb.pack(fill="both", expand=True, padx=2, pady=(2, 0))
+        knobs: list = []
+        vars_: dict = {}
+        vj_ui["knobs"], vj_ui["vars"] = knobs, vars_
+
+        pending: dict = {}                                  # onglet -> fonction qui le remplit (a la premiere selection : le panneau est cher a habiller)
+
+        def new_tab(name: str, fill) -> None:
+            f = tk.Frame(nb, bg=a2w.GUI_PANEL_BG)
+            f.columnconfigure(1, weight=1)
+            f.columnconfigure(4, weight=1)
+            nb.add(f, text=name)
+            pending[str(f)] = fill
+
+        def build_current(_evt=None) -> None:
+            try:
+                f = nb.nametowidget(nb.select())
+            except (tk.TclError, KeyError):
+                return
+            fill = pending.pop(str(f), None)
+            if fill is not None:
+                fill(f)
+                skin.apply(f)
+            setattr(s, "master_tab", nb.index("current"))
+
+        def slider(f, i, key, label, lo, hi, step, factor, unit, default, tip, dec=0, var_key=None) -> None:
+            row, col = i if isinstance(i, tuple) else (i % 3, 3 * (i // 3))
+            var = tk.DoubleVar(value=round(float(params.get(key, default / factor)) * factor, dec))
+            shown = tk.StringVar(value=f"{var.get():.{dec}f}{unit}")
+
+            def moved(v, k=key, fac=factor, u=unit, text=shown, d=dec) -> None:
+                params[k] = float(v) / fac
+                text.set(f"{float(v):.{d}f}{u}")
+
+            name = tk.Label(f, text=label, width=9, anchor="w", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG)
+            name.grid(row=row, column=col, sticky="w", padx=(6, 2))
+            scale = tk.Scale(f, from_=lo, to=hi, resolution=step, orient="horizontal", showvalue=False, variable=var, length=96,
+                             width=10, sliderlength=14, bd=0, highlightthickness=0, bg=a2w.GUI_PANEL_BG, command=moved)
+            scale.grid(row=row, column=col + 1, sticky="ew")
+            tk.Label(f, textvariable=shown, width=7, anchor="e", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).grid(
+                row=row, column=col + 2, sticky="e", padx=(2, 6))
+            name.bind("<Double-Button-1>", lambda e, v=var, d=default: v.set(d))
+            Tooltip(name, tip + " Double-clic sur le nom : valeur d'origine.")
+            Tooltip(scale, tip)
+            knobs.append((key, var, factor, dec, shown, unit))
+
+        def button(f, text, command=None, **grid) -> tk.Button:
+            b = tk.Button(f, text=text, command=command, relief="flat", bd=0, padx=8, pady=2, cursor="hand2", bg=a2w.GUI_BG,
+                          fg=a2w.GUI_FG, activebackground=SCENE_COLOR, activeforeground=BANNER_FG, font=("Segoe UI", 9, "bold"))
+            b.grid(**grid)
+            return b
+
+        def radios(f, key, choices, row, col=0, span=6, tip="", on_change=None) -> None:
+            holder = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
+            holder.grid(row=row, column=col, columnspan=span, sticky="w", padx=6, pady=(2, 0))
+            cur = params.get(key, 0)
+            var = tk.StringVar(value=cur) if isinstance(cur, str) else tk.IntVar(value=int(round(float(cur))))
+            vars_[key] = var
+            for text, value in choices:
+                rb = tk.Radiobutton(holder, text=text, variable=var, value=value, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG,
+                                    selectcolor=a2w.GUI_BG, activebackground=a2w.GUI_PANEL_BG,
+                                    command=lambda k=key, v=var: (params.__setitem__(k, v.get() if isinstance(v.get(), str) else float(v.get())),
+                                                                  on_change() if on_change else None))
+                rb.pack(side="left", padx=2)
+                if tip:
+                    Tooltip(rb, tip)
+
+        # ---- Masters
+        def fill_0(f) -> None:
+            for i, args in enumerate((
+                    ("react_master", "Reac", 0, 200, 5, 100.0, "%", 100, "Master de l'audioreactivite : multiplie tout ce qui vient du son (basses, mediums, aigus, kick) "
+                                                                        "pour tous les effets. 0 % = le visuel ne reagit plus a l'audio, 100 % = normal, 200 % = double."),
+                    ("tempo", "Tempo", 0, 200, 5, 100.0, "%", 100, "Master du tempo : vitesse des animations (halo, fonte, cellules, fond anime, noise) et des courbes "
+                                                                   "d'automation. 100 % = normal, 50 % = deux fois plus lent. Ce n'est pas un BPM detecte : la video de fond "
+                                                                   "et le logo anime gardent leur cadence."),
+                    ("overlay_master", "Overlay", 0, 100, 5, 100.0, "%", 100, "Presence de l'overlay (logo, texte, contour, halo) : 100 % = normal, 0 % = invisible, "
+                                                                              "les effets du fond continuent."),
+                    ("bg_master", "Fond", 0, 100, 5, 100.0, "%", 100, "Luminosite du fond (video, spectre ou motif) : 100 % = normal, 0 % = fond noir, "
+                                                                      "il ne reste que le logo."),
+                    ("hue_master", "Teinte", 0, 360, 5, 1.0, "\u00b0", 0, "Teinte globale : fait tourner les couleurs de toute l'image (fond et logo). "
+                                                                          "0 = couleurs d'origine, 180 = couleurs opposees."))):
+                slider(f, i, *args)
+
+        new_tab("Masters", fill_0)
+
+        # ---- Live : strobe, verrou, montee / drop
+        def fill_1(f) -> None:
+            sb = button(f, strobe_text(), row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            vj_ui["strobe"] = sb
+            sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
+            sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
+            Tooltip(sb, "Strobe : eclair blanc court a la demande. Maintiens le bouton (ou la touche S dans la fenetre de rendu) pour une rafale. "
+                        "Au kick / cadence fixe, un clic arme, un autre desarme.")
+
+            def set_strobe(**kw) -> None:
+                params.update(kw)
+                params["strobe_on"] = 0.0                              # un changement de mode desarme
+                sb.configure(text=strobe_text())
+
+            radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Cadence", "rate")), row=1, span=3,
+                   tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Cadence : un clic arme, un autre desarme.",
+                   on_change=lambda: set_strobe())
+            slider(f, (2, 0), "strobe_rate", "Cadence", 1, 20, 1, 1.0, " Hz", 8, "Cadence du strobe (1 a 20 eclairs par seconde) en rafale manuelle et en cadence fixe.")
+            lock = button(f, "Verrou", toggle_scene_lock, row=0, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            vj_ui["lock"] = lock
+            update_lock_button()
+            Tooltip(lock, "Verrou de scene : gele la scene courante. Le VJ se met en pause et ni les touches de scene, F1..F9, la fleche "
+                          "droite ni les tirages ne la changent ; les masters restent actifs. Touche K dans la fenetre de rendu.")
+            slider(f, (2, 3), "build_time", "Duree", 2, 30, 1, 1.0, " s", 8, "Duree de la montee, en secondes.")
+            bb = button(f, build_text(), start_build, row=1, column=3, sticky="w", padx=6)
+            vj_ui["build"] = bb
+            Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 2 a 16 Hz) et la teinte (jusqu'a +120 degres) montent progressivement. "
+                        "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
+            drop = button(f, "Drop", do_drop, row=1, column=4, sticky="w")
+            Tooltip(drop, "Relache la montee d'un coup : flash blanc, tout retombe aux reglages normaux.")
+
+        new_tab("Live", fill_1)
+
+        # ---- Audio : sensibilite du kick (voyant) et mode silence
+        def fill_2(f) -> None:
+            slider(f, 0, "sensitivity", "Kick", 0.25, 4.0, 0.05, 1.0, "", 1.0,
+                   "Sensibilite du detecteur de kick (comme les fleches haut / bas dans la fenetre de rendu) : plus haut = detecte des kicks plus faibles.", dec=2)
+            led = vj_ui["led"] = tk.Label(f, text=" \u25cf kick ", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG, font=("Segoe UI", 9, "bold"))
+            led.grid(row=0, column=3, columnspan=2, sticky="w", padx=6)
+            Tooltip(led, "Voyant : s'allume a chaque kick detecte.")
+            sil = tk.IntVar(value=int(float(params["silence_on"]) >= 0.5))
+            cb = tk.Checkbutton(f, text="Mode silence", variable=sil, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, selectcolor=a2w.GUI_BG,
+                                activebackground=a2w.GUI_PANEL_BG, command=lambda: params.__setitem__("silence_on", float(sil.get())))
+            cb.grid(row=1, column=0, columnspan=2, sticky="w", padx=6)
+            vars_["silence_on"] = sil
+            Tooltip(cb, "Quand le son tombe sous le seuil pendant le delai, le visuel passe en idle : tempo reduit et overlay efface (fond seul). "
+                        "Il revient des que le son revient.")
+            idle = tk.Label(f, text="idle 0 %", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
+            idle.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
+            vj_ui["idle"] = idle
+            slider(f, (2, 0), "silence_level", "Seuil", 0, 20, 0.5, 100.0, " %", 3, "Niveau sonore (0 a 20 %) sous lequel on parle de silence.", dec=1)
+            slider(f, (2, 3), "silence_delay", "Delai", 1, 30, 1, 1.0, " s", 4, "Secondes de silence avant de passer en idle.")
+            slider(f, (3, 0), "silence_tempo", "Tempo idle", 0, 100, 5, 100.0, "%", 30, "Tempo relatif en idle (100 % = inchange).")
+
+        new_tab("Audio", fill_2)
+
+        # ---- Composition : symetries et deformations
+        def fill_3(f) -> None:
+            radios(f, "comp_sym", SYM_MODES, row=0, span=6, tip="Symetrie appliquee a toute l'image : miroir gauche / haut, quatre quadrants, kaleidoscope.")
+            slider(f, (1, 0), "comp_seg", "Segments", 2, 16, 1, 1.0, "", 6, "Nombre de segments du kaleidoscope.")
+            slider(f, (2, 0), "comp_rot", "Rotation", -90, 90, 1, 1.0, "\u00b0/s", 0, "Rotation du kaleidoscope, en degres par seconde.")
+            slider(f, (1, 3), "comp_pix", "Pixel", 0, 100, 1, 100.0, "%", 0, "Pixelisation de toute l'image (0 = aucune).")
+            slider(f, (2, 3), "comp_trail", "Trainee", 0, 97, 1, 100.0, "%", 0, "Trainee : l'image precedente s'estompe lentement (feedback). 0 = aucune.")
+            slider(f, (3, 0), "comp_warp", "Deform", 0, 100, 1, 100.0, "%", 0, "Deformation globale : ondes lentes sur tout le cadre.")
+
+        new_tab("Compo", fill_3)
+
+        # ---- Auto : cycle de teinte, respiration
+        def fill_4(f) -> None:
+            slider(f, 0, "hue_cycle", "Cycle teinte", -90, 90, 1, 1.0, "\u00b0/s", 0, "La teinte tourne toute seule, en degres par seconde (0 = fixe, negatif = sens inverse).")
+            slider(f, 1, "breath_overlay", "Resp. overlay", 0, 100, 1, 100.0, "%", 0, "Respiration de l'overlay : sa presence oscille doucement (0 = aucune).")
+            slider(f, 2, "breath_bg", "Resp. fond", 0, 100, 1, 100.0, "%", 0, "Respiration du fond, en opposition de phase avec l'overlay (0 = aucune).")
+            slider(f, 3, "breath_period", "Periode", 2, 30, 1, 1.0, " s", 8, "Periode de la respiration, en secondes.")
+
+        new_tab("Auto", fill_4)
+
+        # ---- Memoires de masters
+        def fill_5(f) -> None:
+            armed = {"on": False}
+            slot_btns: list = []
+
+            def slot_label(i: int) -> str:
+                slot = master_book.get(i)
+                return f"{i + 1}  {slot['name'] if len(slot['name']) <= 12 else slot['name'][:11] + '.'}" if slot else f"{i + 1}  \u2014"
+
+            def save_slot(i: int) -> None:
+                slot = master_book.get(i)
+                name = scene_ui["ask_name"]("Memoire de masters", "Nom de la memoire :", slot["name"] if slot else f"Memoire {i + 1}")
+                if name is None:
+                    return
+                master_book.save(i, name, params)
+                slot_btns[i].configure(text=slot_label(i))
+                scene_msg.set(f"Masters enregistres dans la memoire {i + 1}")
+
+            def slot_click(i: int) -> None:
+                if armed["on"]:
+                    armed["on"] = False
+                    arm.configure(text="Sauver")
+                    save_slot(i)
+                    return
+                slot = master_book.get(i)
+                if slot is None:
+                    scene_msg.set(f"Memoire {i + 1} vide : clique Sauver puis une memoire (ou clic droit)")
+                    return
+                params.update(slot["values"])
+                for key in ("idle", "build"):
+                    params[key] = 0.0
+                sync_master_panel()
+                scene_msg.set(f"Memoire {i + 1} '{slot['name']}' rappelee")
+
+            for i in range(scenes.MASTER_SLOTS):
+                b = button(f, slot_label(i), lambda k=i: slot_click(k), row=0 if i < 2 else 1, column=0 if i % 2 == 0 else 3, columnspan=3,
+                           sticky="ew", padx=6, pady=(3, 0))
+                b.bind("<Button-3>", lambda e, k=i: save_slot(k), add="+")
+                slot_btns.append(b)
+                Tooltip(b, "Rappelle cette combinaison de masters (reglages de salle). Clic droit : enregistre les masters actuels ici.")
+
+            def arm_toggle() -> None:
+                armed["on"] = not armed["on"]
+                arm.configure(text="Sauver : choisis" if armed["on"] else "Sauver")
+
+            arm = button(f, "Sauver", arm_toggle, row=2, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            Tooltip(arm, "Clique ici puis sur une memoire pour y enregistrer les masters actuels (teinte, fond, overlay, composition, strobe...).")
+
+        new_tab("Memoires", fill_5)
+
+        # ---- Historique des scenes
+        def fill_6(f) -> None:
+            button(f, "\u25c0 Retour", back_scene, row=0, column=0, sticky="w", padx=6, pady=(3, 0))
+            lb = tk.Listbox(f, height=4, activestyle="none", exportselection=False, bg=a2w.GUI_BG, fg=a2w.GUI_FG, bd=0, highlightthickness=0,
+                            selectbackground=SCENE_COLOR, selectforeground=BANNER_FG)
+            lb.grid(row=0, column=1, rowspan=3, columnspan=4, sticky="nsew", padx=(8, 6), pady=3)
+            lb.bind("<Double-Button-1>", history_pick)
+            history_ui["list"] = lb
+            refresh_history()
+            Tooltip(lb, "Les dernieres scenes jouees (la plus recente en haut). Double-clic : la rejouer. Retour arriere dans la fenetre de rendu = scene precedente.")
+
+        new_tab("Historique", fill_6)
+
+        # onglet garde d'une reconstruction a l'autre
+        try:
+            nb.select(int(getattr(s, "master_tab", 0)))
+        except (tk.TclError, ValueError):
+            pass
+        build_current()
+        nb.bind("<<NotebookTabChanged>>", build_current)
+        vj_ui["tabs"] = (nb, build_current, pending)
+
+        def led_tick() -> None:
+            led = vj_ui.get("led")
+            try:
+                if led is not None:
+                    led.configure(fg=SCENE_COLOR if float(s.audio.analyzer.latest().get("beat", 0.0)) > 0.4 else a2w.GUI_MUTED_FG)
+            except tk.TclError:
+                vj_ui.pop("led", None)
+            except Exception:
+                pass
+            if box.winfo_exists():
+                after(60, led_tick)
+
+        led_tick()
+        return box
 
     def refresh_scene_bar() -> None:
         for child in scene_bar.winfo_children():
@@ -3024,6 +3513,14 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                         "a chaque changement. Le chiffre est le temps avant la prochaine scene. Choisir une scene a la main "
                         "met le VJ en pause ; changer de set le redemarre. Ordre et duree : 'reglages VJ'.")
         vj_ui["toggle"] = toggle
+        if getattr(s, "scene_lock", False):
+            # Verrou actif : bien visible dans la barre (sinon Play, Suivante et les scenes semblent « mortes » sans qu'on sache pourquoi)
+            lockbar = tk.Button(scene_bar, text="Verrou ●", command=toggle_scene_lock, relief="flat", bd=0, padx=10, pady=3,
+                                cursor="hand2", font=("Segoe UI", 9, "bold"), bg=SCENE_COLOR, fg=BANNER_FG,
+                                activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+            lockbar.pack(side="right", padx=2, pady=5)
+            Tooltip(lockbar, "La scene est VERROUILLEE : le VJ (Play, Suivante), les touches de scene, F1..F9 et les tirages sont sans effet. "
+                             "Clique pour deverrouiller (touche K dans la fenetre de rendu).")
         update_vj_button()
         # Set actif : menu pour en changer, creer, renommer, supprimer, exporter, importer
         current_set = scene_book.active_set_name()
@@ -3112,6 +3609,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             side="right", padx=10)
         refresh_scene_panel()
         skin.apply(scene_top)
+        # La rangee ne dicte pas la largeur de la fenetre : trop de touches ou de boutons sont rognes a droite (les boutons du VJ,
+        # poses d'abord, restent visibles) au lieu d'elargir la fenetre de reglages.
+        if proj_ui.get("bar_h") is None:                      # hauteur mesuree une fois (sans cela la barre n'en aurait plus)
+            scene_bar.update_idletasks()
+            proj_ui["bar_h"] = scene_bar.winfo_reqheight()
+        scene_bar.pack_propagate(False)
+        scene_bar.configure(height=proj_ui["bar_h"])
 
     refresh_scene_bar()
     after(250, vj_tick)
@@ -3245,6 +3749,17 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     on_page_config()
     after(400, lambda: (layout.__setitem__("settled", True), on_page_config()))
 
+    def watch_page() -> None:
+        """La taille VOULUE de la page change sans que la page change de taille (section « Affichage et analyse » qu'on ouvre, onglet plus haut,
+        panneau etendu) : aucun <Configure>, donc ni ascenseur ni zone de defilement. On la surveille."""
+        want = (page.winfo_reqwidth(), page.winfo_reqheight())
+        if want != layout.get("want"):
+            layout["want"] = want
+            on_page_config()
+        after(300, watch_page)
+
+    after(300, watch_page)
+
     root.protocol("WM_DELETE_WINDOW", on_close)
     refresh()
     update_meter()
@@ -3269,7 +3784,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
-            "vj": {"state": vj, "toggle": vj_toggle, "advance": vj_advance, "tick": vj_tick, "remaining": vj_remaining},
+            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining},
             "random": {"draw": random_draw, "draw_now": random_draw_now, "keep": random_keep, "save": random_save, "check": random_keep_check, "bank": random_bank,
                        "option": set_random_option, "state": rnd},
             "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,

@@ -480,6 +480,7 @@ def check_gui() -> None:
                 proj["queued"] = s.commands.empty()               # ouverte : la commande part au fil GL
                 while not s.commands.empty():
                     s.commands.get_nowait()                       # (ne pas polluer les etapes suivantes)
+                time.sleep(0.7)                                   # au-dela de l'anti-rebond du bouton
                 proj_btn.invoke()
                 root.update()
                 proj.update(text2=proj_btn.cget("text"), stopped=fake_proj.stops)
@@ -858,6 +859,24 @@ def check_gui() -> None:
                 running = vst["running"]
                 sc["apply"]("Scene A")
                 out["vj_pause"] = (running, vst["running"], "VJ en pause" in sc["msg"].get())
+                # verrou de scene : plus rien ne change la scene (VJ, touches, fleche, tirage), les masters restent libres
+                vst["running"] = True
+                vjc["lock"]()
+                frozen, locked_off = s.active_scene, not vst["running"]
+                vjc["apply"](1)
+                vjc["advance"]()
+                s.scene_requests.put("vjnext")
+                s.scene_requests.put(0)
+                sc["poll"]()
+                vjc["toggle"]()
+                params_now = s.params
+                params_now["hue_master"] = 90.0
+                out["vj_lock"] = (locked_off, s.active_scene == frozen, not vst["running"], "verrouillee" in sc["msg"].get(),
+                                  params_now["hue_master"] == 90.0)
+                params_now["hue_master"] = 0.0
+                vjc["lock"]()                                   # deverrouille : le VJ qui tournait repart
+                out["vj_unlock"] = (vst["running"], not getattr(s, "scene_lock", False), "deverrouillee" in sc["msg"].get())
+                vst["running"] = False
                 sbook.delete("Scene D")
                 sbook.delete("Scene C")
                 vjc["toggle"]()
@@ -918,6 +937,8 @@ def check_gui() -> None:
     import scenes as _scenes
     real_scenes_path, real_live_store_path = _scenes.SCENES_PATH, live.preset_store.path
     _scenes.SCENES_PATH = _tmp_presets / "scenes.json"
+    real_masters_path = _scenes.MASTERS_PATH
+    _scenes.MASTERS_PATH = _tmp_presets / "masters.json"
     live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
         gl_gui.run_gui(s, live, on_ready)
@@ -925,6 +946,7 @@ def check_gui() -> None:
         gl.OVERLAY_PRESETS_PATH = real_presets_path
         gl.BACKGROUND_PRESETS_PATH = real_bg_presets_path
         _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
+        _scenes.MASTERS_PATH = real_masters_path
     p = out.get("p_neon", ())
     check(p == ("live", "classic", 1.5, 0.0, "#ff3df2", 1, 0.11),
           "preset overlay integre charge (logo, effets, halo) SANS toucher au fond", str(p))
@@ -1035,6 +1057,9 @@ def check_gui() -> None:
           "VJ: Espace (lecture / pause) et fleche droite (suivante) via la file de la fenetre de rendu", str((out.get("vj_key_space"), out.get("vj_key_next"))))
     check(out.get("vj_pause") == (True, False, True), "VJ (GUI): choisir une scene a la main met le VJ en pause",
           str(out.get("vj_pause")))
+    check(out.get("vj_lock") == (True,) * 5, "verrou de scene (GUI): VJ en pause, ni choix, ni suivante, ni F1, ni relance ; les masters restent libres",
+          str(out.get("vj_lock")))
+    check(out.get("vj_unlock") == (True,) * 3, "verrou de scene (GUI): deverrouiller relance le VJ qui tournait", str(out.get("vj_unlock")))
     check(out.get("vj_one") == (False, True), "VJ (GUI): moins de 2 scenes = refus avec message", str(out.get("vj_one")))
     check("sets_error" not in out, "sets (GUI): aucune erreur", out.get("sets_error", ""))
     check(out.get("set_new") == ("Soiree", []), "sets (GUI): creer un set (vide), il devient le set actif", str(out.get("set_new")))
@@ -1077,6 +1102,18 @@ def check_gui() -> None:
           f"{out.get('x_fill')} {out.get('x_fill_dbg')}")
     xs = out.get("x_skinned", (0, False))
     check(xs[0] >= 3 and xs[1], "etendu (GUI): les cases VJ sont habillees des l'ouverture du panneau", str(xs))
+    check(out.get("x_aff_scroll") == (True,) * 3,
+          "section Affichage et analyse: l'ouvrir dans une fenetre de taille imposee rend la page defilable (ascenseur et zone de defilement)",
+          str(out.get("x_aff_scroll")))
+    check(out.get("x_master_panel") == (True,) * 6,
+          "panneau etendu: espace de controle global a droite de la liste (7 onglets, curseurs qui ecrivent les masters, strobe, verrou), plus rien dans la barre",
+          str(out.get("x_master_panel")))
+    check(out.get("x_memory") == (True, 200.0, 3.0, True, True),
+          "memoires de masters (GUI): une memoire enregistree se rappelle d'un clic (teinte, symetrie), sans les etats du moment", str(out.get("x_memory")))
+    check(out.get("x_history") == (True,) * 4 and out.get("x_history_lock") == (True, True, True) and out.get("x_lock_bar_off") is True,
+          "historique (GUI): chaque scene jouee est notee, Retour rejoue la precedente, le verrou l'interdit", str((out.get("x_history"), out.get("x_history_lock"))))
+    check(out.get("x_build") == (True,) * 4, "montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc", str(out.get("x_build")))
+    check(out.get("x_silence") == (True,) * 3, "mode silence (GUI): la case ecrit silence_on", str(out.get("x_silence")))
     check(out.get("x_wheel_grip") == (True,) * 4,
           "etendu (GUI): la molette defile la liste des scenes et la poignee l'agrandit / la reduit (la fenetre suit, minimum 80 px)",
           str(out.get("x_wheel_grip")))
@@ -2706,6 +2743,89 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_open"] = (h1 > h0 + 150, panel.winfo_ismapped(),
                      sum(1 for w in walk_(panel) if w.winfo_class() == "Button" and w.cget("text") == "Retirer"),
                      any(w.winfo_class() == "Button" and w.cget("text") == "\u25b4 Reduire" for w in walk_(c["scene_bar"])))
+    # « Affichage et analyse » ouvert dans une fenetre de taille imposee : la page doit devenir defilable (ascenseur + zone de defilement)
+    c["aff_toggle"](True)
+    t_end = time.monotonic() + 1.0
+    while time.monotonic() < t_end:
+        root.update()
+        time.sleep(0.05)
+    pcv, pbar = c["page_canvas"], c["page_bar"]
+    scroll_h = int(str(pcv.cget("scrollregion")).split()[3])
+    out["x_aff_scroll"] = (pbar.winfo_ismapped(), scroll_h > pcv.winfo_height(), pcv.yview()[1] < 1.0)
+    c["aff_toggle"](False)
+    root.update()
+    # espace de controle global (a droite de la liste) : onglets, curseurs des masters, strobe, verrou ; plus rien dans la barre
+    mpanel = c["vj"]["master_box"]()                       # construit une fois, parent = la barre (pas la liste)
+    for nb_ in (w for w in walk_(mpanel) if w.winfo_class() == "TNotebook"):         # les onglets se remplissent a la premiere selection
+        for i_ in range(nb_.index("end")):
+            nb_.select(i_)
+            root.update()
+        nb_.select(0)
+        root.update()
+    knobs = [w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
+    keys = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master")
+    before = {k: params[k] for k in keys}
+    for w, v in zip(knobs[:5], (150, 50, 40, 30, 90)):                       # onglet « Masters »
+        w.set(v)
+    root.update()
+    got = tuple(round(params[k], 2) for k in keys)
+    first_tab = knobs[:5]
+    list_right = min((w.winfo_rootx() for w in first_tab), default=0) > max(
+        (w.winfo_rootx() + w.winfo_width() for w in walk_(panel) if w.winfo_class() == "Canvas"), default=10 ** 6) - 5
+    for k, v in before.items():
+        params[k] = v
+    tabs = [nb for nb in walk_(mpanel) if nb.winfo_class() == "TNotebook"]
+    tab_names = [tabs[0].tab(i, "text") for i in range(tabs[0].index("end"))] if tabs else []
+    bar_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() in ("Button", "Menubutton")]
+    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique"] and len(knobs) >= 18,
+                             got == (1.5, 0.5, 0.4, 0.3, 90.0), list_right,
+                             not any(t.startswith(("Strobe", "Verrou", "Teinte", "Reac", "Tempo", "Overlay", "Fond", "Montee")) for t in bar_texts),
+                             any(w.winfo_class() == "Button" and w.cget("text").startswith("Strobe") for w in walk_(mpanel)),
+                             any(w.winfo_class() == "Button" and w.cget("text").startswith("Verrou") for w in walk_(mpanel)))
+    # memoires de masters, historique et retour, montee / drop, mode silence (par les vrais boutons)
+    vjc, mem = c["vj"], c["vj"]["memories"]
+    params["hue_master"], params["comp_sym"] = 200.0, 3.0
+    mem.save(0, "drop", params)
+    params["hue_master"], params["comp_sym"] = 10.0, 0.0
+    slot_btn = next((w for w in walk_(mpanel) if w.winfo_class() == "Button" and w.cget("text").startswith("1  ")), None)
+    if slot_btn is not None:
+        slot_btn.invoke()
+    root.update()
+    out["x_memory"] = (slot_btn is not None, params["hue_master"], params["comp_sym"], mem.get(1) is None,
+                       "build" not in mem.get(0)["values"] and "idle" not in mem.get(0)["values"])
+    params["hue_master"], params["comp_sym"] = 0.0, 0.0
+    vjc["state"]["running"] = False
+    n0 = len(getattr(s, "scene_history", []))
+    vjc["apply"](0)
+    first_name = s.active_scene
+    vjc["apply"](1)
+    second_name = s.active_scene
+    grown = len(s.scene_history) - n0
+    vjc["back"]()
+    out["x_history"] = (grown == 2, first_name != second_name, s.active_scene == first_name, len(s.scene_history) == n0 + 1)
+    vjc["lock"]()
+    vjc["back"]()
+    lock_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
+    out["x_history_lock"] = (s.active_scene == first_name, "verrouillee" in sc["msg"].get(), "Verrou ●" in lock_texts)
+    vjc["lock"]()
+    lock_texts_off = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
+    out["x_lock_bar_off"] = "Verrou ●" not in lock_texts_off
+    vjc["build"]()
+    for _ in range(8):
+        root.update()
+        time.sleep(0.05)
+    started = params["build"]
+    s.commands.queue.clear() if hasattr(s.commands, "queue") else None
+    hits = params["strobe_hits"]
+    vjc["drop"]()
+    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty())
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    sil = next((w for w in walk_(mpanel) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Mode silence"), None)
+    sil.invoke() if sil is not None else None
+    on = params["silence_on"]
+    sil.invoke() if sil is not None else None
+    out["x_silence"] = (sil is not None, on == 1.0, params["silence_on"] == 0.0)
     # presentation du panneau : boutons des noms qui remplissent leur case, cases habillees des l'ouverture, aucune reconstruction
     root.update()
     root.update()                                      # les <Configure> en attente : les images des boutons etires suivent la taille allouee
@@ -3388,6 +3508,228 @@ def check_layers() -> None:
     check(diff(none) > 0 and (none[outside] == a[outside]).all(), "sans logo: seule la couche fond est rendue")
 
 
+def check_masters() -> None:
+    """Masters du Mode VJ : `react_master` (tout ce qui vient de l'audio) et `tempo` (vitesse des animations et des courbes)."""
+    print("masters (audioreactivite, tempo)")
+    d = gl.DEFAULT_PARAMS
+    check(d["react_master"] == 1.0 and d["tempo"] == 1.0
+          and all(k in gl.OVERLAY_PRESET_EXCLUDED for k in ("react_master", "tempo")),
+          "masters: 100 % par defaut, hors presets et scenes (reglages de salle)")
+    import copy
+    spec = gl.AUTOMATION_SPECS["bg_hue"]
+    lo, hi, period = spec[1], spec[2], spec[4]
+    for tempo, real in ((1.0, period / 4), (0.5, period / 2), (2.0, period / 8), (0.0, period)):
+        p = copy.deepcopy(d)
+        p["_automation"], p["tempo"] = gl.default_automation(), tempo
+        engine = gl.AutomationEngine()
+        engine.step(p, 50.0)
+        engine.step(p, 50.0 + real)
+        want = hi if tempo else (lo + hi) / 2
+        check(abs(p["bg_hue"] - want) < 1e-9, f"tempo {tempo:g}: la courbe avance au bon rythme", f"{p['bg_hue']:.3f}")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone (masters)", str(exc))
+        return
+    size = (320, 180)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(np.full((size[1], size[0], 3), 40, np.uint8).tobytes())
+    r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    loud = {"bass": 1.0, "mid": 0.5, "high": 0.5, "rms": 0.8, "beat": 1.0, "since_beat": 0.0, "beats": 4}
+    base = dict(d, logo_x=0.5, logo_y=0.5, logo_scale=0.25, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.4,
+                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_on=0.0)
+
+    def render(state, **kw):
+        r.draw(fbo, size, state, dict(base, **kw), 1.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    still = render(quiet)
+    check(not np.array_equal(render(loud), still), "reactivite 100 %: le kick pulse le logo")
+    check(np.array_equal(render(loud, react_master=0.0), still), "reactivite 0 %: le visuel ne reagit plus a l'audio")
+    check(not np.array_equal(render(loud, react_master=2.0), render(loud)), "reactivite 200 %: reaction plus forte qu'a 100 %")
+    check("overlay_master" in gl.OVERLAY_PRESET_EXCLUDED and d["overlay_master"] == 1.0,
+          "overlay: 100 % par defaut, hors presets et scenes")
+    shown = render(quiet, logo_pulse=0.0)
+    gone = render(quiet, logo_pulse=0.0, overlay_master=0.0, logo_glow=1.0)
+    half = render(quiet, logo_pulse=0.0, overlay_master=0.5)
+    r.set_logo(np.zeros((64, 64, 4), np.uint8), "x")
+    empty = render(quiet, logo_pulse=0.0)
+    r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+    check(not np.array_equal(shown, empty) and np.array_equal(gone, empty),
+          "overlay 0 %: le logo (et son contour) disparait, le fond reste")
+    check(empty.mean() < half.mean() < shown.mean(), "overlay 50 %: logo a moitie present", f"{empty.mean():.1f} < {half.mean():.1f} < {shown.mean():.1f}")
+    dark = render(quiet, logo_pulse=0.0, bg_master=0.0)
+    half_bg = render(quiet, logo_pulse=0.0, bg_master=0.5)
+    cy, cx = size[1] // 2, size[0] // 2
+    check(dark[:20, :20].max() == 0 and dark[cy, cx].min() > 200 and half_bg[:20, :20].mean() < still[:20, :20].mean() * 0.8,
+          "fond 0 %: le fond est noir, le logo reste ; 50 % : fond attenue",
+          f"coin {dark[:20, :20].max()}, logo {dark[cy, cx].tolist()}")
+    check("bg_master" in gl.OVERLAY_PRESET_EXCLUDED and d["bg_master"] == 1.0, "fond: 100 % par defaut, hors presets et scenes")
+    # strobe : eclair blanc court (appui, rafale en cadence, kick), rien sans appui
+    sr = gl.Renderer(ctx, size, None)
+    sp = dict(d, strobe_mode="manual", strobe_rate=10.0)
+    check(sr._strobe(sp, quiet) == 0.0, "strobe: rien sans appui")
+    gl.strobe_press(sp)
+    first = sr._strobe(sp, quiet)
+    check(first > 0.9 and sp["strobe_on"] == 1.0, "strobe manuel: un appui donne un eclair, meme tres bref", f"{first:.2f}")
+    gl.strobe_release(sp)
+    time.sleep(0.12)
+    check(sr._strobe(sp, quiet) == 0.0, "strobe: l'eclair retombe en 70 ms et s'arrete au relachement")
+    gl.strobe_press(sp)
+    sr._strobe(sp, quiet)
+    flashes = 0
+    for _ in range(12):
+        time.sleep(0.03)
+        flashes += sr._strobe(sp, quiet) > 0.9
+    gl.strobe_release(sp)
+    check(2 <= flashes <= 5, "strobe maintenu: rafale a la cadence reglee (10 Hz ~ 3 eclairs en 0,36 s)", str(flashes))
+    kp = dict(d, strobe_mode="kick")
+    kr = gl.Renderer(ctx, size, None)
+    gl.strobe_press(kp)
+    kr._strobe(kp, quiet)
+    time.sleep(0.12)
+    still_dark = kr._strobe(kp, quiet)
+    kicked = kr._strobe(kp, dict(quiet, beats=1))
+    gl.strobe_press(kp)
+    check(still_dark == 0.0 and kicked > 0.9 and kp["strobe_on"] == 0.0,
+          "strobe au kick : arme, eclair a chaque kick seulement ; un 2e appui desarme")
+    # teinte globale : rotation de couleur de toute l'image (fond et logo), les gris restent gris
+    hr = gl.Renderer(ctx, size, None)
+    hr.video_tex.write(np.tile(np.array([200, 30, 30], np.uint8), (size[1], size[0], 1)).tobytes())
+    hr.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+
+    def hue_px(deg, rr=hr):
+        rr.draw(fbo, size, quiet, dict(base, logo_pulse=0.0, hue_master=deg), 1.0)
+        return read_target(ctx, fbo, size).astype(int)[5, 5]
+
+    red, green, full, opposite = hue_px(0.0), hue_px(120.0), hue_px(360.0), hue_px(180.0)
+    check(red[0] > 150 and green[1] > green[0] and green[1] > green[2] and abs(full - red).max() <= 2 and opposite[0] < red[0],
+          "teinte globale: 120 deg fait virer le rouge au vert, 360 deg = couleurs d'origine, 180 deg = opposees",
+          f"{red.tolist()} -> {green.tolist()} / {opposite.tolist()}")
+    check("hue_master" in gl.OVERLAY_PRESET_EXCLUDED and d["hue_master"] == 0.0, "teinte: 0 par defaut, hors presets et scenes")
+    # --- mode silence
+    guard, sp = gl.SilenceGuard(), {"silence_on": 1.0, "silence_level": 0.03, "silence_delay": 2.0, "silence_tempo": 0.3}
+    idle_at = {}
+    for step in range(0, 81):                                            # 8 s, 10 Hz : 0..3 s de son, puis 5 s de silence, puis du son
+        now = step * 0.1
+        state_ = loud if step < 30 else quiet
+        idle_at[step] = guard.update(sp, state_, now)
+    resumed = [guard.update(sp, loud, 8.0 + i * 0.1) for i in range(1, 20)]
+    check(idle_at[30] == 0.0 and idle_at[49] == 0.0 and idle_at[60] > 0.3 and idle_at[80] == 1.0 and resumed[-1] == 0.0 and resumed[0] > 0.0,
+          "mode silence: idle apres le delai (monte en 1,5 s), retombe des que le son revient",
+          f"{idle_at[49]:.2f} {idle_at[60]:.2f} {idle_at[80]:.2f} {resumed[-1]:.2f}")
+    off = gl.SilenceGuard()
+    check(all(off.update(dict(sp, silence_on=0.0), quiet, i * 0.5) == 0.0 for i in range(20)), "mode silence desactive: jamais idle")
+    check(abs(gl.effective_tempo({"tempo": 1.0, "idle": 1.0, "silence_tempo": 0.3}) - 0.3) < 1e-9
+          and gl.effective_tempo({"tempo": 1.0, "idle": 0.0}) == 1.0 and abs(gl.effective_tempo({"tempo": 2.0, "idle": 0.5, "silence_tempo": 0.0}) - 1.0) < 1e-9,
+          "mode silence: tempo effectif = master x (1 - idle x (1 - tempo idle))")
+    idle_img = render(quiet, idle=1.0)
+    check(np.array_equal(idle_img, render(quiet, overlay_master=0.0)) and not np.array_equal(idle_img, still),
+          "mode silence: en idle l'overlay s'efface (fond seul)")
+    # --- composition : symetries, kaleidoscope, pixelisation, deformation, trainee
+    grad = np.zeros((size[1], size[0], 3), np.uint8)
+    grad[..., 0] = np.linspace(0, 255, size[0]).astype(np.uint8)[None, :]
+    grad[..., 1] = np.linspace(255, 0, size[1]).astype(np.uint8)[:, None]
+    r.video_tex.write(grad.tobytes())
+    plain = render(quiet, overlay_master=0.0, holo_on=0.0)
+    mir = render(quiet, overlay_master=0.0, comp_sym=1)
+    half = size[0] // 2 - 8
+    left, right = mir[:, :half], mir[:, size[0] - half:][:, ::-1]
+    check(abs(left - right).mean() < 6 and abs(plain[:, :half] - plain[:, size[0] - half:][:, ::-1]).mean() > 30,
+          "symetrie: miroir gauche = la moitie droite reflete la gauche")
+    quad = render(quiet, overlay_master=0.0, comp_sym=3)
+    top = quad[:size[1] // 2 - 6, :]
+    check(abs(quad[:size[1] // 2 - 6] - quad[::-1][:size[1] // 2 - 6]).mean() < 6 and abs(top[:, :half] - top[:, size[0] - half:][:, ::-1]).mean() < 6,
+          "symetrie: quatre quadrants (miroirs horizontal et vertical)")
+    kal = render(quiet, overlay_master=0.0, comp_sym=4, comp_seg=6)
+    check(not np.array_equal(kal, plain) and 20 < kal.mean() < 235, "kaleidoscope: image repliee, ni noire ni saturee", f"{kal.mean():.0f}")
+    pix = render(quiet, overlay_master=0.0, comp_pix=1.0)
+    check(len(np.unique(pix[10, :, 0])) <= 45 < len(np.unique(plain[10, :, 0])), "pixelisation: l'image est decoupee en gros blocs",
+          f"{len(np.unique(pix[10, :, 0]))} / {len(np.unique(plain[10, :, 0]))}")
+    check(not np.array_equal(render(quiet, overlay_master=0.0, comp_warp=1.0), plain), "deformation globale: l'image est deformee")
+    check(np.array_equal(render(quiet, overlay_master=0.0, comp_sym=0, comp_pix=0.0, comp_warp=0.0, comp_trail=0.0), plain),
+          "composition coupee: image inchangee")
+    white_vid = np.full((size[1], size[0], 3), 255, np.uint8)
+    r.video_tex.write(white_vid.tobytes())
+    render(quiet, overlay_master=0.0, comp_trail=0.9)                      # image blanche memorisee
+    r.video_tex.write(np.zeros((size[1], size[0], 3), np.uint8).tobytes())
+    with_trail = render(quiet, overlay_master=0.0, comp_trail=0.9)
+    without = render(quiet, overlay_master=0.0, comp_trail=0.0)
+    check(with_trail[20:-20, 20:-20].mean() > 180 > 20 > without[20:-20, 20:-20].mean(),
+          "trainee: l'image precedente s'estompe au lieu de disparaitre", f"{with_trail.mean():.0f} / {without.mean():.0f}")
+    r.video_tex.write(np.full((size[1], size[0], 3), 40, np.uint8).tobytes())
+    # --- cycle de teinte, respiration, montee
+    cr = gl.Renderer(ctx, size, None)
+    cp = dict(base, hue_cycle=90.0)
+    cr.draw(fbo, size, quiet, cp, 0.0)
+    for i in range(1, 11):
+        cr.draw(fbo, size, quiet, cp, 0.1 * i)
+    check(abs(cr._hue_phase - 90.0) < 1.0, "cycle de teinte: 90 degres par seconde", f"{cr._hue_phase:.1f}")
+    cr2 = gl.Renderer(ctx, size, None)
+    cr2.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+    bp = dict(base, breath_overlay=1.0, logo_pulse=0.0)
+    cr2.draw(fbo, size, quiet, bp, 1.0)
+    cr2._breath_t = 0.25
+    gone_img = (cr2.draw(fbo, size, quiet, bp, 1.0), read_target(ctx, fbo, size).astype(int))[1]
+    cr2._breath_t = 0.75
+    back_img = (cr2.draw(fbo, size, quiet, bp, 1.0), read_target(ctx, fbo, size).astype(int))[1]
+    check(gone_img.mean() < back_img.mean() - 5, "respiration: l'overlay oscille (efface a un quart de periode, present aux trois quarts)",
+          f"{gone_img.mean():.1f} < {back_img.mean():.1f}")
+    br = gl.Renderer(ctx, size, None)
+    bq = dict(d, strobe_on=0.0, build=1.0)
+    fires = 0
+    t_end = time.monotonic() + 0.4
+    while time.monotonic() < t_end:
+        fires += br._strobe(bq, quiet) > 0.9
+        time.sleep(0.004)
+    check(fires >= 3 and br._strobe(dict(d, build=0.0), quiet) <= 1.0 and gl.Renderer(ctx, size, None)._strobe(dict(d, build=0.0, strobe_on=0.0), quiet) == 0.0,
+          "montee: le strobe part tout seul (de 2 a 16 Hz) sans etre arme", str(fires))
+    built = render(loud, build=1.0)
+    time.sleep(0.15)                                                    # l'eclair du strobe de la montee doit etre retombe
+    check(not np.array_equal(built, render(loud)), "montee: l'image change (reactivite et eclairs)")
+    check(all(k in gl.OVERLAY_PRESET_EXCLUDED for k in ("hue_cycle", "breath_overlay", "breath_bg", "silence_on", "comp_sym", "comp_trail", "comp_warp", "build_time"))
+          and set(gl.TRANSIENT_KEYS) <= set(gl.ROOM_KEYS) and not set(gl.TRANSIENT_KEYS) & set(gl.MEMORY_KEYS),
+          "reglages de salle: hors presets et scenes ; etats du moment (idle, montee, strobe arme) hors memoires")
+    import json
+    saved_path = gl.PARAMS_PATH
+    try:
+        import tempfile as _t
+        gl.PARAMS_PATH = Path(_t.mkdtemp(prefix="casual_overlay_params_")) / "gl_params.json"
+        gl.save_params(dict(d, idle=0.7, build=0.5, strobe_on=1.0, comp_sym=3.0))
+        reloaded = gl.load_params()
+        check(reloaded["comp_sym"] == 3.0 and reloaded["idle"] == 0.0 and reloaded["build"] == 0.0 and reloaded["strobe_on"] == 0.0
+              and "idle" not in json.loads(gl.PARAMS_PATH.read_text(encoding="utf-8")),
+              "sauvegarde (P): les etats du moment (idle, montee, strobe arme) ne sont ni ecrits ni recharges")
+    finally:
+        gl.PARAMS_PATH = saved_path
+    # --- memoires de masters (fichier)
+    import tempfile as _tf2
+    import scenes as _sc
+    mpath = Path(_tf2.mkdtemp(prefix="casual_overlay_masters_")) / "masters.json"
+    mb = _sc.MasterBook(lambda: mpath)
+    check(mb.slots() == [None] * 4 and mb.get(2) is None, "memoires de masters: quatre emplacements vides au depart")
+    mb.save(1, "calme", dict(d, hue_master=120.0, comp_sym=4.0, build=0.9, idle=0.5))
+    got_slot = mb.get(1)
+    check(got_slot["name"] == "calme" and got_slot["values"]["hue_master"] == 120.0 and got_slot["values"]["comp_sym"] == 4.0
+          and "build" not in got_slot["values"] and "idle" not in got_slot["values"] and mb.get(0) is None and not mb.save(9, "x", d),
+          "memoires de masters: enregistrement, rappel, sans etats du moment, emplacement hors plage refuse")
+    mpath.write_text("{ pas du json", encoding="utf-8")
+    check(mb.slots() == [None] * 4, "memoires de masters: fichier illisible = emplacements vides")
+    phases = {}
+    for tempo in (1.0, 0.5, 0.0, 2.0):
+        rr = gl.Renderer(ctx, size, None)
+        pr = dict(base, tempo=tempo, holo_speed=1.0)
+        rr.draw(fbo, size, quiet, pr, 0.0)
+        for i in range(1, 11):
+            rr.draw(fbo, size, quiet, pr, 0.05 * i)
+        phases[tempo] = rr._holo_t
+    check(abs(phases[0.5] - phases[1.0] / 2) < 1e-6 and abs(phases[2.0] - phases[1.0] * 2) < 1e-6 and phases[0.0] == 0.0
+          and phases[1.0] > 0.4, "tempo: la phase des animations suit le master (0,5 / 1 / 2, 0 = fige)",
+          ", ".join(f"{k:g}: {v:.2f}" for k, v in phases.items()))
+
+
 def check_automation() -> None:
     print("Automations")
     import copy
@@ -4068,6 +4410,16 @@ def check_projection() -> None:
     p.start()
     time.sleep(0.3)
     check(not p.running() and "pilote" in s.status.get("msg", ""), "projection: une erreur du rendu est signalee, la GUI continue")
+    # une seule fenetre a la fois : un second gl_main (fermeture pas finie, double declenchement) renonce au lieu d'en ouvrir une autre
+    s, p = make(True)
+    gl._GL_SLOT.acquire()
+    try:
+        t0 = time.monotonic()
+        gl.gl_main(s)                                               # n'atteint jamais glfw : le creneau est pris
+    finally:
+        gl._GL_SLOT.release()
+    check(s.renderer is None and "deja ouverte" in s.status.get("msg", "") and time.monotonic() - t0 < 6.0,
+          "projection: un second gl_main renonce quand une fenetre est deja ouverte", s.status.get("msg", ""))
 
 
 def _render_stats(live, args, seconds: int = 2) -> tuple:
@@ -4303,6 +4655,7 @@ def main() -> None:
     check_melt()
     check_cells()
     check_noise()
+    check_masters()
     check_scenes()
     check_bg_video()
     check_fond_saveable()

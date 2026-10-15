@@ -121,6 +121,32 @@ DEFAULT_PARAMS = {
     "noise_fx": [0, 0, 0, 0, 0],
     "master": 1.0,
     "sensitivity": 1.0,
+    "react_master": 1.0,              # master de l'audioreactivite (Mode VJ) : x tout ce qui vient de l'audio, 0 = aucune reaction
+    "overlay_master": 1.0,            # master de la presence de l'overlay (Mode VJ) : 0 = invisible, 1 = normal
+    "hue_cycle": 0.0,                 # cycle de teinte (Mode VJ) : la teinte tourne toute seule, en degres par seconde (0 = fixe)
+    "breath_overlay": 0.0,            # respiration de l'overlay (0..1) : sa presence oscille doucement entre 1 - valeur et 1
+    "breath_bg": 0.0,                 # respiration du fond (0..1), en opposition de phase avec celle de l'overlay
+    "breath_period": 8.0,             # periode de la respiration, en secondes
+    "silence_on": 0.0,                # mode silence : quand le son tombe, le visuel passe en idle (tempo reduit, fond seul)
+    "silence_level": 0.03,            # niveau (rms normalise 0..1) sous lequel on parle de silence
+    "silence_delay": 4.0,             # secondes de silence avant de passer en idle
+    "silence_tempo": 0.3,             # tempo relatif en idle (1 = inchange)
+    "idle": 0.0,                      # etat courant du mode silence (0..1), ecrit par SilenceGuard (jamais sauve)
+    "comp_sym": 0,                    # symetrie : 0 aucune, 1 miroir gauche, 2 miroir haut, 3 quatre quadrants, 4 kaleidoscope
+    "comp_seg": 6,                    # segments du kaleidoscope (2..16)
+    "comp_rot": 0.0,                  # rotation du kaleidoscope, en degres par seconde
+    "comp_pix": 0.0,                  # pixelisation (0..1)
+    "comp_trail": 0.0,                # trainee / feedback (0..0,97) : l'image precedente s'estompe lentement
+    "comp_warp": 0.0,                 # deformation globale (0..1)
+    "build": 0.0,                     # montee en cours (0..1), ecrite par le bouton Montee (jamais sauvee)
+    "build_time": 8.0,                # duree de la montee, en secondes
+    "hue_master": 0.0,                # teinte globale (Mode VJ), en degres 0..360 : rotation de couleur de toute l'image
+    "bg_master": 1.0,                # master de la luminosite du fond (Mode VJ) : 0 = fond noir (logo seul), 1 = normal
+    "strobe_on": 0.0,                 # strobe arme / maintenu (Mode VJ, touche S) ; modes : manual | kick | rate
+    "strobe_mode": "manual",
+    "strobe_rate": 8.0,               # Hz (modes manual maintenu et rate)
+    "strobe_hits": 0,                 # compteur d'appuis (un appui plus court qu'une image declenche quand meme un eclair)
+    "tempo": 1.0,                     # master du tempo (Mode VJ) : vitesse des animations et des automations (0..2, 1 = normal)
     # Incrustation du logo (pilotee par la GUI ou --logo*, relue a chaque image)
     "logo_source": "image",           # "image" (PNG), "text" (texte tape a la main) ou "video" (logo anime)
     "logo_video": "",                 # fichier video/GIF anime (source "video")
@@ -367,6 +393,67 @@ def layer_effects(params: dict) -> tuple[list[float], list[float]]:
     return bg, [float(params["fxl_on"][i]) * float(params["fxl_int"][i]) * master for i in range(FX_EFFECTS)]
 
 
+def strobe_press(params: dict) -> None:
+    """Appui sur le strobe (bouton ou touche S) : manuel = eclairs tant que c'est maintenu ; kick / cadence = arme ou desarme."""
+    params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+    if params.get("strobe_mode", "manual") == "manual":
+        params["strobe_on"] = 1.0
+    else:
+        params["strobe_on"] = 0.0 if float(params.get("strobe_on", 0.0)) >= 0.5 else 1.0
+
+
+def strobe_release(params: dict) -> None:
+    if params.get("strobe_mode", "manual") == "manual":
+        params["strobe_on"] = 0.0
+
+
+# Reglages de salle (Mode VJ, espace de controle global) : relus a chaque image, jamais captures par les presets ni les scenes.
+ROOM_KEYS = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master", "hue_cycle", "breath_overlay", "breath_bg",
+             "breath_period", "silence_on", "silence_level", "silence_delay", "silence_tempo", "idle", "comp_sym", "comp_seg",
+             "comp_rot", "comp_pix", "comp_trail", "comp_warp", "build", "build_time", "strobe_on", "strobe_mode", "strobe_rate",
+             "strobe_hits")
+TRANSIENT_KEYS = ("idle", "build", "strobe_on", "strobe_hits")           # etats du moment : ni sauves ni recharges
+MEMORY_KEYS = tuple(k for k in ROOM_KEYS if k not in TRANSIENT_KEYS)    # ce qu'une memoire de masters enregistre
+
+
+def _unit(value, lo: float = 0.0, hi: float = 1.0) -> float:
+    return min(max(float(value), lo), hi)
+
+
+def effective_tempo(p: dict) -> float:
+    """Tempo reel : le master, ralenti par le mode silence (`idle` 0..1 vers `silence_tempo`)."""
+    return _unit(p.get("tempo", 1.0), 0.0, 2.0) * (1.0 - _unit(p.get("idle", 0.0)) * (1.0 - _unit(p.get("silence_tempo", 0.3))))
+
+
+class SilenceGuard:
+    """Mode silence : si le niveau (rms/basses/mediums/aigus normalises, 0 en silence) reste sous `silence_level` pendant
+    `silence_delay` secondes, `params["idle"]` monte vers 1 en 1,5 s (tempo reduit, overlay efface : fond seul) ; il redescend des
+    que le son revient. Desactive (`silence_on` 0) : toujours 0."""
+
+    FADE_S = 1.5
+
+    def __init__(self):
+        self._since: float | None = None
+        self._idle = 0.0
+        self._last: float | None = None
+
+    def update(self, params: dict, state: dict, now: float) -> float:
+        dt = 0.0 if self._last is None else min(max(now - self._last, 0.0), 0.5)
+        self._last = now
+        level = max(float(state.get(k, 0.0)) for k in ("rms", "bass", "mid", "high"))
+        silent = float(params.get("silence_on", 0.0)) >= 0.5 and level < float(params.get("silence_level", 0.03))
+        if silent:
+            if self._since is None:
+                self._since = now
+            target = 1.0 if now - self._since >= max(float(params.get("silence_delay", 4.0)), 0.0) else 0.0
+        else:
+            self._since, target = None, 0.0
+        step = dt / self.FADE_S
+        self._idle = min(self._idle + step, target) if target > self._idle else max(self._idle - step, target)
+        params["idle"] = self._idle
+        return self._idle
+
+
 class AutomationEngine:
     """Applique les automations a `params` (fil de rendu, une fois par image). Une automation
     repart du debut de sa courbe chaque fois qu'elle est (re)activee ; `auto_master` = 0 fige
@@ -374,8 +461,14 @@ class AutomationEngine:
 
     def __init__(self):
         self._start: dict[str, float] = {}
+        self._last: float | None = None
+        self._clock = 0.0                  # temps des courbes : avance au rythme du tempo (params["tempo"])
 
     def step(self, params: dict, now: float) -> None:
+        gap = 0.0 if self._last is None else max(now - self._last, 0.0)
+        self._last = now
+        self._clock += gap * effective_tempo(params)
+        now = self._clock
         data = params.get("_automation")
         if not isinstance(data, dict):
             return
@@ -1045,6 +1138,12 @@ class Renderer:
         self._bg_flip_t = 0.0
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
+        self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
+        self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
+        self._prev_ok = False
+        self.fb_tex: list = []                  # trainee : deux images finales hors ecran (on lit l'une, on ecrit l'autre, puis on echange)
+        self.fb_fbo: list = []
+        self._fb_i = 0
         self.flash_t = -10.0              # instant (time.monotonic) du dernier flash de transition du VJ
         self.noise_out = (0.0, 0.0)      # (houle, coup) x force, pour l'indicateur de la GUI
         self._melt_t = 0.0          # cycles de fonte ecoules (partie entiere = cycles complets)
@@ -1137,9 +1236,10 @@ class Renderer:
     def _ensure_scene(self, size: tuple[int, int]) -> None:
         if self.scene_tex is not None and self.scene_tex.size == size:
             return
-        for old in (self.scene_tex, self.layer_tex, self.holo_tex):
+        for old in (self.scene_tex, self.layer_tex, self.holo_tex, *self.fb_tex):
             if old is not None:
                 old.release()
+        self._prev_ok = False
         # scene_* = couche FOND (opaque), layer_* = couche LOGO (rgba premultiplie, transparente)
         self.scene_tex = self.ctx.texture(size, 4)
         self.layer_tex = self.ctx.texture(size, 4)
@@ -1154,6 +1254,32 @@ class Renderer:
         self.holo_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.holo_tex.repeat_x = self.holo_tex.repeat_y = False
         self.holo_fbo = self.ctx.framebuffer(color_attachments=[self.holo_tex])
+        self.fb_tex = [self.ctx.texture(size, 4) for _ in range(2)]
+        for tex in self.fb_tex:
+            tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            tex.repeat_x = tex.repeat_y = False
+        self.fb_fbo = [self.ctx.framebuffer(color_attachments=[tex]) for tex in self.fb_tex]
+
+    def _strobe(self, p: dict, state: dict) -> float:
+        """Eclair blanc court du strobe : 1 -> 0 en 70 ms. Declenche a chaque appui, puis (arme / maintenu) en cadence fixe ou
+        a chaque kick selon `strobe_mode`. Hors ecran noir : il blanchit l'image comme le flash du VJ, sans bandes de glitch."""
+        now = time.monotonic()
+        beats = int(state.get("beats", 0))
+        kicked, self._strobe_beats = beats != self._strobe_beats, beats
+        hits = int(p["strobe_hits"])
+        fire = hits != self._strobe_seen
+        self._strobe_seen = hits
+        if float(p["strobe_on"]) >= 0.5:
+            if p["strobe_mode"] == "kick":
+                fire = fire or kicked
+            else:
+                fire = fire or now - self._strobe_last >= 1.0 / min(max(float(p["strobe_rate"]), 1.0), 20.0)
+        build = _unit(p.get("build", 0.0))
+        if build > 0.05:                                              # montee : eclairs automatiques de 2 a 16 Hz
+            fire = fire or now - self._strobe_last >= 1.0 / (2.0 + 14.0 * build)
+        if fire:
+            self._strobe_last = now
+        return max(0.0, 1.0 - (now - self._strobe_last) / 0.07)
 
     @staticmethod
     def _set(prog, name: str, value) -> None:
@@ -1164,9 +1290,27 @@ class Renderer:
         width, height = size
         p = {**DEFAULT_PARAMS, **params}       # un dict partiel (tests) reste valide
         fx_on, fx_int, master = p["fx_on"], p["fx_int"], p["master"]
+        # Masters du Mode VJ : reactivite = tout ce qui vient de l'audio est multiplie (0 = le visuel ne reagit plus au son) ;
+        # tempo = les animations (halo, fonte, cellules, fond, noise) avancent plus ou moins vite.
+        build = _unit(p["build"])                                      # montee en cours : plus de reactivite, strobe, teinte qui derive
+        react_m = _unit(float(p["react_master"]) * (1.0 + build), 0.0, 3.0)
+        tempo = effective_tempo(p)                                      # master, ralenti par le mode silence
+        idle = _unit(p["idle"])
+        if react_m != 1.0:
+            state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat") if k in state}}
         bass, high, beat = state["bass"], state["high"], state["beat"]
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
+        dt *= tempo
+        # Respiration (overlay et fond en opposition de phase), cycle de teinte, phases de la composition : integres image par image.
+        self._breath_t += dt / max(float(p["breath_period"]), 1.0)
+        wave = 0.5 + 0.5 * math.sin(2.0 * math.pi * self._breath_t)
+        ov = _unit(p["overlay_master"]) * (1.0 - idle) * (1.0 - _unit(p["breath_overlay"]) * wave)      # presence de l'overlay (0 = efface)
+        bg_level = _unit(p["bg_master"]) * (1.0 - _unit(p["breath_bg"]) * (1.0 - wave))
+        self._hue_phase = (self._hue_phase + dt * float(p["hue_cycle"])) % 360.0
+        hue_deg = (float(p["hue_master"]) + self._hue_phase + build * 120.0) % 360.0
+        self._comp_t += dt
+        self._comp_rot += dt * math.radians(float(p["comp_rot"]))
         # Noise: houle et coups au hasard (x force) qui s'ajoutent a l'audio reel pour les effets coches.
         self.noise.step(dt)
         n_amount = min(max(float(p["noise_amount"]), 0.0), 1.0)
@@ -1200,9 +1344,9 @@ class Renderer:
         self._set(sp, "u_logo_straight", 1.0 if self.logo_video is not None else 0.0)
         if self.logo_video is not None:
             self.logo_video.reader.upload_to(self.logo_tex)
-        self._set(sp, "u_logo_opacity", min(max(float(p["logo_opacity"]), 0.0), 1.0))
+        self._set(sp, "u_logo_opacity", min(max(float(p["logo_opacity"]), 0.0), 1.0) * ov)
         self._set(sp, "u_bass", float(bass_l))
-        self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0))
+        self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0) * ov)
         self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
         self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
         self._set(sp, "u_beat", float(beat))
@@ -1242,7 +1386,7 @@ class Renderer:
         react = max(float(p["bg_react"]), 0.0)
         self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bass) * 1.5)
         self._bg_flip_t += dt * float(p["bg_flip"])
-        flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 else 0.0)
+        flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 else 0.0)
         self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
         self._bg_clock += dt                       # horloge reelle: la palette "test" tourne a 30 images/s fixes
         self._set(sp, "u_bg_palette", {"duo": 1.0, "test": 2.0}.get(p["bg_palette"], 0.0))
@@ -1311,14 +1455,27 @@ class Renderer:
         self._set(pp, "u_beat", float(beat))
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
+        self._set(pp, "u_strobe", self._strobe(p, state))
+        self._set(pp, "u_hue", math.radians(hue_deg))
+        self._set(pp, "u_bg_level", bg_level)
+        # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)
+        self._set(pp, "u_csym", float(int(round(float(p["comp_sym"])))))
+        self._set(pp, "u_cseg", float(max(2, min(16, int(round(float(p["comp_seg"])))))))
+        self._set(pp, "u_crot", self._comp_rot)
+        self._set(pp, "u_cpix", _unit(p["comp_pix"]))
+        self._set(pp, "u_cwarp", _unit(p["comp_warp"]))
+        self._set(pp, "u_ctime", self._comp_t)
+        trail = _unit(p["comp_trail"], 0.0, 0.97)
+        self._set(pp, "u_trail", trail)
+        self._set(pp, "u_prev", 3)
         self._set(pp, "u_nz", float(nz))
         self._set(pp, "u_nz_beat", float(nzb))
         self._set(pp, "u_nz_since", float(self.noise.since))
         self._set(pp, "u_nz_amount", float(n_amount))
         self._set(pp, "u_nz_fx", tuple(float(int(n_fx[i])) for i in range(4)))
         self._set(pp, "u_since_beat", float(state["since_beat"]))
-        self._set(pp, "u_holo", (1.0 + h_react * float(beat) * 1.5) if holo_on else 0.0)
-        self._set(pp, "u_holo_light", float(p["holo_intensity"]))
+        self._set(pp, "u_holo", (1.0 + h_react * float(beat) * 1.5) * ov if holo_on else 0.0)
+        self._set(pp, "u_holo_light", float(p["holo_intensity"]) * ov)
         self._set(pp, "u_holo_reach", max(float(p["holo_reach"]), 0.05))
         self._set(pp, "u_holo_warp", float(p["holo_warp"]))
         self._set(pp, "u_holo_dust", float(p["holo_dust"]))
@@ -1330,9 +1487,25 @@ class Renderer:
         self.scene_tex.use(0)
         self.layer_tex.use(1)
         self.holo_tex.use(2)
-        target.viewport = (0, 0, width, height)
-        target.use()
+        dest = target
+        if trail > 0.001:
+            # Trainee : on ecrit l'image dans l'une de deux textures hors ecran (l'ecran est multi-echantillonne : on ne peut pas le lire
+            # en texture), on lit l'autre (l'image d'avant), puis on recopie l'image finale sur la cible et on echange.
+            read_i = 1 - self._fb_i
+            if not self._prev_ok:
+                self.fb_fbo[read_i].clear(0.0, 0.0, 0.0, 1.0)            # la trainee repart d'une image noire
+                self._prev_ok = True
+            self.fb_tex[read_i].use(3)
+            dest = self.fb_fbo[self._fb_i]
+        else:
+            self._prev_ok = False
+            self.fb_tex[0].use(3)
+        dest.viewport = (0, 0, width, height)
+        dest.use()
         self.post_vao.render(moderngl.TRIANGLE_STRIP)
+        if dest is not target:
+            self.ctx.copy_framebuffer(target, dest)
+            self._fb_i = 1 - self._fb_i
 
 
 # --- Parametres en direct -------------------------------------------------------------
@@ -1368,7 +1541,7 @@ def coerce_params(saved: dict, base: dict | None = None) -> dict:
 # micro et de la salle, pas du look).
 OVERLAY_PRESETS_PATH = Path.home() / ".audio2wave" / "overlay_presets.json"
 BACKGROUND_PRESETS_PATH = Path.home() / ".audio2wave" / "background_presets.json"
-OVERLAY_PRESET_EXCLUDED = ("sensitivity",)
+OVERLAY_PRESET_EXCLUDED = ("sensitivity",) + ROOM_KEYS# reglages de salle : ni presets ni scenes n'y touchent
 BG_KEYS = tuple(k for k in DEFAULT_PARAMS if k.startswith("bg_"))
 BG_AUTOMATION_KEYS = tuple(k for k in AUTOMATION_SPECS if k.startswith("bg_"))
 OVERLAY_PRESETS: dict[str, dict] = {
@@ -1533,7 +1706,7 @@ def load_params() -> dict:
     params = json.loads(json.dumps(DEFAULT_PARAMS))
     try:
         saved = json.loads(PARAMS_PATH.read_text(encoding="utf-8"))
-        params = coerce_params(saved)
+        params = coerce_params({k: v for k, v in saved.items() if k not in TRANSIENT_KEYS})
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as exc:
@@ -1555,7 +1728,8 @@ def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> 
 
 def save_params(params: dict) -> None:
     PARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PARAMS_PATH.write_text(json.dumps(params, indent=2), encoding="utf-8")
+    saved = {k: v for k, v in params.items() if k not in TRANSIENT_KEYS}          # idle, montee, strobe arme : etats du moment
+    PARAMS_PATH.write_text(json.dumps(saved, indent=2), encoding="utf-8")
 
 
 # --- Pont vers audio2wave_live ---------------------------------------------------------
@@ -2591,7 +2765,22 @@ def apply_logo_request(s: Session, renderer: Renderer) -> None:
         print(s.status["logo"], file=sys.stderr)
 
 
+_GL_SLOT = threading.Lock()          # une seule fenetre de projection a la fois, quel que soit le chemin qui l'ouvre
+
+
 def gl_main(s: Session) -> None:
+    """Un seul `_gl_main` en marche : un second appel (demarrage pendant la fermeture du premier, double declenchement)
+    attend la fin de l'ancien au plus 3 s, puis renonce plutot que d'ouvrir une deuxieme fenetre par-dessus la GUI."""
+    if not _GL_SLOT.acquire(timeout=3.0):
+        s.status["msg"] = "La projection est deja ouverte"
+        return
+    try:
+        _gl_main(s)
+    finally:
+        _GL_SLOT.release()
+
+
+def _gl_main(s: Session) -> None:
     """Fenetre GL + boucle de rendu. Tous les appels glfw partent de CE fil (init, creation,
     evenements, destruction): avec --gui il tourne a cote de tkinter, qui garde le fil principal."""
     args = s.args
@@ -2637,6 +2826,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     handle = window.handle
     quit_flag = {"v": False}
     automation = AutomationEngine()
+    silence = SilenceGuard()
 
     def status_line() -> str:
         on = "".join(str(int(v)) for v in params["fx_on"])
@@ -2681,7 +2871,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             try:
                 renderer.reload_shaders()
                 # ne pas ecraser ce que la GUI vient de regler (ni l'etat des automations qu'elle edite)
-                keep = {"sensitivity", "logo_path", "logo_video", "logo_key", "bg_mode", "logo_source", "_automation", "auto_master"}
+                keep = {"sensitivity", *ROOM_KEYS, "logo_path", "logo_video", "logo_key", "bg_mode", "logo_source", "_automation", "auto_master"}
                 params.update({k: v for k, v in load_params().items() if k not in keep})
                 print("Shaders et reglages recharges.")
                 s.status["msg"] = "Shaders recharges"
@@ -2703,7 +2893,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             print(f"cellules du logo: {'on' if params['cell_on'] >= 0.5 else 'off'}")
         elif name == "flash":
             renderer.flash_t = time.monotonic()           # transition du VJ (demandee par la GUI)
-        elif name in ("vj", "vjnext"):
+        elif name in ("vj", "vjnext", "lock", "back"):
             if args.gui:
                 s.scene_requests.put(name)                # Espace / fleche droite : la GUI pilote le VJ
             else:
@@ -2754,6 +2944,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     key_actions[glfw.KEY_C] = "holo"
     key_actions[glfw.KEY_M] = "melt"
     key_actions[glfw.KEY_V] = "cell"
+    key_actions[glfw.KEY_BACKSPACE] = "back"     # scene precedente (la GUI la gere : voir poll_scene_requests)
+    key_actions[glfw.KEY_K] = "lock"             # verrou de scene (la GUI le gere : voir poll_scene_requests)
+    key_actions[glfw.KEY_S] = "strobe"          # strobe : maintenu (manuel) ou arme / desarme (kick, cadence)
     key_actions[glfw.KEY_SPACE] = "vj"           # VJ : lecture / pause
     key_actions[glfw.KEY_RIGHT] = "vjnext"       # VJ : scene suivante
     for n in range(9):
@@ -2763,7 +2956,12 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         name = key_actions.get(key)
         if name and mods & glfw.MOD_SHIFT and name in ("fx0", "fx1", "fx2", "fx3"):
             name = "fxl" + name[2:]              # Maj + 1..4: meme effet sur la couche du logo
-        if name and (action == glfw.PRESS or (action == glfw.REPEAT and name in repeatable)):
+        if name == "strobe":
+            if action == glfw.PRESS:
+                strobe_press(params)
+            elif action == glfw.RELEASE:
+                strobe_release(params)
+        elif name and (action == glfw.PRESS or (action == glfw.REPEAT and name in repeatable)):
             act(name)
 
     glfw.set_key_callback(handle, on_key)
@@ -2833,6 +3031,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             warned = True
 
         state = analyzer.latest()
+        silence.update(params, state, now)
         size = window.framebuffer_size()
         sample = args.stats or frame_i % 8 == 0
         frame_i += 1
