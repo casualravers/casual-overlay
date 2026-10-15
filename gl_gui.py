@@ -43,6 +43,7 @@ from tkinter import colorchooser, filedialog, simpledialog, ttk
 import audio2wave_gl as gl
 import diagnostics
 import randomizer
+import sessionlog
 import skin
 import theme
 import gui_colors
@@ -93,7 +94,7 @@ def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> 
 
 
 MIN_WIN_W, MIN_WIN_H = 940, 420   # en dessous, le panneau d'audio2wave seul ne tient plus
-LIVE_MAX_HEIGHT = 600            # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
+LIVE_MAX_HEIGHT = 600           # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "snap": "SNAP  -  photo de l'onde (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
@@ -462,7 +463,16 @@ SHORTCUTS_HELP = (
     "V : cellules du logo on/off\n"
     "Haut / Bas : sensibilite du kick\n"
     "R : recharger shaders et reglages\n"
-    "P : sauver les reglages"
+    "P : sauver les reglages\n"
+    "\n"
+    "Mode VJ :\n"
+    "X : PANIQUE (coupe effets, strobe, montee,\n"
+    "    pause du VJ, image propre)\n"
+    "S : strobe (maintenu)\n"
+    "K : verrou de scene\n"
+    "Retour arriere : scene precedente\n"
+    ". (point) : tap tempo\n"
+    "/ ou ? : cette aide"
 )
 
 
@@ -472,6 +482,12 @@ def run_gui(s, live, on_ready=None) -> None:
     `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite."""
     require_audio2wave_api(live)
     root = tk.Tk()
+
+    def report(exc, val, tb) -> None:                     # une erreur de callback ne doit pas passer inapercue : journal + console
+        sessionlog.error("Erreur dans l'interface (callback Tk)", val)
+        traceback.print_exception(exc, val, tb)
+
+    root.report_callback_exception = report
     build_window(s, live, root, s.mode, on_ready)
     root.mainloop()
 
@@ -726,31 +742,29 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     tab_fx, tab_logo = new_tab("Effets"), new_tab("Logo")
     tab_aura, tab_melt = new_tab("Aura du logo"), new_tab("Fonte du logo")
     tab_cell, tab_noise = new_tab("Cellules"), new_tab("Noise")
-    # « Affichage et analyse » (entree d'analyse, plein ecran, automations, mesures...) n'a rien a voir avec les effets du logo :
-    # section repliable SOUS les onglets, pas un onglet.
-    aff_bar = tk.Frame(right)
-    aff_bar.pack(fill="x", pady=(6, 0))
-    tab_aff = tk.Frame(right)
-
-    def aff_text() -> str:
-        return "AFFICHAGE ET ANALYSE  " + ("▾" if getattr(s, "aff_open", False) else "▸")
+    # « Affichage et analyse » (entree d'analyse, plein ecran, diagnostic, mesures...) est un reglage de la projection, pas de l'overlay :
+    # onglet « Affichage » de l'espace de controle global du Mode VJ. Le contenu est construit ici (parent persistant : la barre) puis
+    # pose dans l'onglet a sa premiere selection (`pack(in_=...)`, comme le panneau lui-meme).
+    tab_aff = tk.Frame(scene_top, bg=a2w.GUI_PANEL_BG)
 
     def toggle_aff(flag: bool | None = None) -> None:
-        want = (not getattr(s, "aff_open", False)) if flag is None else bool(flag)
-        if want == bool(getattr(s, "aff_open", False)) and aff_toggle.cget("text") == aff_text():
+        """Ouvre le panneau etendu sur l'onglet Affichage (True / bascule) ou le referme (False)."""
+        tabs = vj_ui.get("tabs")
+        shown = bool(tab_aff.winfo_ismapped())
+        want = (not shown) if flag is None else bool(flag)
+        if not want:
+            set_expanded(False)
             return
-        s.aff_open = want
-        if want:
-            tab_aff.pack(fill="x", after=aff_bar)
-        else:
-            tab_aff.pack_forget()
-        aff_toggle.configure(text=aff_text())
-
-    aff_toggle = tk.Button(aff_bar, text=aff_text(), anchor="w", padx=8, command=toggle_aff)
-    aff_toggle.pack(side="left", fill="x", expand=True)
-    if getattr(s, "aff_open", False):
-        tab_aff.pack(fill="x", after=aff_bar)
-    Tooltip(aff_toggle, "Entree d'analyse des effets, plein ecran, barres de debug, sauvegarde, automations, mesures et diagnostic.")
+        set_expanded(True)
+        master_box()
+        tabs = vj_ui.get("tabs")
+        if tabs is None:
+            return
+        nb = tabs[0]
+        for t in nb.tabs():
+            if nb.tab(t, "text") == "Affichage":
+                nb.select(t)
+                break
     zone_p, zone_f, zone_fx = Zone(preset_bar), Zone(tab_fond), Zone(tab_fx)
     zone_logo, zone_aura, zone_melt = Zone(tab_logo), Zone(tab_aura), Zone(tab_melt)
     zone_cell, zone_noise, zone_aff = Zone(tab_cell), Zone(tab_noise), Zone(tab_aff)
@@ -1999,6 +2013,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     def toggle_scene_lock() -> None:
         """Bouton Verrou / touche K : gele la scene (le VJ se met en pause) ; deverrouiller relance le VJ s'il tournait avant."""
+        sessionlog.event("Verrou de scene : " + ("retire" if getattr(s, "scene_lock", False) else "pose"))
         if getattr(s, "scene_lock", False):
             s.scene_lock = False
             if getattr(s, "lock_resume", False):
@@ -2018,6 +2033,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def vj_toggle() -> None:
         if not vj["running"] and scene_locked():
             return
+        sessionlog.event("VJ : " + ("pause" if vj["running"] else "lecture"))
         if vj["running"]:
             vj["running"] = False
             scene_msg.set("VJ en pause")
@@ -2185,6 +2201,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 continue
             if index == "back":
                 back_scene()
+                continue
+            if index == "panic":
+                do_panic(from_gl=True)
+                continue
+            if index == "tap":
+                do_tap()
+                continue
+            if index == "help":
+                scene_ui["help"]()
                 continue
             if 0 <= index < len(scene_book.rows()):
                 apply_entry(index)
@@ -3074,6 +3099,18 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             except tk.TclError:
                 vj_ui.pop("strobe", None)
         update_lock_button()
+        bpm = vj_ui.get("bpm")
+        if bpm is not None:
+            try:
+                bpm.configure(text=f"{tap_state['bpm']:.0f} BPM" if tap_state["bpm"] else "\u2014 BPM")
+            except tk.TclError:
+                vj_ui.pop("bpm", None)
+        try:
+            text = "casual-overlay GL - " + status_text()          # l'etat du spectacle lisible jusque dans la barre des taches
+            if root.title() != text:
+                root.title(text)
+        except tk.TclError:
+            pass
         idle = vj_ui.get("idle")
         if idle is not None:
             try:
@@ -3292,8 +3329,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                     ("bg_master", "Fond", 0, 100, 5, 100.0, "%", 100, "Luminosite du fond (video, spectre ou motif) : 100 % = normal, 0 % = fond noir, "
                                                                       "il ne reste que le logo."),
                     ("hue_master", "Teinte", 0, 360, 5, 1.0, "\u00b0", 0, "Teinte globale : fait tourner les couleurs de toute l'image (fond et logo). "
-                                                                          "0 = couleurs d'origine, 180 = couleurs opposees."))):
+                                                                          "0 = couleurs d'origine, 180 = couleurs opposees."),
+                    ("fx_master", "Effets", 0, 200, 5, 100.0, "%", 100, "Master des effets : multiplie l'intensite de TOUS les effets (deformations, "
+                                                                        "halo, fonte, cellules, noise). 0 % = plus aucun effet, 100 % = normal."))):
                 slider(f, i, *args)
+            tap = button(f, "Tap tempo", do_tap, row=3, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            Tooltip(tap, "Tape le rythme (au moins deux appuis, touche point dans la fenetre de rendu) : le master du tempo suit le BPM "
+                         "(120 BPM = 100 %), et la cadence du strobe en mode Cadence. Une pause de 2 s recommence.")
+            bpm = vj_ui["bpm"] = tk.Label(f, text="\u2014 BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
+            bpm.grid(row=3, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
 
         new_tab("Masters", fill_0)
 
@@ -3315,6 +3359,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                    tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Cadence : un clic arme, un autre desarme.",
                    on_change=lambda: set_strobe())
             slider(f, (2, 0), "strobe_rate", "Cadence", 1, 20, 1, 1.0, " Hz", 8, "Cadence du strobe (1 a 20 eclairs par seconde) en rafale manuelle et en cadence fixe.")
+            slider(f, (3, 0), "strobe_max_hz", "Limite", 1, 20, 1, 1.0, " Hz", 10, "Limiteur de securite : jamais plus de ce nombre d'eclairs par seconde, "
+                                                                                    "quelle que soit la cadence demandee (photosensibilite du public).")
+            slider(f, (3, 3), "strobe_max_s", "Duree max", 1, 60, 1, 1.0, " s", 8, "Limiteur de securite : une rafale continue de strobe est coupee apres cette duree, "
+                                                                                  "puis pause forcee de 3 s.")
             lock = button(f, "Verrou", toggle_scene_lock, row=0, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["lock"] = lock
             update_lock_button()
@@ -3436,6 +3484,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
         new_tab("Historique", fill_6)
 
+        # ---- Affichage et analyse (contenu construit une fois avec la fenetre, pose ici)
+        def fill_7(f) -> None:
+            tab_aff.pack(in_=f, side="top", fill="both", expand=True)
+            tab_aff.lift()
+
+        new_tab("Affichage", fill_7)
+
         # onglet garde d'une reconstruction a l'autre
         try:
             nb.select(int(getattr(s, "master_tab", 0)))
@@ -3460,6 +3515,189 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         led_tick()
         return box
 
+    # ---- garde-fous d'exploitation : panique, tap tempo, aide, console, auto-sauvegarde
+    TAP_REF_BPM = 120.0                                    # tempo 100 % = 120 BPM
+    tap_state: dict = {"times": [], "bpm": None}
+
+    def do_panic(from_gl: bool = False) -> None:
+        """PANIQUE : coupe effets, strobe, montee, composition, teinte, mode silence ; masters remis a 100 % ; le VJ se met en pause et le
+        verrou saute (la main est rendue). Les medias, le fond et le logo ne sont pas touches."""
+        changed = gl.panic(params)
+        build_ui["t0"] = None
+        vj["running"] = False
+        s.lock_resume = False
+        was_locked = bool(getattr(s, "scene_lock", False))
+        s.scene_lock = False
+        if not from_gl:                                    # depuis la touche X, le fil GL l'a deja journalise et a fait son flash
+            sessionlog.event("PANIQUE : " + (", ".join(changed) if changed else "rien a couper"))
+            s.commands.put("flash")
+        try:
+            sync_widgets()
+        except Exception as exc:
+            sessionlog.error("Panique : widgets non resynchronises", exc)
+        sync_master_panel()
+        update_vj_button()
+        update_lock_button()
+        if was_locked:
+            refresh_scene_bar()
+        scene_msg.set("PANIQUE : effets, strobe et montee coupes, VJ en pause" + (", verrou retire" if was_locked else ""))
+
+    def do_tap() -> None:
+        """Tap tempo (bouton ou touche point) : BPM moyen des derniers appuis -> master du tempo (120 BPM = 100 %) ; en strobe a cadence
+        fixe, la cadence suit (BPM / 60 eclairs par seconde, dans les limites du strobe)."""
+        times = tap_state["times"]
+        times.append(time.monotonic())
+        del times[:-12]
+        bpm = gl.tap_bpm(times)
+        if bpm is None:
+            scene_msg.set("Tap tempo : un deuxieme appui donne le BPM")
+            return
+        bpm = min(max(bpm, 30.0), 300.0)
+        tap_state["bpm"] = bpm
+        params["tempo"] = min(max(bpm / TAP_REF_BPM, 0.0), 2.0)
+        if params.get("strobe_mode") == "rate":
+            params["strobe_rate"] = min(max(bpm / 60.0, 1.0), 20.0)
+        sync_master_panel()
+        scene_msg.set(f"Tap tempo : {bpm:.0f} BPM (tempo {params['tempo'] * 100:.0f} %, 120 BPM = 100 %)")
+
+    def status_text() -> str:
+        """Une ligne lisible de l'etat du spectacle : scene, VJ (lecture, pause, verrou), BPM, projection."""
+        scene = getattr(s, "active_scene", None) or "aucune scene"
+        if getattr(s, "scene_lock", False):
+            vj_txt = "VERROUILLE"
+        elif vj["running"]:
+            vj_txt = f"VJ en marche (suivante dans {vj_remaining():.0f} s)"
+        else:
+            vj_txt = "VJ en pause"
+        parts = [scene, vj_txt]
+        if tap_state["bpm"]:
+            parts.append(f"{tap_state['bpm']:.0f} BPM")
+        if projection is not None and not projection.running():
+            parts.append("projection fermee")
+        return "  |  ".join(parts)
+
+    def help_window() -> None:
+        """Fenetre d'aide des raccourcis (touche ? ou /, menu « reglages VJ »)."""
+        old = vj_ui.get("help")
+        try:
+            if old is not None and old.winfo_exists():
+                old.lift()
+                return
+        except tk.TclError:
+            pass
+        win = vj_ui["help"] = tk.Toplevel(root)
+        win.title("Raccourcis")
+        win.configure(bg=a2w.GUI_PANEL_BG)
+        tk.Label(win, text=SHORTCUTS_HELP, justify="left", anchor="nw", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG,
+                 font=("Consolas", 10)).pack(padx=14, pady=(12, 6))
+        tk.Button(win, text="Fermer", command=win.destroy, padx=14).pack(pady=(0, 12))
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.transient(root)
+
+    scene_ui["help"] = help_window
+
+    def key_help(evt) -> None:
+        if evt.widget.winfo_class() not in ("Entry", "Text", "TEntry", "Spinbox"):    # taper un ? dans un champ n'ouvre rien
+            scene_ui["help"]()
+
+    root.bind_all("<question>", key_help)
+
+    def console_window() -> None:
+        """Console VJ : une vue epuree avec les grosses commandes (retour, lecture, suivante, strobe, montee, drop, verrou, PANIQUE)
+        et l'etat du spectacle, a garder sous la main pendant que le panneau etendu reste ferme."""
+        old = vj_ui.get("console")
+        try:
+            if old is not None and old.winfo_exists():
+                old.lift()
+                return
+        except tk.TclError:
+            pass
+        win = vj_ui["console"] = tk.Toplevel(root)
+        win.title("Console VJ")
+        win.configure(bg=a2w.GUI_PANEL_BG)
+        big = ("Segoe UI", 14, "bold")
+        widgets_: dict = {}
+
+        def btn(text, command, row, col, span=1, bg=None, fg=None, key=None):
+            b = tk.Button(win, text=text, command=command, font=big, relief="flat", bd=0, padx=10, pady=14, cursor="hand2",
+                          bg=bg or a2w.GUI_BG, fg=fg or a2w.GUI_FG, activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+            b.grid(row=row, column=col, columnspan=span, sticky="nsew", padx=4, pady=4)
+            if key:
+                widgets_[key] = b
+            return b
+
+        for c in range(3):
+            win.columnconfigure(c, weight=1, uniform="c")
+        btn("\u25c0 Retour", back_scene, 0, 0, key="back")
+        btn("\u25b6 VJ", vj_toggle, 0, 1, key="play")
+        btn("Suivante \u25b6\u25b6", vj_advance, 0, 2, key="next")
+        sb = btn(strobe_text(), None, 1, 0, key="strobe")
+        sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
+        sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
+        btn(build_text(), start_build, 1, 1, key="build")
+        btn("Drop", do_drop, 1, 2, key="drop")
+        btn("Verrou", toggle_scene_lock, 2, 0, key="lock")
+        btn("Tap tempo", do_tap, 2, 1, key="tap")
+        btn("?", help_window, 2, 2, key="help")
+        btn("PANIQUE", do_panic, 3, 0, span=3, bg="#d92b2b", fg="#ffffff", key="panic")
+        status = tk.Label(win, text="", anchor="w", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, font=("Segoe UI", 11), wraplength=520, justify="left")
+        status.grid(row=4, column=0, columnspan=3, sticky="ew", padx=8, pady=(6, 0))
+        meter = tk.Canvas(win, height=26, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
+        meter.grid(row=5, column=0, columnspan=3, sticky="ew", padx=8, pady=(4, 8))
+        widgets_["status"], widgets_["meter"] = status, meter
+        vj_ui["console_widgets"] = widgets_
+
+        def closed() -> None:
+            vj_ui.pop("console", None)
+            vj_ui.pop("console_widgets", None)
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", closed)
+        win.attributes("-topmost", True)
+        console_tick()
+
+    def console_tick() -> None:
+        w = vj_ui.get("console_widgets")
+        if not w:
+            return
+        try:
+            w["status"].configure(text=status_text())
+            on = bool(vj["running"])
+            w["play"].configure(text="\u25a0 VJ" if on else "\u25b6 VJ", bg=SCENE_COLOR if on else a2w.GUI_BG, fg=BANNER_FG if on else a2w.GUI_FG)
+            locked = bool(getattr(s, "scene_lock", False))
+            w["lock"].configure(text="Verrou \u25cf" if locked else "Verrou", bg=SCENE_COLOR if locked else a2w.GUI_BG,
+                                fg=BANNER_FG if locked else a2w.GUI_FG)
+            w["build"].configure(text=build_text())
+            w["strobe"].configure(text=strobe_text())
+            state = s.audio.analyzer.latest()
+            canvas_ = w["meter"]
+            canvas_.delete("all")
+            width = max(canvas_.winfo_width(), 100)
+            for i, (key, color) in enumerate((("bass", "#3b82f6"), ("mid", "#22c55e"), ("high", "#f59e0b"))):
+                level = min(max(float(state.get(key, 0.0)), 0.0), 1.0)
+                x0 = 4 + i * (width // 4)
+                canvas_.create_rectangle(x0, 4, x0 + (width // 4 - 8) * level + 1, 22, fill=color, width=0)
+            if float(state.get("beat", 0.0)) > 0.4:
+                canvas_.create_oval(width - 26, 4, width - 8, 22, fill=SCENE_COLOR, width=0)
+        except tk.TclError:
+            vj_ui.pop("console_widgets", None)
+            return
+        except Exception:
+            pass
+        after(150, console_tick)
+
+    scene_ui["console"] = console_window
+
+    def autosave_tick() -> None:
+        """Instantane de l'etat courant toutes les minutes : un plantage ne fait pas tout perdre (voir `recover_autosave`)."""
+        try:
+            gl.write_autosave(params, {"scene": getattr(s, "active_scene", None), "set": scene_book.active_set_name()})
+        except Exception as exc:
+            sessionlog.error("Auto-sauvegarde impossible", exc)
+        after(int(gl.AUTOSAVE_EVERY_S * 1000), autosave_tick)
+
+    after(int(gl.AUTOSAVE_EVERY_S * 1000), autosave_tick)
+
     def refresh_scene_bar() -> None:
         for child in scene_bar.winfo_children():
             child.destroy()
@@ -3475,6 +3713,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         scenes_title.pack(side="left", padx=(8, 6), pady=5)
         # Mode VJ (a droite) : reglages, scene suivante, lecture / pause. Pose AVANT les touches des scenes : en pack, le
         # premier arrive est le premier servi, donc 9 scenes aux noms longs ne repoussent jamais le bouton hors de la fenetre.
+        panic_btn = tk.Button(scene_bar, text="PANIQUE", command=do_panic, relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+                              font=("Segoe UI", 9, "bold"), bg="#d92b2b", fg="#ffffff", activebackground="#ff4d4d", activeforeground="#ffffff")
+        panic_btn.pack(side="right", padx=(2, 6), pady=5)
+        Tooltip(panic_btn, "PANIQUE (touche X dans la fenetre de rendu) : coupe d'un geste effets, strobe, montee, composition, teinte et mode "
+                           "silence, remet les masters a 100 %, met le VJ en pause et retire le verrou. Le fond, le logo et les medias restent.")
+        vj_ui["panic"] = panic_btn
         expanded = bool(getattr(s, "scenes_expanded", False))
         expand = tk.Button(scene_bar, text="\u25b4 Reduire" if expanded else "\u25be Etendre", command=lambda: set_expanded(not expanded),
                            relief="flat", bd=0, padx=8, pady=3, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR,
@@ -3498,8 +3742,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             label = f"Toutes les {value} s" if value < 60 else f"Toutes les {value // 60} min"
             menu.add_radiobutton(label=label, variable=secs_var, value=value,
                                  command=lambda: set_vj_option(seconds=float(secs_var.get())))
+        menu.add_separator()
+        menu.add_command(label="Console VJ (grosses commandes)...", command=console_window)
+        menu.add_command(label="Raccourcis clavier (?)...", command=help_window)
         opts["menu"] = menu
-        Tooltip(opts, "Ordre et duree du VJ : propres a chaque set.")
+        Tooltip(opts, "Ordre et duree du VJ (propres a chaque set), console VJ et aide des raccourcis.")
         nxt = tk.Button(scene_bar, text="\u25b6\u25b6", command=vj_advance, relief="flat", bd=0, padx=8, pady=3,
                         cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG, activebackground=SCENE_COLOR,
                         activeforeground=BANNER_FG, font=("Segoe UI", 9, "bold"))
@@ -3784,7 +4031,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
-            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining},
+            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "panic": do_panic, "tap": do_tap, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
             "random": {"draw": random_draw, "draw_now": random_draw_now, "keep": random_keep, "save": random_save, "check": random_keep_check, "bank": random_bank,
                        "option": set_random_option, "state": rnd},
             "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,

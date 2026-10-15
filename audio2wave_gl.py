@@ -61,6 +61,7 @@ PIL_ImageFont = _optional_import("PIL.ImageFont", "Pillow")
 
 
 import diagnostics  # noqa: E402  (stdlib seulement : sans dependance a installer)
+import sessionlog  # noqa: E402  (journal de session, stdlib)
 
 
 def require_deps() -> None:
@@ -147,6 +148,9 @@ DEFAULT_PARAMS = {
     "strobe_rate": 8.0,               # Hz (modes manual maintenu et rate)
     "strobe_hits": 0,                 # compteur d'appuis (un appui plus court qu'une image declenche quand meme un eclair)
     "tempo": 1.0,                     # master du tempo (Mode VJ) : vitesse des animations et des automations (0..2, 1 = normal)
+    "fx_master": 1.0,                 # master des effets (Mode VJ) : x l'intensite de TOUS les effets (deformations, halo, fonte, cellules, noise) ; 0 = aucun
+    "strobe_max_hz": 10.0,            # limiteur de strobe : cadence maximale (eclairs / s), securite du public (photosensibilite)
+    "strobe_max_s": 8.0,              # limiteur de strobe : duree maximale d'une rafale continue (s), puis pause forcee de STROBE_COOLDOWN_S
     # Incrustation du logo (pilotee par la GUI ou --logo*, relue a chaque image)
     "logo_source": "image",           # "image" (PNG), "text" (texte tape a la main) ou "video" (logo anime)
     "logo_video": "",                 # fichier video/GIF anime (source "video")
@@ -407,11 +411,130 @@ def strobe_release(params: dict) -> None:
         params["strobe_on"] = 0.0
 
 
+STROBE_COOLDOWN_S = 3.0               # pause forcee apres une rafale trop longue
+
+
+class StrobeLimiter:
+    """Limiteur de strobe (securite du public : photosensibilite). Deux regles, appliquees a TOUS les eclairs du strobe (appui, kick,
+    cadence, montee) : (1) jamais plus de `max_hz` eclairs par seconde ; (2) une rafale continue (eclairs espaces de moins de 1 s)
+    ne dure pas plus de `max_s` secondes : ensuite pause forcee de `STROBE_COOLDOWN_S`. Pure (le temps est injecte), testable."""
+
+    GAP_S = 1.0
+
+    def __init__(self) -> None:
+        self.last = -1e9
+        self.burst_start: float | None = None
+        self.blocked_until = -1e9
+        self.trips = 0                                   # nombre de fois ou la duree maximale a coupe le strobe
+
+    def blocked(self, now: float) -> bool:
+        return now < self.blocked_until
+
+    def allow(self, now: float, max_hz: float, max_s: float) -> bool:
+        max_hz = _unit(max_hz, 1.0, 30.0)
+        max_s = _unit(max_s, 1.0, 120.0)
+        if now < self.blocked_until:
+            return False
+        if now - self.last > self.GAP_S:
+            self.burst_start = None                       # une pause d'une seconde remet la rafale a zero
+        if now - self.last < 1.0 / max_hz - 1e-9:
+            return False
+        if self.burst_start is None:
+            self.burst_start = now
+        elif now - self.burst_start > max_s:
+            self.blocked_until = now + STROBE_COOLDOWN_S
+            self.burst_start = None
+            self.trips += 1
+            return False
+        self.last = now
+        return True
+
+
+# Panique (bouton / touche X) : coupe d'un geste tout ce qui peut partir en vrille et rend une image propre (fond + logo tels que la
+# scene les a poses). Les reglages du logo, du fond et des medias ne sont pas touches.
+PANIC_RESET = {
+    "build": 0.0, "strobe_on": 0.0, "idle": 0.0, "silence_on": 0.0,
+    "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
+    "hue_master": 0.0, "hue_cycle": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
+    "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
+    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0,
+}
+
+
+def panic(params: dict) -> list[str]:
+    """Remet a zero ce qui deforme, masque ou fait clignoter l'image. Rend la liste des reglages qui ont change (pour le journal)."""
+    changed: list[str] = []
+    for key, value in PANIC_RESET.items():
+        if params.get(key) != value:
+            changed.append(key)
+        params[key] = value
+    for key, size in (("fx_on", 5), ("fxl_on", 4), ("noise_fx", 5)):
+        if any(params.get(key, [])):
+            changed.append(key)
+        params[key] = [0] * size
+    bg = str(params.get("bg_video") or "")
+    if params.get("bg_mode") == "video" and not (bg and Path(bg).is_file()):         # fond video sans fichier = ecran noir
+        params["bg_mode"] = "live"
+        changed.append("bg_mode")
+    params["strobe_hits"] = int(params.get("strobe_hits", 0))                       # pas d'eclair en attente
+    return changed
+
+
+def tap_bpm(taps: list[float], max_gap: float = 2.0, keep: int = 6) -> float | None:
+    """BPM d'une suite d'appuis (instants en secondes) : moyenne des derniers intervalles ; un trou de plus de `max_gap`
+    secondes recommence la serie. None tant qu'il y a moins de deux appuis valides. Pure."""
+    series: list[float] = []
+    for t in taps:
+        if series and t - series[-1] > max_gap:
+            series = []
+        series.append(t)
+    series = series[-(keep + 1):]
+    if len(series) < 2:
+        return None
+    mean = (series[-1] - series[0]) / (len(series) - 1)
+    return 60.0 / mean if mean > 0 else None
+
+
+AUTOSAVE_PATH = Path.home() / ".audio2wave" / "autosave.json"
+AUTOSAVE_EVERY_S = 60.0
+
+
+def write_autosave(params: dict, extra: dict | None = None, path: Path | None = None) -> bool:
+    """Instantane de l'etat courant (reglages + scene / set actifs). Ecriture atomique ; un echec est silencieux (rend False)."""
+    path = path or AUTOSAVE_PATH
+    try:
+        data = {"saved_at": time.time(), "params": {k: v for k, v in params.items() if k not in TRANSIENT_KEYS}, **(extra or {})}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def read_autosave(path: Path | None = None) -> dict | None:
+    """Dernier instantane, ou None (absent, illisible)."""
+    try:
+        data = json.loads((path or AUTOSAVE_PATH).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and isinstance(data.get("params"), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def clear_autosave(path: Path | None = None) -> None:
+    """Sortie propre : plus d'instantane (sa presence au lancement suivant signale un arret brutal)."""
+    try:
+        (path or AUTOSAVE_PATH).unlink()
+    except OSError:
+        pass
+
+
 # Reglages de salle (Mode VJ, espace de controle global) : relus a chaque image, jamais captures par les presets ni les scenes.
 ROOM_KEYS = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master", "hue_cycle", "breath_overlay", "breath_bg",
              "breath_period", "silence_on", "silence_level", "silence_delay", "silence_tempo", "idle", "comp_sym", "comp_seg",
              "comp_rot", "comp_pix", "comp_trail", "comp_warp", "build", "build_time", "strobe_on", "strobe_mode", "strobe_rate",
-             "strobe_hits")
+             "strobe_hits", "fx_master", "strobe_max_hz", "strobe_max_s")
 TRANSIENT_KEYS = ("idle", "build", "strobe_on", "strobe_hits")           # etats du moment : ni sauves ni recharges
 MEMORY_KEYS = tuple(k for k in ROOM_KEYS if k not in TRANSIENT_KEYS)    # ce qu'une memoire de masters enregistre
 
@@ -1139,6 +1262,7 @@ class Renderer:
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
+        self.strobe_limiter = StrobeLimiter()
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
         self._prev_ok = False
         self.fb_tex: list = []                  # trainee : deux images finales hors ecran (on lit l'une, on ecrit l'autre, puis on echange)
@@ -1277,8 +1401,11 @@ class Renderer:
         build = _unit(p.get("build", 0.0))
         if build > 0.05:                                              # montee : eclairs automatiques de 2 a 16 Hz
             fire = fire or now - self._strobe_last >= 1.0 / (2.0 + 14.0 * build)
-        if fire:
+        if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"])):
             self._strobe_last = now
+        elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
+            self._trips_logged = self.strobe_limiter.trips
+            sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
         return max(0.0, 1.0 - (now - self._strobe_last) / 0.07)
 
     @staticmethod
@@ -1289,6 +1416,10 @@ class Renderer:
     def draw(self, target, size: tuple[int, int], state: dict, params: dict, t: float) -> None:
         width, height = size
         p = {**DEFAULT_PARAMS, **params}       # un dict partiel (tests) reste valide
+        fm = _unit(p["fx_master"], 0.0, 2.0)   # master des effets : x l'intensite de tous les effets (copie : `params` n'est pas touche)
+        if fm != 1.0:
+            for key in ("master", "melt_depth", "cell_amount", "noise_amount", "holo_intensity", "holo_warp", "holo_dust"):
+                p[key] = float(p[key]) * fm
         fx_on, fx_int, master = p["fx_on"], p["fx_int"], p["master"]
         # Masters du Mode VJ : reactivite = tout ce qui vient de l'audio est multiplie (0 = le visuel ne reagit plus au son) ;
         # tempo = les animations (halo, fonte, cellules, fond, noise) avancent plus ou moins vite.
@@ -2493,8 +2624,34 @@ class Session:
         self.scene_requests: queue.SimpleQueue = queue.SimpleQueue()   # F1..F9 (fil GL) -> la GUI applique la scene
 
 
+def recover_autosave(params: dict, path: Path | None = None) -> tuple[dict, str]:
+    """Un instantane present au lancement = la session precedente ne s'est pas terminee proprement (plantage, coupure) : ses reglages
+    reprennent la place de `gl_params.json`. L'instantane est mis de cote (`.precedent`), pas efface. Rend (reglages, message)."""
+    path = path or AUTOSAVE_PATH
+    snap = read_autosave(path)
+    if snap is None:
+        return params, ""
+    try:
+        os.replace(path, path.with_suffix(".precedent.json"))
+    except OSError:
+        pass
+    try:
+        recovered = coerce_params({k: v for k, v in snap["params"].items() if k not in TRANSIENT_KEYS})
+    except Exception as exc:
+        sessionlog.error("Auto-sauvegarde illisible : ignoree", exc)
+        return params, ""
+    when = time.strftime("%H:%M", time.localtime(float(snap.get("saved_at", time.time()))))
+    scene = snap.get("scene") or "?"
+    sessionlog.event(f"Reprise apres arret brutal : reglages auto-sauves de {when} (scene '{scene}')")
+    return recovered, f"Arret brutal detecte : reglages de {when} restaures (derniere scene : {scene})"
+
+
 def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
+    sessionlog.setup()
+    sessionlog.install_hooks()
+    sessionlog.event(f"Lancement (gui={bool(args.gui)}, synthetic={bool(args.synthetic)})")
     params = load_params()
+    params, recovery_msg = recover_autosave(params)
     if args.sensitivity is not None:
         params["sensitivity"] = args.sensitivity
     params["_automation"] = merge_automation(params.get("_automation"))
@@ -2553,6 +2710,10 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
         reader = manager.reader
 
     s = Session(args, params, live, live_args, render_size, win_size, audio, manager, reader)
+    if recovery_msg:
+        s.status["msg"] = recovery_msg
+        print(recovery_msg, file=sys.stderr)
+    clean = False
     try:
         audio.start()
         if manager is not None:
@@ -2568,7 +2729,11 @@ def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
             gl_gui.run_gui(s, live)
         else:
             gl_main(s)
+        clean = True
     finally:
+        sessionlog.event("Arret propre" if clean else "Arret anormal (l'auto-sauvegarde est gardee)")
+        if clean:
+            clear_autosave()
         s.stop_event.set()
         if s.projection is not None:
             s.projection.stop(wait=5.0)
@@ -2618,14 +2783,38 @@ class Projection:
             return "Projection ouverte en plein ecran"
         return "Projection ouverte en fenetre (F ou la case Plein ecran pour le plein ecran)"
 
+    MAX_RESTARTS = 3                                      # reprises automatiques tolerees...
+    RESTART_WINDOW_S = 120.0                              # ...sur cette fenetre (au-dela : on s'arrete, il y a un vrai probleme)
+    RESTART_DELAY_S = 1.0
+
     def _run(self) -> None:
-        try:
-            (self._target or gl_main)(self.s)
-        except SystemExit as exc:                        # gl_main quitte par sys.exit : la GUI continue
-            self.s.status["msg"] = "Projection impossible (voir la console)" if exc.code else self.s.status.get("msg", "")
-        except Exception as exc:
-            self.s.status["msg"] = f"Projection arretee: {exc}"
-            print(f"Projection arretee: {exc}", file=sys.stderr)
+        """Fil de la projection. Si la fenetre meurt sur une erreur (pas une fermeture voulue : Echap, bouton, arret de la GUI), elle
+        est relancee toute seule avec les reglages et la scene du moment (ils vivent dans `s.params`, pas dans la fenetre)."""
+        starts: list[float] = []
+        while True:
+            try:
+                sessionlog.event("Projection : fenetre ouverte")
+                (self._target or gl_main)(self.s)
+                sessionlog.event("Projection : fenetre fermee")
+                return
+            except SystemExit as exc:                    # gl_main quitte par sys.exit : la GUI continue
+                self.s.status["msg"] = "Projection impossible (voir la console)" if exc.code else self.s.status.get("msg", "")
+                sessionlog.event(f"Projection : arret (code {exc.code})")
+                return
+            except Exception as exc:
+                sessionlog.error("Projection : la fenetre GL est morte", exc)
+                print(f"Projection arretee: {exc}", file=sys.stderr)
+                now = time.monotonic()
+                starts = [t for t in starts if now - t < self.RESTART_WINDOW_S] + [now]
+                if self.s.proj_stop.is_set() or self.s.stop_event.is_set() or len(starts) > self.MAX_RESTARTS:
+                    self.s.status["msg"] = f"Projection arretee: {exc}" + (
+                        " (trop de reprises : bouton Demarrer pour reessayer)" if len(starts) > self.MAX_RESTARTS else "")
+                    return
+                self.s.status["msg"] = f"Projection relancee apres une erreur ({exc})"
+                sessionlog.event(f"Projection : reprise automatique {len(starts)}/{self.MAX_RESTARTS}")
+                time.sleep(self.RESTART_DELAY_S)
+                if self.s.proj_stop.is_set() or self.s.stop_event.is_set():
+                    return
 
     def stop(self, wait: float = 0.0) -> None:
         """Ferme la projection (attend au plus `wait` secondes)."""
@@ -2893,7 +3082,14 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             print(f"cellules du logo: {'on' if params['cell_on'] >= 0.5 else 'off'}")
         elif name == "flash":
             renderer.flash_t = time.monotonic()           # transition du VJ (demandee par la GUI)
-        elif name in ("vj", "vjnext", "lock", "back"):
+        elif name == "panic":
+            changed = panic(params)                        # tout de suite, dans ce fil : pas d'attente de la GUI
+            sessionlog.event("PANIQUE : " + (", ".join(changed) if changed else "rien a couper"))
+            s.status["msg"] = "PANIQUE : effets, strobe et montee coupes"
+            renderer.flash_t = time.monotonic()
+            if args.gui:
+                s.scene_requests.put("panic")              # la GUI met le VJ en pause et remet les curseurs a jour
+        elif name in ("vj", "vjnext", "lock", "back", "tap", "help"):
             if args.gui:
                 s.scene_requests.put(name)                # Espace / fleche droite : la GUI pilote le VJ
             else:
@@ -2948,6 +3144,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     key_actions[glfw.KEY_K] = "lock"             # verrou de scene (la GUI le gere : voir poll_scene_requests)
     key_actions[glfw.KEY_S] = "strobe"          # strobe : maintenu (manuel) ou arme / desarme (kick, cadence)
     key_actions[glfw.KEY_SPACE] = "vj"           # VJ : lecture / pause
+    key_actions[glfw.KEY_X] = "panic"            # PANIQUE : coupe effets, strobe, montee... et rend une image propre
+    key_actions[glfw.KEY_PERIOD] = "tap"         # tap tempo (la GUI le gere)
+    key_actions[glfw.KEY_SLASH] = "help"         # aide des raccourcis (la GUI l'affiche)
     key_actions[glfw.KEY_RIGHT] = "vjnext"       # VJ : scene suivante
     for n in range(9):
         key_actions[getattr(glfw, f"KEY_F{n + 1}")] = f"scene{n}"       # F1..F9 : scenes
@@ -2966,7 +3165,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
     glfw.set_key_callback(handle, on_key)
     print("Echap quitte | F plein ecran | H barres debug | B fond live/motif | T automations | 1-5 effets (Maj+1-4: "
-          "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante (avec --gui)")
+          "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante | X PANIQUE | . tap tempo | / aide (avec --gui)")
     print(status_line())
 
     bgvideo = s.bgvideo = BgVideoManager(s.render_size, s.status)     # fond "video" : decodage lance / arrete selon les reglages
