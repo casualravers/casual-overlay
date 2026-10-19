@@ -4813,7 +4813,7 @@ def check_engine_layer() -> None:
             bad += [(path.name, m) for m in mods if m.split(".")[0] in forbidden]
     check(len(files) >= 4 and not bad, f"engine/: {len(files)} modules, aucun import de la GUI ni de la facade", str(bad[:3]))
     check("engine" in build_portable.APP_DIRS, "version portable: le dossier engine/ est embarque")
-    import engine.audio, engine.video, engine.window
+    import engine.audio, engine.render, engine.video, engine.window
     check(gl.FeatureExtractor is engine.audio.FeatureExtractor and gl.FrameReader is engine.video.FrameReader
           and gl.Window is engine.window.Window, "la facade audio2wave_gl rend les memes objets que engine/")
 
