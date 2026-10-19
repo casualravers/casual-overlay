@@ -10,7 +10,7 @@ sinon le programme s'arrete avec un message clair).
 
 ## Version portable (rien a installer)
 
-Pour un PC de salle ou de scene : `python build_portable.py --zip` (sur ta machine de dev) fabrique `dist/casual-overlay-portable/`
+Pour un PC de salle ou de scene : `python tools/build_portable.py --zip` (sur ta machine de dev) fabrique `dist/casual-overlay-portable/`
 (+ un `.zip`) avec **son Python 3.12, ffmpeg et audio2wave dedans**. Copie le dossier sur le PC cible, double-clic sur `start.bat` :
 c'est tout. Le dossier fait environ 500 Mo (surtout ffmpeg : un build « essentials » est plus leger, `--ffmpeg-dir`). Le script
 verifie le dossier fabrique en le lancant avec SON Python (diagnostic + un rendu synthetique) ; `--no-ffmpeg` pour ne pas embarquer
@@ -56,7 +56,7 @@ python audio2wave_gl.py --gui --no-fullscreen             # GUI seule: choisir l
 python audio2wave_gl.py --background pattern --gui        # fond en motif genere (pas besoin de -d)
 python audio2wave_gl.py --bg-video clip.mp4 --gui         # fond = un fichier video brut en boucle (pas besoin de -d)
 python audio2wave_gl.py --synthetic --no-fullscreen       # essai sans micro ni ffmpeg
-python check_gl.py                                        # verifications hors materiel
+python tools/check_gl.py                                        # verifications hors materiel
 ```
 
 La fenetre s'ouvre sur le premier moniteur non principal (`--monitor N` pour choisir).

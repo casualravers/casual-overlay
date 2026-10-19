@@ -326,12 +326,9 @@ class Renderer:
             scene = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("scene.frag"))
             post = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("post.frag"))
             holo = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("holo.frag"))
-            doodle = self.ctx.program(vertex_shader=self._read("doodle.vert"), fragment_shader=self._read("doodle.frag"))
         except Exception as exc:
             raise ShaderError(str(exc)) from exc
         self.scene_prog, self.post_prog, self.holo_prog = scene, post, holo
-        self.doodle_prog = doodle
-        self.doodle_vao = self.ctx.vertex_array(doodle, [(self.vbo, "2f", "in_pos")])
         self.scene_vao = self.ctx.vertex_array(scene, [(self.vbo, "2f", "in_pos")])
         self.post_vao = self.ctx.vertex_array(post, [(self.vbo, "2f", "in_pos")])
         self.holo_vao = self.ctx.vertex_array(holo, [(self.vbo, "2f", "in_pos")])
@@ -409,28 +406,37 @@ class Renderer:
         if tex is not None:
             tex.release()
 
-    def _draw_doodles(self, target, size: tuple[int, int], now: float) -> None:
+    def _draw_doodles(self, target, size: tuple[int, int], now: float, presence: float = 1.0) -> bool:
+        """Pose les doodles visibles sur la couche du logo (`target`) en relancant la passe LOGO de `scene.frag` pour chacun : texture et
+        rectangle du doodle a la place de ceux du logo, donc fonte acide, cellules, contour lumineux et opacite du logo s'y appliquent
+        comme au logo. Rend True si au moins un est dessine."""
         self.screen_size = size
         if not self.wall.items:                     # liste vide : aucun cout
-            return
+            return False
         for gone in self.wall.step(now):
             self._release_doodle(gone)
         visible = self.wall.visible(now)
         if not visible:
-            return
+            return False
+        sp = self.scene_prog
         target.viewport = (0, 0, size[0], size[1])
         target.use()
         self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA        # alpha premultiplie
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA        # couche premultipliee
+        self._set(sp, "u_pass", 1.0)
+        self._set(sp, "u_logo_on", 1.0)
+        self._set(sp, "u_logo_straight", 0.0)
         try:
             for ident, rect, a in visible:
-                self.doodle_tex[ident].use(0)
-                self._set(self.doodle_prog, "u_tex", 0)
-                self._set(self.doodle_prog, "u_rect", tuple(float(v) for v in rect))
-                self._set(self.doodle_prog, "u_alpha", float(a))
-                self.doodle_vao.render(moderngl.TRIANGLE_STRIP)
+                x, y, w, h = (float(v) for v in rect)
+                self.doodle_tex[ident].use(1)
+                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2, h / 2))
+                self._set(sp, "u_logo_opacity", float(a) * presence)
+                self.scene_vao.render(moderngl.TRIANGLE_STRIP)
         finally:
             self.ctx.disable(moderngl.BLEND)
+        return True
+
     @staticmethod
     def _set(prog, name: str, value) -> None:
         if name in prog:   # un uniform inutilise est elimine par le compilateur
@@ -566,24 +572,33 @@ class Renderer:
         if self.has_logo:
             self._set(sp, "u_pass", 1.0)
             self.scene_vao.render(moderngl.TRIANGLE_STRIP)
-            if holo_on:
-                # Le halo holographique lit l'alpha de cette couche, flou a de nombreuses echelles (mipmaps
-                # a la taille de l'ecran: la portee ne depend ni du PNG ni de la marge de sa texture); le
-                # champ est calcule a basse resolution (holo.frag) puis lu par le post-traitement.
-                self.layer_tex.build_mipmaps()
-                self.layer_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-                hp = self.holo_prog
-                self._set(hp, "u_logo", 0)
-                self._set(hp, "u_res", (float(width), float(height)))
-                self._set(hp, "u_holo_reach", max(float(p["holo_reach"]), 0.05))
-                self._set(hp, "u_holo_lod0", math.log2(max(height, 1) / 720.0))
-                self._set(hp, "u_holo_center", (float(rect[0]), float(1.0 - rect[1])))
-                self.layer_tex.use(0)
-                self.holo_fbo.viewport = (0, 0) + tuple(self.holo_tex.size)
-                self.holo_fbo.use()
-                self.holo_vao.render(moderngl.TRIANGLE_STRIP)
         else:
             self.layer_fbo.clear(0.0, 0.0, 0.0, 0.0)
+        # Les doodles du site passent par la MEME passe que le logo (fonte, cellules, contour, opacite), posee sur sa couche : ils
+        # subissent ensuite ses effets par couche, le halo holographique, la trainee et la composition.
+        doodles_on = self._draw_doodles(self.layer_fbo, size, time.monotonic(), ov)
+        self.video_tex.use(0)
+        self.logo_tex.use(1)
+        self._set(sp, "u_logo_rect", rect)
+        self._set(sp, "u_logo_on", 1.0 if self.has_logo else 0.0)
+        self._set(sp, "u_logo_straight", 1.0 if self.logo_video is not None else 0.0)
+        holo_on = float(p["holo_on"]) >= 0.5 and (self.has_logo or doodles_on)
+        if holo_on:
+            # Le halo holographique lit l'alpha de cette couche, flou a de nombreuses echelles (mipmaps
+            # a la taille de l'ecran: la portee ne depend ni du PNG ni de la marge de sa texture); le
+            # champ est calcule a basse resolution (holo.frag) puis lu par le post-traitement.
+            self.layer_tex.build_mipmaps()
+            self.layer_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            hp = self.holo_prog
+            self._set(hp, "u_logo", 0)
+            self._set(hp, "u_res", (float(width), float(height)))
+            self._set(hp, "u_holo_reach", max(float(p["holo_reach"]), 0.05))
+            self._set(hp, "u_holo_lod0", math.log2(max(height, 1) / 720.0))
+            self._set(hp, "u_holo_center", (float(rect[0]), float(1.0 - rect[1])))
+            self.layer_tex.use(0)
+            self.holo_fbo.viewport = (0, 0) + tuple(self.holo_tex.size)
+            self.holo_fbo.use()
+            self.holo_vao.render(moderngl.TRIANGLE_STRIP)
         if not holo_on:
             # Sans mipmaps construites, le filtre a mipmaps rendrait la texture incomplete (noire).
             self.layer_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -598,6 +613,7 @@ class Renderer:
         self._set(pp, "u_scene", 0)
         self._set(pp, "u_logo", 1)
         self._set(pp, "u_logo_on", 1.0 if self.has_logo else 0.0)
+        self._set(pp, "u_layer_on", 1.0 if (self.has_logo or doodles_on) else 0.0)
         self._set(pp, "u_fx_bg", tuple(fx_bg))
         self._set(pp, "u_fx_logo", tuple(fx_logo))
         self._set(pp, "u_center_logo", (float(center[0]), float(center[1])))
@@ -660,7 +676,6 @@ class Renderer:
         if dest is not target:
             self.ctx.copy_framebuffer(target, dest)
             self._fb_i = 1 - self._fb_i
-        self._draw_doodles(target, size, time.monotonic())
 
 
 def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> tuple[float, float, float]:

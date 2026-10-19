@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import audio2wave_gl as gl
-import diagnostics
+from engine import diagnostics
 import tkinter as tk
 
 

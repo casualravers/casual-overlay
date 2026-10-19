@@ -6,7 +6,7 @@ Guide pour Claude Code (claude.ai/code) dans ce depot.
 
 casual-overlay affiche le visuel `audio2wave_live` (flux ffmpeg) dans une fenetre OpenGL
 plein ecran sur le videoprojecteur, avec un logo PNG incruste et des deformations pilotees
-en temps reel par l'audio du micro. Le plan d'origine est dans `PLAN_POC_GL.md`.
+en temps reel par l'audio du micro. Le plan d'origine est dans `docs/PLAN_POC_GL.md`.
 
 **audio2wave est interne** : une copie du depot `audio2wave` (`https://github.com/casualravers/audio2wave`, `main`) vit dans `sources/audio2wave/` (modules **plats** : ils\ns'importent par leur nom, le dossier est ajoute a `sys.path` ; `audio2wave_gl.bundled_paths` le choisit : `audio2wave/` a cote du programme (portable) > `sources/audio2wave/` >\ndepot voisin `../audio2wave` (dernier recours) ; `--a2w-dir` / `AUDIO2WAVE_DIR` en essaient un autre). On importe `audio2wave_live` (`parse_args`, `producer_command`,\n`resolve_size`, `list_audio_devices`) et les autres modules. Son CLAUDE.md (copie : `sources/audio2wave/CLAUDE.md`) fait foi pour tout ce qui touche au visuel de base (filtres ffmpeg, `--averaging`,\nlatence). **Origine et ecarts** : `sources/audio2wave/VENDORED.md` (commit copie, section « Modifications locales ») et `ORIGINE.json` (empreinte de chaque fichier d'origine) ;\n`check_gl.py` (`check_audio2wave_interne`) echoue si un fichier differe de l'origine **sans etre note** dans VENDORED.md : modifier ces fichiers est permis maintenant, mais toute\nmodification se note (fichier, raison) pour pouvoir resynchroniser avec le depot d'origine. Le depot `audio2wave` reste vivant a part : un correctif qui y est fait se reporte a la main ici\n(et inversement), c'est le prix d'avoir deux copies tant qu'il existe.
 
@@ -56,6 +56,10 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
   app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
+gui/             fenetre de reglages Tk, modules PLATS (importes par leur nom : `audio2wave_gl` ajoute gui/ a `sys.path`) : gl_gui, gui_*, skin, theme, icons, py_modes, gui_colors, gui_gates
+tools/           check_gl.py (`python tools/check_gl.py`), build_portable.py (`python tools/build_portable.py --zip`) ; ils ajoutent la racine du depot a `sys.path`
+docs/            documents de conception (PLAN_POC_GL.md)
+Racine : audio2wave_gl.py (point d'entree), start.bat (lanceur, a garder ici), README.md, CLAUDE.md, requirements-gl.txt. `engine/diagnostics.py` : diagnostic de demarrage.
 sources/audio2wave/  audio2wave (copie interne, modules plats, voir plus haut)
 audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths) + facade qui re-exporte core/ et engine/ (gl.X) ;
                   les tests qui remplacent un nom visent le module qui l'utilise (ex. engine.projection.loop)
@@ -154,7 +158,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
 
 ## Diagnostic de demarrage et version portable
 
-- **`diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
+- **`engine/diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
   `Check(name, level, detail, hint)` (`ok` / `warn` / `fail`) : Python (>= 3.10), modules (obligatoires = fail ; tkinter fail avec
   `--gui` sinon warn ; tkinterdnd2 warn ; sounddevice warn en `--synthetic`), ffmpeg / DirectShow / ffprobe (fail sauf
   `--synthetic`), audio2wave (fail sauf synthetique sans GUI, comme `load_live`), **OpenGL** (`moderngl.create_standalone_context()`,
@@ -191,9 +195,9 @@ python audio2wave_gl.py -d "<entree>" --dry-run        # meme commande ffmpeg qu
 python audio2wave_gl.py -d "<entree>"                  # live (fenetre ; --fullscreen pour le plein ecran)
 python audio2wave_gl.py --gui [--projeter]             # reglages seuls ; bouton « Demarrer la projection » (ou --projeter)
 python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
-python check_gl.py                                     # verifications hors materiel
+python tools/check_gl.py                                     # verifications hors materiel
 python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ffmpeg, OpenGL, micro...)
-python build_portable.py --zip                         # dossier portable (Python + ffmpeg + audio2wave dedans)
+python tools/build_portable.py --zip                         # dossier portable (Python + ffmpeg + audio2wave dedans)
 ```
 
 Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--style radio
@@ -446,9 +450,11 @@ la projection**. Desactive par defaut.
   ni Tk. Une erreur reseau est dite dans le statut (`status["doodles"]`), journalisee **une seule fois** (`sessionlog`) et reessayee au tour suivant ; un
   telechargement en echec n'est pas marque « vu » (reessai), un fichier invalide l'est. Decodage Pillow (`decode` : taille lue avant tout decodage,
   `exif_transpose` pour les photos, `_premultiplied` comme le logo) puis `Session.doodle_queue`. Demarre par `run_app` (le fil dort tant que la case est decochee).
-- **Rendu** (`Renderer.add_doodle` / `_draw_doodles`, `doodle.vert` / `doodle.frag`) : la boucle GL vide la file a chaque image et pose les doodles ; la passe
-  vient **apres** le post-traitement et la trainee, donc ni symetrie, ni pixelisation, ni teinte globale, ni strobe ne les touchent ; melange premultiplie
-  (ONE, ONE_MINUS_SRC_ALPHA), textures a mipmaps. Liste vide = passe sautee (aucun cout). Les doodles arrives projection fermee sont jetes (`Projection.start`).
+- **Rendu** (`Renderer.add_doodle` / `_draw_doodles`) : la boucle GL vide la file a chaque image. Chaque doodle visible relance la **passe LOGO de `scene.frag`** (`u_pass` 1) avec SA texture et SON rectangle a la place
+  de ceux du logo, melangee en alpha premultiplie sur la couche du logo (`layer_fbo`) : il recoit donc **tout ce que recoit le logo** : fonte acide, cellules, contour lumineux, opacite / master overlay, puis (dans `post.frag`) les effets par couche
+  (ondulation, onde de choc, aberration, glitch ; lies au fond ou propres au logo, `fx_link`), l'aura holographique (calculee sur l'alpha de la couche ; centree sur le logo), la traînee et la composition (symetrie, pixelisation, teinte, strobe).
+  `u_layer_on` (post.frag) garde la couche active meme sans logo. Pas de shader dedie (doodle.vert / doodle.frag supprimes). Liste vide = aucune passe (aucun cout) ; au plus 5 doodles = 5 passes plein cadre en plus.
+  Les doodles arrives projection fermee sont jetes (`Projection.start`). Une animation propre aux doodles est prevue plus tard.
 - `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
   injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
   sauvegarde, case de la GUI.
@@ -793,7 +799,7 @@ case `~`, bouton de courbe, presets sinus/triangle/carre/dents de scie/aleatoire
 - Interpolation "boucle" : le dernier point rejoint le premier. Une courbe en dents de scie
   fait donc un retour en arriere rapide sur sa derniere portion ; pour une grandeur cyclique
   comme la teinte, les valeurs par defaut utilisent un sinus (aller-retour) plutot qu'un tour complet.
-### GUI (`--gui`, [gl_gui.py](gl_gui.py))
+### GUI (`--gui`, [gl_gui.py](gui/gl_gui.py))
 
 **La partie Live n'est pas reecrite : c'est la fenetre de reglages d'`audio2wave_live.py`
 (`build_gui`), importee du depot audio2wave comme dependance**, donc avec ses presets, ses
@@ -872,7 +878,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   avec `sticky="new"` + `columnconfigure(2, weight=1)` pour que son bandeau prenne toute la largeur.
   Le halo holographique n'est plus replie (il a son onglet).
 
-- **Modes Snap et Ridge** ([py_modes.py](py_modes.py), `activate_mode` / `build_window` dans gl_gui.py) : les boutons
+- **Modes Snap et Ridge** ([py_modes.py](gui/py_modes.py), `activate_mode` / `build_window` dans gl_gui.py) : les boutons
   Live / Snap / Ridge d'audio2wave changent la **source du fond**, sans nouvelle fenetre et sans modifier
   audio2wave (leurs `build_gui` appellent `on_switch_mode`, qu'on branche). Snap et Ridge dessinent leurs images
   en Python : avec l'API hote d'audio2wave on les lance **sans fenetre ni ffplay** : `parse_args(argv)` (`make_args`) construit leurs
@@ -907,7 +913,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
     micro est ouvert une fois de plus (ffmpeg dshow, en plus de sounddevice et du producteur live suspendu) ;
     la case "Plein ecran" de Snap/Ridge n'existe pas (c'est notre fenetre GL qui gere l'affichage) ; le Mode VJ
     d'audio2wave (enchainement de presets) n'est pas verifie ici.
-- **Reglages incompatibles grises** ([gui_gates.py](gui_gates.py)) : un reglage sans objet dans le mode ou l'etat
+- **Reglages incompatibles grises** ([gui_gates.py](gui/gui_gates.py)) : un reglage sans objet dans le mode ou l'etat
   courant est **grise** (jamais retire : la disposition ne bouge pas et on voit qu'il existe). Pour les panneaux
   d'audio2wave (sans option dediee dans leur code) : `install_mode_gates` retrouve les widgets par leur texte et
   suit leurs variables Tk par une **trace Tcl** (`trace add variable`) ; surtout pas `tk.StringVar(name=...)`, dont
@@ -922,7 +928,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   en rendant en lecture seule tous les champs de 6 caracteres, ce qui figeait aussi le **crossover de Snap** ;
   on cible maintenant la ligne "Taille du rendu". Un test qui detruit une fenetre d'audio2wave doit laisser tourner
   leur `refresh()` apres `finished_event.set()` (sinon bruit Tcl, ou boucle d'evenements sans fin).
-- **Aides a la saisie des couleurs** ([gui_colors.py](gui_colors.py)) : les champs texte de couleur d'audio2wave
+- **Aides a la saisie des couleurs** ([gui_colors.py](gui/gui_colors.py)) : les champs texte de couleur d'audio2wave
   ("Couleurs", "Couleur de fond" ; "Couleur du trait" de Ridge) gardent leur champ mais gagnent, dans la meme cellule
   de la grille, une **pastille par couleur** (un clic ouvre le selecteur et remplace CETTE couleur, ecrite en
   `0xRRGGBB`), un **menu de 14 couleurs nommees** (remplace la premiere) et un **"+"** pour ajouter une couleur
@@ -1058,7 +1064,7 @@ fragile.
 
 ## Verifications
 
-`python check_gl.py` (aucun peripherique requis) : lecteur de frames avec faux producteur
+`python tools/check_gl.py` (aucun peripherique requis) : lecteur de frames avec faux producteur
 par blocs de 4 Ko (aucune frame melangee, ordre conserve, partielle jetee, latest-wins) ;
 features sur signaux synthetiques (un beat par salve a 48 et 44,1 kHz, periode 500 ms,
 -30 dB, bruit blanc, sinus continu, silence, isolation des bandes, ring buffer) ; reglages

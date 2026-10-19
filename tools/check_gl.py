@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verifications hors materiel de audio2wave_gl.py (aucun micro, projecteur ni ffmpeg).
 
-    python check_gl.py
+    python tools/check_gl.py
 
   1. lecteur de frames : faux producteur livrant par blocs de 4 Ko, aucune frame melangee,
      frame partielle de fin de flux jetee, latest-wins;
@@ -18,6 +18,8 @@ import tempfile
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent      # racine du depot (ce script est dans tools/)
+sys.path[:0] = [str(ROOT), str(ROOT / "tools")]
 import audio2wave_gl as gl
 from core import autosave as core_autosave
 from core import params as core_params
@@ -3102,7 +3104,7 @@ def check_diagnostics() -> None:
     from types import SimpleNamespace as NS
 
     import build_portable as bp
-    import diagnostics as dg
+    from engine import diagnostics as dg
     print("Diagnostic de demarrage et version portable")
 
     def lvl(check_or_list, name):
@@ -3245,7 +3247,7 @@ def check_diagnostics() -> None:
     out.mkdir()
     bp.build_app(out, gl.DEFAULT_A2W_DIR)
     names = {str(x.relative_to(out)).replace("\\", "/") for x in out.rglob("*") if x.is_file()}
-    check({"audio2wave_gl.py", "diagnostics.py", "start.bat", "LISEZMOI.txt", "gl_shaders/post.frag", "audio2wave/audio2wave_live.py",
+    check({"audio2wave_gl.py", "engine/diagnostics.py", "gui/skin.py", "start.bat", "LISEZMOI.txt", "gl_shaders/post.frag", "audio2wave/audio2wave_live.py",
            "audio2wave/common.py"} <= names and not any(n.startswith("asset/animations") for n in names)
           and any(n.startswith("asset/") and n.endswith(".png") for n in names), "portable: le dossier contient le programme, les shaders, audio2wave, le logo ; pas les animations perso")
     src, dst = tmp / "src", tmp / "dst"
@@ -4752,8 +4754,8 @@ def check_skin() -> None:
     finally:
         root.destroy()
     import build_portable
-    check(all(f in build_portable.APP_FILES for f in ("skin.py", "theme.py")),
-          "version portable: skin.py et theme.py embarques")
+    check("gui" in build_portable.APP_DIRS and all((ROOT / "gui" / f).is_file() for f in ("skin.py", "theme.py", "icons.py")),
+          "version portable: le dossier gui/ (skin.py, theme.py, icons.py...) est embarque")
 
 
 def check_portable_modules() -> None:
@@ -4762,9 +4764,10 @@ def check_portable_modules() -> None:
     print("version portable : modules embarques")
     import ast
     import build_portable as bp
-    here = Path(__file__).resolve().parent
-    local = {p.stem for p in here.glob("*.py")}
-    shipped_files = [here / n for n in bp.APP_FILES if n.endswith(".py") and n != "check_gl.py"] + sorted((here / "core").glob("*.py"))     # (check_gl lui-meme importe les outils de fabrication)
+    here = ROOT
+    local = {p.stem for p in here.glob("*.py")} | {p.stem for p in (here / "gui").glob("*.py")}          # modules plats : racine et gui/
+    shipped_files = ([here / n for n in bp.APP_FILES if n.endswith(".py")]
+                     + [f for d in ("core", "engine", "gui") for f in sorted((here / d).glob("*.py"))])
     missing = []
     for path in shipped_files:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -4772,7 +4775,7 @@ def check_portable_modules() -> None:
                 [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else []
             for m in mods:
                 top = m.split(".")[0]
-                if top in local and f"{top}.py" not in bp.APP_FILES and top != "check_gl":
+                if top in local and f"{top}.py" not in bp.APP_FILES and not ((here / "gui" / f"{top}.py").is_file() and "gui" in bp.APP_DIRS):
                     missing.append((path.name, m))
     check(not missing, f"portable: {len(shipped_files)} modules embarques, aucun import d'un module du depot qui n'y soit pas", str(missing[:3]))
     check(all((here / n).is_file() for n in bp.APP_FILES), "portable: tous les fichiers de la liste existent",
@@ -4784,7 +4787,7 @@ def check_core_purity() -> None:
     print("core/ : Python pur")
     import ast
     import subprocess
-    here = Path(__file__).resolve().parent
+    here = ROOT
     forbidden = ("audio2wave_gl", "gl_gui", "audio2wave", "tkinter", "numpy", "moderngl", "glfw", "PIL", "sounddevice", "skin", "theme",
                  "gui_colors", "gui_gates", "py_modes", "diagnostics", "tkinterdnd2")
     files = sorted((here / "core").glob("*.py"))
@@ -5117,6 +5120,28 @@ def check_doodles() -> None:
     check(top[0] > 240 and top[1] < 20 and bottom[1] > 240 and bottom[0] < 20, "rendu: image dans le bon sens (haut = rouge, bas = vert)", f"{top} {bottom}")
     outside = img[~changed]
     check((np.abs(outside.astype(int) - base[~changed].astype(int)).sum() == 0), "rendu: le reste de l'image est strictement intact")
+    # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
+    def doodle_render(pre=None, **kw):
+        rr = gl.Renderer(ctx, size, None)
+        if pre:
+            pre(rr)
+        rr._doodle_rng = __import__("random").Random(7)                      # meme emplacement d'un rendu a l'autre
+        rr.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))
+        rr.add_doodle(top_red_bottom_green, time.monotonic() - 5.0)
+        rr.draw(fbo, size, dict(st, bass=1.0, beat=1.0, since_beat=0.0), dict(params, master=1.0, fx_link=0.0, **kw), 0.7)
+        return read_target(ctx, fbo, size).astype(int), rr.wall.items[-1]["rect"]
+    off, rc = doodle_render(fx_on=[0.0] * 5, fxl_on=[0.0] * 4)
+    on_logo, _ = doodle_render(fx_on=[0.0] * 5, fxl_on=[1.0] * 4, fxl_int=[1.0] * 4)
+    on_bg, _ = doodle_render(fx_on=[1.0, 1.0, 1.0, 0.0, 0.0], fx_int=[1.0] * 5, fxl_on=[0.0] * 4)
+    mask = np.abs(off - np.array([0, 0, 255])).sum(axis=2) > 60                # emplacement du doodle
+    check(np.abs(on_logo - off).sum() > 2000, "doodle: les effets de la couche du logo le deforment", str(np.abs(on_logo - off).sum()))
+    check(np.abs(on_bg - off)[mask].sum() == 0, "doodle: les effets propres au fond (logo delie) ne le touchent pas")
+    # fonte acide, halo holographique : memes passes que le logo
+    plain = dict(fx_on=[0.0] * 5, fxl_on=[0.0] * 4)
+    melted, _ = doodle_render(pre=lambda rr: setattr(rr, "_melt_t", 0.5), melt_on=1.0, melt_depth=1.0, **plain)
+    check(np.abs(melted - off)[mask].sum() > 20000, "doodle: la fonte acide le ronge comme le logo", str(np.abs(melted - off)[mask].sum()))
+    aura, _ = doodle_render(holo_on=1.0, holo_intensity=1.0, holo_reach=1.5, holo_dust=0.0, **plain)
+    check(np.abs(aura - off)[~mask].sum() > 20000, "doodle: l'aura holographique l'entoure et deforme le fond", str(np.abs(aura - off)[~mask].sum()))
     # alpha premultiplie : 50 % d'opacite sur du bleu ne doit pas noircir les bords (pas de halo sombre)
     r2 = gl.Renderer(ctx, size, None)
     r2.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
@@ -5246,7 +5271,7 @@ def check_audio2wave_interne() -> None:
     import json as _json
     import shutil
     import tempfile
-    here = Path(__file__).resolve().parent
+    here = ROOT
     vend = here / "sources" / "audio2wave"
     check(Path(gl.DEFAULT_A2W_DIR).resolve() == vend.resolve(), "audio2wave: le dossier par defaut est la copie interne sources/audio2wave", str(gl.DEFAULT_A2W_DIR))
     need = ("audio2wave.py", "audio2wave_live.py", "audio2wave_snap.py", "audio2wave_ridge.py", "common.py", "preset_registry.py", "check_contract.py",
@@ -5288,7 +5313,7 @@ def check_engine_layer() -> None:
     print("engine/ : couche moteur")
     import ast
     import build_portable
-    here = Path(__file__).resolve().parent
+    here = ROOT
     forbidden = ("audio2wave_gl", "gl_gui", "tkinter", "skin", "theme", "gui_colors", "gui_gates", "py_modes", "tkinterdnd2")
     files = sorted((here / "engine").glob("*.py"))
     bad = []
@@ -5311,7 +5336,7 @@ def check_params_schema() -> None:
     import random
     import re
     from core import params_schema as ps
-    here = Path(__file__).resolve().parent
+    here = ROOT
     # --- integrite de la table
     bad = [p.key for p in ps.TABLE if p.key != "logo_path" and not _in_range(p, p.default)]
     check(not bad, "table: chaque valeur par defaut est dans sa plage", str(bad))
@@ -5371,7 +5396,7 @@ def check_params_schema() -> None:
             wide.append((key, (spec[1], spec[2]), (p.lo, p.hi)))
     check(not wide, "automations: chaque courbe reste dans la plage de son reglage", str(wide[:3]))
     # --- curseurs de la GUI : leur plage tient dans celle de la table
-    src = "".join(path.read_text(encoding="utf-8") for path in [here / "gl_gui.py", *sorted(here.glob("gui_*.py"))])     # la GUI est repartie en plusieurs modules
+    src = "".join(path.read_text(encoding="utf-8") for path in [here / "gui" / "gl_gui.py", *sorted((here / "gui").glob("gui_*.py"))])     # la GUI est repartie en plusieurs modules
     out_of = []
     n_sliders = 0
     for m in re.finditer(r'param_slider\(\w+, "[^"]*", "(\w+)", ([-\d.]+), ([-\d.]+),', src):
@@ -5392,7 +5417,7 @@ def check_params_schema() -> None:
     # --- le code ne lit/ecrit que des reglages declares
     unknown = set()
     allowed = {"_automation", "fx_on", "fx_int"}
-    for fname in ("audio2wave_gl.py", "gl_gui.py", *sorted(p.name for p in here.glob("gui_*.py")), "core/randomizer.py", "core/scenes.py", "core/params.py", "core/controls.py"):
+    for fname in ("audio2wave_gl.py", "gui/gl_gui.py", *("gui/" + p.name for p in sorted((here / "gui").glob("gui_*.py"))), "core/randomizer.py", "core/scenes.py", "core/params.py", "core/controls.py"):
         text = (here / fname).read_text(encoding="utf-8")
         for m in re.finditer(r'\b(?:params|p|cur|current|values|full)\[\s*"([a-z][a-z0-9_]*)"\s*\]', text):
             key = m.group(1)
@@ -5417,7 +5442,7 @@ def check_params_schema() -> None:
                     stray.append((fn.__name__, k, v))
     check(not stray, "hasard: les tirages du Full Randomizer restent dans les plages de la table", str(stray[:3]))
     import build_portable
-    check((Path(build_portable.__file__).parent / "core" / "params_schema.py").is_file() and "core" in build_portable.APP_DIRS,
+    check((ROOT / "core" / "params_schema.py").is_file() and "core" in build_portable.APP_DIRS,
           "version portable: core/params_schema.py embarque")
 
 

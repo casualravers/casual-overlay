@@ -1,8 +1,8 @@
 """Fabrique la version PORTABLE de casual-overlay : un dossier qui demarre sur un PC Windows sans rien installer.
 
-    python build_portable.py                       # dist/casual-overlay-portable/
-    python build_portable.py --zip                 # + un .zip a copier sur une cle USB
-    python build_portable.py --ffmpeg-dir C:\\ffmpeg\\bin --no-verify
+    python tools/build_portable.py                       # dist/casual-overlay-portable/
+    python tools/build_portable.py --zip                 # + un .zip a copier sur une cle USB
+    python tools/build_portable.py --ffmpeg-dir C:\\ffmpeg\\bin --no-verify
 
 Contenu du dossier :
     python/        un Python 3.12 complet (copie de l'installation locale : tkinter compris) + les modules de requirements-gl.txt
@@ -24,11 +24,9 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "py_modes.py", "diagnostics.py", "skin.py", "theme.py", "icons.py",
-             "check_gl.py", "requirements-gl.txt", "start.bat", "README.md",
-             *sorted(p.name for p in HERE.glob("gui_*.py")))          # la GUI est repartie en modules gui_*.py : tous embarques
-APP_DIRS = ("gl_shaders", "core", "engine")
+HERE = Path(__file__).resolve().parent.parent          # racine du depot (ce script est dans tools/)
+APP_FILES = ("audio2wave_gl.py", "requirements-gl.txt", "start.bat", "README.md")
+APP_DIRS = ("gl_shaders", "core", "engine", "gui", "tools")      # gui/ : fenetre de reglages ; tools/ : check_gl.py (le diagnostic l'importe pas, mais on le garde pour verifier sur place)
 PY_SKIP_DIRS = {"Doc", "include", "libs", "Scripts", "__pycache__"}            # a la racine de l'installation Python
 LIB_SKIP = {"test", "tests", "idlelib", "lib2to3", "turtledemo", "ensurepip", "__pycache__", "site-packages"}
 SITE_SKIP = ("pip", "setuptools", "wheel", "_distutils_hack", "pkg_resources", "__pycache__")
