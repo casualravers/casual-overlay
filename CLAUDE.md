@@ -454,7 +454,8 @@ la projection**. Desactive par defaut.
   de ceux du logo, melangee en alpha premultiplie sur la couche du logo (`layer_fbo`) : il recoit donc **tout ce que recoit le logo** : fonte acide, cellules, contour lumineux, opacite / master overlay, puis (dans `post.frag`) les effets par couche
   (ondulation, onde de choc, aberration, glitch ; lies au fond ou propres au logo, `fx_link`), l'aura holographique (calculee sur l'alpha de la couche ; centree sur le logo), la traînee et la composition (symetrie, pixelisation, teinte, strobe).
   `u_layer_on` (post.frag) garde la couche active meme sans logo. Pas de shader dedie (doodle.vert / doodle.frag supprimes). Liste vide = aucune passe (aucun cout) ; au plus 5 doodles = 5 passes plein cadre en plus.
-  Les doodles arrives projection fermee sont jetes (`Projection.start`). Une animation propre aux doodles est prevue plus tard.
+  Les doodles arrives projection fermee sont jetes (`Projection.start`). 
+  **Animation** (`core.doodles.pose`, `Wall.posed`) : apparition en « pop » (echelle 0 -> 1 avec depassement de ~9 %, rotation de ~17 degres qui se redresse en balancant, 0,9 s), palier droit, disparition (gonfle un instant, rapetisse en pivotant, 0,9 s) ; le sens de rotation alterne d'un doodle a l'autre. Fondus d'opacite courts (0,4 s / 0,7 s). Le shader du logo sait pivoter (`u_logo_cs` = cos, sin ; sin = 0 pour le logo, qui reste droit) : fonte, cellules et contour suivent la rotation.
 - `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
   injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
   sauvegarde, case de la GUI.
