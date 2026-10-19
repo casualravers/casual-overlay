@@ -56,6 +56,7 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   video          FrameReader, flux de test, producteurs ffmpeg, LogoVideo, BgVideo, ProducerManager
   window         fenetre glfw, choix du moniteur, plein ecran
   render         Renderer (passes GL), noise, texte / logo, PerfGuard
+  session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
 audio2wave_gl.py  facade + Session, Projection, boucle de rendu, demarrage ; re-exporte les noms de core/ et d'engine/ (`gl.X`) ;
                   Session / Projection / loop restent ici (les tests y patchent des noms) ; suite prevue : une vraie classe Session dans engine/ (check_gl.py `check_engine_layer` impose le sens des imports)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
