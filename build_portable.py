@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "py_modes.py", "diagnostics.py", "skin.py", "theme.py",
              "check_gl.py", "requirements-gl.txt", "start.bat", "README.md",
              *sorted(p.name for p in HERE.glob("gui_*.py")))          # la GUI est repartie en modules gui_*.py : tous embarques
-APP_DIRS = ("gl_shaders", "core")
+APP_DIRS = ("gl_shaders", "core", "engine")
 PY_SKIP_DIRS = {"Doc", "include", "libs", "Scripts", "__pycache__"}            # a la racine de l'installation Python
 LIB_SKIP = {"test", "tests", "idlelib", "lib2to3", "turtledemo", "ensurepip", "__pycache__", "site-packages"}
 SITE_SKIP = ("pip", "setuptools", "wheel", "_distutils_hack", "pkg_resources", "__pycache__")

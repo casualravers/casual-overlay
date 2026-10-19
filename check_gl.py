@@ -4797,6 +4797,26 @@ def check_core_purity() -> None:
     check(res.returncode == 0 and res.stdout.strip().isdigit(),
           "core/: tout s'importe sans numpy, GL, Tk ni le moteur", (res.stderr or res.stdout).strip().splitlines()[-1] if (res.stderr or res.stdout).strip() else "")
 
+def check_engine_layer() -> None:
+    """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""
+    print("engine/ : couche moteur")
+    import ast
+    import build_portable
+    here = Path(__file__).resolve().parent
+    forbidden = ("audio2wave_gl", "gl_gui", "tkinter", "skin", "theme", "gui_colors", "gui_gates", "py_modes", "tkinterdnd2")
+    files = sorted((here / "engine").glob("*.py"))
+    bad = []
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else []
+            bad += [(path.name, m) for m in mods if m.split(".")[0] in forbidden]
+    check(len(files) >= 4 and not bad, f"engine/: {len(files)} modules, aucun import de la GUI ni de la facade", str(bad[:3]))
+    check("engine" in build_portable.APP_DIRS, "version portable: le dossier engine/ est embarque")
+    import engine.audio, engine.video, engine.window
+    check(gl.FeatureExtractor is engine.audio.FeatureExtractor and gl.FrameReader is engine.video.FrameReader
+          and gl.Window is engine.window.Window, "la facade audio2wave_gl rend les memes objets que engine/")
+
 def check_params_schema() -> None:
     """Table unique des reglages (params_schema.py) : integrite, derivations, validation, et coherence avec le moteur, la GUI, les
     presets integres, les automations et le hasard (rien ne doit sortir des plages declarees)."""
@@ -5071,6 +5091,7 @@ def main() -> None:
     check_masters()
     check_portable_modules()
     check_core_purity()
+    check_engine_layer()
     check_params_schema()
     check_safeguards()
     check_scenes()

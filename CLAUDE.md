@@ -50,7 +50,13 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   sessionlog     journal de session
   scenes         scenes, sets, memoires de masters (stockage, export / import)
   randomizer     Full Randomizer (banques d'assets, tirages)
-audio2wave_gl.py  moteur : rendu GL, analyse audio, lecteurs ffmpeg, Projection, demarrage ; ré-exporte les noms de core/ (`gl.X`)
+engine/          moteur sans rendu GL (importe core/ et les dependances facultatives, jamais la GUI ni la facade) :
+  deps           numpy / glfw / moderngl / sounddevice / Pillow importes une fois (`None` si absents, `MISSING`)
+  audio          FeatureExtractor, RingBuffer, AudioAnalyzer, entrees micro / synthetique
+  video          FrameReader, flux de test, producteurs ffmpeg, LogoVideo, BgVideo, ProducerManager
+  window         fenetre glfw, choix du moniteur, plein ecran
+audio2wave_gl.py  facade + rendu GL (Renderer), Session, Projection, demarrage ; re-exporte les noms de core/ et d'engine/ (`gl.X`) ;
+                  suite prevue : sortir Renderer / Session / Projection vers engine/ (check_gl.py `check_engine_layer` impose le sens des imports)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
 gui_fond / gui_effects / gui_logo / gui_audio   onglets de la partie LIVE et OVERLAY (fond, effets + halo / fonte / cellules / noise, logo, analyse)
 gui_sets / gui_drop / gui_random / gui_panel    sets, medias (glisser-deposer, vignettes), Full Randomizer, panneau etendu
