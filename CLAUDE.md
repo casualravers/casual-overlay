@@ -123,6 +123,16 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
     (`tidy_mode_gui` et les tests le retrouvent par leur texte ; les bandeaux d'audio2wave par `widgets["section_titles"]`). Onglets ttk : selectionne = `CARD` + texte d'accent.
   - Couleurs lues sur un widget : `_norm` (nom Tk / systeme -> `#rrggbb`). Les `PhotoImage` sont gardees par racine Tk (`root._skin_photos`,
     plusieurs racines dans les tests). Hauteur : boutons ~24 px, champs 1 px de bord (la fenetre reste sous 700 px).
+- **Icones** (`icons.py`, Pillow, aucun fichier image ni police d'emojis : leur rendu varie d'un PC a l'autre) : 50 icones sur une grille de 24 x 24, traits arrondis de 2
+  unites (style Lucide), sur-echantillonnees puis reduites ; `icons.image(nom, taille, couleur)`. **Les libelles ne changent jamais** : `icons.for_text(libelle)`
+  rend l'icone d'un libelle connu (`TEXT_ICONS`, casse ignoree ; un libelle qui commence deja par un glyphe ▶ ▾ ■ ◀ n'en recoit pas ; un nom libre comme
+  « 1  Devil Kinky » non plus), et `skin` ajoute l'image : **boutons** (`_icon_button_image` : forme + icone + libelle dessines ensemble avec la police PIL equivalente
+  a la police Tk, `compound="none"` ; ATTENTION : `compound="image"` n'existe pas pour un Button Tk, l'erreur `TclError` est avalee par `apply` et le bouton reste
+  nu), **titres de section** (`tick_icon_image` : repere + icone a l'accent), **onglets** ttk (`skin_notebook` : icone grise, celle de l'onglet choisi a l'accent,
+  mise a jour sur `<<NotebookTabChanged>>`), **cases et radios** de `ICON_TOGGLES` seulement (`with_icon`). Un libelle sur plusieurs lignes n'a pas d'icone. Pour
+  ajouter une icone : une fonction `_nom(p)` dans `icons.py` (+ son nom dans `_NAMES`) et une ligne dans `TEXT_ICONS` ; `check_gl.py` (`check_icons`) verifie que
+  chaque libelle pointe vers une icone dessinee, que toutes se dessinent, et que boutons / titres / onglets / cases gardent leur texte. `icons.py` est dans
+  `APP_FILES` du portable (`check_portable_modules` l'a rappele).
 - **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) devient `theme.LIVE` par le point d'extension `common.set_gui_accent`
   (`apply_a2w_palette()`, avant `live.style_gui` : leurs widgets le lisent a la creation ; Snap / Ridge, importes plus tard, lisent la
   valeur de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`.

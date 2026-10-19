@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "py_modes.py", "diagnostics.py", "skin.py", "theme.py",
+APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "py_modes.py", "diagnostics.py", "skin.py", "theme.py", "icons.py",
              "check_gl.py", "requirements-gl.txt", "start.bat", "README.md",
              *sorted(p.name for p in HERE.glob("gui_*.py")))          # la GUI est repartie en modules gui_*.py : tous embarques
 APP_DIRS = ("gl_shaders", "core", "engine")

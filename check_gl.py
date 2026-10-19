@@ -5144,6 +5144,65 @@ def check_doodles() -> None:
     check(len(r5.wall) == 1 and params["doodle_on"] == 0.0, "panique: ne retire pas les doodles affiches")
     shutil.rmtree(tmp, ignore_errors=True)
 
+def check_icons() -> None:
+    """Icones de l'interface : toutes dessinables, libelles inchanges (tests et code les retrouvent par leur texte), boutons / titres / onglets /
+    cases habilles."""
+    print("icones")
+    import icons
+    import skin
+    import theme as T
+    import tkinter as tk
+    from tkinter import ttk
+    check(all(name in icons.ICONS for name in icons.TEXT_ICONS.values()), "icones: chaque libelle connu pointe vers une icone dessinee",
+          str([n for n in icons.TEXT_ICONS.values() if n not in icons.ICONS]))
+    bad = []
+    for name in icons.ICONS:
+        for size in (14, 16, 24):
+            img = icons.image(name, size, T.FG)
+            if img.size != (size, size) or img.getbbox() is None:
+                bad.append((name, size))
+    check(not bad, f"icones: les {len(icons.ICONS)} icones se dessinent a toutes les tailles, jamais vides", str(bad[:3]))
+    check(icons.for_text("Sauvegarder") == "save" and icons.for_text("  PANIQUE ") == "alert" and icons.for_text("▶ VJ") is None
+          and icons.for_text("1  Devil Kinky") is None and icons.for_text("") is None, "icones: libelle -> icone (casse ignoree, glyphe existant et noms libres sans icone)")
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        check(False, "Tk pour les icones", str(exc))
+        return
+    try:
+        root.configure(bg=T.BG)
+        skin.zone(root, T.OVERLAY)
+        btn = tk.Button(root, text="Supprimer", font=T.FONT_BOLD)
+        plain = tk.Button(root, text="Kick TV", font=T.FONT_BOLD)
+        multi = tk.Button(root, text="Deux\nlignes", font=T.FONT_BOLD)
+        chk = tk.Checkbutton(root, text="Cellules")
+        rad = tk.Radiobutton(root, text="Video", value=1)
+        other = tk.Checkbutton(root, text="Stereo")
+        lab = tk.Label(root, text="FOND")
+        nb = ttk.Notebook(root)
+        for label in ("Effets", "Autre"):
+            nb.add(tk.Frame(nb), text=label)
+        for w in (btn, plain, multi, chk, rad, other, lab, nb):
+            w.pack()
+        skin.title(lab, T.OVERLAY)
+        skin.apply(root)
+        root.update()
+        check(btn.cget("text") == "Supprimer" and str(btn.cget("compound")) == "none" and btn.winfo_reqwidth() > plain.winfo_reqwidth() - 20,
+              "icones: un bouton a icone garde son libelle (cget text), l'image porte l'icone et le texte", str((btn.cget("text"), btn.cget("compound"))))
+        check(str(plain.cget("compound")) == "center" and plain.cget("text") == "Kick TV", "icones: un bouton sans icone reste comme avant")
+        check(str(multi.cget("compound")) == "center", "icones: un libelle sur plusieurs lignes n'a pas d'icone")
+        check(chk._sk["key"][2] == "grid" and rad._sk["key"][2] == "video" and other._sk["key"][2] is None, "icones: cases et radios choisies ont une icone, les autres non")
+        check(lab.cget("text") == "FOND" and str(lab.cget("image")) != "", "icones: le titre garde son texte et porte repere + icone")
+        check(nb.tab(0, "text") == "Effets" and nb.tab(0, "image") and not nb.tab(1, "image"), "icones: onglet connu = icone, texte inchange ; onglet inconnu = rien",
+              str((nb.tab(0, "text"), nb.tab(0, "image"), nb.tab(1, "image"))))
+        nb.select(1)
+        root.update()
+        btn.configure(state="disabled")
+        root.update()
+        check(btn.cget("text") == "Supprimer" and str(btn.cget("state")) == "disabled", "icones: griser un bouton a icone le redessine sans changer son libelle")
+    finally:
+        root.destroy()
+
 def check_engine_layer() -> None:
     """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""
     print("engine/ : couche moteur")
@@ -5436,6 +5495,7 @@ def main() -> None:
     check_cells()
     check_noise()
     check_doodles()
+    check_icons()
     check_masters()
     check_portable_modules()
     check_core_purity()

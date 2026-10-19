@@ -22,12 +22,16 @@ from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
+import icons
 import theme as T
 
-SS = 4                                   # sur-echantillonnage du dessin
+SS = 4                                  # sur-echantillonnage du dessin
 PRIMARY = {"Sauvegarder", "Enregistrer", "Demarrer la projection"}      # textes des boutons a l'accent (les autres sont neutres)
 BTN_MARGIN = (3, 1)                      # transparent autour d'un bouton : jamais colle a son voisin
 GAP = 6                                  # espace image / texte des radios et cases
+ICON_PX = 14                             # taille des icones des boutons, des titres, des onglets et des cases
+ICON_TOGGLES = {"image", "texte", "video", "audio2wave", "fond genere", "halo holographique", "fonte acide", "cellules",
+                "recuperer les medias", "automations actives"}      # cases et radios qui recoivent une icone
 _pil_cache: dict = {}
 _installed = False
 
@@ -113,6 +117,17 @@ def check_image(on: bool, accent: str, disabled: bool = False, size: int = 17) -
     return _pil_cache[key]
 
 
+def with_icon(base: Image.Image, icon: str, color: str) -> Image.Image:
+    """`base` (anneau ou case + espace) suivie d'une icone et d'un espace."""
+    key = ("withicon", id(base), icon, color)
+    if key not in _pil_cache:
+        out = Image.new("RGBA", (base.width + ICON_PX + GAP, base.height), (0, 0, 0, 0))
+        out.paste(base, (0, 0), base)
+        ico = icons.image(icon, ICON_PX, color)
+        out.paste(ico, (base.width, (base.height - ICON_PX) // 2), ico)
+        _pil_cache[key] = out
+    return _pil_cache[key]
+
 def tick_image(color: str, height: int, width: int = 4, gap: int = 8) -> Image.Image:
     """Petit repere vertical arrondi a l'accent, a gauche d'un titre (marge transparente a droite)."""
     key = ("tick", color, height, width, gap)
@@ -124,14 +139,30 @@ def tick_image(color: str, height: int, width: int = 4, gap: int = 8) -> Image.I
     return _pil_cache[key]
 
 
+def tick_icon_image(color: str, height: int, icon: str, size: int = ICON_PX) -> Image.Image:
+    """Repere vertical + icone a l'accent (titre de section), suivis d'un espace transparent."""
+    key = ("tickicon", color, height, icon, size)
+    if key not in _pil_cache:
+        tick = tick_image(color, height, 4, 7)
+        ico = icons.image(icon, size, color)
+        out = Image.new("RGBA", (tick.width + size + 6, max(height, size)), (0, 0, 0, 0))
+        out.paste(tick, (0, (out.height - tick.height) // 2), tick)
+        out.paste(ico, (tick.width, (out.height - size) // 2), ico)
+        _pil_cache[key] = out
+    return _pil_cache[key]
+
+
 def title(label: tk.Label, color: str, kicker: bool = True) -> None:
-    """Titre de section : repere d'accent + texte a l'accent, sans bande de fond (kicker = petit titre, sinon titre de partie)."""
+    """Titre de section : repere d'accent (+ icone si le titre en a une) + texte a l'accent, sans bande de fond (kicker = petit titre, sinon titre de partie)."""
     try:
         bg = str(label.master.cget("bg"))
     except tk.TclError:
         bg = T.BG
+    height = 12 if kicker else 20
+    icon = icons.for_text(str(label.cget("text")))
+    img = tick_icon_image(color, height, icon, ICON_PX if kicker else 18) if icon else tick_image(color, height)
     label.config(bg=bg, fg=color, font=T.FONT_KICKER if kicker else T.FONT_TITLE, anchor="w", compound="left",
-                 image=photo(label, tick_image(color, 12 if kicker else 20)), padx=2 if kicker else 6, pady=3 if kicker else 6)
+                 image=photo(label, img), padx=2 if kicker else 6, pady=3 if kicker else 6)
 
 
 def photo(w: tk.Misc, img: Image.Image) -> ImageTk.PhotoImage:
@@ -244,14 +275,59 @@ def _button_colors(w: tk.Misc, state: str) -> tuple:
     return fill, sk["fg"]
 
 
+def _pil_font(font: tkfont.Font, root) -> "ImageFont.FreeTypeFont | None":
+    """Police PIL equivalente a une police Tk (meme famille, taille, graisse), ou None si le fichier est introuvable."""
+    from PIL import ImageFont
+    key = ("pilfont", font.actual("family"), font.actual("size"), font.actual("weight"))
+    if key not in _pil_cache:
+        family = font.actual("family").lower().replace(" ", "")
+        bold = font.actual("weight") == "bold"
+        size = font.actual("size")
+        px = abs(size) if size < 0 else round(size * root.winfo_fpixels("1i") / 72.0)
+        names = {"segoeui": ("segoeuib.ttf" if bold else "segoeui.ttf")}.get(family, family + (".ttf"))
+        pf = None
+        for candidate in (names, "segoeuib.ttf" if bold else "segoeui.ttf", "arialbd.ttf" if bold else "arial.ttf"):
+            try:
+                pf = ImageFont.truetype(candidate, px)
+                break
+            except OSError:
+                continue
+        _pil_cache[key] = pf
+    return _pil_cache[key]
+
+
+def _icon_button_image(w: tk.Misc, width: int, height: int, fill: str, fg: str, icon: str, text: str, font: tkfont.Font):
+    """Bouton a icone : forme arrondie + icone + libelle, dessines ensemble (le libelle du widget reste le meme : `cget("text")`)."""
+    pf = _pil_font(font, w)
+    if pf is None:
+        return None
+    key = ("iconbtn", width, height, fill, fg, icon, text, id(pf))
+    if key not in _pil_cache:
+        base = round_rect_image(width, height, fill, T.RADIUS, margin=BTN_MARGIN).copy()
+        d = ImageDraw.Draw(base)
+        text_w = d.textlength(text, font=pf)
+        content = ICON_PX + GAP + text_w
+        x0 = BTN_MARGIN[0] + (width - content) / 2
+        cy = BTN_MARGIN[1] + height / 2
+        ico = icons.image(icon, ICON_PX, fg)
+        base.paste(ico, (round(x0), round(cy - ICON_PX / 2)), ico)
+        d.text((x0 + ICON_PX + GAP, cy), text, font=pf, fill=_rgb(fg) + (255,), anchor="lm")
+        _pil_cache[key] = base
+    return _pil_cache[key]
+
+
 def _render_button(w: tk.Misc) -> None:
     sk = w._sk
     text = str(_orig_cget(w, "text"))
     font = sk["font_obj"]
+    icon = sk.get("icon") or icons.for_text(text)
+    if icon and "\n" in text:
+        icon = None
+    extra = (ICON_PX + GAP) if icon else 0
     if sk["chars"]:
         text_w = font.measure("0") * sk["chars"]
     else:
-        text_w = max((font.measure(line) for line in text.split("\n")), default=0)
+        text_w = max((font.measure(line) for line in text.split("\n")), default=0) + extra
     lines = max(1, text.count("\n") + 1)
     width = text_w + 2 * sk["padx"]
     height = max(21, font.metrics("linespace") * lines + 2 * sk["pady"])
@@ -263,15 +339,21 @@ def _render_button(w: tk.Misc) -> None:
         height = max(height, alloc_h - 2 * BTN_MARGIN[1])
     state = _state(w)
     fill, fg = _button_colors(w, state)
-    key = (width, height, fill, fg, state)
+    key = (width, height, fill, fg, state, icon, text if icon else "")
     if sk.get("key") == key:
         return
     sk["key"] = key
-    img = photo(w, round_rect_image(width, height, fill, T.RADIUS, margin=BTN_MARGIN))
+    composite = _icon_button_image(w, width, height, fill, fg, icon, text, font) if icon else None
+    if composite is not None:
+        img = photo(w, composite)
+        compound = "none"                     # le libelle est dans l'image ; le widget le garde (cget, tests, info-bulles)
+    else:
+        img = photo(w, round_rect_image(width, height, fill, T.RADIUS, margin=BTN_MARGIN))
+        compound = "center"
     sk["img"] = img
     # Etire : la taille VOULUE du widget reste la taille naturelle (en pixels, le bouton a une image), sinon il ne pourrait plus
     # retrecir quand la fenetre diminue ; c'est l'allocation du gestionnaire de mise en page qui donne la taille de l'image.
-    _orig_configure(w, image=img, fg=fg, activeforeground=fg, activebackground=sk["parent"],
+    _orig_configure(w, image=img, compound=compound, fg=fg, activeforeground=fg, activebackground=sk["parent"],
                     width=natural[0] if stretch else 0, height=natural[1] if stretch else 0)
 
 
@@ -280,11 +362,17 @@ def _render_toggle(w: tk.Misc) -> None:
     dis = str(_orig_cget(w, "state")) == "disabled"
     make = radio_image if sk["kind"] == "radio" else check_image
     accent = accent_for(w)
-    key = (dis, accent)
+    text = str(_orig_cget(w, "text"))
+    icon = icons.for_text(text) if " ".join(text.split()).lower() in ICON_TOGGLES else None
+    key = (dis, accent, icon)
     if sk.get("key") == key:
         return
     sk["key"] = key
-    off, on = photo(w, make(False, accent, dis)), photo(w, make(True, accent, dis))
+    img_off, img_on = make(False, accent, dis), make(True, accent, dis)
+    if icon:                                  # icone apres l'anneau / la case : [o] (icone) libelle
+        img_off = with_icon(img_off, icon, T.FAINT if dis else T.MUTED)
+        img_on = with_icon(img_on, icon, T.FAINT if dis else accent)
+    off, on = photo(w, img_off), photo(w, img_on)
     sk["imgs"] = (off, on)
     _orig_configure(w, image=off, selectimage=on, disabledforeground=T.FAINT, activeforeground=accent if not dis else T.FAINT)
 
@@ -525,6 +613,30 @@ def skin_widget(w: tk.Misc) -> bool:
     return False
 
 
+def skin_notebook(nb: ttk.Notebook) -> None:
+    """Icones des onglets (gris, l'onglet choisi a l'accent) : les libelles ne changent pas."""
+    if getattr(nb, "_sk_nb", False):
+        return
+    nb._sk_nb = True
+    accent = accent_for(nb)
+    tabs = [(i, icons.for_text(nb.tab(i, "text"))) for i in range(nb.index("end"))]
+    tabs = [(i, ic) for i, ic in tabs if ic]
+    if not tabs:
+        return
+
+    def paint(_e=None) -> None:
+        try:
+            current = nb.index("current")
+        except tk.TclError:
+            current = -1
+        for i, ic in tabs:
+            try:
+                nb.tab(i, image=photo(nb, icons.image(ic, ICON_PX, accent if i == current else T.MUTED)), compound="left")
+            except tk.TclError:
+                return
+    paint()
+    nb.bind("<<NotebookTabChanged>>", paint, add="+")
+
 def apply(root: tk.Misc) -> int:
     """Habille `root` et tous ses descendants. Rend le nombre de widgets habilles."""
     install()
@@ -536,6 +648,11 @@ def apply(root: tk.Misc) -> int:
             children = node.winfo_children()
         except tk.TclError:
             continue
+        if node.winfo_class() == "TNotebook":
+            try:
+                skin_notebook(node)
+            except tk.TclError:
+                pass
         if node is not root or node.winfo_class() in ("Button", "Radiobutton", "Checkbutton", "Menubutton", "Scale", "Entry"):
             try:
                 count += bool(skin_widget(node))
