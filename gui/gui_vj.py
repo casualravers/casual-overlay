@@ -372,10 +372,10 @@ def install(c):
             update_lock_button()
             Tooltip(lock, "Verrou de scene : gele la scene courante. Le VJ se met en pause et ni les touches de scene, F1..F9, la fleche "
                           "droite ni les tirages ne la changent ; les masters restent actifs. Touche K dans la fenetre de rendu.")
-            slider(f, (2, 3), "build_time", "Duree", 5, 180, 5, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (2 a 16 Hz) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
+            slider(f, (2, 3), "build_time", "Duree", 5, 180, 5, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
             bb = button(f, build_text(), start_build, row=1, column=3, sticky="w", padx=6)
             vj_ui["build"] = bb
-            Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 2 a 16 Hz) et la teinte (jusqu'a +120 degres) montent progressivement. "
+            Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
                         "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
             drop = button(f, "Drop", do_drop, row=1, column=4, sticky="w")
             Tooltip(drop, "Relache la montee d'un coup : flash blanc, tout retombe aux reglages normaux.")

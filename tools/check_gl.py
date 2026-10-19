@@ -4136,7 +4136,14 @@ def check_masters() -> None:
         fires += br._strobe(bq, quiet) > 0.9
         time.sleep(0.004)
     check(fires >= 3 and br._strobe(dict(d, build=0.0), quiet) <= 1.0 and gl.Renderer(ctx, size, None)._strobe(dict(d, build=0.0, strobe_on=0.0), quiet) == 0.0,
-          "montee: le strobe part tout seul (de 2 a 16 Hz) sans etre arme", str(fires))
+          "montee: le strobe part tout seul (jusqu'a 16 Hz) sans etre arme", str(fires))
+    first = gl.Renderer(ctx, size, None)
+    check(first._strobe(dict(d, strobe_on=0.0, build=1e-6), quiet) > 0.9,
+          "montee: le premier eclair part des le debut de la montee (pas quelques secondes apres le clic)")
+    from core import controls as cc_
+    hz = [cc_.build_strobe_hz(b_ / 10) for b_ in range(0, 11)]
+    check(hz[0] == 0.5 and hz[10] == 16.0 and all(a_ < b_ for a_, b_ in zip(hz, hz[1:])) and hz[3] < 2.0 and hz[5] < 5.0,
+          "montee: cadence des eclairs lente au depart (0,5 Hz, moins de 2 Hz a 30 %, moins de 5 Hz a mi-montee), 16 Hz a 100 %", str([round(h_, 1) for h_ in hz]))
     built = render(loud, build=1.0)
     time.sleep(0.15)                                                    # l'eclair du strobe de la montee doit etre retombe
     check(not np.array_equal(built, render(loud)), "montee: l'image change (reactivite et eclairs)")

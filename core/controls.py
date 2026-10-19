@@ -130,6 +130,17 @@ def panic(params: dict) -> list[str]:
     return changed
 
 
+BUILD_STROBE_HZ = (0.5, 16.0)         # cadence des eclairs de la montee : au depart un eclair toutes les 2 s, a 100 % seize par seconde
+
+
+def build_strobe_hz(build: float) -> float:
+    """Cadence (Hz) des eclairs automatiques de la montee. Courbe en carre : lente au debut (pas d'effet epileptique des les premieres
+    secondes), qui ne s'emballe que vers la fin. build = 0..1."""
+    b = _unit(build)
+    lo, hi = BUILD_STROBE_HZ
+    return lo + (hi - lo) * b * b
+
+
 def tap_bpm(taps: list[float], max_gap: float = 2.0, keep: int = 6) -> float | None:
     """BPM d'une suite d'appuis (instants en secondes) : moyenne des derniers intervalles ; un trou de plus de `max_gap`
     secondes recommence la serie. None tant qu'il y a moins de deux appuis valides. Pure."""
