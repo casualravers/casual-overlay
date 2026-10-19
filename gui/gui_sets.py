@@ -6,6 +6,7 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 from __future__ import annotations
 
 from core import scenes
+from core import setpack
 from pathlib import Path
 from tkinter import filedialog
 from tkinter import simpledialog
@@ -36,12 +37,12 @@ def install(c):
         "chooser": lambda title, text, buttons: choice_dialog(root, title, text, buttons),
         "ask_name": lambda title, prompt, initial="": simpledialog.askstring(title, prompt, parent=root, initialvalue=initial),
         "ask_save": lambda initial: filedialog.asksaveasfilename(
-            parent=root, title="Exporter le set", initialfile=initial, defaultextension=".json",
-            filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+            parent=root, title="Exporter le set", initialfile=initial, defaultextension=".zip",
+            filetypes=[("Archive de set avec medias (.zip)", "*.zip"), ("Set seul, sans medias (.json)", "*.json")]),
         "ask_keep": lambda defaults, fond_ok, validate, a2w_mode=None: keep_dialog(root, defaults, fond_ok, validate, a2w_mode),
         "ask_dir": lambda: filedialog.askdirectory(parent=root, title="Dossier d'assets (images, videos, animations)"),
         "ask_open": lambda: filedialog.askopenfilename(
-            parent=root, title="Importer un set", filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+            parent=root, title="Importer un set", filetypes=[("Set casual-overlay (.zip ou .json)", "*.zip *.json"), ("Tous les fichiers", "*.*")]),
     }
 
     def switch_set(name: str) -> bool:
@@ -108,16 +109,28 @@ def install(c):
 
     def export_set_now(path: str | None = None) -> bool:
         name = scene_book.active_set_name()
-        path = path or scene_ui["ask_save"](f"{name}.set.json")
+        path = path or scene_ui["ask_save"](f"{name}.casual-set.zip")
         if not path:
             return False
+        pack = str(path).lower().endswith(".zip")
         try:
             data = scenes.export_set(scene_book, name)
-            Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            if pack:                                       # archive : le set + les medias qu'il utilise (a reimporter sur une autre machine)
+                scene_msg.set(f"Export de '{name}' en cours (copie des medias)...")
+                root.update_idletasks()
+                info = setpack.write_pack(path, data)
+            else:
+                Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         except (OSError, ValueError) as exc:
             scene_msg.set(f"Export impossible: {exc}")
             return False
-        scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes) : {Path(path).name}")
+        if pack:
+            note = f", {info['files']} media(s) embarque(s) ({info['bytes'] / 1048576:.1f} Mo)"
+            if info["missing"]:
+                note += f" - introuvable(s), non embarque(s): {', '.join(Path(m).name for m in info['missing'][:3])}"
+            scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes{note}) : {Path(path).name}")
+        else:
+            scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes, sans medias) : {Path(path).name}")
         return True
 
     def resolve_conflict(title: str, text: str, what: str) -> str | None:
@@ -135,7 +148,12 @@ def install(c):
         if not path:
             return False
         try:
-            parsed = scenes.parse_import(Path(path).read_text(encoding="utf-8"))
+            if setpack.is_pack(path):                      # archive : les medias sont extraits sur cette machine et les chemins refaits
+                scene_msg.set("Import en cours (extraction des medias)...")
+                root.update_idletasks()
+                parsed = scenes.parse_import(setpack.read_pack(path, scenes.IMPORT_DIR / "media"))
+            else:
+                parsed = scenes.parse_import(Path(path).read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as exc:
             scene_msg.set(f"Import impossible: {exc}")
             return False

@@ -25,6 +25,7 @@ from core import randomizer
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
 MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : quatre emplacements
 MASTER_SLOTS = 4
+IMPORT_DIR = Path.home() / ".audio2wave" / "imported"        # medias extraits des archives de set importees (voir core/setpack.py)
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
 MAX_NAME = 200                    # pas de limite pratique : les noms longs sont affiches en entier ou raccourcis a l'ecran

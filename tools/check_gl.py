@@ -1107,6 +1107,8 @@ def check_gui() -> None:
           "sets (GUI): plus de 9 scenes : une touche par scene dans la bande defilante (plus de menu '+N')", str(sm))
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
+    check(out.get("set_pack") == (True, True, True, True),
+          "sets (GUI): export .zip avec les medias, reimport apres avoir perdu le fichier d'origine = media extrait et chemin refait", str(out.get("set_pack")))
     ir = out.get("set_import_rename", ())
     check(len(ir) == 4 and ir[0].startswith("Soiree (2)") and ir[1] == "Set deja present" and ir[2] == 1 and ir[3] == 4,
           "sets (GUI): import d'un nom de set deja pris -> choix, renommer garde les deux (une seule question : scenes identiques)",
@@ -2584,6 +2586,71 @@ def check_sets_pure(sc, tmp) -> None:
             check(False, f"import refuse: {word}")
         except ValueError as exc:
             check(word in str(exc), f"import refuse avec un message clair: {word}", str(exc))
+    # archive d'un set avec ses medias
+    import zipfile
+    from core import setpack as sp
+    srcd = Path(tempfile.mkdtemp(prefix="casual_overlay_pack_"))
+    png = srcd / "logo un.png"
+    png.write_bytes(b"PNGDATA" * 100)
+    vid = srcd / "fond.mp4"
+    vid.write_bytes(b"VIDEO" * 500)
+    same = srcd / "copie.mp4"                                    # meme contenu que fond.mp4 : une seule copie dans l'archive
+    same.write_bytes(b"VIDEO" * 500)
+    pbook = sc.SceneBook(lambda: srcd / "scenes_pack.json")
+    pbook.put({"name": "P1", "bg": "video", "mode": None, "live_overrides": None,
+               "fond": {"bg_mode": "video", "bg_video": str(vid)}, "overlay": {"logo_source": "image", "logo_path": str(png)}})
+    pbook.put({"name": "P2", "bg": "live", "mode": "snap", "live_overrides": {"video": str(same), "gain": 2}, "fond": None,
+               "overlay": {"text_font": "Arial"}})
+    pbook.new_set("Pack")
+    pbook.set_active("Pack")
+    pbook.add_entry("P1", {"logo_source": "video", "logo_video": str(vid)})
+    pbook.add_entry("P2")
+    pbook.set_entry_a2w(1, "video", str(png))
+    pbook.set_entry_bg_video(1, "Z:/absent/zz.mp4")
+    exp_p = sc.export_set(pbook)
+    check(sorted(sp.media_paths(exp_p)) == sorted({str(png), str(vid), str(same), "Z:/absent/zz.mp4", "Arial"}),
+          "archive: tous les emplacements de media sont reperes (logo, video de fond, videos audio2wave, media d'entree)", str(sp.media_paths(exp_p)))
+    zpath = srcd / "set.casual-set.zip"
+    info = sp.write_pack(zpath, exp_p)
+    names_z = zipfile.ZipFile(zpath).namelist()
+    check(info["files"] == 2 and info["missing"] == ["Z:/absent/zz.mp4"] and sp.is_pack(zpath) and not sp.is_pack(png) and "set.json" in names_z
+          and len([n for n in names_z if n.startswith("media/")]) == 2,
+          "archive: un media identique n'est embarque qu'une fois, un media introuvable est signale (et pas embarque)", f"{info} {names_z}")
+    inner = _json.loads(zipfile.ZipFile(zpath).read("set.json").decode("utf-8"))
+    check(all(p_.startswith("pack:media/") for p_ in sp.media_paths(inner) if "absent" not in p_ and p_ != "Arial")
+          and inner["scenes"][1]["overlay"]["text_font"] == "Arial" and inner["scenes"][1]["live_overrides"]["gain"] == 2,
+          "archive: les chemins deviennent des references, les autres reglages (police, gain) sont intacts")
+    elsewhere = srcd / "autre machine" / "media"
+    raw = sp.read_pack(zpath, elsewhere)
+    got = [p_ for p_ in sp.media_paths(raw)]
+    real = [p_ for p_ in got if "absent" not in p_ and p_ != "Arial"]
+    check(len(real) == 2 and all(Path(p_).is_file() and str(elsewhere) in p_ for p_ in real) and "Z:/absent/zz.mp4" in got
+          and Path(raw["scenes"][0]["overlay"]["logo_path"]).read_bytes() == png.read_bytes(),
+          "archive: a l'import les medias sont extraits dans un dossier stable et les chemins pointent dessus", str(got))
+    check(sp.read_pack(zpath, elsewhere) == raw, "archive: reimporter la meme archive redonne exactement les memes chemins (scenes reconnues identiques)")
+    parsed_p = sc.parse_import(raw)
+    dest_p = sc.SceneBook(lambda: srcd / "dest_pack.json")
+    res_p = sc.import_set(dest_p, parsed_p)
+    again = sc.import_conflicts(dest_p, sc.parse_import(sp.read_pack(zpath, elsewhere)))
+    check(res_p["set"] == "Pack" and res_p["missing"] == ["Z:/absent/zz.mp4"] and again == {"set": True, "scenes": []},
+          "archive: le set importe ne signale manquant que le media vraiment absent ; une 2e importation ne cree aucun conflit de scene", str((res_p, again)))
+    evil = srcd / "evil.zip"
+    with zipfile.ZipFile(evil, "w") as ze:
+        ze.writestr("set.json", _json.dumps({**exp_p, "scenes": [{"name": "E", "bg": "live", "overlay": {"logo_path": "pack:media/../../pwn.png"}}],
+                                             "set": {"name": "E", "vj": {}, "entries": []}}))
+        ze.writestr("media/../../pwn.png", b"x")
+    evil_raw = sp.read_pack(evil, srcd / "evil_media")
+    check(evil_raw["scenes"][0]["overlay"]["logo_path"] == "" and not (srcd.parent / "pwn.png").exists() and not (srcd / "pwn.png").exists(),
+          "archive: un nom d'archive qui sort du dossier (..) est refuse, rien n'est ecrit ailleurs")
+    junk = srcd / "junk.zip"
+    with zipfile.ZipFile(junk, "w") as zj:
+        zj.writestr("autre.txt", "x")
+    for bad_zip, word in ((junk, "set.json"),):
+        try:
+            sp.read_pack(bad_zip, srcd / "j")
+            check(False, "archive refusee: pas un set")
+        except ValueError as exc:
+            check(word in str(exc), "archive refusee avec un message clair si ce n'est pas un set", str(exc))
     bgv_path = Path(tempfile.mkdtemp(prefix="casual_overlay_bgv_")) / "scenes.json"
     bgb = sc.SceneBook(lambda: bgv_path)
     bgb.put({"name": "A", "bg": "live", "mode": "snap", "live_overrides": {"gain": 1}, "fond": None, "overlay": {}})
@@ -2678,6 +2745,25 @@ def gui_sets_steps(c, s, out) -> None:
     ui["chooser"] = stub(["Renommer (garder les deux)"])
     sc["import"](str(path))
     out["set_import_rename"] = (book.active_set_name(), calls[0][0] if calls else None, len(calls), len(book.rows()))
+    calls.clear()
+    # archive : exporter avec un media, le perdre, reimporter ailleurs
+    from core import scenes as sc_mod
+    png_src = tmpd / "media origine" / "logo.png"
+    png_src.parent.mkdir()
+    png_src.write_bytes(b"\x89PNG-test-bytes")
+    book.set_entry_media(0, {"logo_source": "image", "logo_path": str(png_src)})
+    zpath = tmpd / "soiree.casual-set.zip"
+    old_import_dir, sc_mod.IMPORT_DIR = sc_mod.IMPORT_DIR, tmpd / "imported"
+    exported_zip = sc["export"](str(zpath))
+    export_msg = sc["msg"].get()
+    png_src.unlink()                                       # « autre machine » : le fichier d'origine n'existe plus
+    ui["chooser"] = stub(["Renommer (garder les deux)", "Renommer (garder les deux)", "Renommer (garder les deux)"])
+    imported_zip = sc["import"](str(zpath))
+    media0 = (book.rows()[0]["media"] or {}).get("logo_path") or ""
+    sc_mod.IMPORT_DIR = old_import_dir
+    out["set_pack"] = (exported_zip and zpath.exists(), imported_zip, "media(s) embarque(s)" in export_msg,
+                       bool(media0) and Path(media0).is_file() and str(tmpd / "imported") in media0 and Path(media0).read_bytes() == b"\x89PNG-test-bytes")
+    book.set_entry_media(0, None)
     calls.clear()
     ui["chooser"] = stub(["Annuler"])
     before = book.set_names()
