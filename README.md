@@ -4,8 +4,9 @@ Fenetre OpenGL plein ecran pour videoprojecteur : le visuel `audio2wave_live` (s
 micro), un logo PNG, un texte tape a la main ou une animation video detouree incruste par-dessus, et des deformations (wobble, onde de choc, aberration
 chromatique, glitch, pulsation du logo) pilotees en temps reel par les basses et le kick.
 
-Ce depot depend du depot voisin **audio2wave** (`../audio2wave`, ou `--a2w-dir`), a jour : branche `add-snap-waveform-photo`,
-commit `86e0458` ou plus recent, c'est-a-dire `common.API_VERSION` >= 2 (sinon le programme s'arrete avec un message qui dit de mettre a jour ce depot).
+audio2wave (le visuel de fond : spectre, Snap, Ridge) est **interne** : une copie vit dans `sources/audio2wave/` (origine, commit et modifications locales :
+`sources/audio2wave/VENDORED.md`). Plus de depot voisin a cloner ; `--a2w-dir` permet d'essayer une autre version (il faut `common.API_VERSION` >= 2,
+sinon le programme s'arrete avec un message clair).
 
 ## Version portable (rien a installer)
 
@@ -27,8 +28,7 @@ resumes dans la fenetre de reglages (ligne des scenes) et le rapport complet est
 
 ## Installation (developpement)
 
-Prerequis : Python 3.12 (3.14 n'a pas encore de wheel `moderngl`), `ffmpeg` dans le PATH,
-depot `audio2wave` a cote de celui-ci.
+Prerequis : Python 3.12 (3.14 n'a pas encore de wheel `moderngl`), `ffmpeg` dans le PATH.
 
 ```bash
 py -3.12 -m venv .venv

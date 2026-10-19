@@ -82,6 +82,7 @@ class Session:
         self.live, self.live_args = live, live_args
         self.render_size, self.win_size = render_size, win_size
         self.audio, self.manager, self.reader = audio, manager, reader
+        self.doodle_queue: queue.SimpleQueue = queue.SimpleQueue()   # doodles decodes par le fil de recuperation, lus par le fil GL
         self.status: dict = manager.status if manager else {}
         self.status.setdefault("fps", 0.0)
         self.commands: queue.SimpleQueue = queue.SimpleQueue()

@@ -6,7 +6,7 @@
 
 Contenu du dossier :
     python/        un Python 3.12 complet (copie de l'installation locale : tkinter compris) + les modules de requirements-gl.txt
-    audio2wave/    les scripts du depot audio2wave (dependance, jamais modifies)
+    audio2wave/    les scripts d'audio2wave (copie interne de sources/audio2wave/)
     ffmpeg/        ffmpeg.exe et ffprobe.exe (ajoutes au PATH par le programme, aucune installation)
     *.py, gl_shaders/, asset/ (+ asset/images/, sans animations ni videos), start.bat, LISEZMOI.txt
 
@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "py_modes.py", "diagnostics.py", "skin.py", "theme.py",
+APP_FILES = ("audio2wave_gl.py", "gl_gui.py", "py_modes.py", "diagnostics.py", "skin.py", "theme.py", "icons.py",
              "check_gl.py", "requirements-gl.txt", "start.bat", "README.md",
              *sorted(p.name for p in HERE.glob("gui_*.py")))          # la GUI est repartie en modules gui_*.py : tous embarques
 APP_DIRS = ("gl_shaders", "core", "engine")
@@ -191,7 +191,7 @@ def verify(out: Path) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Fabrique la version portable de casual-overlay (Windows).")
     ap.add_argument("--out", default=str(HERE / "dist" / "casual-overlay-portable"))
-    ap.add_argument("--a2w-dir", default=os.environ.get("AUDIO2WAVE_DIR", str(HERE.parent / "audio2wave")))
+    ap.add_argument("--a2w-dir", default=os.environ.get("AUDIO2WAVE_DIR", str(HERE / "sources" / "audio2wave")))
     ap.add_argument("--ffmpeg-dir", default=None, help="Dossier de ffmpeg.exe / ffprobe.exe (defaut : celui du PATH)")
     ap.add_argument("--no-ffmpeg", action="store_true", help="Ne pas embarquer ffmpeg (il faudra l'installer sur le PC cible)")
     ap.add_argument("--no-verify", action="store_true", help="Ne pas lancer le dossier fabrique pour le verifier")

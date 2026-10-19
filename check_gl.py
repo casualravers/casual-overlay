@@ -890,7 +890,7 @@ def check_gui() -> None:
                     gui_expand_steps(c, s, out)
                     gui_random_steps(c, s, out)
                     gui_bgvideo_steps(c, s, out)
-                    gui_diag_steps(c, out)
+                    gui_diag_steps(c, s, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -1126,6 +1126,9 @@ def check_gui() -> None:
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
           str((out.get("x_help"), out.get("x_help_once"))))
+    check(out.get("x_row_icons") == (True, True), "liste des scenes (VJ): Renommer et Retirer en icone seule (libelle inchange)", str(out.get("x_row_icons")))
+    check(out.get("x_console_icons") == ["Drop", "Montee", "PANIQUE", "Strobe", "Tap tempo", "Verrou"],
+          "console VJ: icones sur Strobe, Montee, Drop, Verrou, Tap tempo et PANIQUE (libelles inchanges)", str(out.get("x_console_icons")))
     check(out.get("x_console") == (True, True, True), "console VJ: grosses commandes (PANIQUE, Drop, Suivante) et ligne d'etat", str(out.get("x_console")))
     check(out.get("x_title") is True, "titre de la fenetre: l'etat du spectacle (scene, VJ) lisible dans la barre des taches")
     check(out.get("x_autosave") is True, "auto-sauvegarde: reglages (sans etats du moment), scene et set ecrits", str(out.get("x_autosave")))
@@ -1185,6 +1188,7 @@ def check_gui() -> None:
     check(out.get("a2w_apply") == (True, True) and out.get("a2w_clear") is None,
           "medias (GUI): appliquer l'entree pose ses videos dans le panneau Snap (celles de la scene gardees) ; retirer la rend",
           str((out.get("a2w_apply"), out.get("a2w_clear"))))
+    check(out.get("doodle_gui") == (1, 0.0, 1.0, 0.0), "doodles (GUI): case Recuperer les medias dans Affichage, desactivee par defaut, pilote doodle_on", str(out.get("doodle_gui")))
     check(out.get("diag_gui") == (True, True, True, "Button", "Diagnostic"),
           "diagnostic (GUI): bouton Diagnostic (Affichage) qui montre le rapport", str(out.get("diag_gui")))
     bm = out.get("bgv_modes", {})
@@ -2891,6 +2895,9 @@ def gui_expand_steps(c, s, out) -> None:
     clab = [w.cget("text") for top in cons for w in walk_(top) if w.winfo_class() == "Label"]
     out["x_console"] = (len(cons) == 1, "PANIQUE" in cbtn and "Drop" in cbtn and any(t_.startswith("Suivante") for t_ in cbtn),
                         any("VJ" in t_ for t_ in clab))
+    rows_ = [w for w in walk_(root) if w.winfo_class() == "Button" and w.cget("text") in ("Renommer", "Retirer")]
+    out["x_row_icons"] = (len(rows_) >= 2, all(getattr(w, "_sk", {}).get("icon_only") for w in rows_))
+    out["x_console_icons"] = sorted(w.cget("text") for top in cons for w in walk_(top) if w.winfo_class() == "Button" and str(w.cget("image")))
     for top in cons:
         top.destroy()
     root.update()
@@ -3226,7 +3233,7 @@ def check_diagnostics() -> None:
 
     # version portable : dossiers embarques reconnus, assemblage du dossier
     a2w, path = gl.bundled_paths(tmp / "app", "X")
-    check(a2w == tmp / "audio2wave" and path == "X", "portable: sans dossiers embarques, comportement d'origine")
+    check(a2w == tmp / "app" / "sources" / "audio2wave" and path == "X", "portable: sans dossiers embarques, la copie interne (sources/audio2wave) est le defaut")
     (tmp / "app" / "audio2wave").mkdir(parents=True)
     (tmp / "app" / "audio2wave" / "audio2wave_live.py").write_text("x", encoding="utf-8")
     (tmp / "app" / "ffmpeg").mkdir()
@@ -3252,10 +3259,18 @@ def check_diagnostics() -> None:
     check(bp.find_base_python().joinpath("python.exe").exists(), "portable: installation Python de base retrouvee")
 
 
-def gui_diag_steps(c, out) -> None:
+def gui_diag_steps(c, s, out) -> None:
     text = c["diag_report"]()
     out["diag_gui"] = (text.startswith("Diagnostic casual-overlay"), "Resultat" in text, "OpenGL" not in text or True,
                        c["diag_btn"].winfo_class(), c["diag_btn"].cget("text"))
+    boxes = [w for w in c["aff_frame"].winfo_children() if w.winfo_class() == "Checkbutton" and w.cget("text") == "Recuperer les medias"]
+    before = float(s.params["doodle_on"])
+    if boxes:
+        boxes[0].invoke()
+    on = float(s.params["doodle_on"])
+    if boxes:
+        boxes[0].invoke()
+    out["doodle_gui"] = (len(boxes), before, on, float(s.params["doodle_on"]))
 
 
 def make_test_video(path: Path, size: str = "320x240", seconds: int = 2) -> None:
@@ -4798,6 +4813,471 @@ def check_core_purity() -> None:
     check(res.returncode == 0 and res.stdout.strip().isdigit(),
           "core/: tout s'importe sans numpy, GL, Tk ni le moteur", (res.stderr or res.stdout).strip().splitlines()[-1] if (res.stderr or res.stdout).strip() else "")
 
+def check_doodles() -> None:
+    """Doodles du site : logique pure (core/doodles.py), fil de recuperation (faux reseau puis vrai serveur HTTP local), rendu par-dessus
+    la projection (contexte standalone), et le reglage 'doodle_on' qui ne va ni dans les presets ni dans les scenes."""
+    print("doodles du site (recuperation + affichage)")
+    import io
+    import json as _json
+    import queue
+    import random
+    import shutil
+    import tempfile
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from core import doodles as dd
+    from engine import doodle_feed as feed_mod
+
+    # --- configuration
+    cfg, why = dd.parse_config({"url": "https://abc.supabase.co/", "anon_key": "KEY"})
+    check(cfg == {"url": "https://abc.supabase.co", "anon_key": "KEY"} and why == "", "config: url nettoyee, cle lue")
+    check(dd.parse_config({"url": "https://x"})[0] is None and "anon_key" in dd.parse_config({"url": "https://x"})[1],
+          "config incomplete: message qui nomme ce qui manque", dd.parse_config({"url": "https://x"})[1])
+    check(dd.parse_config({"url": "ftp://x", "anon_key": "k"})[0] is None and dd.parse_config([])[0] is None, "config: url non http / contenu inattendu refuses")
+    tmp = Path(tempfile.mkdtemp(prefix="doodles_"))
+    check(dd.load_config(tmp / "absent.json")[0] is None and "absente" in dd.load_config(tmp / "absent.json")[1],
+          "config absente: message clair (le bouton reste actif)", dd.load_config(tmp / "absent.json")[1])
+    (tmp / "bad.json").write_text("{pas du json", encoding="utf-8")
+    (tmp / "ok.json").write_text(_json.dumps({"url": "https://x.co", "anon_key": "k"}), encoding="utf-8-sig")
+    check(dd.load_config(tmp / "bad.json")[0] is None and dd.load_config(tmp / "ok.json")[0] is not None, "config: JSON invalide refuse, fichier valide (BOM compris) lu")
+
+    # --- requetes
+    url, body, headers = dd.list_request(cfg)
+    b = _json.loads(body)
+    check(url == "https://abc.supabase.co/storage/v1/object/list/doodles" and b == {"prefix": "", "limit": 100, "sortBy": {"column": "created_at", "order": "desc"}}
+          and headers["apikey"] == "KEY" and headers["Authorization"] == "Bearer KEY", "liste: POST sur le bucket doodles, plus recents d'abord, cle anon en en-tetes")
+    check(dd.download_url(cfg, "a b.png") == "https://abc.supabase.co/storage/v1/object/public/doodles/a%20b.png", "telechargement: URL publique, nom encode")
+    listing = dd.parse_listing(_json.dumps([{"name": "b.png", "created_at": "2026-01-02"}, {"name": ".emptyFolderPlaceholder"}, {"name": "dir/x.png"},
+                                            {"id": None}, "bruit", {"name": "a.png", "created_at": "2026-01-01"}]))
+    check([e["name"] for e in listing] == ["b.png", "a.png"], "liste: dossiers, marqueurs et entrees sans nom ecartes", str(listing))
+    try:
+        dd.parse_listing("{pas du json")
+        bad = False
+    except ValueError:
+        bad = True
+    check(bad, "liste: reponse illisible = erreur (reessai au tour suivant)")
+
+    # --- fichiers vus
+    seen = dd.Seen()
+    seen.arm(listing)
+    check(seen.fresh(listing) == [], "activation: l'existant est memorise comme vu, rien a afficher")
+    more = listing + [{"name": "d.png", "created_at": "2026-01-04"}, {"name": "c.png", "created_at": "2026-01-03"}]
+    check(seen.fresh(more) == ["c.png", "d.png"], "nouveaux fichiers rendus du plus ancien au plus recent", str(seen.fresh(more)))
+    seen.mark("c.png")
+    check(seen.fresh(more) == ["d.png"], "un fichier traite n'est plus propose (affiche une seule fois)")
+
+    # --- validation avant affichage
+    def png_bytes(w, h, color=(255, 0, 0, 255), fmt="PNG"):
+        buf = io.BytesIO()
+        im = gl.PIL_Image.new("RGBA" if fmt == "PNG" else "RGB", (w, h), color if fmt == "PNG" else color[:3])
+        im.save(buf, fmt)
+        return buf.getvalue()
+
+    png, jpg = png_bytes(8, 8), png_bytes(8, 8, fmt="JPEG")
+    check(dd.check_download(png) == ("png", "") and dd.check_download(jpg) == ("jpeg", ""), "validation: PNG et JPEG acceptes")
+    check(dd.check_download(b"")[0] is None and dd.check_download(b"GIF89a" + b"0" * 50)[0] is None
+          and dd.check_download(png + b"0" * (dd.MAX_BYTES + 1))[0] is None, "validation: vide, autre format et plus de 5 Mo refuses",
+          str((dd.check_download(b"")[1], dd.check_download(b"GIF89a" + b"0" * 50)[1], dd.check_download(png + b"0" * (dd.MAX_BYTES + 1))[1])))
+    check(dd.check_size(4096, 4096) == "" and dd.check_size(4097, 10) != "" and dd.check_size(0, 5) != "", "validation: dimensions <= 4096 px")
+    try:
+        feed_mod.decode(png + b"")
+        ok_decode = True
+        feed_mod.decode(b"\x89PNG\r\n\x1a\nfaux")
+        ok_decode = False
+    except ValueError:
+        pass
+    check(ok_decode, "decodage: un PNG tronque / faux est refuse (ValueError), un vrai passe")
+    try:
+        feed_mod.decode(png_bytes(5000, 4))
+        too_big = False
+    except ValueError as exc:
+        too_big = "trop grande" in str(exc)
+    check(too_big, "decodage: image de plus de 4096 px refusee avant tout decodage")
+    arr, w, h = feed_mod.decode(png_bytes(4, 2, (255, 0, 0, 128)))
+    check((w, h) == (4, 2) and tuple(arr[0, 0]) == (128, 0, 0, 128), "decodage: RGBA a alpha premultiplie", str(tuple(arr[0, 0])))
+
+    # --- position, opacite, mur
+    rng = random.Random(7)
+    inside = True
+    for aspect in (0.05, 0.5, 1.0, 2.0, 20.0):
+        for sa in (1.0, 16 / 9, 4 / 3, 0.5):
+            for _ in range(300):
+                x, y, rw, rh = dd.place(rng, aspect, sa)
+                inside &= -1e-9 <= x and -1e-9 <= y and x + rw <= 1.0 + 1e-9 and y + rh <= 1.0 + 1e-9 and rh <= dd.MAX_HEIGHT_FRAC + 1e-9
+    check(inside, "position: toujours entierement dans le cadre (ratios extremes compris), hauteur <= 30 %")
+    x, y, rw, rh = dd.place(rng, 2.0, 16 / 9)
+    check(abs(rh - 0.30) < 1e-9 and abs(rw * 16 / 9 / rh - 2.0) < 1e-9, "position: hauteur 30 % de l'ecran, ratio de l'image garde")
+    xs = {round(dd.place(rng, 1.0, 16 / 9)[0], 3) for _ in range(40)}
+    check(len(xs) > 20, "position: tirage different a chaque apparition")
+    a = [dd.alpha(t) for t in (-1, 0, 0.75, 1.5, 7, 13, 14, 15, 16)]
+    check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
+          and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
+    wall = dd.Wall()
+    dropped = []
+    for i in range(7):
+        dropped += wall.add(i, (0, 0, 0.1, 0.1), 100.0 + i)
+    check(len(wall) == 5 and dropped == [0, 1] and [it["id"] for it in wall.items] == [2, 3, 4, 5, 6], "mur: 5 medias au plus, le plus ancien part", str(dropped))
+    check(wall.step(110.0) == [] and wall.step(119.5) == [2, 3, 4] and len(wall) == 2, "mur: les medias expires sont retires")
+    check(len(wall.visible(112.0)) == 2 and wall.clear() == [5, 6] and len(wall) == 0, "mur: visibles puis vide")
+
+    # --- un tour d'interrogation avec un faux reseau
+    def fake_net(files, fail=()):
+        def post(url, body, hdr):
+            return _json.dumps([{"name": n, "created_at": f"2026-01-{i + 1:02d}"} for i, n in enumerate(files)])
+
+        def get(url):
+            name = url.rsplit("/", 1)[1]
+            if name in fail:
+                raise OSError("coupure")
+            return files[name]
+        return post, get
+
+    files = {"old.png": png, "new1.png": png, "bad.png": b"pas une image" * 4, "new2.jpg": jpg}
+    post, get = fake_net(files)
+    seen = dd.Seen()
+    seen.arm([{"name": "old.png", "created_at": "2026-01-01"}])
+    good, rejected, error = dd.poll_once(cfg, seen, post, get)
+    check([n for n, _ in good] == ["new1.png", "bad.png"][:1] + ["new2.jpg"] and len(rejected) == 1 and "bad.png" in rejected[0] and error == "",
+          "tour: nouveaux fichiers valides rendus, fichier invalide ecarte et journalise", str((good and [n for n, _ in good], rejected, error)))
+    check(dd.poll_once(cfg, seen, post, get) == ([], [], ""), "tour suivant: rien de nouveau, rien a refaire")
+    seen2 = dd.Seen()
+    post2, get2 = fake_net({"a.png": png, "b.png": png, "c.png": png}, fail=("b.png",))
+    good, rejected, error = dd.poll_once(cfg, seen2, post2, get2)
+    check([n for n, _ in good] == ["a.png"] and "b.png" in error and "b.png" not in seen2.names and "c.png" not in seen2.names,
+          "tour: coupure en cours de route = fichiers deja recus gardes, le fichier en echec sera reessaye", str((good and [n for n, _ in good], error)))
+
+    # --- le fil (faux reseau, horloge injectee)
+    class FakeS:
+        def __init__(self):
+            self.params = {"doodle_on": 0.0}
+            self.status = {}
+            self.doodle_queue = queue.SimpleQueue()
+
+    def drain(q):
+        out = []
+        while True:
+            try:
+                out.append(q.get_nowait())
+            except queue.Empty:
+                return out
+
+    clock = {"t": 0.0}
+    fs = FakeS()
+    live_files = {"old.png": png}
+    state_cfg = {"cfg": (None, "Configuration du depot absente : cree depot.json")}
+
+    def listing_post(url, body, hdr):
+        if live_files.get("__down__"):
+            raise OSError("reseau coupe")
+        return _json.dumps([{"name": n, "created_at": f"2026-01-{i + 1:02d}"} for i, n in enumerate(k for k in live_files if k != "__down__")])
+
+    def file_get(url):
+        return live_files[url.rsplit("/", 1)[1]]
+
+    fd = feed_mod.DoodleFeed(fs, config_loader=lambda: state_cfg["cfg"], post=listing_post, get=file_get, poll_s=5.0, clock=lambda: clock["t"])
+    fd.tick()
+    check(fs.status.get("doodles", "") == "" and fs.doodle_queue.empty(), "fil: desactive = aucune interrogation, aucun statut")
+    fs.params["doodle_on"] = 1.0
+    fd.tick()
+    check("absente" in fs.status["doodles"] and fs.doodle_queue.empty(), "fil: config absente = le statut le dit clairement", fs.status["doodles"])
+    state_cfg["cfg"] = (cfg, "")
+    clock["t"] = 5.0
+    fd.tick()
+    check(fd.armed and "attente" in fs.status["doodles"] and fs.doodle_queue.empty(), "fil: a l'activation l'existant est memorise, rien n'est affiche", fs.status["doodles"])
+    live_files.update({"fresh.png": png, "junk.png": b"\x89PNG\r\n\x1a\nxxxx"})
+    clock["t"] = 7.0
+    fd.tick()
+    check(fs.doodle_queue.empty(), "fil: pas d'interrogation avant 5 s")
+    clock["t"] = 10.5
+    fd.tick()
+    got = drain(fs.doodle_queue)
+    check([g["name"] for g in got] == ["fresh.png"] and got[0]["rgba"].shape == (8, 8, 4), "fil: nouveau fichier decode et mis en file, fichier corrompu ignore",
+          str([g["name"] for g in got]))
+    clock["t"] = 16.0
+    fd.tick()
+    check(fs.doodle_queue.empty() and "1 recu" in fs.status["doodles"], "fil: un fichier n'est affiche qu'une fois", fs.status["doodles"])
+    live_files["__down__"] = True
+    clock["t"] = 21.5
+    fd.tick()
+    check("reseau" in fs.status["doodles"], "fil: erreur reseau = statut, le fil continue", fs.status["doodles"])
+    del live_files["__down__"]
+    live_files["after.png"] = png
+    clock["t"] = 27.0
+    fd.tick()
+    check([g["name"] for g in drain(fs.doodle_queue)] == ["after.png"], "fil: apres une coupure, on reprend au tour suivant")
+    fs.params["doodle_on"] = 0.0
+    fd.tick()
+    live_files["while_off.png"] = png
+    clock["t"] = 40.0
+    fd.tick()
+    fs.params["doodle_on"] = 1.0
+    clock["t"] = 41.0
+    fd.tick()
+    clock["t"] = 47.0
+    fd.tick()
+    check(fs.doodle_queue.empty(), "fil: ce qui est arrive pendant la desactivation n'est pas affiche a la reactivation")
+
+    # --- vrai HTTP local : en-tetes, corps de la liste, telechargement
+    served = {"post": [], "get": []}
+    payload = {"list": _json.dumps([{"name": "net.png", "created_at": "2026-02-01"}]).encode(), "net.png": png_bytes(6, 6, (0, 255, 0, 255))}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            served["post"].append((self.path, self.headers.get("apikey"), self.headers.get("Authorization"), _json.loads(self.rfile.read(n))))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(payload["list"])
+
+        def do_GET(self):
+            served["get"].append(self.path)
+            name = self.path.rsplit("/", 1)[1]
+            if name not in payload:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(payload[name])
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c2 = {"url": f"http://127.0.0.1:{srv.server_port}", "anon_key": "ANON"}
+        seen3 = dd.Seen()
+        seen3.arm([])
+        good, rejected, error = dd.poll_once(c2, seen3, feed_mod.http_post, feed_mod.http_get)
+        post_path, k1, k2, post_body = served["post"][0]
+        check(post_path == "/storage/v1/object/list/doodles" and k1 == "ANON" and k2 == "Bearer ANON" and post_body["sortBy"]["order"] == "desc"
+              and served["get"] == ["/storage/v1/object/public/doodles/net.png"] and [n for n, _ in good] == ["net.png"] and not rejected and not error,
+              "HTTP reel (urllib): liste POST avec cle anon, telechargement public", str((served["post"][0][:3], served["get"], error)))
+        payload["list"] = _json.dumps([{"name": "ghost.png", "created_at": "2026-03-01"}]).encode()
+        good, rejected, error = dd.poll_once(c2, seen3, feed_mod.http_post, feed_mod.http_get)
+        check(good == [] and "ghost.png" in error and "ghost.png" not in seen3.names, "HTTP reel: 404 = erreur de telechargement, reessai possible", error)
+    finally:
+        srv.shutdown()
+    try:
+        feed_mod.http_post("http://127.0.0.1:9/x", b"{}", {})
+        refused = False
+    except Exception:
+        refused = True
+    check(refused, "HTTP reel: serveur injoignable = exception (journalisee par le fil, jamais bloquante)")
+
+    # --- reglage : ni sauve, ni preset, ni scene, ni panique
+    check("doodle_on" in gl.TRANSIENT_KEYS and gl.DEFAULT_PARAMS["doodle_on"] == 0.0, "reglage doodle_on: etat du moment, desactive par defaut")
+    pr = dict(gl.DEFAULT_PARAMS, doodle_on=1.0)
+    check("doodle_on" not in gl.capture_overlay(pr) and "doodle_on" not in gl.capture_background(pr) and "doodle_on" not in gl.PANIC_RESET,
+          "reglage doodle_on: absent des presets overlay / fond et de la panique")
+    saved = tmp / "saved.json"
+    old_path = core_params.PARAMS_PATH
+    core_params.PARAMS_PATH = saved
+    try:
+        gl.save_params(pr)
+        check("doodle_on" not in _json.loads(saved.read_text(encoding="utf-8")), "reglage doodle_on: pas ecrit par la sauvegarde (P)")
+    finally:
+        core_params.PARAMS_PATH = old_path
+    check(hasattr(gl.Session.__init__, "__code__") and "doodle_queue" in gl.Session.__init__.__code__.co_names, "Session: file des doodles")
+
+    # --- rendu par-dessus la projection
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        shutil.rmtree(tmp, ignore_errors=True)
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    params = dict(gl.DEFAULT_PARAMS, master=0.0, logo_glow=0.0, logo_pulse=0.0, logo_jitter=0.0)
+    st = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    r.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))              # fond bleu pur
+    r.draw(fbo, size, st, params, 0.0)
+    base = read_target(ctx, fbo, size).copy()
+    check(len(r.wall) == 0 and not r.doodle_tex, "rendu: liste vide = aucun doodle (la passe est sautee)")
+    top_red_bottom_green = np.zeros((50, 100, 4), dtype=np.uint8)
+    top_red_bottom_green[:25] = (255, 0, 0, 255)
+    top_red_bottom_green[25:] = (0, 255, 0, 255)
+    now = time.monotonic() - 5.0                                              # age 5 s : palier, opacite pleine
+    r.add_doodle(top_red_bottom_green, now)
+    rect = r.wall.items[-1]["rect"]
+    r.draw(fbo, size, st, params, 0.0)
+    img = read_target(ctx, fbo, size)
+    changed = np.abs(img.astype(int) - base.astype(int)).sum(axis=2) > 60
+    ys, xs = np.nonzero(changed)
+    x0, y0, x1, y1 = xs.min(), ys.min(), xs.max(), ys.max()
+    check(abs((y1 - y0 + 1) - 0.30 * size[1]) <= 3 and abs((x1 - x0 + 1) - 2 * 0.30 * size[1]) <= 3 and x0 >= 0 and y0 >= 0 and x1 < size[0] and y1 < size[1],
+          "rendu: doodle de 30 % de la hauteur, ratio garde, entierement dans le cadre", f"{x1 - x0 + 1}x{y1 - y0 + 1}")
+    ex, ey = rect[0] * size[0], rect[1] * size[1]
+    check(abs(x0 - ex) <= 3 and abs(y0 - ey) <= 3, "rendu: pose a l'endroit tire", f"({x0},{y0}) attendu ({ex:.0f},{ey:.0f})")
+    cx = (x0 + x1) // 2
+    top, bottom = img[y0 + 5, cx], img[y1 - 5, cx]
+    check(top[0] > 240 and top[1] < 20 and bottom[1] > 240 and bottom[0] < 20, "rendu: image dans le bon sens (haut = rouge, bas = vert)", f"{top} {bottom}")
+    outside = img[~changed]
+    check((np.abs(outside.astype(int) - base[~changed].astype(int)).sum() == 0), "rendu: le reste de l'image est strictement intact")
+    # alpha premultiplie : 50 % d'opacite sur du bleu ne doit pas noircir les bords (pas de halo sombre)
+    r2 = gl.Renderer(ctx, size, None)
+    r2.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
+    half = np.zeros((20, 20, 4), dtype=np.uint8)
+    half[:] = (128, 0, 0, 128)                                                # rouge a 50 %, premultiplie
+    r2.add_doodle(half, time.monotonic() - 5.0)
+    r2.draw(fbo, size, st, params, 0.0)
+    img2 = read_target(ctx, fbo, size)
+    cy2 = int((r2.wall.items[-1]["rect"][1] + 0.15) * size[1])
+    cx2 = int((r2.wall.items[-1]["rect"][0] + r2.wall.items[-1]["rect"][2] / 2) * size[0])
+    px = img2[cy2, cx2]
+    check(120 <= px[0] <= 136 and px[1] == 0 and px[2] == 0, "rendu: alpha premultiplie (50 % de rouge sur noir = 128, pas 64)", str(px))
+    # le fondu : au tout debut le doodle est invisible, il apparait ensuite
+    r3 = gl.Renderer(ctx, size, None)
+    r3.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
+    r3.add_doodle(top_red_bottom_green, time.monotonic() + 0.0)
+    r3.draw(fbo, size, st, params, 0.0)
+    near_zero = int(read_target(ctx, fbo, size).max())
+    check(near_zero < 40, "rendu: fondu d'entree (quasi invisible a l'apparition)", str(near_zero))
+    # limite de 5 et liberation des textures ; expiration
+    r4 = gl.Renderer(ctx, size, None)
+    for _ in range(8):
+        r4.add_doodle(half, time.monotonic() - 5.0)
+    check(len(r4.wall) == 5 and len(r4.doodle_tex) == 5, "rendu: 5 doodles au plus, les textures des evinces sont liberees", f"{len(r4.wall)} {len(r4.doodle_tex)}")
+    r4._draw_doodles(fbo, size, time.monotonic() + 60.0)
+    check(len(r4.wall) == 0 and not r4.doodle_tex, "rendu: apres 15 s tout est retire et libere")
+    # la panique n'y touche pas (meme regle que le logo et le texte)
+    r5 = gl.Renderer(ctx, size, None)
+    r5.add_doodle(half, time.monotonic() - 5.0)
+    gl.panic(params)
+    check(len(r5.wall) == 1 and params["doodle_on"] == 0.0, "panique: ne retire pas les doodles affiches")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+def check_icons() -> None:
+    """Icones de l'interface : toutes dessinables, libelles inchanges (tests et code les retrouvent par leur texte), boutons / titres / onglets /
+    cases habilles."""
+    print("icones")
+    import icons
+    import skin
+    import theme as T
+    import tkinter as tk
+    from tkinter import ttk
+    check(all(name in icons.ICONS for name in icons.TEXT_ICONS.values()), "icones: chaque libelle connu pointe vers une icone dessinee",
+          str([n for n in icons.TEXT_ICONS.values() if n not in icons.ICONS]))
+    bad = []
+    for name in icons.ICONS:
+        for size in (14, 16, 24):
+            img = icons.image(name, size, T.FG)
+            if img.size != (size, size) or img.getbbox() is None:
+                bad.append((name, size))
+    check(not bad, f"icones: les {len(icons.ICONS)} icones se dessinent a toutes les tailles, jamais vides", str(bad[:3]))
+    check(icons.for_text("Sauvegarder") == "save" and icons.for_text("  PANIQUE ") == "alert" and icons.for_text("▶ VJ") is None
+          and icons.for_text("1  Devil Kinky") is None and icons.for_text("") is None, "icones: libelle -> icone (casse ignoree, glyphe existant et noms libres sans icone)")
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        check(False, "Tk pour les icones", str(exc))
+        return
+    try:
+        root.configure(bg=T.BG)
+        skin.zone(root, T.OVERLAY)
+        btn = tk.Button(root, text="Supprimer", font=T.FONT_BOLD)
+        plain = tk.Button(root, text="Kick TV", font=T.FONT_BOLD)
+        multi = tk.Button(root, text="Deux\nlignes", font=T.FONT_BOLD)
+        chk = tk.Checkbutton(root, text="Cellules")
+        rad = tk.Radiobutton(root, text="Video", value=1)
+        other = tk.Checkbutton(root, text="Stereo")
+        lab = tk.Label(root, text="FOND")
+        nb = ttk.Notebook(root)
+        for label in ("Effets", "Autre"):
+            nb.add(tk.Frame(nb), text=label)
+        for w in (btn, plain, multi, chk, rad, other, lab, nb):
+            w.pack()
+        skin.title(lab, T.OVERLAY)
+        skin.apply(root)
+        root.update()
+        check(btn.cget("text") == "Supprimer" and str(btn.cget("compound")) == "none",
+              "icones: un bouton a icone garde son libelle (cget text), l'image porte l'icone", str((btn.cget("text"), btn.cget("compound"))))
+        check(str(plain.cget("compound")) == "center" and plain.cget("text") == "Kick TV", "icones: un bouton sans icone reste comme avant")
+        check(str(multi.cget("compound")) == "center", "icones: un libelle sur plusieurs lignes n'a pas d'icone")
+        check(chk._sk["key"][2] == "grid" and rad._sk["key"][2] == "video" and other._sk["key"][2] is None, "icones: cases et radios choisies ont une icone, les autres non")
+        check(lab.cget("text") == "FOND" and str(lab.cget("image")) != "", "icones: le titre garde son texte et porte repere + icone")
+        check(nb.tab(0, "text") == "Effets" and nb.tab(0, "image") and not nb.tab(1, "image"), "icones: onglet connu = icone, texte inchange ; onglet inconnu = rien",
+              str((nb.tab(0, "text"), nb.tab(0, "image"), nb.tab(1, "image"))))
+        # menus deroulants du VJ (SET, ordre, duree, reglages) : icone a gauche du texte
+        menus = {}
+        for label in ("SET  Entropie ▾", "ordre : dans l'ordre ▾", "duree par defaut : 10 s ▾", "reglages VJ ▾", "+ Scene ▾"):
+            mb = tk.Menubutton(root, text=label, bg=T.BG, fg=T.FG)
+            mb.pack()
+            menus[label] = mb
+        skin.apply(root)
+        check(all(str(menus[l].cget("image")) for l in list(menus)[:4]) and not str(menus["+ Scene ▾"].cget("image"))
+              and menus["SET  Entropie ▾"].cget("text") == "SET  Entropie ▾",
+              "icones: les menus du VJ (SET, ordre, duree, reglages) ont leur icone, texte inchange ; + Scene n'en double pas le plus")
+        # icone seule : le libelle devient l'info-bulle (ou la premiere ligne de celle qui existe deja)
+        check(btn._sk["icon_only"] and not plain._sk.get("icon_only") and btn.winfo_reqwidth() < plain.winfo_reqwidth(),
+              "icones: Supprimer = icone seule (bouton plus court), un bouton sans icone garde son texte")
+        skin._tip_enter(btn)
+        own = btn._sk.get("tip")
+        own_text = next((c.cget("text") for c in own.winfo_children()), "") if own is not None else None
+        skin._tip_leave(btn)
+        check(own_text == "Supprimer" and btn._sk.get("tip") is None and not [c for c in btn.winfo_children() if isinstance(c, tk.Toplevel)],
+              "icones: le libelle s'affiche en info-bulle au survol et disparait a la sortie", str(own_text))
+        theirs = tk.Toplevel(btn)
+        theirs.wm_overrideredirect(True)
+        tk.Label(theirs, text="Supprime le preset choisi.").pack()
+        skin._tip_enter(btn)
+        merged = next((c.cget("text") for c in theirs.winfo_children()), "")
+        skin._tip_enter(btn)
+        again = next((c.cget("text") for c in theirs.winfo_children()), "")
+        theirs.destroy()
+        check(merged == "Supprimer\nSupprime le preset choisi." and again == merged and btn._sk.get("tip") is None,
+              "icones: une info-bulle existante recoit le libelle en premiere ligne (une seule fois)", str((merged, again)))
+        nb.select(1)
+        root.update()
+        btn.configure(state="disabled")
+        root.update()
+        check(btn.cget("text") == "Supprimer" and str(btn.cget("state")) == "disabled", "icones: griser un bouton a icone le redessine sans changer son libelle")
+    finally:
+        root.destroy()
+
+def check_audio2wave_interne() -> None:
+    """audio2wave est interne (sources/audio2wave) : dossier par defaut, ordre de recherche, et copie fidele a son origine (toute
+    modification doit etre notee dans VENDORED.md : l'empreinte de chaque fichier est comparee a ORIGINE.json)."""
+    print("audio2wave interne")
+    import hashlib
+    import json as _json
+    import shutil
+    import tempfile
+    here = Path(__file__).resolve().parent
+    vend = here / "sources" / "audio2wave"
+    check(Path(gl.DEFAULT_A2W_DIR).resolve() == vend.resolve(), "audio2wave: le dossier par defaut est la copie interne sources/audio2wave", str(gl.DEFAULT_A2W_DIR))
+    need = ("audio2wave.py", "audio2wave_live.py", "audio2wave_snap.py", "audio2wave_ridge.py", "common.py", "preset_registry.py", "check_contract.py",
+            "VENDORED.md", "ORIGINE.json")
+    check(all((vend / n).is_file() for n in need), "audio2wave interne: tous les fichiers sont la", str([n for n in need if not (vend / n).is_file()]))
+    # ordre de recherche : portable (audio2wave/ a cote du programme) > copie interne > depot voisin
+    tmp = Path(tempfile.mkdtemp(prefix="a2w_order_"))
+    prog = tmp / "prog"
+    (prog / "audio2wave").mkdir(parents=True)
+    (prog / "sources" / "audio2wave").mkdir(parents=True)
+    (tmp / "audio2wave").mkdir()
+    for d in (prog / "audio2wave", prog / "sources" / "audio2wave", tmp / "audio2wave"):
+        (d / "audio2wave_live.py").write_text("", encoding="utf-8")
+    check(gl.bundled_paths(prog)[0] == prog / "audio2wave", "audio2wave: la version portable (audio2wave/ a cote du programme) l'emporte")
+    (prog / "audio2wave" / "audio2wave_live.py").unlink()
+    check(gl.bundled_paths(prog)[0] == prog / "sources" / "audio2wave", "audio2wave: sinon la copie interne")
+    (prog / "sources" / "audio2wave" / "audio2wave_live.py").unlink()
+    check(gl.bundled_paths(prog)[0] == tmp / "audio2wave", "audio2wave: le depot voisin n'est qu'un dernier recours")
+    shutil.rmtree(tmp, ignore_errors=True)
+    # fidelite a l'origine : une modification non notee echoue
+    origin = _json.loads((vend / "ORIGINE.json").read_text(encoding="utf-8"))
+    notes = (vend / "VENDORED.md").read_text(encoding="utf-8")
+    section = notes.split("## Modifications locales", 1)[-1]
+    changed = [n for n, digest in origin["sha256"].items()
+               if not (vend / n).is_file() or hashlib.sha256((vend / n).read_bytes()).hexdigest() != digest]
+    extra = [f.name for f in vend.glob("*.py") if f.name not in origin["sha256"]]
+    unlisted = [n for n in changed + extra if n not in section]
+    check(origin["commit"] in notes and not unlisted and (not (changed or extra) or "Aucune" not in section),
+          f"audio2wave interne: {len(origin['sha256'])} fichiers conformes a l'origine ({origin['commit'][:7]}), ou chaque ecart est note dans VENDORED.md",
+          f"modifies: {changed} ajoutes: {extra} non notes: {unlisted}")
+
 def check_engine_layer() -> None:
     """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""
     print("engine/ : couche moteur")
@@ -5089,6 +5569,9 @@ def main() -> None:
     check_melt()
     check_cells()
     check_noise()
+    check_doodles()
+    check_icons()
+    check_audio2wave_interne()
     check_masters()
     check_portable_modules()
     check_core_purity()

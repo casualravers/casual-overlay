@@ -1,0 +1,1067 @@
+# audio2wave
+
+Quatre programmes autour des filtres de visualisation audio de ffmpeg :
+
+- **`audio2wave.py`** — rendu fichier. Un `.wav` en entree, une video en sortie, fond
+  transparent (ProRes 4444 ou WebM/VP9) pour overlay direct dans un montage.
+- **`audio2wave_live.py`** — analyseur temps reel. Affiche le spectre d'une entree
+  audio (carte son, table de mixage) dans une fenetre. Regle pour la latence, pas
+  pour l'exactitude.
+- **`audio2wave_snap.py`** — photo de waveform. Meme entree live, mais une image fixe
+  des N dernieres secondes, rafraichie toutes les N secondes. Rien ne defile.
+- **`audio2wave_ridge.py`** — vagues empilees. Meme principe que la photo, mais rien
+  n'est efface au rafraichissement : chaque nouvelle ligne s'empile devant les
+  precedentes, qui defilent et sortent par le haut comme un sismographe.
+
+## Installation
+
+Deux facons d'avoir ffmpeg/ffprobe/ffplay, au choix :
+
+**Pour une utilisation ponctuelle ou en developpement** — installe ffmpeg pour
+toute la machine :
+
+```bash
+winget install --id Gyan.FFmpeg
+```
+
+(`ffplay`, utilise par les versions temps reel/photo, est fourni avec. Si tu
+viens de l'installer, ouvre un nouveau terminal : le `PATH` n'est pas
+rafraichi dans les fenetres deja ouvertes.)
+
+**Pour donner le projet a quelqu'un qui n'a rien a configurer** — pas besoin
+d'installer ffmpeg ni de toucher au `PATH` :
+
+1. Telecharge un build Windows (ex. [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/),
+   lien "release essentials", ~100 Mo).
+2. Extrais `ffmpeg.exe`, `ffprobe.exe` et `ffplay.exe` (dans le sous-dossier
+   `bin/` du zip telecharge) dans un dossier `bin/` cree a la racine de ce
+   depot, a cote de `audio2wave_snap.py`.
+3. Double-clique `audio2wave.bat` a la racine.
+
+Les scripts detectent automatiquement `bin/` s'il existe et l'utilisent en
+priorite, sans rien configurer d'autre — voir `common.py` si l'un des deux
+chemins d'installation te surprend.
+
+## Lancement sans terminal (`.bat`)
+
+Un seul fichier `.bat` a la racine, point d'entree unique :
+
+| fichier | lance |
+|---|---|
+| `audio2wave.bat` | `audio2wave_snap.py --gui` (entree audio choisie dans la fenetre) |
+
+Double-clic, pas de ligne de commande a taper. Nécessite [Python](https://www.python.org/downloads/)
+installe (coche "Add python.exe to PATH" pendant l'installation) — le `.bat`
+previent clairement si ce n'est pas le cas plutot que d'echouer en silence.
+`live`/`ridge` se lancent DEPUIS cette meme fenetre (boutons de bascule, voir
+plus bas) — jamais directement, plus de `.bat` dedie pour eux.
+
+## Jongler entre les trois modes, sans jamais ouvrir de nouvelle fenetre
+
+La fenetre de reglages (`snap`/`live`/`ridge`) a des boutons vers les deux
+autres modes : **Live**/**Ridge** dans celle de `snap` (a cote du menu
+"Entree audio"), **Snap**/**Ridge** dans celle de `live`, **Snap**/**Live**
+dans celle de `ridge`. Cliquer l'un d'eux ferme proprement la session en
+cours (capture audio, fenetre video) puis charge les reglages du mode
+suivant DANS CETTE MEME FENETRE, AVEC LA MEME ENTREE AUDIO — jamais de
+nouvelle fenetre qui s'ouvre, jamais besoin de choisir l'entree une deuxieme
+fois. `snap` refuse de basculer si aucune entree n'est encore choisie
+(`live`/`ridge`, qui l'exigent des le demarrage, en ont forcement deja une).
+
+Ce n'est pas une fusion des moteurs de rendu : chaque mode garde son propre
+fonctionnement (l'entree `Fenetre de reglages` de chaque section plus bas
+reste valable), seule la navigation entre eux est unifiee.
+
+```bash
+python audio2wave_snap.py --gui
+# fenetre: menu "Entree audio" -> boutons "Live"/"Ridge" a cote d'Actualiser
+# depuis n'importe quel mode, les boutons "Autres modes" ramenent aux deux autres
+```
+
+---
+
+# File render — `audio2wave.py`
+
+## Usage
+
+```bash
+python audio2wave.py <source.wav> [sortie] [options]
+```
+
+- `source` : cherchee telle quelle, sinon dans `asset/` (`--asset-dir`)
+- `sortie` : optionnelle, deduite du nom de source + du style si omise ; sinon ecrite dans `output/` (`--output-dir`)
+
+## Styles (`--style`)
+
+| style | rendu | filtre ffmpeg |
+|---|---|---|
+| `analyzer` (defaut) | spectre facon spectrometre, en barres ou en ligne (`--shape`) | `showfreqs` |
+| `radio` | onde temporelle centree, courbe qui ondule | `showwaves` |
+| `spectrum` | spectrogramme defilant (temps en X, frequence en Y) | `showspectrum` |
+| `waveform` | oscillogramme classique | `showwaves` |
+
+## Options principales
+
+| option | role | defaut |
+|---|---|---|
+| `--shape bar\|line` | forme du trace pour `--style analyzer` | `bar` |
+| `--colors` | couleur(s) du trace, separees par `\|` | `white` |
+| `--bg-color` | couleur du fond (avec `--no-transparent`) | `black` |
+| `--gain auto\|<dB>` | niveau avant analyse ; `auto` mesure la crete et remplit l'image | `auto` |
+| `--averaging <n>` | lissage temporel (1 = nerveux, 20+ = pose) | `10` |
+| `--bars <n>` | nombre de barres/points (0 = pleine resolution) | `128` (analyzer) / largeur/4 (radio) |
+| `--format` | `prores4444` \| `webm` \| `mp4` | `prores4444` |
+| `--no-transparent --bg-color <c>` | fond plein au lieu de l'alpha | alpha actif |
+| `--keep-audio` | reinjecte la piste audio source dans la sortie | desactive |
+| `--dry-run` | affiche la commande ffmpeg sans l'executer | - |
+
+Liste complete : `python audio2wave.py -h`
+
+## Exemples
+
+```bash
+python audio2wave.py voix.wav                                    # -> output/voix_analyzer.mov
+python audio2wave.py voix.wav --shape line --colors gray
+python audio2wave.py voix.wav --style radio --colors "0xff00ff"
+python audio2wave.py voix.wav clip.webm --format webm --style spectrum --colormap rainbow
+python audio2wave.py voix.wav preview.mp4 --format mp4 --no-transparent --bg-color "0x1a1a1a"
+```
+
+---
+
+# Live — `audio2wave_live.py`
+
+Capture une entree audio et affiche l'analyseur dans une fenetre. Le son n'est pas
+reproduit : seul le visuel est affiche.
+
+## Usage
+
+```bash
+python audio2wave_live.py --list-devices              # nom exact des entrees
+python audio2wave_live.py -d "<entree>" --tune        # conseille un --gain
+python audio2wave_live.py -d "<entree>" --gain 34     # lance l'affichage
+```
+
+`--tune` est l'etape a faire une fois la carte son branchee et la platine lancee :
+un flux live n'a pas de crete connue a l'avance, contrairement a un fichier, donc
+`--gain` ne peut pas etre automatique. Il donne la valeur pour chacun des modes.
+
+**Si la crete mesuree est deja proche de 0 dBFS** (ou que la moyenne colle a la
+crete, signe d'un signal quasi plat), `--tune` previent d'un ecretage probable
+*avant meme* la capture — typique d'une table de mixage/platine dont la sortie
+est trop chaude pour l'entree de la carte son. Aucun `--gain`, meme au minimum,
+ne peut reparer ca : baisser le gain d'un signal deja tronque a la numerisation
+ne fait que le reduire en gardant sa forme deformee (le spectre reste "plein",
+riche en harmoniques d'ecretage) quel que soit `--gain`. A regler cote materiel
+(baisser la sortie de la platine/table de mixage, ou le potentiometre d'entree
+de la carte son si elle en a un) ou dans les parametres d'enregistrement de
+Windows (un curseur de niveau d'entree pousse a fond ecrete independamment de
+`--gain`), puis relancer `--tune` pour verifier.
+
+## Modes d'affichage
+
+Le mode se choisit au lancement (relancer pour en changer) :
+
+```bash
+python audio2wave_live.py -d "<entree>"                          # barres
+python audio2wave_live.py -d "<entree>" --shape line             # courbe de spectre
+python audio2wave_live.py -d "<entree>" --style radio --gain -10 # onde temporelle
+```
+
+Le fond se regle separement du trace, dans les deux programmes :
+
+```bash
+python audio2wave_live.py -d "<entree>" --colors gray --bg-color navy
+```
+
+| mode | rendu | latence |
+|---|---|---|
+| `--style analyzer --shape bar` (defaut) | barres facon egaliseur | ~180 ms |
+| `--style analyzer --shape line` | courbe de spectre continue | ~180 ms |
+| `--style radio` | onde temporelle centree | **~50 ms** |
+
+`radio` n'utilise ni FFT ni lissage : c'est nettement le mode le plus reactif.
+**Son gain n'est pas le meme** que celui de l'analyzer (40 dB d'ecart) — une onde
+touche deja les bords a crete normalisee, alors qu'une barre reste loin du plafond.
+
+## Options specifiques
+
+| option | role | defaut |
+|---|---|---|
+| `-d`, `--device` | entree DirectShow a capturer | requis |
+| `--tune` | mesure le niveau et conseille un `--gain` par mode | - |
+| `--style` | `analyzer` \| `radio` | `analyzer` |
+| `--gain <dB>` | niveau avant analyse | `30` (analyzer) / `-10` (radio) |
+| `--buffer <ms>` | tampon de capture ; trop bas = coupures | `50` |
+| `--averaging <n>` | lissage ; **poste de latence principal**, analyzer seul | `6` |
+| `--win-size <n>` | fenetre FFT ; plus petit = plus reactif, moins precis | auto (max 512) |
+| `--bg-color` | couleur du fond, independante de `--colors` | `black` |
+| `--size` | resolution de rendu | `960x540`, ou l'ecran avec `--fullscreen` |
+| `--fullscreen` | plein ecran | - |
+| `--gui` | ouvre une fenetre de reglages (voir plus bas) | - |
+
+`--shape`, `--colors`, `--bars`, `--bar-gap`, `--max-freq`, `--freq-scale`,
+`--amp-scale`, `--stereo` se comportent comme en mode fichier.
+
+## Fenetre de reglages (`--gui`)
+
+```bash
+python audio2wave_live.py -d "<entree>" --gui
+```
+
+**Different des deux autres scripts** (`audio2wave_snap.py`/`audio2wave_ridge.py`) :
+ici il n'y a pas de boucle Python par image a relire en direct — le producteur ffmpeg
+et l'afficheur ffplay sont relies par un relais Python (voir CLAUDE.md), delibere
+pour la latence. Chaque reglage change dans la fenetre relance donc automatiquement
+le flux (debounce de quelques centaines de ms apres la derniere modification, pas de
+bouton "Appliquer" a cliquer) — mais la fenetre video elle-meme ne se ferme/rouvre
+plus a chaque reglage, seulement si la taille ou le mode plein ecran changent (ffplay
+ne peut pas changer ca sans se redemarrer lui-meme).
+
+Meme theme sombre (fond ardoise, accent cyan) que les deux autres fenetres `--gui`,
+partage via `style_gui()` dans `audio2wave.py`.
+
+Si le nouveau reglage fait echouer ffmpeg (peripherique perdu, par exemple),
+l'ancienne configuration, toujours fonctionnelle, est conservee au lieu d'etre
+perdue — le probleme est signale dans le terminal et dans la fenetre de reglages.
+
+Reglable dans la fenetre : style, forme, couleurs, barres/points, gain, lissage,
+espace entre barres, echelle des frequences et de l'amplitude, stereo, taille de
+fenetre, plein ecran. Fermer la fenetre de reglages arrete le programme en entier
+(meme effet que Ctrl+C) ; fermer la fenetre video le fait aussi, comme sans `--gui`.
+
+## Latence
+
+Affichee au demarrage, avec son detail. En analyzer, aux valeurs par defaut :
+**~180 ms** (capture 50 + fenetre FFT 32 + lissage 100). Le lissage domine — c'est
+le premier levier a baisser si le rendu semble en retard sur la musique :
+
+```bash
+python audio2wave_live.py -d "<entree>" --averaging 2 --buffer 20
+```
+
+## Ce qui est sacrifie pour la vitesse
+
+- fenetre FFT courte (512) : frequences plus grossieres
+- pas de canal alpha ni de pre-analyse du fichier
+- mono par defaut : deux fois moins de FFT a calculer
+
+En revanche **ni la resolution ni le nombre de barres ne sont sacrifies** : mesure
+faite, 960x540 et 1920x1080 coutent le meme temps de traitement, tout comme 48 et
+240 colonnes. Le cout est domine par la capture et la FFT. Avec `--fullscreen`, le
+rendu se fait donc directement a la resolution de l'ecran, plutot que d'etre
+agrandi (et flouté) par ffplay.
+
+---
+
+# Snap — `audio2wave_snap.py`
+
+Meme entree live que `audio2wave_live.py`, mais **rien ne defile** : la fenetre
+montre le contour du dernier temps joue, **trace de gauche a droite** en accelere
+comme un crayon, et le trait atteint le bord droit pile au moment ou le temps suivant
+prend sa place.
+
+## Usage
+
+```bash
+python audio2wave_snap.py --list-devices              # nom exact des entrees
+python audio2wave_snap.py -d "<entree>"               # 4 temps a 128 BPM (une mesure)
+python audio2wave_snap.py -d "<entree>" --bpm 174     # dnb
+python audio2wave_snap.py -d "<entree>" --beats 1     # rafraichit a chaque temps
+python audio2wave_snap.py -d "<entree>" --interval 10 # ou en secondes
+python audio2wave_snap.py -d "<entree>" --save-dir output --fullscreen
+python audio2wave_snap.py -d "<entree>" --preset club                # voir Presets plus bas
+```
+
+## Duree d'une photo
+
+Elle se donne en temps, pas en secondes : `--beats 4 --bpm 128` par defaut, soit
+**1,875 s**, une mesure a 4/4. C'est aussi le rythme de rafraichissement. Une mesure
+laisse le temps de lire le trace avant qu'il ne change ; `--beats 1` rafraichit a
+chaque temps, plus nerveux mais plus dur a suivre a l'oeil. Un flux live n'annonce
+aucun tempo, d'ou le `--bpm` a regler sur la musique jouee ; `--interval <s>`
+court-circuite les deux.
+
+La cadence est calee sur l'horloge et non sur la fin du rendu, sinon chaque photo
+arriverait avec le retard cumule des rendus precedents. Si le rendu deborde de
+l'intervalle, le creneau est saute plutot que pris en retard, avec un avertissement.
+
+## Frequence d'echantillonnage
+
+`--rate auto` (defaut) **interroge le peripherique au lancement et prend sa
+frequence**, ce qui supprime tout reechantillonnage. C'est le seul gain de precision
+reel a attendre de ce reglage : la capture etait auparavant forcee a 44100 Hz, alors
+que la quasi-totalite des cartes son sous Windows travaillent a 48000 — chaque
+echantillon passait donc par un reechantillonneur, qui est un filtre, coute du temps
+et lisse legerement les attaques, sans jamais rien ajouter.
+
+**Monter au-dela de la frequence du peripherique n'apporte rien** : ffmpeg ne ferait
+qu'interpoler des valeurs absentes. Et meme a frequence reelle plus haute, le gain sur
+l'image est negligeable. Mesure de l'erreur sur la crete retenue par colonne, a un
+temps sur 1920 px (soit 0,244 ms par colonne) :
+
+| frequence | ech./colonne | erreur moyenne, contenu 2 kHz | pire cas |
+|---|---|---|---|
+| 44100 | 10,8 | 0,4 % | 3,9 % |
+| 48000 | 11,7 | 0,1 % | 3,4 % |
+| 96000 | 23,4 | 0,0 % | 0,9 % |
+| 192000 | 46,9 | 0,0 % | 0,2 % |
+
+Sur les graves, l'ecart entre crete vue et crete reelle ne bouge pas du tout avec la
+frequence (32,6 % a 44100 comme a 192000) : ce n'est pas une imprecision mais le
+regime voulu, une colonne de 0,244 ms ne couvrant que 2 % d'un cycle a 80 Hz, elle
+montre la forme d'onde plutot que son enveloppe.
+
+**Ce qui fait la precision de l'image, ce sont donc les pixels et les points, pas les
+Hz** : `--size` pour la resolution, `--columns` pour la finesse du trace, `--beats`
+pour la duree couverte.
+
+`--rate 48000` impose une valeur et evite la sonde. Celle-ci ouvre le peripherique une
+fraction de seconde avant la capture ; si votre carte n'aime pas etre reprise aussitot
+apres avoir ete relachee, c'est l'echappatoire.
+
+## Trace progressif
+
+L'image n'apparait pas d'un coup : elle se dessine colonne par colonne, et **le trait
+atteint le bord droit exactement au rafraichissement suivant**. Deux creneaux mesures
+a 128 BPM, aux exemples `--beats 1` et `--beats 4` (le defaut) :
+
+| | `--beats 1` (469 ms) | `--beats 4` (1,875 s, defaut) |
+|---|---|---|
+| rendu de la photo (`pencil`) | ~6 ms | ~8 ms |
+| balayage de gauche a droite | ~463 ms, 12-14 images | ~1867 ms, ~57 images |
+| ecart mesure a l'echeance | +1 a +5 ms | +1,6 a +2,2 ms |
+
+Le balayage occupe donc tout le temps disponible et se termine sur le temps, a
+quelques millisecondes pres — la granularite des pauses sous Windows. Il ne couvre pas
+tout a fait le creneau entier parce que le rendu en occupe le debut ; en `pencil`
+c'est negligeable (moins de 0,5 % du creneau par defaut), plus sensible avec les
+styles ffmpeg (`rekordbox`/`simple`, ~95 ms de rendu quelle que soit la duree couverte).
+
+L'avancee est calculee sur l'horloge et non sur le numero d'image : si un pas traine,
+le suivant rattrape au lieu de decaler la fin. Seules les colonnes nouvellement
+decouvertes sont recopiees a chaque pas — 0,4 ms par pas en 1920x360, 1 ms en 1080p,
+contre trois fois plus si l'image entiere etait reconstruite a chaque fois.
+
+**Le balayage part de la photo precedente, pas d'un ecran vide** : la nouvelle courbe
+recouvre l'ancienne colonne par colonne au fil de sa progression, au lieu qu'un aplat
+de fond s'affiche d'un coup avant de retracer. L'ancienne photo reste donc visible la
+ou le balayage n'est pas encore passe. Exception : avec `--video`/`--video2` actifs,
+chaque photo repart d'un fond uni comme avant — demarrer d'une photo deja chargee
+(trait + video) s'est avere ralentir assez l'affichage pour faire saccader la video
+qui joue derriere.
+
+`--draw-fps` regle la fluidite (60 img/s par defaut) ; `--draw-fps 0` revient a
+l'affichage direct de la photo entiere.
+
+Chaque photo est annoncee dans le terminal avec sa crete et le gain applique :
+
+```
+[21:04:12] crete -14.3 dBFS -> gain +13.8 dB
+```
+
+## Presets (`--preset`)
+
+Un preset regroupe plusieurs options sous un nom court, pour ne pas avoir a recopier
+la meme ligne de commande a chaque lancement. `--list-presets` en detaille le contenu.
+Les trois modes ont chacun leurs presets (fichiers separes, jamais partages) : le
+detail ci-dessous porte sur `audio2wave_snap.py`, mais `audio2wave_live.py`
+(`club`/`calme`) et `audio2wave_ridge.py` (`large`/`dense`) fonctionnent a
+l'identique (`--preset`/`--list-presets` en CLI, bloc **Presets** dans leur
+fenetre `--gui` avec Charger/Mettre a jour/Sauvegarder sous) — juste sans le
+Mode VJ, propre a `audio2wave_snap.py` (voir plus bas).
+
+```bash
+python audio2wave_snap.py --list-presets
+python audio2wave_snap.py -d "<entree>" --preset club
+python audio2wave_snap.py -d "<entree>" --preset c            # alias
+python audio2wave_snap.py -d "<entree>" --preset club --wave 8  # ecrase le preset
+```
+
+| preset (alias) | contenu |
+|---|---|
+| `wave` (`w`) | `--style pencil --wave` : le contour anime en sinusoide plutot qu'en silhouette figee |
+| `club` (`c`) | `--style pencil --wave --line-width 3 --fullscreen --colors 0x39c9ff` : plein ecran pour une projection, trait epais et vif pour rester lisible de loin |
+| `rekordbox` (`rb`) | `--style rekordbox` : le look d'un ecran de platine |
+| `editor` (`e`) | `--style simple --scale sqrt` : onde pleine facon editeur audio, passages faibles remontes |
+
+**Une option passee en plus sur la ligne de commande garde toujours la priorite sur le
+preset**, presets compris : `--preset club --style simple` applique le fullscreen et la
+couleur de `club`, mais rend en `simple` plutot qu'en `pencil`. C'est un mecanisme
+d'argparse (`set_defaults` puis reparsing de la ligne de commande), pas une fusion de
+dictionnaires : seules les options *absentes* de la ligne de commande prennent la
+valeur du preset.
+
+### Presets utilisateur (charger/sauvegarder depuis `--gui`)
+
+En plus des quatre presets integres ci-dessus, la fenetre `--gui` (voir plus bas)
+permet de **charger** un preset, d'en **sauvegarder un nouveau** ou de **mettre a
+jour** un preset utilisateur existant a partir des reglages courants — pratique
+pour retrouver en un clic une combinaison style/couleurs/gain/etc. deja reglee a
+l'oreille pendant une session precedente, ou pour affiner un preset deja
+sauvegarde sans repartir de zero. **Charger se fait en choisissant simplement le
+preset dans le menu deroulant** — il s'applique immediatement des la selection,
+pas besoin de cliquer un bouton "Charger" en plus.
+
+Les presets sauvegardes depuis la fenetre atterrissent dans
+`~/.audio2wave/snap_presets.json` (cree au besoin) et sont **immediatement
+utilisables en ligne de commande** comme n'importe quel preset integre :
+
+```bash
+python audio2wave_snap.py -d "<entree>" --preset mon_preset
+python audio2wave_snap.py --list-presets   # liste aussi les presets utilisateur
+```
+
+Sauvegarder (nouveau nom) et Mettre a jour (preset selectionne dans le menu
+**Charger**) capturent tous les deux tout ce que la fenetre expose (style, couleurs,
+epaisseur, `--wave`, points/colonnes, echelle, filtre, crossover, gain, images/s,
+dossier PNG) — pas seulement les quelques options choisies a la main dans les
+presets integres. **L'etat de la "Variation automatique" (voir plus bas) fait
+partie du preset** : pour chaque curseur automatable, la case activee ou non,
+la courbe dessinee et sa vitesse sont sauvegardees et restaurees a l'identique.
+**La taille de fenetre (largeur/hauteur) n'en fait pas
+partie** : elle reste independante des reglages visuels, un preset ne la
+change jamais, meme si elle etait differente au moment de sauvegarder.
+**Mettre a jour** peut aussi cibler un preset integre (`wave`,
+`club`, `rekordbox`, `editor`...) : ca cree une version personnalisee dans le
+JSON utilisateur qui le remplace desormais sur cette machine (`--preset club`
+lira alors cette version), sans toucher au preset d'origine dans le code —
+supprimer l'entree du JSON restaure le comportement integre. **Sauvegarder**
+(nouveau nom), lui, refuse toujours un nom de preset integre, pour eviter
+qu'une faute de frappe n'ecrase un preset existant sans intention explicite.
+**`default`** (aucune surcharge, les reglages argparse tels quels) est un
+preset integre special : il est charge par defaut a l'ouverture de la fenetre
+(sauf `--preset <autre>` explicite) et **n'est jamais modifiable**, ni par
+Mettre a jour ni par Sauvegarder sous. **Supprimer** retire un preset du JSON
+utilisateur, avec une modale de confirmation (irreversible) ; un preset
+integre jamais "mis a jour" (donc absent du JSON) ne peut pas etre supprime,
+il n'y a rien a retirer.
+Charger un preset qui contient une option figee au lancement
+(ex. `--fullscreen` dans `club`) l'ignore silencieusement dans la fenetre — ces
+options ne peuvent de toute facon pas se relancer en direct sans redemarrer le
+programme (voir la section `--gui` plus bas) — et l'indique dans la ligne de
+statut.
+
+### Mode VJ (enchainement de presets pour un set entier)
+
+Un bouton **Mode VJ -- Ouvrir...** dans la fenetre `--gui` ouvre un petit popup
+pour planifier un enchainement de presets sur toute la duree d'un set :
+
+1. **Ajouter** une entree : choisis d'abord une **categorie** (snap/live/
+   ridge), puis un **preset** de cette categorie (le second menu se
+   repeuple avec ses noms des que la categorie change) et une duree en
+   minutes, puis **Ajouter** — elle rejoint la fin de la liste. La liste
+   couvre **tous les modes**, pas seulement snap : les presets de
+   `audio2wave_live.py`/`audio2wave_ridge.py` sont selectionnables aussi,
+   sans avoir a retenir un prefixe (la categorie choisie suffit a lever
+   l'ambiguite de nom). Un preset etranger ne change pas de mode (le Mode VJ
+   reste dans snap) : seules les options qui ont un sens ici (gain, couleurs,
+   epaisseur...) s'appliquent, celles sans equivalent (`style`/`shape` de
+   live, dont les valeurs n'existent pas cote snap) sont retirees avant meme
+   d'atteindre `apply_preset()`.
+2. Reordonne avec **Monter**/**Descendre**, retire une entree avec
+   **Supprimer**. Les durees sont relatives : deplacer une entree decale
+   automatiquement l'horaire de toutes celles qui suivent, pas besoin de
+   recalculer quoi que ce soit a la main.
+3. **Demarrer VJ** lance l'enchainement : le premier preset s'applique
+   immediatement, puis chaque suivant a l'echeance cumulee de son tour — et le
+   tout **boucle** indefiniment une fois la liste epuisee, pour couvrir un set
+   qui dure plus longtemps que prevu. **Arreter VJ** fige le preset en cours.
+
+```bash
+python audio2wave_snap.py -d "<entree>" --gui
+# Mode VJ -> Ouvrir... -> ajoute quelques presets avec leurs durees -> Demarrer VJ
+```
+
+Chaque changement planifie appelle exactement la meme logique que le bouton
+**Charger** (`apply_preset()`) : une entree qui reference une option figee au
+lancement est ignoree de la meme facon, et signalee dans le statut. Fermer le
+popup ne perd rien — l'enchainement continue de tourner en arriere-plan, et la
+liste reapparait telle quelle a la reouverture ; c'est volontaire, pour ne pas
+avoir a garder cette fenetre ouverte pendant tout le set.
+
+**L'enchainement lui-meme se sauvegarde**, en haut du popup :
+
+- **Enchainement** (menu deroulant) + **Charger** : remplace la liste en cours
+  par un enchainement deja sauvegarde.
+- **Mettre a jour** : reecrit l'enchainement selectionne dans le menu avec la
+  liste courante.
+- **Sauvegarder sous** (champ nom + bouton, Entree fonctionne aussi) : cree un
+  nouvel enchainement a partir de la liste courante.
+
+Stocke dans `~/.audio2wave/snap_vj_setlists.json`, separement des presets
+(`snap_presets.json`) — utile pour retrouver en un clic le plan d'un set
+complet joue un soir precedent, sans avoir a re-saisir chaque preset et sa
+duree.
+
+## Styles (`--style`)
+
+| style | rendu |
+|---|---|
+| `pencil` (defaut) | un seul trait blanc, sans remplissage : contour grossier de l'amplitude, ou sinusoide bornee par elle avec `--wave` |
+| `rekordbox` | onde coloree par bande, facon platine : graves en bleu, medium en orange, aigus en blanc |
+| `simple` | onde pleine d'une seule couleur, facon editeur audio |
+
+### `pencil`
+
+Pas de couleur, pas de remplissage : l'amplitude est reduite a **une polyligne de
+96 points** par defaut, dessinee en blanc sur noir, en haut et en bas du centre. A
+96 points sur 1920 px, un segment fait une vingtaine de pixels et le trait reste
+franchement anguleux, comme une esquisse. `--columns` regle cette grossierete
+(`--columns 40` pour un trait plus lisse encore, `--columns 240` pour coller de plus
+pres a l'onde), `--line-width` l'epaisseur, `--colors` et `--bg-color` les deux
+couleurs.
+
+**`--wave`** remplace le contour par une **sinusoide bornee par l'amplitude** : le
+trait oscille, et l'enveloppe ne fait plus que limiter son ampleur. Une attaque
+devient une grande oscillation qui se resserre ensuite, ce qui donne un visuel plus
+vivant qu'un simple contour. Le nombre d'oscillations sur la largeur peut suivre
+l'option — `--wave` seul en met 24, `--wave 12` les etale, `--wave 48` les resserre :
+
+```bash
+python audio2wave_snap.py -d "<entree>" --wave
+python audio2wave_snap.py -d "<entree>" --wave 12 --line-width 3
+```
+
+La phase ne depend que de la position horizontale : d'une photo a l'autre les cretes
+restent en place et seule leur hauteur change, ce qui evite un scintillement d'un
+temps sur l'autre.
+
+**`--kick-glow`** ajoute un halo blanc sur le trait a chaque attaque franche (kick)
+detectee dans le signal — purement decoratif, pas une isolation des basses par
+filtre (pas de scipy/numpy dans ce projet) : une montee brutale d'energie locale,
+assez pour l'oeil, y compris sur un mix deja bien compresse/limite (typique en
+club/DJ). Le trait s'epaissit legerement, et surtout un halo blanc degrade
+apparait dans le fond juste autour du trait sur `--kick-glow-size` pixels —
+visible quelle que soit la couleur du trait, y compris blanc (couleur par
+defaut de `pencil`) : le halo vit dans le fond, pas sur la couleur du trait lui-
+meme, qui ne pourrait pas "s'eclaircir" davantage s'il est deja blanc.
+
+```bash
+python audio2wave_snap.py -d "<entree>" --kick-glow
+python audio2wave_snap.py -d "<entree>" --kick-glow --kick-glow-size 80 --colors 0xff2266
+```
+
+Le nombre de kicks detectes par photo s'affiche dans la ligne de statut
+(console et `--gui`) des que l'option est active, meme quand il vaut 0 : utile
+pour verifier que la detection accroche bien avant de chercher le halo a l'oeil.
+
+**`--glow-live`** anime ce MEME halo autrement : au lieu de positions de kick
+detectees sur la photo entiere (donc figees jusqu'a la prochaine photo, avec
+le retard d'un `--beats`/`--bpm` complet), il suit le niveau audio EN CONTINU
+et s'applique uniformement sur tout le trait — l'intensite monte et descend en
+temps reel, sans attendre le prochain rafraichissement :
+
+```bash
+python audio2wave_snap.py -d "<entree>" --kick-glow --glow-live
+```
+
+Necessite `--kick-glow` (c'est un mode du meme halo, pas un effet a part) ;
+dans `--gui`, c'est une case "Temps reel" juste a cote de "Halo sur les
+kicks", sans effet si cette derniere n'est pas cochee. La ligne de statut
+affiche alors l'intensite courante du halo plutot qu'un compte de kicks.
+
+Ce style est **rasterise en Python, pas par ffmpeg** : aucun filtre ne dessine une
+polyligne d'enveloppe, `showwavespic` remplit une silhouette et `showwaves` trace la
+forme d'onde elle-meme. Pour chaque colonne, le segment vertical reliant la hauteur
+precedente a la nouvelle est peint, ce qui garde le trait continu meme sur une
+attaque, la ou un point par colonne laisserait des trous. Effet de bord notable : le
+rendu tombe de ~95 ms a **~6-8 ms** par photo, et le trace progressif recupere ce
+temps quel que soit `--beats` (exemple a un temps, 469 ms a 128 BPM : 463 ms de
+balayage, contre 375 ms avec les styles ffmpeg).
+
+### `rekordbox`
+
+Empile **trois traces du plus large au plus etroit**, et non trois bandes cote a
+cote :
+
+| trace | signal | couleur |
+|---|---|---|
+| exterieur | complet | blanc |
+| milieu | passe-bas 2000 Hz (graves + medium) | orange |
+| interieur | passe-bas 200 Hz (graves seuls) | bleu |
+
+Chaque trace etant centre et rempli, le plus etroit se pose dans le plus large : on
+lit un coeur bleu qui grossit sur les kicks, un liseret orange sur les medium, et du
+blanc sur les pointes la ou les aigus depassent. Les deux coupures se reglent avec
+`--crossover 200,2000`, les trois couleurs avec `--colors "graves|medium|aigus"`.
+
+Effet de bord utile de cet empilement : le trace exterieur est le signal complet, donc
+la crete mesuree pour le gain auto est bien celle qui touche les bords de l'image.
+
+## Options specifiques
+
+| option | role | defaut |
+|---|---|---|
+| `-d`, `--device` | entree DirectShow a capturer | requis |
+| `--preset <nom>` | charge un jeu d'options nomme (voir plus haut) | - |
+| `--list-presets` | detaille les presets disponibles et quitte | - |
+| `--bpm <n>` | tempo de reference | `128` |
+| `--beats <n>` | temps par photo **et** delai entre deux photos | `4` |
+| `--interval <s>` | la meme duree en secondes, a la place de `--bpm/--beats` | - |
+| `--style` | `pencil` \| `rekordbox` \| `simple` | `pencil` |
+| `--columns <n>` | points de la polyligne en `pencil`, colonnes dessinees sinon | `96` en `pencil` |
+| `--line-width <n>` | epaisseur du trait, `pencil` seul | `2` |
+| `--wave [n]` | sinusoide bornee par l'amplitude au lieu du contour, `pencil` seul | contour ; `24` avec l'option |
+| `--kick-glow` | halo blanc sur le trait a chaque kick detecte, `pencil` seul | desactive |
+| `--kick-glow-size <px>` | rayon du halo | `40` |
+| `--glow-live` | le meme halo, anime en temps reel par le niveau audio courant (necessite `--kick-glow`) | desactive |
+| `--crossover <g,a>` | coupures entre bandes, en Hz | `200,2000` |
+| `--gain auto\|<dB>` | `auto` normalise chaque photo sur sa propre crete | `auto` |
+| `--scale` | `lin` \| `sqrt` \| `cbrt` \| `log` | `lin` |
+| `--filter-mode peak\|average` | crete gardee ou enveloppe lissee par colonne | `peak` |
+| `--draw-fps <n>` | fluidite du trace progressif ; `0` = affichage direct | `60` |
+| `--video <fichier>` | video jouee en boucle sous le trace, `pencil` seul (voir plus bas) | - |
+| `--video2 <fichier>` | deuxieme video, jouee en boucle hors de la bande d'enveloppe, `pencil` seul (voir plus bas) | - |
+| `--asset-dir <dir>` | dossier ou chercher `--video`/`--video2` si le chemin donne n'existe pas tel quel | `asset` |
+| `--gui` | ouvre une fenetre de reglages en direct (voir plus bas) | - |
+| `--save-dir <dir>` | ecrit aussi chaque photo en PNG (image entiere) | - |
+| `--json-status <fichier>` | une ligne JSON par photo : `peak_dbfs`, `rms_dbfs`, `gain_db`, `kicks_s` (instants des kicks en secondes), `bpm_set`, `bpm_estimate`, `glow`. `-` = sortie standard (la ligne de statut humaine est alors supprimee). Fonction equivalente : `audio2wave_snap.analyze_block(pcm, channels, rate)` | - |
+| `--size` | resolution | largeur de l'ecran, tiers de sa hauteur |
+| `--rate auto\|<Hz>` | frequence d'echantillonnage de la capture | `auto` |
+| `--buffer <ms>` | tampon de capture | `50` |
+
+`--colors`, `--bg-color`, `--stereo`, `--split-channels`, `--fullscreen`,
+`--dry-run` se comportent comme dans les autres scripts.
+
+## Video entre l'amplitude min et max (`--video`, `pencil` seul)
+
+```bash
+python audio2wave_snap.py -d "<entree>" --video clip.mp4
+python audio2wave_snap.py -d "<entree>" --video clip.mp4 --wave --line-width 3
+```
+
+`clip.mp4` est cherche tel quel, puis dans `--asset-dir` (`asset` par defaut) : un
+nom simple suffit sans avoir a le prefixer a chaque lancement, meme convention que
+la source audio d'`audio2wave.py`.
+
+La video remplit **la bande entre les deux traits de l'enveloppe** (amplitude min et
+max), pas au-dela : le reste de l'image — au-dessus et en dessous de la bande — reste
+au `--bg-color`, et les traits sont peints par dessus. En `--wave`, ou une seule ligne
+oscillante est tracee, la video occupe quand meme toute la bande d'enveloppe (les deux
+bornes existent toujours, meme quand une seule est encree) : la ligne ondule alors
+par-dessus la video plutot qu'a cote. Le fichier est rejoue **en boucle** tant que le
+programme tourne, et recadre en "cover" (agrandi jusqu'a couvrir, puis recadre au
+centre) : il remplit toujours la bande, sans deformation, quel que soit son format
+d'origine.
+
+**La video continue de jouer pendant le balayage, et se superpose lentement a la
+photo precedente sur tout le `--beats`**, comme le reste du trace (voir "Trace
+progressif" plus haut) : la bande ne repart pas d'un fond uni a chaque photo, la
+nouvelle enveloppe et son contenu video recouvrent progressivement l'ancienne.
+Cela coute plus cher qu'un simple devoilement (les colonnes deja tracees sont
+repeintes a chaque pas) : mesure a 30 img/s, **14 % du creneau en 1920x360, 19 %
+en plein ecran 1080p** (la bande etant plus etroite qu'un remplissage jusqu'au bas
+de l'image). Le balayage finit toujours a l'echeance, avec une precision qui passe
+de ±1-5 ms sans video a **+5 a +12 ms** avec.
+
+**Compromis assume, a garder en tete** : mesure au banc, repartir de la photo
+precedente ici degrade la lecture video au fil des photos (le nombre d'images
+video distinctes vues par balayage tombe irregulierement de ~45 a 1-15) — sur
+cette meme mesure, repartir d'un fond uni a chaque photo reste parfaitement
+stable. La superposition lente a ete choisie malgre cette mesure ; l'effet reel a
+l'usage peut etre moins marque qu'au banc synthetique. La video elle-meme ne
+redemarre jamais : elle continue de decoder sans interruption, seule
+l'irregularite de rafraichissement pourrait se voir sur certaines configurations.
+
+**Le trait, lui, ne se superpose jamais a l'ancien** : contrairement au fond et a
+la video, qui repartent volontairement de la photo precedente (superposition
+lente ci-dessus), le contour blanc de l'ancienne photo est efface avant que le
+prochain balayage ne commence. Sans ca, la portion pas encore atteinte par le
+nouveau trait continuerait d'afficher l'ancien jusqu'a ce que le balayage la
+rejoigne — deux contours visibles en meme temps au lieu d'un seul qui remplace
+l'autre a mesure qu'il se dessine.
+
+Reserve a `--style pencil` : les styles `rekordbox` et `simple` composent leur image
+dans un graphe de filtres ffmpeg, pas sur un canevas Python, donc y injecter la video
+demanderait un masque (`alphamerge`) — une toute autre mecanique. L'option est
+refusee avec un message clair plutot que silencieusement ignoree.
+
+Les PNG de `--save-dir` contiennent la video telle qu'elle etait au debut de la photo.
+
+### Deuxieme video, hors de la bande (`--video2`)
+
+```bash
+python audio2wave_snap.py -d "<entree>" --video2 fond.mp4
+python audio2wave_snap.py -d "<entree>" --video clip.mp4 --video2 fond.mp4
+```
+
+`--video2` joue un second fichier, en boucle et en "cover" comme `--video`, mais
+**hors** de la bande d'enveloppe : au-dessus du trait du haut et en dessous du trait
+du bas, la ou `--video` ne peint rien. Independante de `--video` — utilisable seule
+(la bande reste au `--bg-color`, le reste de l'image joue la video) ou combinee avec
+elle (une video a l'interieur de la vague, une autre autour). Memes contraintes que
+`--video` : `pencil` seul, fichier verifie a l'avance.
+
+**Contrairement a `--video`, elle ne suit pas le balayage progressif : elle joue en
+continu sur toute la largeur de l'image a chaque rafraichissement**, y compris dans
+les colonnes que le trait n'a pas encore atteintes. Choix delibere, distinct de la
+lente superposition de `--video`/du trace lui-meme : en la limitant aux colonnes
+deja revelees (comme le reste du balayage), les colonnes pas encore atteintes
+gardaient l'image video figee depuis le debut du balayage precedent — jusqu'a un
+plein `--beats` — puis sautaient d'un coup a l'image courante des que le trait les
+rejoignait, percu comme des coupures plutot qu'une lecture fluide. Repeinte en
+dernier sur toute la largeur, elle ne touche jamais le trait ni la video interieure
+de `--video` (zones disjointes par construction).
+
+Combiner `--video` et `--video2` double le cout de decodage (deux fichiers) et de
+repeinture par pas ; a garder en tete sur une resolution plein ecran.
+
+## Fenetre de reglages en direct (`--gui`)
+
+```bash
+python audio2wave_snap.py --gui                  # choisis l'entree dans la fenetre
+python audio2wave_snap.py -d "<entree>" --gui    # ou directement en ligne de commande
+```
+
+**`-d`/`--device` est optionnel avec `--gui`** : le menu deroulant "Entree
+audio" de la fenetre (bouton **Actualiser** pour detecter un peripherique
+branche apres coup) permet de le choisir apres coup, donc rien n'empeche de
+lancer la fenetre sans en preciser un sur la ligne de commande. Sans `--gui`,
+`-d` reste obligatoire (aucun autre moyen d'en choisir un) ; `--dry-run`
+l'exige aussi meme combine a `--gui` (il n'y a rien de reel a montrer sans
+peripherique).
+
+Ouvre une petite fenetre tkinter avec un controle par reglage : entree audio,
+tempo (BPM et temps par photo, `--bpm`/`--beats`),
+style (pencil / rekordbox / simple), couleurs du trait et de fond, epaisseur,
+`--wave` (case a cocher + oscillations), points/colonnes, `--kick-glow` (case a
+cocher + rayon du halo + case "Temps reel" pour `--glow-live`), echelle, filtre par
+colonne, crossover (deux champs Hz), gain (case "automatique" + curseur manuel en
+dB) avec un bouton **Mesurer (tuning)**, video interieure/exterieure (`--video`/
+`--video2`, pencil seul), dossier PNG (`--save-dir`, cree au besoin), images/s du
+trace, et un bloc **Presets** (charger/sauvegarder, voir plus haut). La plupart
+des changements prennent effet **a la photo suivante**, sans redemarrer la
+capture ni la fenetre ffplay ; trois exceptions redemarrent un sous-processus en
+douceur (voir ci-dessous).
+
+Theme sombre coherent (fond ardoise, accent cyan), partage avec les deux autres
+fenetres `--gui` (`audio2wave_live.py`, `audio2wave_ridge.py`) via `style_gui()`
+dans `audio2wave.py` — marges genereuses, boutons aeres et curseurs amincis
+plutot que le rendu Tk par defaut, pour un aspect plus moderne. Fenetre en deux
+panneaux cote a cote plutot qu'une seule colonne, pour rester large plutot que
+haute avec autant de reglages, chaque groupe (Source, Apparence, Video,
+Rekordbox / Simple, Sortie) annonce par un petit intitule en capitales ; les
+precisions ("vide = defaut", "pencil seul"...) ne sont plus dans le texte des
+labels mais en info-bulle au survol de la souris.
+
+**Entree audio, video et video2 redemarrent un sous-processus, pas juste `args`**
+Changer l'entree audio (menu deroulant + bouton **Actualiser** pour re-detecter
+les peripheriques branches apres l'ouverture de la fenetre — utile pour brancher
+des platines en cours de route) relance la capture ffmpeg sur le nouveau
+peripherique ; changer le chemin de `--video`/`--video2` (champ texte, cherche
+tel quel puis dans `--asset-dir` comme au demarrage) relance le decodeur video
+correspondant. Dans les deux cas la fenetre ffplay ne bouge pas : seul le flux
+source change, avec une courte coupure (quelques centaines de ms pour l'audio,
+le temps qu'un nouveau ffmpeg dshow s'ouvre) plutot qu'un redemarrage seamless
+comme les reglages d'`audio2wave_live.py`. Un chemin video introuvable est
+signale en statut sans toucher au flux en cours, pour ne pas couper une video
+qui marchait sur une faute de frappe pas encore corrigee. Un bouton
+**Parcourir...** a cote de chaque champ video ouvre le selecteur de fichiers
+habituel plutot que de taper le chemin a la main, filtre sur les extensions
+video courantes.
+
+**Le bouton "Mesurer (tuning)"** mesure la crete (et le facteur de crete, pour
+detecter un ecretage AVANT la capture) de la fenetre audio courante et bascule
+le gain en manuel sur la valeur conseillee — l'equivalent de `--tune`
+(`audio2wave_live.py`) mais lu depuis la capture deja en cours, sans avoir a
+relancer le programme. Le meme avertissement d'ecretage que `--tune` s'affiche
+au besoin (voir plus bas, section Gain).
+
+**BPM et temps par photo** recalculent `--interval` a chaque changement de l'un
+ou l'autre (meme formule qu'au demarrage : temps × 60 / BPM), et retaillent la
+fenetre glissante de capture en consequence — sans redemarrer la capture, juste
+en resize cote Python (le flux ffmpeg dshow lui-meme ne change pas). Y toucher
+bascule la fenetre sur les deux curseurs pour la suite de la session, meme si le
+programme a demarre avec un `--interval` explicite.
+
+**Variation automatique** fait piloter un curseur tout seul par une courbe au
+lieu de la souris : une case **`~`** (active/desactive) et un bouton **courbe**
+(editer) apparaissent sous le curseur de l'epaisseur du trait, des points/
+colonnes et du rayon du halo (`--kick-glow-size`) — les seuls reglages ou une
+derive visuelle a un sens direct ; places sous le curseur plutot qu'a cote pour
+que tous les curseurs de la fenetre gardent la meme largeur et restent alignes.
+Le bouton **courbe** ouvre une petite fenetre d'edition **propre a ce
+reglage** : un canevas ou glisser les points de la courbe a la souris pour
+dessiner une forme libre, cinq presets pour partir d'une base (**Sinus**,
+**Triangle**, **Carre**, **Dents de scie**, **Aleatoire**), et une **Vitesse**
+(curseur allant du plus lent a gauche au plus rapide a droite, de 3 a 40
+secondes par cycle complet) — chaque reglage garde sa propre courbe et sa
+propre vitesse, independantes des autres : rien n'empeche de faire
+respirer lentement l'epaisseur en triangle pendant que le rayon du halo saute en
+carre rapide. Purement decoratif, aucun lien avec la detection de kicks
+ci-dessus ; decocher `~` fige le curseur a sa position courante et repart du
+debut de la courbe a la prochaine activation ; la case, la courbe et la
+vitesse de chaque curseur automatable font partie des presets (voir plus
+haut), pas juste une preference de session.
+
+**`audio2wave_live.py`/`audio2wave_ridge.py` ont la meme "Variation
+automatique"**, sur un choix de curseurs plus restreint (Halo/Derive de
+teinte cote `live`, Espacement/Deformation/Epaisseur cote `ridge`) mais avec
+exactement le meme editeur de courbe. Seule difference notable :
+`audio2wave_live.py` ne relit rien "en direct" (voir la section Gain/reglages
+plus haut sur son bouton Appliquer) — un curseur coche continue d'avancer sur
+sa courbe a l'ecran, mais le rendu affiche ne se met a jour que toutes les 2
+secondes environ (redemarrage seamless automatique, meme mecanique que le
+bouton Appliquer), pas image par image comme `audio2wave_snap.py`/
+`audio2wave_ridge.py`.
+
+```bash
+python audio2wave_snap.py -d "<entree>" --gui   # coche ~ sur "Epaisseur du trait", bouton courbe pour l'editer
+```
+
+**Taille fenetre** (largeur/hauteur en pixels, deux champs comme Crossover Hz) et
+**Plein ecran** (case juste a cote) redemarrent la fenetre video (et les
+`--video`/`--video2` actives, recadrees a la nouvelle taille) — une coupure de
+quelques centaines de ms, comme changer d'entree audio ou de video. Les champs
+de taille sont pre-remplis avec la resolution courante ; tant qu'on n'y touche
+pas, le comportement automatique (ecran entier ou un tiers de sa hauteur) reste
+actif. **Decocher "Plein ecran" est le moyen de sortir d'une fenetre ouverte en
+plein ecran sur le mauvais moniteur** (ou simplement coincee) : la nouvelle
+fenetre s'ouvre en mode normal, deplacable a la souris comme n'importe quelle
+fenetre. La nouvelle fenetre tente de reprendre la position de l'ancienne
+(comme `audio2wave_live.py`) ; en mode fenetre ca fonctionne, en plein ecran
+c'est une tentative non confirmee sur un vrai poste multi-ecran — si "Plein
+ecran" retombe encore sur le mauvais moniteur, le contournement fiable reste
+de decocher, deplacer la fenetre normale vers le bon ecran a la souris, puis
+recocher.
+
+**Ce qui reste volontairement hors de cette fenetre** : `--stereo`,
+`--split-channels`, `--rate`, `--buffer`, `--interval` (remplace par
+BPM/temps ci-dessus). Tous sont figes des le lancement dans la commande de
+capture (nombre de canaux, frequence, taille du tampon) — donc les changer en direct
+desynchroniserait carrement le flux audio ou n'aurait aucun effet.
+
+**Changer de style reinitialise les champs couleur** (vides = defaut du nouveau
+style) : `rekordbox` exige trois couleurs separees par `|`, `pencil`/`simple` une
+seule, donc garder la couleur de l'ancien style planterait le rendu de la photo
+suivante. Plus generalement, un reglage temporairement invalide (crossover mal
+forme, par exemple) fait sauter une seule photo — avec un message d'erreur — plutot
+que d'arreter le programme.
+
+Comme pour `audio2wave_ridge.py`, la boucle de capture/rendu tourne dans un fil
+separe pendant que tkinter possede le fil principal ; aucun verrou, une affectation
+d'attribut simple est atomique en Python. Fermer la fenetre de reglages arrete le
+programme en entier (meme effet que Ctrl+C).
+
+## Resolution et largeur des colonnes
+
+Le rendu se fait par defaut a la **largeur entiere de l'ecran** (la hauteur n'est
+reduite qu'en mode fenetre, pour que la fenetre tienne avec sa barre de titre) : c'est
+la largeur qui porte le detail temporel, et les PNG de `--save-dir` en profitent aussi.
+Cout mesure a 1920 px : 95 ms par photo en fenetre, 150 ms en plein ecran 1080p — a
+128 BPM, 20 a 30 % d'un temps si `--beats 1`, 5 a 8 % d'une mesure au defaut
+(`--beats 4`).
+
+Une colonne resume une tranche d'audio par sa crete, et deux regimes donnent un bon
+resultat aux deux extremes :
+
+| duree par colonne | rendu |
+|---|---|
+| **> 10 ms** (au moins un cycle de basse) | chaque colonne resume une crete : onde pleine, facon vue d'ensemble |
+| entre les deux | chaque colonne attrape un bout de cycle au hasard : peigne de traits fins |
+| **< 1 ms** | des dizaines de colonnes par cycle : la forme d'onde elle-meme est dessinee |
+
+Le programme vise donc l'un ou l'autre selon la duree de la photo. A un temps sur
+1920 px on est a 0,24 ms par colonne, et au defaut (`--beats 4`, une mesure) a
+0,98 ms : dans les deux cas sous le seuil d'1 ms, donc plein detail, une colonne par
+pixel — la marge devient fine au-dela de 4 temps environ. Passe ce seuil, le
+programme repasse a une colonne par 10 ms puis agrandit — avec un rapport
+d'agrandissement arrondi a un entier, sinon `neighbor` donnerait des colonnes de 4 px
+et d'autres de 5.
+
+`--columns` force la valeur : `0` pour une colonne par pixel, `64` pour de larges
+barres. Le nombre retenu est affiche au demarrage avec sa duree.
+
+A l'echelle d'un temps, les trois bandes ne se lisent plus comme des couches
+concentriques mais comme un liseret de couleur autour du trace : les passe-bas
+retardent les graves de quelques millisecondes, ce qui est invisible sur une vue
+d'ensemble mais visible quand un cycle occupe 50 pixels. `--columns 96` ou
+`--style simple` retrouvent un trace franc.
+
+## Gain
+
+`--gain auto` est le defaut, comme en mode fichier et contrairement au mode live :
+chaque photo etant un bloc fini deja en memoire, sa crete se mesure avant le trace.
+**Chaque image est donc normalisee independamment** — un passage faible remplit
+autant la hauteur qu'un passage fort. Pour garder les ecarts de niveau visibles
+d'une photo a l'autre, imposer une valeur fixe :
+
+```bash
+python audio2wave_snap.py -d "<entree>" --gain 20
+```
+
+Aucune correction par style n'est necessaire ici : `showwavespic` dessine
+l'amplitude telle quelle, donc a crete normalisee l'onde touche exactement les
+bords, quelle que soit `--scale`.
+
+`--scale lin` est le defaut et le plus proche d'une platine. `sqrt` et `cbrt`
+remontent les passages faibles, mais en `rekordbox` ils gonflent surtout les graves,
+qui finissent en bloc bleu plein ou l'on ne distingue plus les kicks.
+
+Ce script n'a pas de `--tune` en ligne de commande (contrairement a
+`audio2wave_live.py`) : `--gui` (voir plus haut) l'expose a la place, sous la
+forme d'un bouton **Mesurer (tuning)** — la capture tournant deja, pas besoin
+d'une etape de mesure separee avant de lancer le vrai rendu. Meme diagnostic
+d'ecretage qu'en mode live : une crete proche de 0 dBFS, ou un facteur de crete
+faible (signal quasi plat), signalent un ecretage survenu AVANT la capture
+(platine/table de mixage trop chaude, ou niveau d'enregistrement Windows pousse
+a fond) — baisser le gain ne peut alors que reduire un signal deja deforme, pas
+le reparer.
+
+## Pourquoi ce n'est pas une video au ralenti
+
+- **Une seule capture pour toute la session.** Rouvrir le peripherique DirectShow a
+  chaque photo couterait quelques centaines de ms et echouerait sur les cartes qui
+  n'acceptent pas d'etre reprises aussitot. Le PCM brut transite par Python.
+- **`showwavespic` ne sort qu'une image**, a la fin de son entree : c'est exactement
+  une photo, et le rendu se termine tout seul puisque le bloc est fini.
+- **ffplay ne recoit que des images completes**, une par pas du trace : le dessin se
+  fait cote Python, sur un canevas garde en memoire. Prive de donnees, ffplay laisse la
+  derniere image a l'ecran. La cadence qu'on lui annonce vaut le double du rythme reel
+  des images : il doit toujours consommer plus vite qu'on ne le nourrit, sinon elles
+  s'empilent dans sa file et l'affichage prend un retard qui grandit.
+- **Un fil vide le tube de capture en permanence**, et garde une fenetre glissante.
+  Sans lui, le rendu (~100 ms) serait une pause pendant laquelle personne ne lit le
+  tube : l'audio s'accumulerait et la photo prendrait un retard croissant sur la
+  musique. Discret a 3 s par photo, plus du tout a un temps, ou le rendu pese 20 %
+  de l'intervalle.
+
+Le fond par defaut depend du style : `0x14161c` en `rekordbox`, ou il fait partie du
+look, et `black` en `simple`. **`--bg-color black` garde l'alpha des filtres** : noir
+a l'ecran, mais les PNG de `--save-dir` sortent en RGBA a fond transparent, prets a
+etre poses sur un montage. Toute autre couleur est composee dans l'image et remplit
+le PNG.
+
+---
+
+# Ridge — `audio2wave_ridge.py`
+
+Meme principe que `audio2wave_snap.py` (une ligne d'amplitude tracee a chaque
+rafraichissement), mais **rien n'est efface** : chaque nouvelle ligne s'empile devant
+les precedentes, qui defilent vers le haut et sortent de l'ecran comme un
+sismographe. L'effet recherche est celui d'un "ridge plot" facon pochette *Unknown
+Pleasures* de Joy Division — un champ de vagues qui approche.
+
+## Usage
+
+```bash
+python audio2wave_ridge.py --list-devices              # nom exact des entrees
+python audio2wave_ridge.py -d "<entree>"                # 4 temps a 128 BPM
+python audio2wave_ridge.py -d "<entree>" --fullscreen --ridge-spacing 4
+python audio2wave_ridge.py -d "<entree>" --colors "0x39c9ff" --ridge-noise 0.2
+```
+
+## Comment les lignes s'empilent
+
+A chaque rafraichissement (meme cadence `--beats`/`--bpm`/`--interval` que
+`audio2wave_snap.py`) :
+
+1. Le canevas entier **remonte** de `--ridge-spacing` pixels (`--ridge-spacing 6`
+   par defaut). Les rangees qui sortent par le haut sont perdues, les rangees
+   liberees en bas repassent au fond.
+2. La nouvelle ligne "nait" tout en bas et son pic remonte selon l'amplitude du
+   nouvel intervalle. Pour chaque colonne, le fond est repeint de la crete jusqu'a
+   la base **avant** de tracer le trait : c'est ce remplissage, fait apres le
+   decalage, qui occulte automatiquement tout ce qui deborde dans cette zone — sans
+   comparaison de hauteur entre lignes. Une ligne plus ancienne, plus haute que la
+   nouvelle, reste donc visible au-dessus d'elle ; une ligne plus basse est
+   recouverte.
+
+Comme pour `audio2wave_snap.py`, le trace n'apparait pas d'un coup : il se dessine
+de gauche a droite et atteint le bord droit pile au rafraichissement suivant
+(`--draw-fps`, `0` pour un affichage direct).
+
+## Deformation
+
+Chaque ligne recoit un peu de bruit synthetique lisse (`--ridge-noise 0.12` par
+defaut, en fraction de la portee des pics) en plus de l'enveloppe reelle du signal :
+sans ca, un passage audio tres stable produirait des lignes visuellement
+identiques, empilees les unes sur les autres sans aucun relief. Le bruit est
+interpole sur quelques points de controle seulement (pas un point par colonne), pour
+se lire comme une ondulation large et lente — une vague, pas un grain. `0` desactive
+la deformation.
+
+## Options specifiques
+
+| option | role | defaut |
+|---|---|---|
+| `-d`, `--device` | entree DirectShow a capturer | requis |
+| `--ridge-spacing <px>` | espacement vertical entre deux lignes | `6` |
+| `--ridge-noise <0..1>` | deformation synthetique, en fraction de la portee des pics | `0.12` |
+| `--colors` | couleur du trait | `white` |
+| `--bg-color` | couleur de fond et d'occultation | `black` |
+| `--columns <n>` | points de la polyligne de chaque ligne | `96` |
+| `--line-width <n>` | epaisseur du trait | `2` |
+| `--gain auto\|<dB>` | `auto` normalise sur les lignes recentes (voir `--gain-window`) | `auto` |
+| `--gain-window <n>` | nombre de lignes recentes sur lesquelles `--gain auto` lisse sa reference | `8` |
+| `--gui` | ouvre une fenetre de reglages en direct (voir plus bas) | - |
+| `--save-dir <dir>` | ecrit le canevas accumule en PNG a chaque ligne | - |
+
+`--bpm`, `--beats`, `--interval`, `--size`, `--fullscreen`, `--draw-fps`, `--rate`,
+`--buffer`, `--dry-run` se comportent comme dans `audio2wave_snap.py`. Pas de
+`--stereo`/`--split-channels` : ce programme ne trace jamais qu'un seul trait par
+ligne, la capture reste mono.
+
+## Cout et precision
+
+`render_ridge_line` (calcul de l'enveloppe), `shift_canvas` (decalage du canevas) et
+`paint_ridge_line` (occultation + trace) sont mesures ensemble a moins de 25 ms par
+ligne, aux deux tailles usuelles (1920x360 fenetre, 1920x1080 plein ecran) — largement
+sous le budget d'un rafraichissement, meme au minimum (`--beats 1`, ~470 ms a
+128 BPM). Le decalage est une seule affectation de tranche (pas de boucle pixel par
+pixel) ; l'occultation ecrit par tranches a pas fixe (une par canal R/G/B), pas
+colonne par colonne pixel a pixel.
+
+## Gain : lisse sur plusieurs lignes, pas photo par photo
+
+Contrairement a `audio2wave_snap.py` (une seule photo affichee a la fois, normalisee
+independamment a chaque rafraichissement — correct dans ce cas), `audio2wave_ridge.py`
+garde des dizaines de lignes visibles simultanement. Normaliser chaque ligne sur sa
+propre crete, independamment des autres, ecraserait donc le relief : un passage
+quasi silencieux entre deux temps serait remonte au meme plafond qu'un kick, et
+l'occultation effacerait l'historique accumule a chaque rafraichissement — un trace
+plat qui semble tronque, colle en haut de l'ecran, comme un signal carre.
+
+`--gain auto` (defaut) calibre donc sa reference sur **le pic le plus fort des
+`--gain-window` dernieres lignes** (8 par defaut), pas sur la ligne courante seule :
+un passage calme apparait alors nettement plus bas qu'un passage fort recent, ce qui
+est precisement le relief recherche. `--gain-window 1` retrouve le comportement
+instantane (une reference par ligne, comme une photo isolee) ; une fenetre plus
+large lisse davantage mais reagit plus lentement a un vrai changement de niveau.
+
+```bash
+python audio2wave_ridge.py -d "<entree>" --gain-window 16   # lissage plus large
+python audio2wave_ridge.py -d "<entree>" --gain 20          # ou une valeur fixe
+```
+
+## Fenetre de reglages en direct (`--gui`)
+
+```bash
+python audio2wave_ridge.py -d "<entree>" --gui
+```
+
+Ouvre une petite fenetre tkinter a cote de la fenetre de vagues, avec un curseur par
+reglage : espacement, deformation, lissage du gain, epaisseur, points par ligne,
+images/s du trace, gain (case "automatique" + curseur manuel en dB), dossier PNG
+(`--save-dir`, cree au besoin), plus deux champs texte pour les couleurs (memes
+noms/valeurs hexadecimales qu'en ligne de commande, valides avec Entree ou en
+changeant de champ). Un changement prend effet **a la ligne suivante**, sans
+redemarrer la capture ni rouvrir la fenetre ffplay — seul le rendu en aval bouge,
+l'historique deja trace
+reste tel quel. Meme theme sombre que les deux autres fenetres `--gui` (voir
+`audio2wave_snap.py` plus haut).
+
+**Ce qui n'est pas reglable en direct** : `--beats`/`--bpm`/`--interval` (change la
+taille du bloc audio capture), `--size`/`--fullscreen` (change la taille de la
+fenetre ffplay et du canevas). Ces reglages determinent la topologie du pipeline
+(capture, canevas, fenetre), pas juste le rendu d'une ligne ; les changer demanderait
+de redemarrer ces trois pieces. Relance le programme pour les changer.
+
+Techniquement, la boucle de capture/rendu tourne dans un fil separe pendant que
+tkinter possede le fil principal (necessaire sur certaines plateformes, prudent sur
+toutes). La fenetre de reglages ne fait que modifier les attributs lus a chaque
+ligne — pas de verrou : une affectation d'un entier/flottant/texte est atomique en
+Python, largement suffisant pour un outil visuel qui n'a pas besoin d'une
+coherence stricte image par image. Fermer la fenetre de reglages arrete le programme
+en entier (meme effet que Ctrl+C).

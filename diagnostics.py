@@ -115,8 +115,8 @@ def check_audio2wave(a2w_dir: Path, need: bool = True) -> Check:
     if target.is_file():
         return Check("audio2wave", "ok", str(a2w_dir))
     return Check("audio2wave", "fail" if need else "warn", f"audio2wave_live.py introuvable dans {a2w_dir}",
-                 "Place le depot audio2wave a cote de casual-overlay, dans le dossier audio2wave/ du programme, "
-                 "ou indique-le avec --a2w-dir (variable AUDIO2WAVE_DIR).")
+                 "audio2wave est interne : le dossier sources/audio2wave/ (ou audio2wave/ pour la version portable) est incomplet ou absent. "
+                 "Retablis-le depuis le depot, ou indique un autre dossier avec --a2w-dir (variable AUDIO2WAVE_DIR).")
 
 
 def _create_standalone():

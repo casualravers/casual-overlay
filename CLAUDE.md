@@ -8,14 +8,9 @@ casual-overlay affiche le visuel `audio2wave_live` (flux ffmpeg) dans une fenetr
 plein ecran sur le videoprojecteur, avec un logo PNG incruste et des deformations pilotees
 en temps reel par l'audio du micro. Le plan d'origine est dans `PLAN_POC_GL.md`.
 
-**Dependance : le depot voisin `audio2wave`** (dossier `../audio2wave` par defaut, sinon
-`--a2w-dir` ou variable `AUDIO2WAVE_DIR`). Son CLAUDE.md fait foi pour tout ce qui touche
-au visuel de base (filtres ffmpeg, `--averaging`, latence). Ici on n'en modifie **aucun
-fichier** ; on importe `audio2wave_live` (`parse_args`, `producer_command`,
-`resolve_size`, `list_audio_devices`).
+**audio2wave est interne** : une copie du depot `audio2wave` (`https://github.com/casualravers/audio2wave`, `main`) vit dans `sources/audio2wave/` (modules **plats** : ils\ns'importent par leur nom, le dossier est ajoute a `sys.path` ; `audio2wave_gl.bundled_paths` le choisit : `audio2wave/` a cote du programme (portable) > `sources/audio2wave/` >\ndepot voisin `../audio2wave` (dernier recours) ; `--a2w-dir` / `AUDIO2WAVE_DIR` en essaient un autre). On importe `audio2wave_live` (`parse_args`, `producer_command`,\n`resolve_size`, `list_audio_devices`) et les autres modules. Son CLAUDE.md (copie : `sources/audio2wave/CLAUDE.md`) fait foi pour tout ce qui touche au visuel de base (filtres ffmpeg, `--averaging`,\nlatence). **Origine et ecarts** : `sources/audio2wave/VENDORED.md` (commit copie, section « Modifications locales ») et `ORIGINE.json` (empreinte de chaque fichier d'origine) ;\n`check_gl.py` (`check_audio2wave_interne`) echoue si un fichier differe de l'origine **sans etre note** dans VENDORED.md : modifier ces fichiers est permis maintenant, mais toute\nmodification se note (fichier, raison) pour pouvoir resynchroniser avec le depot d'origine. Le depot `audio2wave` reste vivant a part : un correctif qui y est fait se reporte a la main ici\n(et inversement), c'est le prix d'avoir deux copies tant qu'il existe.
 
-**API hote d'audio2wave utilisee** (branche `add-snap-waveform-photo`, commit `86e0458` ou plus recent, `common.API_VERSION` >= 2 ; c'est le
-depot audio2wave qui l'expose et la garantit par `check_contract.py`, on ne reecrit plus ses constantes ni ses methodes, on ne fouille plus ses
+**API hote d'audio2wave utilisee** (`common.API_VERSION` >= 2 ; la copie interne l'expose et la garantit par `check_contract.py`, on ne reecrit plus ses constantes ni ses methodes, on ne fouille plus ses
 widgets) : `common.set_gui_accent(accent, accent_fg)` (accent de la palette : `apply_a2w_palette`), `AutomationManager(..., curve_label,
 on_editor_open)` et son crochet de classe `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)` (fenetre « courbe » :
 `install_curve_skin`), `Tooltip` qui reste dans la fenetre, `common.make_scrollbar` et `common.readable_fg` (survol des menus lisible sur
@@ -50,6 +45,7 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   sessionlog     journal de session
   scenes         scenes, sets, memoires de masters (stockage, export / import)
   randomizer     Full Randomizer (banques d'assets, tirages)
+  doodles        doodles du site : config, liste du bucket, fichiers vus, validation, position, cycle de vie, mur (voir plus bas)
 engine/          moteur sans rendu GL (importe core/ et les dependances facultatives, jamais la GUI ni la facade) :
   deps           numpy / glfw / moderngl / sounddevice / Pillow importes une fois (`None` si absents, `MISSING`)
   audio          FeatureExtractor, RingBuffer, AudioAnalyzer, entrees micro / synthetique
@@ -57,8 +53,10 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   window         fenetre glfw, choix du moniteur, plein ecran
   render         Renderer (passes GL), noise, texte / logo, PerfGuard
   session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
+  doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
   app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
+sources/audio2wave/  audio2wave (copie interne, modules plats, voir plus haut)
 audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths) + facade qui re-exporte core/ et engine/ (gl.X) ;
                   les tests qui remplacent un nom visent le module qui l'utilise (ex. engine.projection.loop)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
@@ -121,6 +119,16 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
     (`tidy_mode_gui` et les tests le retrouvent par leur texte ; les bandeaux d'audio2wave par `widgets["section_titles"]`). Onglets ttk : selectionne = `CARD` + texte d'accent.
   - Couleurs lues sur un widget : `_norm` (nom Tk / systeme -> `#rrggbb`). Les `PhotoImage` sont gardees par racine Tk (`root._skin_photos`,
     plusieurs racines dans les tests). Hauteur : boutons ~24 px, champs 1 px de bord (la fenetre reste sous 700 px).
+- **Icones** (`icons.py`, Pillow, aucun fichier image ni police d'emojis : leur rendu varie d'un PC a l'autre) : 50 icones sur une grille de 24 x 24, traits arrondis de 2
+  unites (style Lucide), sur-echantillonnees puis reduites ; `icons.image(nom, taille, couleur)`. **Les libelles ne changent jamais** : `icons.for_text(libelle)`
+  rend l'icone d'un libelle connu (`TEXT_ICONS`, casse ignoree ; un libelle qui commence deja par un glyphe ▶ ▾ ■ ◀ n'en recoit pas ; un nom libre comme
+  « 1  Devil Kinky » non plus), et `skin` ajoute l'image : **boutons** (`_icon_button_image` : forme + icone + libelle dessines ensemble avec la police PIL equivalente
+  a la police Tk, `compound="none"` ; ATTENTION : `compound="image"` n'existe pas pour un Button Tk, l'erreur `TclError` est avalee par `apply` et le bouton reste
+  nu), **titres de section** (`tick_icon_image` : repere + icone a l'accent), **onglets** ttk (`skin_notebook` : icone grise, celle de l'onglet choisi a l'accent,
+  mise a jour sur `<<NotebookTabChanged>>`), **cases et radios** de `ICON_TOGGLES` seulement (`with_icon`). Un libelle sur plusieurs lignes n'a pas d'icone. **Icone seule** (skin.ICON_ONLY : Supprimer, Mettre a jour, Restaurer, Actualiser, Sauvegarder, Dupliquer la derniere, Tirer maintenant, Rescanner, Centrer, Aucun / Aucune, Plein ecran (bouton)) : l'image ne porte que l'icone, le widget garde son libelle (cget, tests), et _tip_enter / _tip_leave l'affichent en info-bulle ; si le code de la GUI a deja pose une info-bulle (celle d'audio2wave est une Toplevel enfant du widget), le libelle en devient la premiere ligne au lieu d'en ouvrir une seconde. **Mode VJ** : la barre des scenes, le panneau etendu (menus SET / ordre / duree : skin pose l'icone sur les menus a fleche dans le texte, Tk la place a gauche ; Renommer / Retirer en icone seule), les onglets et boutons de l'espace de controle (Strobe, Verrou, Montee ↑ / Drop ↓, Tap tempo, Mode silence...) et la **Console VJ** (fenetre a boutons 	k.Button hors habillage : tn(..., icon=...) pose une icone de 26 px, check_gl.py x_console_icons) ont leurs icones. Les actions critiques ou ambigues gardent leur texte (PANIQUE, Demarrer la projection, Diagnostic, Tap tempo, Strobe, Verrou...). Pour
+  ajouter une icone : une fonction `_nom(p)` dans `icons.py` (+ son nom dans `_NAMES`) et une ligne dans `TEXT_ICONS` ; `check_gl.py` (`check_icons`) verifie que
+  chaque libelle pointe vers une icone dessinee, que toutes se dessinent, et que boutons / titres / onglets / cases gardent leur texte. `icons.py` est dans
+  `APP_FILES` du portable (`check_portable_modules` l'a rappele).
 - **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) devient `theme.LIVE` par le point d'extension `common.set_gui_accent`
   (`apply_a2w_palette()`, avant `live.style_gui` : leurs widgets le lisent a la creation ; Snap / Ridge, importes plus tard, lisent la
   valeur de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`.
@@ -165,7 +173,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
   ffprobe.exe), `start.bat`, `LISEZMOI.txt`. **Pas de gel (PyInstaller)** : audio2wave est importe dynamiquement et tkinter /
   modules varient selon le mode. `audio2wave_gl.bundled_paths(script_dir, path)` : `audio2wave/` a cote du programme l'emporte sur le
-  depot voisin (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
+  copie interne (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
   trouvent). `start.bat` prend `python\python.exe` puis `.venv\Scripts\python.exe`. Le script **verifie le dossier fabrique** avec
   son propre Python (diagnostic + rendu synthetique de 3 s). Verifie a la main : lance avec un PATH reduit a `C:\Windows\System32`,
   tout est trouve dans le dossier (python, modules, ffmpeg, audio2wave), OpenGL et micro detectes. Taille ~520 Mo dont 424 Mo de
@@ -422,6 +430,29 @@ Le logo **se decompose en cellules** (Voronoi + cell shading) ; il garde sa form
   (`check_cells`) : intact a 0, decompose, couleurs gardees, **les cellules ne couvrent que la forme du logo** (logo
   a moitie transparent), rien hors du rectangle, contour de la couleur choisie, derive, audio.
 
+### Doodles du site (case « Recuperer les medias », onglet Affichage)
+
+Recupere les fichiers deposes sur le site Casual Ravers (bucket Supabase Storage public `doodles` : PNG / JPEG, 5 Mo max) et les affiche **par-dessus
+la projection**. Desactive par defaut.
+- **Configuration** : `~/.audio2wave/depot.json` = `{"url": "https://<projet>.supabase.co", "anon_key": "..."}` (jamais dans le code ni versionne). Absente
+  ou incomplete : la case reste active, le statut (ligne d'etat de la GUI) dit ce qui manque ; la config est relue a chaque tour tant qu'elle manque.
+- **Reglage `doodle_on`** : portee `state` (ni sauve par P, ni dans l'auto-sauvegarde, ni presets overlay / fond, ni scenes, ni memoires de masters) ;
+  PANIQUE n'y touche pas (comme le logo et le texte). Decocher arrete l'interrogation ; les doodles deja affiches finissent leur fondu.
+- **`core/doodles.py`** (pur) : `parse_config` / `load_config`, `list_request` (POST `/storage/v1/object/list/doodles`, `sortBy created_at desc`, `limit` 100 :
+  les plus recents d'abord, sinon passe 100 fichiers les nouveaux n'apparaitraient plus), `download_url`, `parse_listing`, `Seen` (`arm` a l'activation =
+  l'existant est memorise sans etre affiche ; `fresh` du plus ancien au plus recent ; `mark`), `check_download` (vide, > 5 Mo, signature PNG / JPEG : le
+  suffixe ne prouve rien), `check_size` (<= 4096 px), `place` (rectangle tire au hasard, toujours entierement dans le cadre, hauteur 30 % de l'ecran, ratio
+  garde), `alpha` (fondu 1,5 s / palier / fondu 2 s sur 15 s), `Wall` (5 visibles au plus, le plus ancien part), `poll_once` (un tour sans fil : reseau injecte).
+- **`engine/doodle_feed.py`** : `DoodleFeed` = fil d'arriere-plan (tick toutes les 250 ms, interrogation toutes les 5 s, timeout 6 s), jamais dans le fil GL
+  ni Tk. Une erreur reseau est dite dans le statut (`status["doodles"]`), journalisee **une seule fois** (`sessionlog`) et reessayee au tour suivant ; un
+  telechargement en echec n'est pas marque « vu » (reessai), un fichier invalide l'est. Decodage Pillow (`decode` : taille lue avant tout decodage,
+  `exif_transpose` pour les photos, `_premultiplied` comme le logo) puis `Session.doodle_queue`. Demarre par `run_app` (le fil dort tant que la case est decochee).
+- **Rendu** (`Renderer.add_doodle` / `_draw_doodles`, `doodle.vert` / `doodle.frag`) : la boucle GL vide la file a chaque image et pose les doodles ; la passe
+  vient **apres** le post-traitement et la trainee, donc ni symetrie, ni pixelisation, ni teinte globale, ni strobe ne les touchent ; melange premultiplie
+  (ONE, ONE_MINUS_SRC_ALPHA), textures a mipmaps. Liste vide = passe sautee (aucun cout). Les doodles arrives projection fermee sont jetes (`Projection.start`).
+- `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
+  injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
+  sauvegarde, case de la GUI.
 ### Noise : un hasard unique et prereglé (`noise_amount`, `noise_fx`)
 
 **Un seul noise, non parametrable** (`NoiseDrive`, audio2wave_gl.py) : une valeur continue au hasard (`noise_value`, noise de

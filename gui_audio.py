@@ -97,6 +97,13 @@ def install(c):
 
     tk.Button(frame, text="Ambiance par defaut", command=reset_automation).pack(side="left", padx=(8, 0))
 
+    doodle_var = tk.IntVar(value=int(float(params.get("doodle_on", 0.0)) >= 0.5))
+    bind_param("doodle_on", doodle_var, float)
+    doodle_check = tk.Checkbutton(tab_aff, text="Recuperer les medias", variable=doodle_var)
+    doodle_check.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    Tooltip(doodle_check, "Recupere les doodles deposes sur le site (config : ~/.audio2wave/depot.json) et les affiche par-dessus la projection. "
+                          "Seuls les fichiers apparus apres l'activation sont montres. Jamais enregistre dans un preset ni une scene.")
+
     shortcuts_label = tk.Label(frame, text=" (i) ", fg=a2w.GUI_ACCENT, font=a2w.GUI_FONT, cursor="question_arrow")
     shortcuts_label.pack(side="left", padx=(8, 0))
     Tooltip(shortcuts_label, SHORTCUTS_HELP)

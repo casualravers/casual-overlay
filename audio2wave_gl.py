@@ -10,14 +10,13 @@ deformations reactives a l'audio du micro.
 
 Dependances : pip install -r requirements-gl.txt (en plus de ffmpeg dans le PATH).
 
-Reutilise du depot audio2wave (dependance, importee depuis --a2w-dir, par defaut
-../audio2wave) :
+Reutilise audio2wave (copie interne : sources/audio2wave/, ou --a2w-dir pour en essayer une autre) :
   - audio2wave_live.parse_args()      : toutes les options du visuel (via --live-args),
   - audio2wave_live.producer_command() / spawn_producer() : commande ffmpeg identique,
   - common.list_audio_devices()       : inventaire dshow.
 Reimplemente ici : lecteur de frames (derniere frame ENTIERE gagne), fenetre glfw,
-rendu moderngl, capture sounddevice, analyse FFT/kick. Aucun fichier d'audio2wave
-n'est modifie.
+rendu moderngl, capture sounddevice, analyse FFT/kick. Les modifications de la copie d'audio2wave
+sont notees dans sources/audio2wave/VENDORED.md.
 """
 
 from __future__ import annotations
@@ -99,11 +98,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def bundled_paths(script_dir: Path, env_path: str = "") -> tuple[Path, str]:
-    """Version portable : (dossier d'audio2wave, PATH) quand le programme est livre avec ses dependances. audio2wave/ a cote du
-    programme l'emporte sur le depot voisin ; ffmpeg/ (ffmpeg.exe, ffprobe.exe) est ajoute en tete du PATH, donc `shutil.which`,
-    audio2wave et nos sous-processus le trouvent sans installation. Sans ces dossiers : comportement d'origine."""
-    a2w = script_dir / "audio2wave"
-    a2w_dir = a2w if (a2w / "audio2wave_live.py").is_file() else script_dir.parent / "audio2wave"
+    """(dossier d'audio2wave, PATH). audio2wave est interne : `audio2wave/` a cote du programme (version portable) l'emporte, puis
+    `sources/audio2wave/` (le depot) ; le depot voisin `../audio2wave` n'est plus qu'un dernier recours (ancien poste de dev). ffmpeg/
+    (ffmpeg.exe, ffprobe.exe), s'il est livre avec le programme, est ajoute en tete du PATH : `shutil.which`, audio2wave et nos
+    sous-processus le trouvent sans installation."""
+    candidates = (script_dir / "audio2wave", script_dir / "sources" / "audio2wave", script_dir.parent / "audio2wave")
+    a2w_dir = next((c for c in candidates if (c / "audio2wave_live.py").is_file()), candidates[1])
     ffmpeg = script_dir / "ffmpeg"
     if (ffmpeg / "ffmpeg.exe").is_file() or (ffmpeg / "ffmpeg").is_file():
         env_path = str(ffmpeg) + os.pathsep + env_path
@@ -172,7 +172,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--live-args", default=None,
                    help='Options transmises a audio2wave_live.py, ex: "--style radio --gain 20"')
     p.add_argument("--a2w-dir", default=os.environ.get("AUDIO2WAVE_DIR", str(DEFAULT_A2W_DIR)),
-                   help=f"Depot audio2wave (defaut: {DEFAULT_A2W_DIR})")
+                   help=f"Dossier d'audio2wave (defaut: {DEFAULT_A2W_DIR}, copie interne)")
     p.add_argument("--diagnostic", action="store_true",
                    help="Verifie ce PC (ffmpeg, OpenGL, micro, modules...) et quitte : code 1 s'il y a une erreur")
     p.add_argument("--list-devices", action="store_true", help="Liste les entrees DirectShow et quitte")

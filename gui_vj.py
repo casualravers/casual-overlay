@@ -10,6 +10,7 @@ from core import sessionlog
 from tkinter import ttk
 import audio2wave_gl as gl
 import json
+import icons
 import skin
 import time
 import tkinter as tk
@@ -587,9 +588,12 @@ def install(c):
         big = ("Segoe UI", 14, "bold")
         widgets_: dict = {}
 
-        def btn(text, command, row, col, span=1, bg=None, fg=None, key=None):
+        def btn(text, command, row, col, span=1, bg=None, fg=None, key=None, icon=None):
             b = tk.Button(win, text=text, command=command, font=big, relief="flat", bd=0, padx=10, pady=14, cursor="hand2",
                           bg=bg or a2w.GUI_BG, fg=fg or a2w.GUI_FG, activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+            if icon:                                  # icone a gauche du libelle (la console se lit de loin, dans le noir)
+                b._console_icon = skin.photo(b, icons.image(icon, 26, fg or a2w.GUI_FG))
+                b.configure(image=b._console_icon, compound="left", padx=14)
             b.grid(row=row, column=col, columnspan=span, sticky="nsew", padx=4, pady=4)
             if key:
                 widgets_[key] = b
@@ -600,15 +604,15 @@ def install(c):
         btn("\u25c0 Retour", back_scene, 0, 0, key="back")
         btn("\u25b6 VJ", vj_toggle, 0, 1, key="play")
         btn("Suivante \u25b6\u25b6", vj_advance, 0, 2, key="next")
-        sb = btn(strobe_text(), None, 1, 0, key="strobe")
+        sb = btn(strobe_text(), None, 1, 0, key="strobe", icon="bolt")
         sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
         sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
-        btn(build_text(), start_build, 1, 1, key="build")
-        btn("Drop", do_drop, 1, 2, key="drop")
-        btn("Verrou", toggle_scene_lock, 2, 0, key="lock")
-        btn("Tap tempo", do_tap, 2, 1, key="tap")
+        btn(build_text(), start_build, 1, 1, key="build", icon="up")
+        btn("Drop", do_drop, 1, 2, key="drop", icon="down")
+        btn("Verrou", toggle_scene_lock, 2, 0, key="lock", icon="lock")
+        btn("Tap tempo", do_tap, 2, 1, key="tap", icon="tap")
         btn("?", help_window, 2, 2, key="help")
-        btn("PANIQUE", do_panic, 3, 0, span=3, bg="#d92b2b", fg="#ffffff", key="panic")
+        btn("PANIQUE", do_panic, 3, 0, span=3, bg="#d92b2b", fg="#ffffff", key="panic", icon="alert")
         status = tk.Label(win, text="", anchor="w", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, font=("Segoe UI", 11), wraplength=520, justify="left")
         status.grid(row=4, column=0, columnspan=3, sticky="ew", padx=8, pady=(6, 0))
         meter = tk.Canvas(win, height=26, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
