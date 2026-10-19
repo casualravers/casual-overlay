@@ -1,0 +1,142 @@
+"""Commandes de salle du Mode VJ : tempo effectif, mode silence, strobe (appui, limiteur), panique, tap tempo.
+
+Fonctions et classes pures (aucune fenetre, aucun GL, stdlib seulement) : le temps est injecte, tout se teste sans materiel.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+def _unit(value, lo: float = 0.0, hi: float = 1.0) -> float:
+    return min(max(float(value), lo), hi)
+
+
+def effective_tempo(p: dict) -> float:
+    """Tempo reel : le master, ralenti par le mode silence (`idle` 0..1 vers `silence_tempo`)."""
+    return _unit(p.get("tempo", 1.0), 0.0, 2.0) * (1.0 - _unit(p.get("idle", 0.0)) * (1.0 - _unit(p.get("silence_tempo", 0.3))))
+
+
+class SilenceGuard:
+    """Mode silence : si le niveau (rms/basses/mediums/aigus normalises, 0 en silence) reste sous `silence_level` pendant
+    `silence_delay` secondes, `params["idle"]` monte vers 1 en 1,5 s (tempo reduit, overlay efface : fond seul) ; il redescend des
+    que le son revient. Desactive (`silence_on` 0) : toujours 0."""
+
+    FADE_S = 1.5
+
+    def __init__(self):
+        self._since: float | None = None
+        self._idle = 0.0
+        self._last: float | None = None
+
+    def update(self, params: dict, state: dict, now: float) -> float:
+        dt = 0.0 if self._last is None else min(max(now - self._last, 0.0), 0.5)
+        self._last = now
+        level = max(float(state.get(k, 0.0)) for k in ("rms", "bass", "mid", "high"))
+        silent = float(params.get("silence_on", 0.0)) >= 0.5 and level < float(params.get("silence_level", 0.03))
+        if silent:
+            if self._since is None:
+                self._since = now
+            target = 1.0 if now - self._since >= max(float(params.get("silence_delay", 4.0)), 0.0) else 0.0
+        else:
+            self._since, target = None, 0.0
+        step = dt / self.FADE_S
+        self._idle = min(self._idle + step, target) if target > self._idle else max(self._idle - step, target)
+        params["idle"] = self._idle
+        return self._idle
+
+
+def strobe_press(params: dict) -> None:
+    """Appui sur le strobe (bouton ou touche S) : manuel = eclairs tant que c'est maintenu ; kick / cadence = arme ou desarme."""
+    params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+    if params.get("strobe_mode", "manual") == "manual":
+        params["strobe_on"] = 1.0
+    else:
+        params["strobe_on"] = 0.0 if float(params.get("strobe_on", 0.0)) >= 0.5 else 1.0
+
+
+def strobe_release(params: dict) -> None:
+    if params.get("strobe_mode", "manual") == "manual":
+        params["strobe_on"] = 0.0
+
+
+STROBE_COOLDOWN_S = 3.0               # pause forcee apres une rafale trop longue
+
+
+class StrobeLimiter:
+    """Limiteur de strobe (securite du public : photosensibilite). Deux regles, appliquees a TOUS les eclairs du strobe (appui, kick,
+    cadence, montee) : (1) jamais plus de `max_hz` eclairs par seconde ; (2) une rafale continue (eclairs espaces de moins de 1 s)
+    ne dure pas plus de `max_s` secondes : ensuite pause forcee de `STROBE_COOLDOWN_S`. Pure (le temps est injecte), testable."""
+
+    GAP_S = 1.0
+
+    def __init__(self) -> None:
+        self.last = -1e9
+        self.burst_start: float | None = None
+        self.blocked_until = -1e9
+        self.trips = 0                                   # nombre de fois ou la duree maximale a coupe le strobe
+
+    def blocked(self, now: float) -> bool:
+        return now < self.blocked_until
+
+    def allow(self, now: float, max_hz: float, max_s: float) -> bool:
+        max_hz = _unit(max_hz, 1.0, 30.0)
+        max_s = _unit(max_s, 1.0, 120.0)
+        if now < self.blocked_until:
+            return False
+        if now - self.last > self.GAP_S:
+            self.burst_start = None                       # une pause d'une seconde remet la rafale a zero
+        if now - self.last < 1.0 / max_hz - 1e-9:
+            return False
+        if self.burst_start is None:
+            self.burst_start = now
+        elif now - self.burst_start > max_s:
+            self.blocked_until = now + STROBE_COOLDOWN_S
+            self.burst_start = None
+            self.trips += 1
+            return False
+        self.last = now
+        return True
+
+
+# Panique (bouton / touche X) : coupe d'un geste tout ce qui peut partir en vrille et rend une image propre (fond + logo tels que la
+# scene les a poses). Les reglages du logo, du fond et des medias ne sont pas touches.
+PANIC_RESET = {
+    "build": 0.0, "strobe_on": 0.0, "idle": 0.0, "silence_on": 0.0,
+    "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
+    "hue_master": 0.0, "hue_cycle": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
+    "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
+    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0,
+}
+
+
+def panic(params: dict) -> list[str]:
+    """Remet a zero ce qui deforme, masque ou fait clignoter l'image. Rend la liste des reglages qui ont change (pour le journal)."""
+    changed: list[str] = []
+    for key, value in PANIC_RESET.items():
+        if params.get(key) != value:
+            changed.append(key)
+        params[key] = value
+    for key, size in (("fx_on", 5), ("fxl_on", 4), ("noise_fx", 5)):
+        if any(params.get(key, [])):
+            changed.append(key)
+        params[key] = [0] * size
+    bg = str(params.get("bg_video") or "")
+    if params.get("bg_mode") == "video" and not (bg and Path(bg).is_file()):         # fond video sans fichier = ecran noir
+        params["bg_mode"] = "live"
+        changed.append("bg_mode")
+    params["strobe_hits"] = int(params.get("strobe_hits", 0))                       # pas d'eclair en attente
+    return changed
+
+
+def tap_bpm(taps: list[float], max_gap: float = 2.0, keep: int = 6) -> float | None:
+    """BPM d'une suite d'appuis (instants en secondes) : moyenne des derniers intervalles ; un trou de plus de `max_gap`
+    secondes recommence la serie. None tant qu'il y a moins de deux appuis valides. Pure."""
+    series: list[float] = []
+    for t in taps:
+        if series and t - series[-1] > max_gap:
+            series = []
+        series.append(t)
+    series = series[-(keep + 1):]
+    if len(series) < 2:
+        return None
+    mean = (series[-1] - series[0]) / (len(series) - 1)
+    return 60.0 / mean if mean > 0 else None

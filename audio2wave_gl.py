@@ -30,7 +30,6 @@ import json
 import math
 import os
 import queue
-import random
 import shlex
 import shutil
 import subprocess
@@ -61,8 +60,26 @@ PIL_ImageFont = _optional_import("PIL.ImageFont", "Pillow")
 
 
 import diagnostics  # noqa: E402  (stdlib seulement : sans dependance a installer)
-import params_schema  # noqa: E402  (table unique des reglages, stdlib)
-import sessionlog  # noqa: E402  (journal de session, stdlib)
+from core import params as core_params, params_schema, sessionlog  # noqa: E402,F401  (stdlib : table des reglages, journal de session)
+# Facade de compatibilite : ces noms vivent dans core/ (Python pur, sans GL ni Tk) et restent lisibles ici (`gl.X`).
+# Les chemins de fichiers se remplacent dans le module qui les possede (core.params.PARAMS_PATH, core.autosave.AUTOSAVE_PATH...).
+from core.params import (  # noqa: E402,F401
+    DEFAULT_LOGO_NAME, default_logo, DEFAULT_LOGO, PARAMS_PATH, FX_NAMES, DEFAULT_PARAMS, ROOM_KEYS, TRANSIENT_KEYS, MEMORY_KEYS,
+    coerce_params, OVERLAY_PRESETS_PATH, BACKGROUND_PRESETS_PATH, OVERLAY_PRESET_EXCLUDED, BG_KEYS, BG_AUTOMATION_KEYS,
+    OVERLAY_PRESETS, BACKGROUND_PRESETS, PresetBook, OVERLAY_BOOK, BACKGROUND_BOOK, _split_automation, capture_overlay,
+    capture_background, overlay_preset_values, background_preset_values, load_params, save_params
+)
+from core.automation import (  # noqa: E402,F401
+    AUTOMATION_POINTS, AUTOMATION_SPECS, FX_EFFECTS, curve_points, default_automation, merge_automation, _list_key, get_param,
+    set_param, set_fx_link, AutomationEngine
+)
+from core.controls import (  # noqa: E402,F401
+    strobe_press, strobe_release, STROBE_COOLDOWN_S, StrobeLimiter, PANIC_RESET, panic, tap_bpm, _unit, effective_tempo,
+    SilenceGuard
+)
+from core.autosave import (  # noqa: E402,F401
+    AUTOSAVE_PATH, AUTOSAVE_EVERY_S, write_autosave, read_autosave, clear_autosave, recover_autosave
+)
 
 
 def require_deps() -> None:
@@ -74,19 +91,6 @@ def require_deps() -> None:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SHADER_DIR = SCRIPT_DIR / "gl_shaders"
-DEFAULT_LOGO_NAME = "Casual Ravers - Kit_Sigle - Blanc.png"
-
-
-def default_logo(script_dir: Path) -> Path:
-    """Logo par defaut : `asset/images/` (rangement actuel des assets), sinon `asset/` (ancien emplacement)."""
-    for sub in ("images", ""):
-        path = script_dir / "asset" / sub / DEFAULT_LOGO_NAME
-        if path.is_file():
-            return path
-    return script_dir / "asset" / "images" / DEFAULT_LOGO_NAME
-
-
-DEFAULT_LOGO = default_logo(SCRIPT_DIR)
 
 
 def bundled_paths(script_dir: Path, env_path: str = "") -> tuple[Path, str]:
@@ -103,126 +107,6 @@ def bundled_paths(script_dir: Path, env_path: str = "") -> tuple[Path, str]:
 
 DEFAULT_A2W_DIR, _bundled_path = bundled_paths(SCRIPT_DIR, os.environ.get("PATH", ""))
 os.environ["PATH"] = _bundled_path
-PARAMS_PATH = Path.home() / ".audio2wave" / "gl_params.json"
-
-FX_NAMES = ["wobble", "ripple", "chroma", "glitch", "logo"]
-# Les reglages sont decrits UNE fois, dans params_schema.py (defaut, plage, enum, portee, doc) ; tout le reste en est derive.
-DEFAULT_PARAMS = params_schema.defaults(str(DEFAULT_LOGO))
-
-# --- Automations de reglages ------------------------------------------------------------
-# Meme principe que "Variation automatique" d'audio2wave (voir son CLAUDE.md): chaque reglage
-# automatise suit sa PROPRE courbe (AUTOMATION_POINTS points de controle boucles, interpoles
-# lineairement) a sa PROPRE vitesse, et la valeur est une fonction pure du temps. Le moteur
-# tourne ici, dans le fil de rendu (precision a l'image, et ca marche aussi sans --gui) ;
-# la GUI reprend l'editeur de courbes d'audio2wave et ne fait que lire/ecrire
-# params["_automation"].
-AUTOMATION_POINTS = 12       # meme valeur que AUTOMATE_CURVE_POINTS d'audio2wave (compatibilite des editeurs)
-
-# cle de params -> (libelle, min, max, courbe, periode en s, active par defaut). Min/max = plage
-# de l'automation (plus etroite que celle du curseur: un reglage automatise est PILOTE, le curseur
-# suit). Periodes volontairement premieres entre elles (pas de multiple commun) pour que
-# l'ensemble ne se repete jamais a l'identique. Actives par defaut: ce qui donne de la vie sans
-# rien deplacer (teinte, angle, carreaux, intensites d'effets); position, taille et opacite du
-# logo sont proposees mais coupees (une marque ne doit pas se promener sans qu'on l'ait voulu).
-AUTOMATION_SPECS: dict[str, tuple] = {
-    "bg_hue":           ("Teinte", 0.0, 0.5, "sinus", 79, True),
-    "bg_angle":         ("Angle du degrade", 20.0, 160.0, "sinus", 53, True),
-    "bg_speed":         ("Vitesse", 0.4, 1.8, "sinus", 37, True),
-    "bg_tile":          ("Taille des carreaux", 50.0, 150.0, "sinus", 29, True),
-    "bg_checker":       ("Contraste du damier", 0.06, 0.32, "sinus", 23, True),
-    "bg_flip":          ("Cadence du damier", 0.5, 3.5, "triangle", 47, True),
-    "logo_x":           ("Position X", 0.35, 0.65, "sinus", 43, False),
-    "logo_y":           ("Position Y", 0.42, 0.58, "sinus", 31, False),
-    "logo_scale":       ("Taille (image)", 0.30, 0.42, "sinus", 13, False),
-    "text_scale":       ("Taille du texte", 0.12, 0.20, "sinus", 13, False),
-    "logo_opacity":     ("Opacite", 0.6, 1.0, "sinus", 19, False),
-    "logo_pulse":       ("Pulsation", 0.05, 0.30, "sinus", 21, True),
-    "logo_glow":        ("Contour lumineux", 0.4, 1.5, "sinus", 11, True),
-    "logo_glow_radius": ("Rayon du contour", 0.6, 1.6, "sinus", 17, True),
-    "fx_int0":          ("Intensite wobble", 0.4, 1.2, "sinus", 19, True),
-    "fx_int1":          ("Intensite onde de choc", 0.4, 1.3, "sinus", 41, True),
-    "fx_int2":          ("Intensite aberration", 0.3, 1.2, "sinus", 7, True),
-    "fx_int3":          ("Intensite glitch", 0.15, 1.0, "aleatoire", 61, True),
-    "fx_int4":          ("Intensite logo", 0.6, 1.2, "sinus", 59, True),
-    # Effets de la couche logo (utiles seulement quand fx_link = 0). Periodes differentes de celles
-    # du fond: les deux couches ne respirent pas en phase.
-    "fxl_int0":         ("Logo: intensite wobble", 0.4, 1.2, "sinus", 67, True),
-    "fxl_int1":         ("Logo: intensite onde de choc", 0.4, 1.3, "sinus", 31, True),
-    "fxl_int2":         ("Logo: intensite aberration", 0.3, 1.2, "sinus", 71, True),
-    "fxl_int3":         ("Logo: intensite glitch", 0.15, 1.0, "aleatoire", 83, True),
-}
-
-FX_EFFECTS = 4               # wobble, ripple, chroma, glitch: les effets qui se deforment par couche
-
-
-def curve_points(name: str, n: int = AUTOMATION_POINTS, seed: int = 7) -> list[float]:
-    """Courbe de depart (valeurs 0..1, bouclee): memes formes que les presets d'audio2wave."""
-    if name == "triangle":
-        return [2 * (i / n) if i / n <= 0.5 else 2 * (1 - i / n) for i in range(n)]
-    if name == "carre":
-        return [1.0 if i / n < 0.5 else 0.0 for i in range(n)]
-    if name == "dents":
-        return [i / n for i in range(n)]
-    if name == "aleatoire":
-        rng = random.Random(seed)
-        return [rng.random() for _ in range(n)]
-    return [0.5 + 0.5 * math.sin(2 * math.pi * i / n) for i in range(n)]
-
-
-def default_automation() -> dict:
-    """Etat initial {cle: {"enabled", "points", "period"}}: celui de AUTOMATION_SPECS."""
-    return {key: {"enabled": bool(spec[5]), "points": curve_points(spec[3], seed=i), "period": float(spec[4])}
-            for i, (key, spec) in enumerate(AUTOMATION_SPECS.items())}
-
-
-def merge_automation(saved) -> dict:
-    """Etat sauve valide, complete par les valeurs par defaut (cle absente ou entree invalide)."""
-    merged = default_automation()
-    if isinstance(saved, dict):
-        for key, entry in saved.items():
-            if key not in merged or not isinstance(entry, dict):
-                continue
-            points = entry.get("points")
-            if isinstance(points, list) and len(points) == AUTOMATION_POINTS \
-                    and all(isinstance(v, (int, float)) for v in points):
-                merged[key]["points"] = [min(max(float(v), 0.0), 1.0) for v in points]
-            if isinstance(entry.get("period"), (int, float)) and entry["period"] > 0:
-                merged[key]["period"] = float(entry["period"])
-            if "enabled" in entry:
-                merged[key]["enabled"] = bool(entry["enabled"])
-    return merged
-
-
-def _list_key(key: str):
-    """'fx_int2' -> ('fx_int', 2), 'fxl_int0' -> ('fxl_int', 0), sinon None (reglage scalaire)."""
-    for prefix in ("fx_int", "fxl_int"):
-        if key.startswith(prefix) and key[len(prefix):].isdigit():
-            return prefix, int(key[len(prefix):])
-    return None
-
-
-def get_param(params: dict, key: str):
-    lk = _list_key(key)
-    return params[lk[0]][lk[1]] if lk else params[key]
-
-
-def set_param(params: dict, key: str, value: float) -> None:
-    lk = _list_key(key)
-    if lk:
-        params[lk[0]][lk[1]] = value
-    else:
-        params[key] = value
-
-
-def set_fx_link(params: dict, linked: bool) -> None:
-    """Lie ou delie les effets du logo et du fond. En deliant, les reglages du logo partent de ceux du
-    fond (rien ne saute a l'ecran)."""
-    if not linked and float(params["fx_link"]) >= 0.5:
-        for i in range(FX_EFFECTS):
-            params["fxl_on"][i] = params["fx_on"][i]
-            params["fxl_int"][i] = params["fx_int"][i]
-    params["fx_link"] = 1.0 if linked else 0.0
-
 
 def _hash01(i: int, seed: int) -> float:
     """Hachage entier -> [0, 1) (deterministe, sans etat)."""
@@ -287,220 +171,6 @@ def layer_effects(params: dict) -> tuple[list[float], list[float]]:
     if float(params["fx_link"]) >= 0.5:
         return bg, list(bg)
     return bg, [float(params["fxl_on"][i]) * float(params["fxl_int"][i]) * master for i in range(FX_EFFECTS)]
-
-
-def strobe_press(params: dict) -> None:
-    """Appui sur le strobe (bouton ou touche S) : manuel = eclairs tant que c'est maintenu ; kick / cadence = arme ou desarme."""
-    params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
-    if params.get("strobe_mode", "manual") == "manual":
-        params["strobe_on"] = 1.0
-    else:
-        params["strobe_on"] = 0.0 if float(params.get("strobe_on", 0.0)) >= 0.5 else 1.0
-
-
-def strobe_release(params: dict) -> None:
-    if params.get("strobe_mode", "manual") == "manual":
-        params["strobe_on"] = 0.0
-
-
-STROBE_COOLDOWN_S = 3.0               # pause forcee apres une rafale trop longue
-
-
-class StrobeLimiter:
-    """Limiteur de strobe (securite du public : photosensibilite). Deux regles, appliquees a TOUS les eclairs du strobe (appui, kick,
-    cadence, montee) : (1) jamais plus de `max_hz` eclairs par seconde ; (2) une rafale continue (eclairs espaces de moins de 1 s)
-    ne dure pas plus de `max_s` secondes : ensuite pause forcee de `STROBE_COOLDOWN_S`. Pure (le temps est injecte), testable."""
-
-    GAP_S = 1.0
-
-    def __init__(self) -> None:
-        self.last = -1e9
-        self.burst_start: float | None = None
-        self.blocked_until = -1e9
-        self.trips = 0                                   # nombre de fois ou la duree maximale a coupe le strobe
-
-    def blocked(self, now: float) -> bool:
-        return now < self.blocked_until
-
-    def allow(self, now: float, max_hz: float, max_s: float) -> bool:
-        max_hz = _unit(max_hz, 1.0, 30.0)
-        max_s = _unit(max_s, 1.0, 120.0)
-        if now < self.blocked_until:
-            return False
-        if now - self.last > self.GAP_S:
-            self.burst_start = None                       # une pause d'une seconde remet la rafale a zero
-        if now - self.last < 1.0 / max_hz - 1e-9:
-            return False
-        if self.burst_start is None:
-            self.burst_start = now
-        elif now - self.burst_start > max_s:
-            self.blocked_until = now + STROBE_COOLDOWN_S
-            self.burst_start = None
-            self.trips += 1
-            return False
-        self.last = now
-        return True
-
-
-# Panique (bouton / touche X) : coupe d'un geste tout ce qui peut partir en vrille et rend une image propre (fond + logo tels que la
-# scene les a poses). Les reglages du logo, du fond et des medias ne sont pas touches.
-PANIC_RESET = {
-    "build": 0.0, "strobe_on": 0.0, "idle": 0.0, "silence_on": 0.0,
-    "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
-    "hue_master": 0.0, "hue_cycle": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
-    "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
-    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0,
-}
-
-
-def panic(params: dict) -> list[str]:
-    """Remet a zero ce qui deforme, masque ou fait clignoter l'image. Rend la liste des reglages qui ont change (pour le journal)."""
-    changed: list[str] = []
-    for key, value in PANIC_RESET.items():
-        if params.get(key) != value:
-            changed.append(key)
-        params[key] = value
-    for key, size in (("fx_on", 5), ("fxl_on", 4), ("noise_fx", 5)):
-        if any(params.get(key, [])):
-            changed.append(key)
-        params[key] = [0] * size
-    bg = str(params.get("bg_video") or "")
-    if params.get("bg_mode") == "video" and not (bg and Path(bg).is_file()):         # fond video sans fichier = ecran noir
-        params["bg_mode"] = "live"
-        changed.append("bg_mode")
-    params["strobe_hits"] = int(params.get("strobe_hits", 0))                       # pas d'eclair en attente
-    return changed
-
-
-def tap_bpm(taps: list[float], max_gap: float = 2.0, keep: int = 6) -> float | None:
-    """BPM d'une suite d'appuis (instants en secondes) : moyenne des derniers intervalles ; un trou de plus de `max_gap`
-    secondes recommence la serie. None tant qu'il y a moins de deux appuis valides. Pure."""
-    series: list[float] = []
-    for t in taps:
-        if series and t - series[-1] > max_gap:
-            series = []
-        series.append(t)
-    series = series[-(keep + 1):]
-    if len(series) < 2:
-        return None
-    mean = (series[-1] - series[0]) / (len(series) - 1)
-    return 60.0 / mean if mean > 0 else None
-
-
-AUTOSAVE_PATH = Path.home() / ".audio2wave" / "autosave.json"
-AUTOSAVE_EVERY_S = 60.0
-
-
-def write_autosave(params: dict, extra: dict | None = None, path: Path | None = None) -> bool:
-    """Instantane de l'etat courant (reglages + scene / set actifs). Ecriture atomique ; un echec est silencieux (rend False)."""
-    path = path or AUTOSAVE_PATH
-    try:
-        data = {"saved_at": time.time(), "params": {k: v for k, v in params.items() if k not in TRANSIENT_KEYS}, **(extra or {})}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        os.replace(tmp, path)
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
-
-
-def read_autosave(path: Path | None = None) -> dict | None:
-    """Dernier instantane, ou None (absent, illisible)."""
-    try:
-        data = json.loads((path or AUTOSAVE_PATH).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) and isinstance(data.get("params"), dict) else None
-    except (OSError, ValueError):
-        return None
-
-
-def clear_autosave(path: Path | None = None) -> None:
-    """Sortie propre : plus d'instantane (sa presence au lancement suivant signale un arret brutal)."""
-    try:
-        (path or AUTOSAVE_PATH).unlink()
-    except OSError:
-        pass
-
-
-# Portees des reglages (voir params_schema.py) : salle (Mode VJ, relus a chaque image, jamais captures par les presets ni les scenes),
-# etats du moment (ni sauves ni recharges), contenu d'une memoire de masters.
-ROOM_KEYS = params_schema.ROOM_KEYS
-TRANSIENT_KEYS = params_schema.TRANSIENT_KEYS
-MEMORY_KEYS = params_schema.MEMORY_KEYS
-
-
-def _unit(value, lo: float = 0.0, hi: float = 1.0) -> float:
-    return min(max(float(value), lo), hi)
-
-
-def effective_tempo(p: dict) -> float:
-    """Tempo reel : le master, ralenti par le mode silence (`idle` 0..1 vers `silence_tempo`)."""
-    return _unit(p.get("tempo", 1.0), 0.0, 2.0) * (1.0 - _unit(p.get("idle", 0.0)) * (1.0 - _unit(p.get("silence_tempo", 0.3))))
-
-
-class SilenceGuard:
-    """Mode silence : si le niveau (rms/basses/mediums/aigus normalises, 0 en silence) reste sous `silence_level` pendant
-    `silence_delay` secondes, `params["idle"]` monte vers 1 en 1,5 s (tempo reduit, overlay efface : fond seul) ; il redescend des
-    que le son revient. Desactive (`silence_on` 0) : toujours 0."""
-
-    FADE_S = 1.5
-
-    def __init__(self):
-        self._since: float | None = None
-        self._idle = 0.0
-        self._last: float | None = None
-
-    def update(self, params: dict, state: dict, now: float) -> float:
-        dt = 0.0 if self._last is None else min(max(now - self._last, 0.0), 0.5)
-        self._last = now
-        level = max(float(state.get(k, 0.0)) for k in ("rms", "bass", "mid", "high"))
-        silent = float(params.get("silence_on", 0.0)) >= 0.5 and level < float(params.get("silence_level", 0.03))
-        if silent:
-            if self._since is None:
-                self._since = now
-            target = 1.0 if now - self._since >= max(float(params.get("silence_delay", 4.0)), 0.0) else 0.0
-        else:
-            self._since, target = None, 0.0
-        step = dt / self.FADE_S
-        self._idle = min(self._idle + step, target) if target > self._idle else max(self._idle - step, target)
-        params["idle"] = self._idle
-        return self._idle
-
-
-class AutomationEngine:
-    """Applique les automations a `params` (fil de rendu, une fois par image). Une automation
-    repart du debut de sa courbe chaque fois qu'elle est (re)activee ; `auto_master` = 0 fige
-    toutes les valeurs la ou elles sont (sans toucher aux interrupteurs individuels)."""
-
-    def __init__(self):
-        self._start: dict[str, float] = {}
-        self._last: float | None = None
-        self._clock = 0.0                  # temps des courbes : avance au rythme du tempo (params["tempo"])
-
-    def step(self, params: dict, now: float) -> None:
-        gap = 0.0 if self._last is None else max(now - self._last, 0.0)
-        self._last = now
-        self._clock += gap * effective_tempo(params)
-        now = self._clock
-        data = params.get("_automation")
-        if not isinstance(data, dict):
-            return
-        if float(params.get("auto_master", 1.0)) < 0.5:
-            self._start.clear()            # a la reprise, chaque courbe repart de son debut
-            return
-        for key, entry in data.items():
-            spec = AUTOMATION_SPECS.get(key)
-            if spec is None or not entry.get("enabled"):
-                self._start.pop(key, None)
-                continue
-            points = entry["points"]
-            n = len(points)
-            start = self._start.setdefault(key, now)
-            pos = ((now - start) / max(0.5, float(entry["period"])) % 1.0) * n
-            i0 = int(pos) % n
-            frac = pos - int(pos)
-            v = points[i0] + (points[(i0 + 1) % n] - points[i0]) * frac
-            set_param(params, key, spec[1] + (spec[2] - spec[1]) * v)
 
 
 # --- Analyse audio -----------------------------------------------------------------
@@ -1529,206 +1199,6 @@ class Renderer:
             self._fb_i = 1 - self._fb_i
 
 
-# --- Parametres en direct -------------------------------------------------------------
-
-def coerce_params(saved: dict, base: dict | None = None) -> dict:
-    """Reglages valides tires de `saved` (fichier sauve ou preset) par-dessus `base` (defaut: les valeurs
-    par defaut) : cle inconnue, type, longueur de liste ou valeur d'enum incorrects = ignores, nombre hors plage ramene dans la plage
-    (params_schema.validate). `_automation` est
-    fusionne avec l'ambiance par defaut (merge_automation) s'il est present."""
-    params = json.loads(json.dumps(base if base is not None else DEFAULT_PARAMS))
-    for key in DEFAULT_PARAMS:
-        if key not in saved:
-            continue
-        ok, value = params_schema.validate(key, saved[key])      # type, longueur, enum ; un nombre hors plage est ramene dedans
-        if ok:
-            params[key] = value
-    if isinstance(saved.get("_automation"), dict):
-        params["_automation"] = merge_automation(saved["_automation"])
-    return params
-
-
-# Presets propres a l'overlay : memes gestes que les presets live d'audio2wave, mais dans leurs PROPRES fichiers et
-# avec une mecanique modifiable (PresetBook). Deux jeux decorreles, comme les deux parties de la GUI :
-#  - OVERLAY (logo, effets, halo, fonte, cellules, automations correspondantes) : aucune cle `bg_*` ;
-#  - FOND (source Audio2wave / motif genere et ses reglages, automations `bg_*`).
-# Un preset = des valeurs posees par-dessus les reglages par defaut ; "sensibilite" en est exclue (elle depend du
-# micro et de la salle, pas du look).
-OVERLAY_PRESETS_PATH = Path.home() / ".audio2wave" / "overlay_presets.json"
-BACKGROUND_PRESETS_PATH = Path.home() / ".audio2wave" / "background_presets.json"
-OVERLAY_PRESET_EXCLUDED = params_schema.OVERLAY_PRESET_EXCLUDED     # sensibilite + reglages de salle : ni presets ni scenes n'y touchent
-BG_KEYS = params_schema.BG_KEYS                                     # portee « fond » (bg_master est un reglage de SALLE, pas du fond)
-BG_AUTOMATION_KEYS = tuple(k for k in AUTOMATION_SPECS if params_schema.is_bg(k))
-OVERLAY_PRESETS: dict[str, dict] = {
-    "default": {},
-    # logo net, effets doux : le decorrele fond/logo dans son usage le plus simple
-    "sobre": {"fx_link": 0.0, "fxl_on": [0, 0, 0, 0], "fx_on": [1, 1, 0, 0, 1], "fx_int": [0.7, 0.7, 1.0, 1.0, 1.0],
-              "master": 0.8, "logo_pulse": 0.06, "logo_jitter": 0.0, "logo_glow": 0.5,
-              "holo_on": 1.0, "holo_intensity": 0.8, "holo_warp": 0.7},
-    # halo holographique ample et contour magenta
-    "neon": {"holo_on": 1.0, "holo_intensity": 1.5, "holo_reach": 1.8, "holo_react": 0.5, "logo_glow": 1.4,
-             "logo_glow_color": "#ff3df2", "fx_link": 0.0, "fxl_on": [0, 0, 1, 1], "fxl_int": [1.0, 1.0, 0.8, 0.6]},
-    # tout a fond, tout reagit
-    "chaos": {"master": 1.3, "fx_int": [1.6, 1.4, 1.5, 1.3, 1.4], "logo_pulse": 0.25, "logo_jitter": 0.012,
-              "holo_react": 1.0, "fx_link": 0.0, "fxl_on": [1, 1, 1, 1], "fxl_int": [1.4, 1.2, 1.4, 1.2]},
-}
-BACKGROUND_PRESETS: dict[str, dict] = {
-    "default": {},
-    "sobre": {"bg_react": 0.4},
-    # fond sombre duo
-    "neon": {"bg_mode": "pattern", "bg_palette": "duo", "bg_color1": "#14003a", "bg_color2": "#00e5ff",
-             "bg_checker": 0.08, "bg_angle": 35.0},
-    "chaos": {"bg_react": 1.6, "bg_speed": 2.2, "bg_flip": 4.0},
-}
-
-
-class PresetBook:
-    """Presets integres (`builtin`, dans le code) + presets utilisateur (JSON `path`), comme PresetStore d'audio2wave_live
-    mais **tout est modifiable** : mettre a jour un integre en enregistre une version utilisateur qui le remplace, le
-    supprimer le masque (liste reservee `_deleted` du meme fichier), `restore_builtins()` rend les integres d'origine.
-    `default` reste toujours present et toujours **en tete** : le supprimer revient a sa version d'origine."""
-
-    DELETED = "_deleted"
-
-    def __init__(self, builtin: dict[str, dict], path_getter):
-        self.builtin = builtin
-        self._path_getter = path_getter        # le chemin est relu a chaque appel (les tests le remplacent)
-
-    @property
-    def path(self) -> Path:
-        return Path(self._path_getter())
-
-    def _read(self) -> dict:
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-
-    def load_user(self) -> dict[str, dict]:
-        return {k: v for k, v in self._read().items() if k != self.DELETED and isinstance(v, dict)}
-
-    def deleted(self) -> list[str]:
-        value = self._read().get(self.DELETED)
-        return [n for n in value if isinstance(n, str)] if isinstance(value, list) else []
-
-    def all(self) -> dict[str, dict]:
-        """Tous les presets, `default` en tete puis ordre alphabetique."""
-        hidden = set(self.deleted())
-        merged = {n: v for n, v in self.builtin.items() if n not in hidden}
-        merged.update(self.load_user())
-        merged.setdefault("default", self.builtin.get("default", {}))
-        names = ["default"] + sorted(n for n in merged if n != "default")
-        return {n: merged[n] for n in names}
-
-    def names(self) -> list[str]:
-        return list(self.all())
-
-    def save(self, name: str, overrides: dict) -> None:
-        data = self._read()
-        data[name] = overrides
-        data[self.DELETED] = [n for n in self.deleted() if n != name]
-        self._write(data)
-
-    def delete(self, name: str) -> str | None:
-        """'reset' (default : retour a l'original), 'deleted', ou None si le nom n'existe pas."""
-        data = self._read()
-        if name == "default":
-            if "default" not in data:
-                return "reset"
-            del data["default"]
-            self._write(data)
-            return "reset"
-        if name not in self.all():
-            return None
-        data.pop(name, None)
-        if name in self.builtin:
-            data[self.DELETED] = sorted(set(self.deleted()) | {name})
-        self._write(data)
-        return "deleted"
-
-    def is_modified(self, name: str) -> bool:
-        return name in self.builtin and name in self.load_user()
-
-    def restore_builtins(self) -> None:
-        data = {k: v for k, v in self._read().items() if k != self.DELETED and k not in self.builtin}
-        self._write(data)
-
-
-OVERLAY_BOOK = PresetBook(OVERLAY_PRESETS, lambda: OVERLAY_PRESETS_PATH)
-BACKGROUND_BOOK = PresetBook(BACKGROUND_PRESETS, lambda: BACKGROUND_PRESETS_PATH)
-
-
-def _split_automation(state, current: dict, want_bg: bool) -> dict:
-    """Etat d'automation : les entrees `bg_*` (want_bg) ou toutes les autres, venant de `state` ; le reste reste celui de
-    `current`."""
-    merged = merge_automation(current.get("_automation"))
-    for key, entry in merge_automation(state).items():
-        if params_schema.is_bg(key) == want_bg:
-            merged[key] = entry
-    return merged
-
-
-def capture_overlay(params: dict) -> dict:
-    """Instantane des reglages de l'overlay pour un preset (sans le fond ni ce qui depend du materiel)."""
-    snap = json.loads(json.dumps({k: v for k, v in params.items()
-                                  if (k in DEFAULT_PARAMS or k == "_automation") and k not in BG_KEYS}))
-    for key in OVERLAY_PRESET_EXCLUDED:
-        snap.pop(key, None)
-    if "_automation" in snap:
-        snap["_automation"] = {k: v for k, v in snap["_automation"].items() if k not in BG_AUTOMATION_KEYS}
-    return snap
-
-
-def capture_background(params: dict) -> dict:
-    """Instantane des reglages du fond (source, motif, automations `bg_*`)."""
-    snap = json.loads(json.dumps({k: params[k] for k in BG_KEYS if k in params}))
-    if "_automation" in params:
-        snap["_automation"] = json.loads(json.dumps({k: v for k, v in params["_automation"].items()
-                                                     if k in BG_AUTOMATION_KEYS}))
-    return snap
-
-
-def overlay_preset_values(overrides: dict, current: dict) -> dict:
-    """Reglages a appliquer pour un preset overlay : valeurs par defaut + `overrides` (valides), sauf ce qui est exclu
-    ou appartient au fond (garde la valeur courante, meme si un ancien preset contenait des `bg_*`). L'automation
-    n'est touchee que si le preset en contient une, et jamais pour les reglages du fond."""
-    values = coerce_params(overrides)
-    for key in OVERLAY_PRESET_EXCLUDED + BG_KEYS:
-        values[key] = current.get(key, DEFAULT_PARAMS[key])
-    if "_automation" in overrides:
-        values["_automation"] = _split_automation(overrides["_automation"], current, want_bg=False)
-    else:
-        values.pop("_automation", None)
-    return values
-
-
-def background_preset_values(overrides: dict, current: dict) -> dict:
-    """Reglages a appliquer pour un preset de fond : seulement les cles `bg_*` (defaut + preset) et, si le preset en
-    contient, les automations `bg_*`. Tout le reste (logo, effets, sensibilite) garde sa valeur courante."""
-    full = coerce_params(overrides)
-    values = {k: full[k] for k in BG_KEYS}
-    if "_automation" in overrides:
-        values["_automation"] = _split_automation(overrides["_automation"], current, want_bg=True)
-    return values
-
-
-def load_params() -> dict:
-    params = json.loads(json.dumps(DEFAULT_PARAMS))
-    try:
-        saved = json.loads(PARAMS_PATH.read_text(encoding="utf-8"))
-        params = coerce_params({k: v for k, v in saved.items() if k not in TRANSIENT_KEYS})
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as exc:
-        print(f"Reglages ignores ({PARAMS_PATH}): {exc}", file=sys.stderr)
-    return params
-
-
 def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> tuple[float, float, float]:
     """'#rrggbb' -> (r, g, b) en 0..1 ; valeur invalide -> couleur de repli."""
     for candidate in (text, fallback):
@@ -1739,12 +1209,6 @@ def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> 
             except ValueError:
                 pass
     return (0.37, 0.83, 0.78)
-
-
-def save_params(params: dict) -> None:
-    PARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    saved = {k: v for k, v in params.items() if k not in TRANSIENT_KEYS}          # idle, montee, strobe arme : etats du moment
-    PARAMS_PATH.write_text(json.dumps(saved, indent=2), encoding="utf-8")
 
 
 # --- Pont vers audio2wave_live ---------------------------------------------------------
@@ -2508,28 +1972,6 @@ class Session:
         self.scene_requests: queue.SimpleQueue = queue.SimpleQueue()   # F1..F9 (fil GL) -> la GUI applique la scene
 
 
-def recover_autosave(params: dict, path: Path | None = None) -> tuple[dict, str]:
-    """Un instantane present au lancement = la session precedente ne s'est pas terminee proprement (plantage, coupure) : ses reglages
-    reprennent la place de `gl_params.json`. L'instantane est mis de cote (`.precedent`), pas efface. Rend (reglages, message)."""
-    path = path or AUTOSAVE_PATH
-    snap = read_autosave(path)
-    if snap is None:
-        return params, ""
-    try:
-        os.replace(path, path.with_suffix(".precedent.json"))
-    except OSError:
-        pass
-    try:
-        recovered = coerce_params({k: v for k, v in snap["params"].items() if k not in TRANSIENT_KEYS})
-    except Exception as exc:
-        sessionlog.error("Auto-sauvegarde illisible : ignoree", exc)
-        return params, ""
-    when = time.strftime("%H:%M", time.localtime(float(snap.get("saved_at", time.time()))))
-    scene = snap.get("scene") or "?"
-    sessionlog.event(f"Reprise apres arret brutal : reglages auto-sauves de {when} (scene '{scene}')")
-    return recovered, f"Arret brutal detecte : reglages de {when} restaures (derniere scene : {scene})"
-
-
 def run_app(args, live, live_args, render_size: tuple[int, int]) -> None:
     sessionlog.setup()
     sessionlog.install_hooks()
@@ -2953,8 +2395,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 s.status["msg"] = "Erreur de shader (voir la console), ancien programme conserve"
         elif name == "save":
             save_params(params)
-            print(f"Reglages sauves dans {PARAMS_PATH}")
-            s.status["msg"] = f"Reglages sauves ({PARAMS_PATH.name})"
+            print(f"Reglages sauves dans {core_params.PARAMS_PATH}")
+            s.status["msg"] = f"Reglages sauves ({core_params.PARAMS_PATH.name})"
         elif name == "holo":
             params["holo_on"] = 0.0 if float(params["holo_on"]) >= 0.5 else 1.0
             print(f"halo holographique: {'on' if params['holo_on'] >= 0.5 else 'off'}")

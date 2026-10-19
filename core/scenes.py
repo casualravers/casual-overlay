@@ -17,8 +17,9 @@ import random
 import re
 from pathlib import Path
 
-import audio2wave_gl as gl
-import randomizer
+from core import automation as auto
+from core import params as prm
+from core import randomizer
 
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
 MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : quatre emplacements
@@ -46,7 +47,7 @@ def live_preset_name(name: str) -> str:
 
 class MasterBook:
     """Memoires de masters : `MASTER_SLOTS` emplacements, chacun `{"name", "values"}` ou vide (None). `values` ne garde que les cles de
-    `gl.MEMORY_KEYS` (reglages de salle sans etats du moment), validees par `coerce_params`. Fichier JSON illisible = emplacements vides."""
+    `params.MEMORY_KEYS` (reglages de salle sans etats du moment), validees par `coerce_params`. Fichier JSON illisible = emplacements vides."""
 
     def __init__(self, path_getter) -> None:
         self._path_getter = path_getter
@@ -64,7 +65,7 @@ class MasterBook:
         out: list = [None] * MASTER_SLOTS
         for i, slot in enumerate(raw[:MASTER_SLOTS] if isinstance(raw, list) else []):
             if isinstance(slot, dict) and isinstance(slot.get("values"), dict) and isinstance(slot.get("name"), str):
-                values = {k: v for k, v in gl.coerce_params(slot["values"]).items() if k in gl.MEMORY_KEYS and k in slot["values"]}
+                values = {k: v for k, v in prm.coerce_params(slot["values"]).items() if k in prm.MEMORY_KEYS and k in slot["values"]}
                 out[i] = {"name": slot["name"][:MAX_NAME] or f"M{i + 1}", "values": values}
         return out
 
@@ -73,7 +74,7 @@ class MasterBook:
             return False
         slots = self.slots()
         slots[index] = {"name": (name or "").strip()[:MAX_NAME] or f"M{index + 1}",
-                        "values": json.loads(json.dumps({k: params[k] for k in gl.MEMORY_KEYS if k in params}))}
+                        "values": json.loads(json.dumps({k: params[k] for k in prm.MEMORY_KEYS if k in params}))}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps({"version": 1, "slots": slots}, indent=2), encoding="utf-8")
         return True
@@ -437,23 +438,23 @@ def capture_scene(name: str, params: dict, mode: str, live_overrides: dict | Non
         "bg": bg_mode if own else "live",
         "mode": None if own else mode,
         "live_overrides": None if own else strip_live_overrides(live_overrides),
-        "fond": gl.capture_background(params) if own else None,
-        "overlay": gl.capture_overlay(params),
+        "fond": prm.capture_background(params) if own else None,
+        "overlay": prm.capture_overlay(params),
     }
 
 
 def scene_values(scene: dict, current: dict) -> dict:
     """Reglages overlay a poser pour la scene : le reglage overlay (jamais le fond) + soit le motif genere, soit
     seulement `bg_mode = live` (le visuel d'audio2wave est regle a part, par son propre preset). Meme forme que
-    `gl.overlay_preset_values` (`_automation` complet si la scene en a)."""
-    values = gl.overlay_preset_values(scene.get("overlay") or {}, current)
+    `params.overlay_preset_values` (`_automation` complet si la scene en a)."""
+    values = prm.overlay_preset_values(scene.get("overlay") or {}, current)
     if scene.get("bg") in ("pattern", "video") and isinstance(scene.get("fond"), dict):
-        bg = gl.background_preset_values(scene["fond"], current)
+        bg = prm.background_preset_values(scene["fond"], current)
         bg_auto = bg.pop("_automation", None)
         values.update(bg)
         if bg_auto is not None:
-            merged = gl.merge_automation(values.get("_automation", current.get("_automation")))
-            for key in gl.BG_AUTOMATION_KEYS:
+            merged = auto.merge_automation(values.get("_automation", current.get("_automation")))
+            for key in prm.BG_AUTOMATION_KEYS:
                 merged[key] = bg_auto[key]
             values["_automation"] = merged
         values["bg_mode"] = scene["bg"]           # "pattern" ou "video"
@@ -479,7 +480,7 @@ def media_values(media: dict | None, current: dict) -> dict:
     """Reglages a poser pour `media` (valides, seulement les cles de MEDIA_KEYS) ; {} si aucun media."""
     if not isinstance(media, dict) or not media:
         return {}
-    full = gl.coerce_params({k: v for k, v in media.items() if k in MEDIA_KEYS})
+    full = prm.coerce_params({k: v for k, v in media.items() if k in MEDIA_KEYS})
     return {k: full[k] for k in MEDIA_KEYS if k in media}
 
 

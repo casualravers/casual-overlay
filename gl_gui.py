@@ -42,13 +42,12 @@ from tkinter import colorchooser, filedialog, simpledialog, ttk
 
 import audio2wave_gl as gl
 import diagnostics
-import randomizer
-import sessionlog
 import skin
 import theme
 import gui_colors
 import gui_gates
-import scenes
+from core import params as core_params
+from core import randomizer, scenes, sessionlog
 
 REFRESH_MS = 500
 METER_MS = 60
@@ -659,7 +658,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if projection is not None and not projection.running():
             if name == "save":
                 gl.save_params(params)
-                s.status["msg"] = f"Reglages sauves ({gl.PARAMS_PATH.name})"
+                s.status["msg"] = f"Reglages sauves ({core_params.PARAMS_PATH.name})"
             elif name in ("reload", "hud", "fullscreen"):
                 s.status["msg"] = "Disponible quand la projection est ouverte"
             return

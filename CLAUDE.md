@@ -38,6 +38,32 @@ recommande** : `moderngl`/`glcontext` n'ont pas de wheel pour Python 3.14 et leu
 compilation exige MSVC. Environnement de dev : `py -3.12 -m venv .venv` puis
 `.venv\Scripts\python.exe -m pip install -r requirements-gl.txt`.
 
+## Structure du depot : `core/` (Python pur) au-dessus du moteur et de la GUI
+
+```
+core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun numpy) : se teste partout
+  params_schema  table unique des reglages (defaut, plage, enum, portee, doc)
+  params         DEFAULT_PARAMS, validation (coerce_params), presets overlay / fond, capture, gl_params.json, logo par defaut
+  automation     courbes, AutomationEngine, liaison fond / logo (get_param, set_param, set_fx_link)
+  controls       tempo effectif, SilenceGuard, strobe (appui), StrobeLimiter, panique, tap tempo
+  autosave       instantane toutes les minutes, reprise apres un arret brutal
+  sessionlog     journal de session
+  scenes         scenes, sets, memoires de masters (stockage, export / import)
+  randomizer     Full Randomizer (banques d'assets, tirages)
+audio2wave_gl.py  moteur : rendu GL, analyse audio, lecteurs ffmpeg, Projection, demarrage ; ré-exporte les noms de core/ (`gl.X`)
+gl_gui.py + skin / theme / gui_*   GUI Tk (importe core/ et le moteur)
+```
+
+**Regle de dependance** : `core/` n'importe jamais le moteur (`audio2wave_gl`), la GUI, Tk, numpy, GL, PIL ni audio2wave ; le moteur et la GUI
+importent `core/`. `check_gl.py` (`check_core_purity`) l'impose par l'analyse des imports et en important tout `core/` dans un interpreteur
+qui interdit ces modules. Un module deplace dans `core/` l'a ete **tel quel** (blocs coupes, pas reecrits) ; seuls changent les imports.
+- **Facade** : `audio2wave_gl` re-exporte les noms deplaces (`gl.coerce_params`, `gl.panic`, `gl.AutomationEngine`...) pour que le code et les tests
+  existants marchent ; les nouveaux usages importent `core/` directement. **Les chemins de fichiers se remplacent dans le module qui les possede**
+  (`core.params.PARAMS_PATH` / `OVERLAY_PRESETS_PATH` / `BACKGROUND_PRESETS_PATH`, `core.autosave.AUTOSAVE_PATH`, `core.scenes.SCENES_PATH` /
+  `MASTERS_PATH`) : remplacer l'alias `gl.X` ne change rien aux fonctions de core/ (c'est ce que font les tests).
+- Le dossier portable embarque `core/` entier (`APP_DIRS`), verifie par le script (diagnostic + rendu synthetique avec le Python du dossier).
+- Suite prevue : decouper `build_window` (gl_gui) par panneaux, sortir le moteur de rendu en `engine/`, puis (si audio2wave est internalise)
+  `sources/` ; la GUI ne devra parler au moteur que par `Session` (params, commandes, requetes).
 ## Design de la fenetre de reglages (`theme.py`, `skin.py`)
 
 Direction : **sombre sobre, un accent fin par partie** (LIVE bleu `#3b82f6`, OVERLAY violet, SCENES ambre), boutons arrondis, radios en
@@ -155,7 +181,7 @@ micro --WASAPI--> sounddevice -> RingBuffer -> AudioAnalyzer (fil) -> FeatureExt
         rgba premultiplie) -> passe 2 (effets par couche, logo pose sur le fond, HUD)
 ```
 
-Tout est dans [audio2wave_gl.py](audio2wave_gl.py) ; les GLSL sont dans `gl_shaders/`
+Le moteur est dans [audio2wave_gl.py](audio2wave_gl.py) (le Python pur est dans core/, voir plus haut) ; les GLSL sont dans `gl_shaders/`
 (`quad.vert`, `scene.frag`, `post.frag`, rechargeables a chaud avec R).
 
 - **Le rendu tourne a la cadence de l'ecran, pas a celle de ffmpeg** (30 fps) : la derniere
@@ -391,7 +417,7 @@ hysterese + delai minimum 0,45 s, environ un coup toutes les 1,7 s). Phase integ
 - `check_gl.py` (`check_noise`) : plage, determinisme, cadence des coups et delai minimum, houle ni plate ni saturee, dt = 0,
   rendu **sans aucun son** (chaque effet coche bouge ; rien de coche ou intensite 0 = image inchangee) et GUI (cases, preset).
 
-### Scenes (scenes.py, barre en haut de la GUI, F1 a F9)
+### Scenes (core/scenes.py, barre en haut de la GUI, F1 a F9)
 
 Une scene change tout le look d'un geste. **Scene = (fond audio2wave OU motif genere) + overlay** (le motif genere REMPLACE le
 visuel d'audio2wave, il ne le complete pas) :
@@ -455,7 +481,7 @@ visuel d'audio2wave, il ne le complete pas) :
     - **Construction** : le panneau est construit **une seule fois** (`master_box`, parent persistant = la barre, replace a droite de chaque nouvelle liste par `pack(in_=...)` + `lift()`) et **chaque onglet se remplit a sa premiere selection** (`new_tab(nom, fill)`) : le reconstruire avec la liste et habiller ~30 curseurs gelait la fenetre. Les tests selectionnent les onglets un a un avant de chercher leurs widgets. Le **Verrou** actif est aussi signale par un bouton ambre « Verrou ● » dans la barre (cliquer deverrouille) : sans lui Play, Suivante, F1..F9 et les tirages semblaient morts. `vj_tick` isole chaque etape et reprogramme TOUJOURS le tick suivant (une erreur ne doit jamais tuer le minuteur du VJ). Mesure : ouvrir le panneau etendu avec 12 scenes prend ~2,3 s et un rafraichissement force ~1,2 s (lignes de la liste, avant et apres l'espace de controle : pas lie a lui).
     - Reglages de salle : `gl.ROOM_KEYS` (dans `OVERLAY_PRESET_EXCLUDED` : ni presets ni scenes ni `reload` n'y touchent) ; `gl.TRANSIENT_KEYS` (`idle`, `build`, `strobe_on`, `strobe_hits`) ne sont ni ecrits par P ni recharges. Details des masters : `params["react_master"]` multiplie tout ce qui vient de l'audio (`bass` / `mid` / `high` / `rms` / `beat` au debut de `Renderer.draw`, 0 = plus aucune reaction, sans toucher au noise) ; `params["tempo"]` (0..2) met a l'echelle le `dt` des animations (halo, fonte, cellules, defilement et bascule du fond, noise) et l'horloge des courbes d'automation (`AutomationEngine._clock`). « Overlay » (0 a 100 %, `params["overlay_master"]`) regle la **presence de l'overlay** : il multiplie l'opacite du logo, son contour et le halo holographique (0 = logo invisible, le fond continue). « Fond » (`bg_master`, 0 a 100 %) attenue le fond (`u_bg_level` dans `post.frag`) : 0 = fond noir, logo seul. Le bouton « Strobe » (`Renderer._strobe`, `u_strobe` : eclair blanc de 70 ms, sans bandes de glitch) : maintenu (ou touche S dans la fenetre de rendu) = un eclair par appui puis rafale a `strobe_rate` Hz ; boutons radio = mode (`strobe_mode` : `manual`, `kick` = un eclair par kick, `rate` = cadence fixe ; kick et cadence : un clic arme, un autre desarme) et curseur de cadence (1 a 20 Hz) ; `strobe_hits` (compteur d'appuis) garantit un eclair meme pour un appui plus court qu'une image ; `gl.strobe_press` / `gl.strobe_release` partages par le bouton et la touche. « Teinte » (`hue_master`, 0..360) fait tourner les couleurs de **toute l'image** (fond et logo, `hue_rotate` autour de l'axe du gris dans `post.frag`, avant flash et strobe ; les gris restent gris). Le bouton « Verrou » (touche K dans la fenetre de rendu, `toggle_scene_lock`, `s.scene_lock`) **gele la scene courante** : le VJ se met en pause et `apply_scene` / `vj_advance` / `random_draw` / demarrage du VJ / F1..F9 / fleche droite sont refuses avec un message (`scene_locked`) ; les masters restent actifs ; deverrouiller relance le VJ s'il tournait (`s.lock_resume`). **Ce n'est pas un BPM detecte** (rien dans le code n'estime un tempo) : la video de fond (ffmpeg `-re`) et le logo anime gardent leur cadence. Reglages de salle : dans `OVERLAY_PRESET_EXCLUDED` (ni presets ni scenes ni `reload` n'y touchent), sauves avec P. La rangee ne dicte plus la largeur de la fenetre (`pack_propagate(False)`, hauteur mesuree une fois) : trop de touches sont rognees a droite au lieu d'elargir les reglages.
   - Un changement de mode (Live -> Snap) reconstruit la fenetre : ~1 s, en partie masque par le flash.
-- **Sets** (scenes.py `SceneBook`, GUI : menu `SET` de la barre) : `scenes.json` = `{"version": 2, "scenes": [...], "sets": [{"name",
+- **Sets** (core/scenes.py `SceneBook`, GUI : menu `SET` de la barre) : `scenes.json` = `{"version": 2, "scenes": [...], "sets": [{"name",
   "entries": [{"scene", "media"}], "vj"}], "active_set"}`. Un set **reference** les scenes par nom (les scenes sont des briques,
   partagees ; une meme scene peut figurer plusieurs fois dans un set, chaque entree avec son `media`) ; `put` d'une scene
   nouvelle l'ajoute aussi a la fin du set actif, `delete` la retire de la bibliotheque **et de tous les sets** ; une entree
@@ -476,7 +502,7 @@ visuel d'audio2wave, il ne le complete pas) :
     La GUI (`import_set_now`, `resolve_conflict`) pose la question puis **demande confirmation avant de remplacer**.
   - Dialogues dans `scene_ui` (`chooser`, `ask_name`, `ask_save`, `ask_open`) : les tests les remplacent, jamais de fenetre
     bloquante. `choice_dialog` (module) = fenetre modale a boutons.
-- **Full Randomizer** (`randomizer.py`, ordre VJ `alea`, `scenes.VJ_ORDERS`, libelle « Full Randomizer » partout dans la GUI) : a chaque changement `vj_advance` appelle `random_draw()`
+- **Full Randomizer** (`core/randomizer.py`, ordre VJ `alea`, `scenes.VJ_ORDERS`, libelle « Full Randomizer » partout dans la GUI) : a chaque changement `vj_advance` appelle `random_draw()`
   au lieu de lire une entree : `randomizer.draw_scene(rng, settings, Context)` (pur, graine injectable) rend une **scene temporaire**
   (meme format que `capture_scene`, nom `Full Randomizer`), appliquee par `apply_scene_dict` (extrait de `apply_scene_core`, qui lui
   passe la scene de la bibliotheque) : flash, minuteur = `duree` du set, `s.active_scene` = `Full Randomizer`, `s.rnd` = etat (`last`,
@@ -591,7 +617,7 @@ visuel d'audio2wave, il ne le complete pas) :
   valeurs (motif / audio2wave, automations, micro intact), barre, F1/F2/F8, nom deja pris, mise a jour au meme rang, VJ (ordre, reglages persistants, minuteur reel, flash, Espace / fleche droite, pause a la main),
   suppression du preset, **changement de mode Live -> Snap avec chargement du preset `club`**.
 
-### Table unique des reglages (`params_schema.py`)
+### Table unique des reglages (`core/params_schema.py`)
 
 **Un reglage = une ligne** dans `params_schema.TABLE` (stdlib, aucune dependance au moteur ni a la GUI) : cle, valeur par defaut, plage
 (`lo` / `hi`, par element pour une liste), valeurs permises (`choices`, pour les enums), **portee** (`scope`), drapeau `keep` (la touche R ne
@@ -612,7 +638,7 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
 - `check_gl.py` (`check_params_schema`) : valeurs par defaut dans leur plage, table = `DEFAULT_PARAMS`, portees disjointes et completes,
   regression `bg_master`, validation (hors plage, mauvais type, enum, listes), **presets integres, courbes d'automation, curseurs de la GUI
   (lus dans le source : `param_slider(...)` et les curseurs des masters) et tirages du Full Randomizer (300 tirages) tous dans les plages**,
-  aucun reglage lu ou ecrit par le code sans etre dans la table, `params_schema.py` dans le portable (`APP_FILES`).
+  aucun reglage lu ou ecrit par le code sans etre dans la table, `core/params_schema.py` dans le portable (`APP_FILES`).
 ### Garde-fous d'exploitation (soiree : fiabilite, robustesse, aisance)
 
 - **Panique** (`gl.panic(params)`, `PANIC_RESET`; bouton rouge **PANIQUE** tout a droite de la barre, touche **X** dans la fenetre de rendu, bouton de la console) :
@@ -636,7 +662,7 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   `proj_stop` / `stop_event`) relance `gl_main` apres `RESTART_DELAY_S` = 1 s avec les reglages du moment (ils vivent dans `s.params`) ; au plus
   `MAX_RESTARTS` = 3 reprises en `RESTART_WINDOW_S` = 120 s, ensuite le statut dit « trop de reprises : bouton Demarrer pour reessayer ». Verifie
   en vrai : une boucle de rendu qui plante est relancee et retombe a 60 fps.
-- **Journal de session** (`sessionlog.py`, stdlib ; `~/.audio2wave/casual-overlay.log`, rotation 3 x 500 Ko) : branche par `run_app` seulement (les
+- **Journal de session** (`core/sessionlog.py`, stdlib ; `~/.audio2wave/casual-overlay.log`, rotation 3 x 500 Ko) : branche par `run_app` seulement (les
   tests n'ecrivent jamais dans le vrai fichier ; sans fichier branche tout se tait). Evenements (lancement, scene appliquee... verrou, VJ, panique,
   strobe limite, projection ouverte / fermee / relancee, arret propre ou anormal) et **toutes les erreurs avec leur trace** : callbacks Tk
   (`root.report_callback_exception` dans `run_gui`), exceptions non rattrapees du fil principal et des autres fils (`install_hooks`),
@@ -652,7 +678,7 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   `status_text()` (scene, VJ en marche avec le temps restant / en pause / VERROUILLE, BPM, projection fermee) sert la console **et le titre de
   la fenetre des reglages** (lisible dans la barre des taches), mis a jour par `update_master_panel` (250 ms).
 - `check_gl.py` (`check_safeguards`, etapes `x_panic`, `x_panic_key`, `x_tap`, `x_help`, `x_console`, `x_title`, `x_autosave`, projection : reprise
-  et arret voulu) ; le harnais redirige `gl.AUTOSAVE_PATH` vers un dossier temporaire. `sessionlog.py` est dans `APP_FILES` du portable
+  et arret voulu) ; le harnais redirige `gl.AUTOSAVE_PATH` vers un dossier temporaire. `core/sessionlog.py` est dans `APP_FILES` du portable
   (sinon la version portable ne demarrerait pas).
 ### Effets par couche (fond / logo decorreles)
 
