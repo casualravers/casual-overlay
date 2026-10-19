@@ -158,7 +158,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
 
 ## Diagnostic de demarrage et version portable
 
-- **`diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
+- **`engine/diagnostics.py`** (stdlib seulement, importe par `audio2wave_gl`) : `run_checks(a2w_dir, synthetic, gui, opengl, ...)` rend des
   `Check(name, level, detail, hint)` (`ok` / `warn` / `fail`) : Python (>= 3.10), modules (obligatoires = fail ; tkinter fail avec
   `--gui` sinon warn ; tkinterdnd2 warn ; sounddevice warn en `--synthetic`), ffmpeg / DirectShow / ffprobe (fail sauf
   `--synthetic`), audio2wave (fail sauf synthetique sans GUI, comme `load_live`), **OpenGL** (`moderngl.create_standalone_context()`,
