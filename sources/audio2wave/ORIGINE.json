@@ -1,0 +1,15 @@
+{
+  "depot": "https://github.com/casualravers/audio2wave",
+  "commit": "4ee1496e452cf54a4b928ee668b30dc6bb33d7ba",
+  "sha256": {
+    "audio2wave.py": "daa0738b336c173485db79f0885db6f3deeee8632520c0468e33a3e3b05d4eed",
+    "audio2wave_live.py": "a7cdac01a14e5be3dbc4198cf5950b0eccca0f8716fa96010b290d51b58ee12f",
+    "audio2wave_ridge.py": "403de300dc61824688e76bbd2c2974ce2e2340a13f1a29825bba7bd7da2b8a5f",
+    "audio2wave_snap.py": "100021f863a359c3f2a5c23d23787489ed01c34b1f13eee949ac78175f819fe0",
+    "check_contract.py": "ef4d046fb834c3e2dc73b7d6541585395f8f0174fcc7d99592d2f0dd170dcf6b",
+    "CLAUDE.md": "88e89c2d9e101ac49bd344ab3ce4498dc3b53d1ee764571cd9227ef136c71c4f",
+    "common.py": "1e42440e5c78d1063699d40ba602752178fc6c3dee6448f1309101d8c2714f14",
+    "preset_registry.py": "864c2801c7032473577e3dba65228b0ab3e329c4b58ce2a51fc6c8314557dec3",
+    "README.md": "cad9bb262a4c66448616208dac2926690d13fb009eda1aba64beef454892d27f"
+  }
+}

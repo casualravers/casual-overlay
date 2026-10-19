@@ -8,14 +8,9 @@ casual-overlay affiche le visuel `audio2wave_live` (flux ffmpeg) dans une fenetr
 plein ecran sur le videoprojecteur, avec un logo PNG incruste et des deformations pilotees
 en temps reel par l'audio du micro. Le plan d'origine est dans `PLAN_POC_GL.md`.
 
-**Dependance : le depot voisin `audio2wave`** (dossier `../audio2wave` par defaut, sinon
-`--a2w-dir` ou variable `AUDIO2WAVE_DIR`). Son CLAUDE.md fait foi pour tout ce qui touche
-au visuel de base (filtres ffmpeg, `--averaging`, latence). Ici on n'en modifie **aucun
-fichier** ; on importe `audio2wave_live` (`parse_args`, `producer_command`,
-`resolve_size`, `list_audio_devices`).
+**audio2wave est interne** : une copie du depot `audio2wave` (`https://github.com/casualravers/audio2wave`, `main`) vit dans `sources/audio2wave/` (modules **plats** : ils\ns'importent par leur nom, le dossier est ajoute a `sys.path` ; `audio2wave_gl.bundled_paths` le choisit : `audio2wave/` a cote du programme (portable) > `sources/audio2wave/` >\ndepot voisin `../audio2wave` (dernier recours) ; `--a2w-dir` / `AUDIO2WAVE_DIR` en essaient un autre). On importe `audio2wave_live` (`parse_args`, `producer_command`,\n`resolve_size`, `list_audio_devices`) et les autres modules. Son CLAUDE.md (copie : `sources/audio2wave/CLAUDE.md`) fait foi pour tout ce qui touche au visuel de base (filtres ffmpeg, `--averaging`,\nlatence). **Origine et ecarts** : `sources/audio2wave/VENDORED.md` (commit copie, section « Modifications locales ») et `ORIGINE.json` (empreinte de chaque fichier d'origine) ;\n`check_gl.py` (`check_audio2wave_interne`) echoue si un fichier differe de l'origine **sans etre note** dans VENDORED.md : modifier ces fichiers est permis maintenant, mais toute\nmodification se note (fichier, raison) pour pouvoir resynchroniser avec le depot d'origine. Le depot `audio2wave` reste vivant a part : un correctif qui y est fait se reporte a la main ici\n(et inversement), c'est le prix d'avoir deux copies tant qu'il existe.
 
-**API hote d'audio2wave utilisee** (branche `add-snap-waveform-photo`, commit `86e0458` ou plus recent, `common.API_VERSION` >= 2 ; c'est le
-depot audio2wave qui l'expose et la garantit par `check_contract.py`, on ne reecrit plus ses constantes ni ses methodes, on ne fouille plus ses
+**API hote d'audio2wave utilisee** (`common.API_VERSION` >= 2 ; la copie interne l'expose et la garantit par `check_contract.py`, on ne reecrit plus ses constantes ni ses methodes, on ne fouille plus ses
 widgets) : `common.set_gui_accent(accent, accent_fg)` (accent de la palette : `apply_a2w_palette`), `AutomationManager(..., curve_label,
 on_editor_open)` et son crochet de classe `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)` (fenetre « courbe » :
 `install_curve_skin`), `Tooltip` qui reste dans la fenetre, `common.make_scrollbar` et `common.readable_fg` (survol des menus lisible sur
@@ -61,6 +56,7 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
   app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
+sources/audio2wave/  audio2wave (copie interne, modules plats, voir plus haut)
 audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths) + facade qui re-exporte core/ et engine/ (gl.X) ;
                   les tests qui remplacent un nom visent le module qui l'utilise (ex. engine.projection.loop)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
@@ -177,7 +173,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
   ffprobe.exe), `start.bat`, `LISEZMOI.txt`. **Pas de gel (PyInstaller)** : audio2wave est importe dynamiquement et tkinter /
   modules varient selon le mode. `audio2wave_gl.bundled_paths(script_dir, path)` : `audio2wave/` a cote du programme l'emporte sur le
-  depot voisin (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
+  copie interne (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
   trouvent). `start.bat` prend `python\python.exe` puis `.venv\Scripts\python.exe`. Le script **verifie le dossier fabrique** avec
   son propre Python (diagnostic + rendu synthetique de 3 s). Verifie a la main : lance avec un PATH reduit a `C:\Windows\System32`,
   tout est trouve dans le dossier (python, modules, ffmpeg, audio2wave), OpenGL et micro detectes. Taille ~520 Mo dont 424 Mo de

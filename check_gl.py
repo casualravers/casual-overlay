@@ -3233,7 +3233,7 @@ def check_diagnostics() -> None:
 
     # version portable : dossiers embarques reconnus, assemblage du dossier
     a2w, path = gl.bundled_paths(tmp / "app", "X")
-    check(a2w == tmp / "audio2wave" and path == "X", "portable: sans dossiers embarques, comportement d'origine")
+    check(a2w == tmp / "app" / "sources" / "audio2wave" and path == "X", "portable: sans dossiers embarques, la copie interne (sources/audio2wave) est le defaut")
     (tmp / "app" / "audio2wave").mkdir(parents=True)
     (tmp / "app" / "audio2wave" / "audio2wave_live.py").write_text("x", encoding="utf-8")
     (tmp / "app" / "ffmpeg").mkdir()
@@ -5238,6 +5238,46 @@ def check_icons() -> None:
     finally:
         root.destroy()
 
+def check_audio2wave_interne() -> None:
+    """audio2wave est interne (sources/audio2wave) : dossier par defaut, ordre de recherche, et copie fidele a son origine (toute
+    modification doit etre notee dans VENDORED.md : l'empreinte de chaque fichier est comparee a ORIGINE.json)."""
+    print("audio2wave interne")
+    import hashlib
+    import json as _json
+    import shutil
+    import tempfile
+    here = Path(__file__).resolve().parent
+    vend = here / "sources" / "audio2wave"
+    check(Path(gl.DEFAULT_A2W_DIR).resolve() == vend.resolve(), "audio2wave: le dossier par defaut est la copie interne sources/audio2wave", str(gl.DEFAULT_A2W_DIR))
+    need = ("audio2wave.py", "audio2wave_live.py", "audio2wave_snap.py", "audio2wave_ridge.py", "common.py", "preset_registry.py", "check_contract.py",
+            "VENDORED.md", "ORIGINE.json")
+    check(all((vend / n).is_file() for n in need), "audio2wave interne: tous les fichiers sont la", str([n for n in need if not (vend / n).is_file()]))
+    # ordre de recherche : portable (audio2wave/ a cote du programme) > copie interne > depot voisin
+    tmp = Path(tempfile.mkdtemp(prefix="a2w_order_"))
+    prog = tmp / "prog"
+    (prog / "audio2wave").mkdir(parents=True)
+    (prog / "sources" / "audio2wave").mkdir(parents=True)
+    (tmp / "audio2wave").mkdir()
+    for d in (prog / "audio2wave", prog / "sources" / "audio2wave", tmp / "audio2wave"):
+        (d / "audio2wave_live.py").write_text("", encoding="utf-8")
+    check(gl.bundled_paths(prog)[0] == prog / "audio2wave", "audio2wave: la version portable (audio2wave/ a cote du programme) l'emporte")
+    (prog / "audio2wave" / "audio2wave_live.py").unlink()
+    check(gl.bundled_paths(prog)[0] == prog / "sources" / "audio2wave", "audio2wave: sinon la copie interne")
+    (prog / "sources" / "audio2wave" / "audio2wave_live.py").unlink()
+    check(gl.bundled_paths(prog)[0] == tmp / "audio2wave", "audio2wave: le depot voisin n'est qu'un dernier recours")
+    shutil.rmtree(tmp, ignore_errors=True)
+    # fidelite a l'origine : une modification non notee echoue
+    origin = _json.loads((vend / "ORIGINE.json").read_text(encoding="utf-8"))
+    notes = (vend / "VENDORED.md").read_text(encoding="utf-8")
+    section = notes.split("## Modifications locales", 1)[-1]
+    changed = [n for n, digest in origin["sha256"].items()
+               if not (vend / n).is_file() or hashlib.sha256((vend / n).read_bytes()).hexdigest() != digest]
+    extra = [f.name for f in vend.glob("*.py") if f.name not in origin["sha256"]]
+    unlisted = [n for n in changed + extra if n not in section]
+    check(origin["commit"] in notes and not unlisted and (not (changed or extra) or "Aucune" not in section),
+          f"audio2wave interne: {len(origin['sha256'])} fichiers conformes a l'origine ({origin['commit'][:7]}), ou chaque ecart est note dans VENDORED.md",
+          f"modifies: {changed} ajoutes: {extra} non notes: {unlisted}")
+
 def check_engine_layer() -> None:
     """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""
     print("engine/ : couche moteur")
@@ -5531,6 +5571,7 @@ def main() -> None:
     check_noise()
     check_doodles()
     check_icons()
+    check_audio2wave_interne()
     check_masters()
     check_portable_modules()
     check_core_purity()
