@@ -5121,8 +5121,10 @@ def check_doodles() -> None:
     outside = img[~changed]
     check((np.abs(outside.astype(int) - base[~changed].astype(int)).sum() == 0), "rendu: le reste de l'image est strictement intact")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
-    def doodle_render(**kw):
+    def doodle_render(pre=None, **kw):
         rr = gl.Renderer(ctx, size, None)
+        if pre:
+            pre(rr)
         rr._doodle_rng = __import__("random").Random(7)                      # meme emplacement d'un rendu a l'autre
         rr.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))
         rr.add_doodle(top_red_bottom_green, time.monotonic() - 5.0)
@@ -5134,6 +5136,12 @@ def check_doodles() -> None:
     mask = np.abs(off - np.array([0, 0, 255])).sum(axis=2) > 60                # emplacement du doodle
     check(np.abs(on_logo - off).sum() > 2000, "doodle: les effets de la couche du logo le deforment", str(np.abs(on_logo - off).sum()))
     check(np.abs(on_bg - off)[mask].sum() == 0, "doodle: les effets propres au fond (logo delie) ne le touchent pas")
+    # fonte acide, halo holographique : memes passes que le logo
+    plain = dict(fx_on=[0.0] * 5, fxl_on=[0.0] * 4)
+    melted, _ = doodle_render(pre=lambda rr: setattr(rr, "_melt_t", 0.5), melt_on=1.0, melt_depth=1.0, **plain)
+    check(np.abs(melted - off)[mask].sum() > 20000, "doodle: la fonte acide le ronge comme le logo", str(np.abs(melted - off)[mask].sum()))
+    aura, _ = doodle_render(holo_on=1.0, holo_intensity=1.0, holo_reach=1.5, holo_dust=0.0, **plain)
+    check(np.abs(aura - off)[~mask].sum() > 20000, "doodle: l'aura holographique l'entoure et deforme le fond", str(np.abs(aura - off)[~mask].sum()))
     # alpha premultiplie : 50 % d'opacite sur du bleu ne doit pas noircir les bords (pas de halo sombre)
     r2 = gl.Renderer(ctx, size, None)
     r2.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))

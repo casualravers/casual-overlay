@@ -234,7 +234,7 @@ void main() {
     // Halo holographique: deformation du fond + lumiere (jamais sur le logo: pose dessus, intact).
     vec2 disp = vec2(0.0);
     vec3 light = vec3(0.0);
-    if (u_holo > 0.001 && u_logo_on > 0.5) {
+    if (u_holo > 0.001 && u_layer_on > 0.5) {
         holo(cuv, disp, light);
     }
     // Fond et logo deformes chacun avec leurs reglages, puis logo pose par-dessus (alpha premultiplie).

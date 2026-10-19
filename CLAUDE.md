@@ -450,10 +450,11 @@ la projection**. Desactive par defaut.
   ni Tk. Une erreur reseau est dite dans le statut (`status["doodles"]`), journalisee **une seule fois** (`sessionlog`) et reessayee au tour suivant ; un
   telechargement en echec n'est pas marque « vu » (reessai), un fichier invalide l'est. Decodage Pillow (`decode` : taille lue avant tout decodage,
   `exif_transpose` pour les photos, `_premultiplied` comme le logo) puis `Session.doodle_queue`. Demarre par `run_app` (le fil dort tant que la case est decochee).
-- **Rendu** (`Renderer.add_doodle` / `_draw_doodles`, `doodle.vert` / `doodle.frag`) : la boucle GL vide la file a chaque image et pose les doodles ; ils sont dessines **sur la couche du logo** (`layer_fbo`,
-  apres le champ du halo : le halo ne les entoure pas), donc ils subissent **les memes effets que le logo** (ondulation, onde de choc, aberration, glitch, trainee, composition : symetrie, pixelisation, teinte, strobe), lies au fond ou propres au logo
-  (`fx_link`) ; `u_layer_on` (post.frag) garde la couche active meme sans logo. Pas de fonte, cellules ni contour : ils vivent dans `logo_at` du logo. Melange premultiplie (ONE, ONE_MINUS_SRC_ALPHA),
-  textures a mipmaps. Liste vide = passe sautee (aucun cout). Les doodles arrives projection fermee sont jetes (`Projection.start`). Une animation propre aux doodles est prevue plus tard.
+- **Rendu** (`Renderer.add_doodle` / `_draw_doodles`) : la boucle GL vide la file a chaque image. Chaque doodle visible relance la **passe LOGO de `scene.frag`** (`u_pass` 1) avec SA texture et SON rectangle a la place
+  de ceux du logo, melangee en alpha premultiplie sur la couche du logo (`layer_fbo`) : il recoit donc **tout ce que recoit le logo** : fonte acide, cellules, contour lumineux, opacite / master overlay, puis (dans `post.frag`) les effets par couche
+  (ondulation, onde de choc, aberration, glitch ; lies au fond ou propres au logo, `fx_link`), l'aura holographique (calculee sur l'alpha de la couche ; centree sur le logo), la traînee et la composition (symetrie, pixelisation, teinte, strobe).
+  `u_layer_on` (post.frag) garde la couche active meme sans logo. Pas de shader dedie (doodle.vert / doodle.frag supprimes). Liste vide = aucune passe (aucun cout) ; au plus 5 doodles = 5 passes plein cadre en plus.
+  Les doodles arrives projection fermee sont jetes (`Projection.start`). Une animation propre aux doodles est prevue plus tard.
 - `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
   injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
   sauvegarde, case de la GUI.
