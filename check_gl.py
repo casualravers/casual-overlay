@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 
 import audio2wave_gl as gl
+from core import autosave as core_autosave
+from core import params as core_params
 
 gl.require_deps()
 np = gl.np
@@ -688,8 +690,8 @@ def check_gui() -> None:
             op["save"]()
             bp["save_var"].set("Mon Fond")
             bp["save"]()
-            saved = json.loads(gl.OVERLAY_PRESETS_PATH.read_text(encoding="utf-8")) if gl.OVERLAY_PRESETS_PATH.exists() else {}
-            sbg = json.loads(gl.BACKGROUND_PRESETS_PATH.read_text(encoding="utf-8")) if gl.BACKGROUND_PRESETS_PATH.exists() else {}
+            saved = json.loads(core_params.OVERLAY_PRESETS_PATH.read_text(encoding="utf-8")) if core_params.OVERLAY_PRESETS_PATH.exists() else {}
+            sbg = json.loads(core_params.BACKGROUND_PRESETS_PATH.read_text(encoding="utf-8")) if core_params.BACKGROUND_PRESETS_PATH.exists() else {}
             ml, mf = saved.get("mon look", {}), sbg.get("mon fond", {})
             out["p_saved"] = ("mon look" in saved and "sensitivity" not in ml and "_automation" in ml
                               and not any(k.startswith("bg_") for k in ml)
@@ -751,7 +753,7 @@ def check_gui() -> None:
             out["n_default"] = (list(params["noise_fx"]), [v.get() for v in nfv])
             obook.delete("noisy")
             # scenes : barre en haut, capture / application, F1..F9, etat d'audio2wave range dans la scene
-            import scenes as scn
+            from core import scenes as scn
             sc, sbook = c["scenes"], c["scene_book"]
             s.scene_requests = queue.SimpleQueue()
             c["bg_var"].set("pattern")
@@ -929,25 +931,25 @@ def check_gui() -> None:
 
     import json
     import tempfile as _tf
-    real_presets_path = gl.OVERLAY_PRESETS_PATH
-    real_bg_presets_path = gl.BACKGROUND_PRESETS_PATH
+    real_presets_path = core_params.OVERLAY_PRESETS_PATH
+    real_bg_presets_path = core_params.BACKGROUND_PRESETS_PATH
     _tmp_presets = Path(_tf.mkdtemp(prefix="casual_overlay_presets_"))
-    gl.OVERLAY_PRESETS_PATH = _tmp_presets / "overlay_presets.json"        # jamais les vrais fichiers
-    gl.BACKGROUND_PRESETS_PATH = _tmp_presets / "background_presets.json"
-    import scenes as _scenes
+    core_params.OVERLAY_PRESETS_PATH = _tmp_presets / "overlay_presets.json"        # jamais les vrais fichiers
+    core_params.BACKGROUND_PRESETS_PATH = _tmp_presets / "background_presets.json"
+    from core import scenes as _scenes
     real_scenes_path, real_live_store_path = _scenes.SCENES_PATH, live.preset_store.path
     _scenes.SCENES_PATH = _tmp_presets / "scenes.json"
     real_masters_path = _scenes.MASTERS_PATH
     _scenes.MASTERS_PATH = _tmp_presets / "masters.json"
-    real_autosave_path = gl.AUTOSAVE_PATH
-    gl.AUTOSAVE_PATH = _tmp_presets / "autosave.json"
+    real_autosave_path = core_autosave.AUTOSAVE_PATH
+    core_autosave.AUTOSAVE_PATH = _tmp_presets / "autosave.json"
     live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
         gl_gui.run_gui(s, live, on_ready)
     finally:
-        gl.AUTOSAVE_PATH = real_autosave_path
-        gl.OVERLAY_PRESETS_PATH = real_presets_path
-        gl.BACKGROUND_PRESETS_PATH = real_bg_presets_path
+        core_autosave.AUTOSAVE_PATH = real_autosave_path
+        core_params.OVERLAY_PRESETS_PATH = real_presets_path
+        core_params.BACKGROUND_PRESETS_PATH = real_bg_presets_path
         _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
         _scenes.MASTERS_PATH = real_masters_path
     p = out.get("p_neon", ())
@@ -1585,8 +1587,9 @@ def check_render() -> None:
         check(0.08 < height_frac < 0.3 and abs((ys.min() + ys.max()) / 2 / size[1] - 0.5) < 0.06
               and abs((xs.min() + xs.max()) / 2 / size[0] - 0.5) < 0.06,
               "texte centre, hauteur proportionnelle a la taille du texte", f"hauteur {height_frac:.2f}")
-    original_render_text, calls = gl.render_text, []
-    gl.render_text = lambda *a, **k: (calls.append(1), original_render_text(*a, **k))[1]
+    import engine.projection as engine_projection
+    original_render_text, calls = engine_projection.render_text, []
+    engine_projection.render_text = lambda *a, **k: (calls.append(1), original_render_text(*a, **k))[1]
     try:
         gl.apply_logo_request(fake, rt)                               # rien n'a change
         unchanged = len(calls)
@@ -1597,7 +1600,7 @@ def check_render() -> None:
         gl.apply_logo_request(fake, rt)
         retyped = len(calls)
     finally:
-        gl.render_text = original_render_text
+        engine_projection.render_text = original_render_text
     check((unchanged, moved, retyped) == (0, 0, 1),
           "texture regeneree seulement quand le texte/la police/la couleur changent", f"{(unchanged, moved, retyped)}")
     text_params["text_content"] = "  "
@@ -2264,7 +2267,7 @@ def check_noise() -> None:
 def check_scenes() -> None:
     import tempfile
 
-    import scenes as sc
+    from core import scenes as sc
     print("Scenes")
     check(sc.live_preset_name("Mon Set 2!") == "scene-mon-set-2" and sc.live_preset_name("***") == "scene-scene",
           "nom des presets des anciennes scenes (migration): minuscules, sans espace")
@@ -2556,7 +2559,7 @@ def check_sets_pure(sc, tmp) -> None:
     check(sc.SceneBook._entry({"bg_video": "  a.mp4 "}, "A")["bg_video"] == "a.mp4" and sc.SceneBook._entry({"bg_video": 5}, "A")["bg_video"] is None,
           "scenes: bg_video valide a la lecture (export / import compris)")
     import random as rnd_mod
-    import randomizer as rz
+    from core import randomizer as rz
     rn = rz.random_name(rnd_mod.Random(1), [])
     taken = {f"{a} {b}".lower() for a in rz.NAME_WORDS_A for b in rz.NAME_WORDS_B}
     rn2 = rz.random_name(rnd_mod.Random(1), taken)
@@ -3267,7 +3270,7 @@ def check_bg_video() -> None:
     import subprocess
     import tempfile
 
-    import scenes as sc
+    from core import scenes as sc
     print("Fond video")
     d = Path(tempfile.mkdtemp(prefix="casual_overlay_bgvideo_"))
     vid = d / "fond.mp4"
@@ -3764,20 +3767,20 @@ def check_masters() -> None:
           and set(gl.TRANSIENT_KEYS) <= set(gl.ROOM_KEYS) and not set(gl.TRANSIENT_KEYS) & set(gl.MEMORY_KEYS),
           "reglages de salle: hors presets et scenes ; etats du moment (idle, montee, strobe arme) hors memoires")
     import json
-    saved_path = gl.PARAMS_PATH
+    saved_path = core_params.PARAMS_PATH
     try:
         import tempfile as _t
-        gl.PARAMS_PATH = Path(_t.mkdtemp(prefix="casual_overlay_params_")) / "gl_params.json"
+        core_params.PARAMS_PATH = Path(_t.mkdtemp(prefix="casual_overlay_params_")) / "gl_params.json"
         gl.save_params(dict(d, idle=0.7, build=0.5, strobe_on=1.0, comp_sym=3.0))
         reloaded = gl.load_params()
         check(reloaded["comp_sym"] == 3.0 and reloaded["idle"] == 0.0 and reloaded["build"] == 0.0 and reloaded["strobe_on"] == 0.0
-              and "idle" not in json.loads(gl.PARAMS_PATH.read_text(encoding="utf-8")),
+              and "idle" not in json.loads(core_params.PARAMS_PATH.read_text(encoding="utf-8")),
               "sauvegarde (P): les etats du moment (idle, montee, strobe arme) ne sont ni ecrits ni recharges")
     finally:
-        gl.PARAMS_PATH = saved_path
+        core_params.PARAMS_PATH = saved_path
     # --- memoires de masters (fichier)
     import tempfile as _tf2
-    import scenes as _sc
+    from core import scenes as _sc
     mpath = Path(_tf2.mkdtemp(prefix="casual_overlay_masters_")) / "masters.json"
     mb = _sc.MasterBook(lambda: mpath)
     check(mb.slots() == [None] * 4 and mb.get(2) is None, "memoires de masters: quatre emplacements vides au depart")
@@ -3875,8 +3878,8 @@ def check_automation() -> None:
     check(merged["bg_hue"]["points"] == default["bg_hue"]["points"] and merged["bg_hue"]["period"] == specs["bg_hue"][4]
           and "inconnue" not in merged and merged["logo_x"]["enabled"] is True and set(merged) == set(specs),
           "merge_automation: entrees invalides remplacees, cles inconnues ignorees, manquantes completees")
-    original = gl.PARAMS_PATH
-    gl.PARAMS_PATH = Path(tempfile.mkdtemp()) / "gl_params.json"
+    original = core_params.PARAMS_PATH
+    core_params.PARAMS_PATH = Path(tempfile.mkdtemp()) / "gl_params.json"
     try:
         p = gl.load_params()
         p["_automation"] = gl.merge_automation({"bg_tile": {"enabled": False, "period": 12.5,
@@ -3887,13 +3890,13 @@ def check_automation() -> None:
         check(back["_automation"]["bg_tile"] == {"enabled": False, "period": 12.5, "points": [0.1] * 12}
               and back["auto_master"] == 0.0, "automations et interrupteur general sauves puis recharges")
     finally:
-        gl.PARAMS_PATH = original
+        core_params.PARAMS_PATH = original
 
 
 def check_params() -> None:
     print("Reglages (touche P)")
-    original = gl.PARAMS_PATH
-    gl.PARAMS_PATH = Path(tempfile.mkdtemp()) / "sous" / "gl_params.json"
+    original = core_params.PARAMS_PATH
+    core_params.PARAMS_PATH = Path(tempfile.mkdtemp()) / "sous" / "gl_params.json"
     try:
         check(gl.load_params() == gl.DEFAULT_PARAMS, "sans fichier: valeurs par defaut")
         params = gl.load_params()
@@ -3902,10 +3905,10 @@ def check_params() -> None:
         params["sensitivity"] = 2.0
         gl.save_params(params)
         check(gl.load_params() == params, "sauvegarde puis rechargement identiques")
-        gl.PARAMS_PATH.write_text("{ pas du json", encoding="utf-8")
+        core_params.PARAMS_PATH.write_text("{ pas du json", encoding="utf-8")
         check(gl.load_params() == gl.DEFAULT_PARAMS, "fichier corrompu: retour aux valeurs par defaut")
     finally:
-        gl.PARAMS_PATH = original
+        core_params.PARAMS_PATH = original
 
 
 def _plain_vj(vj: dict) -> dict:
@@ -3916,7 +3919,7 @@ def _plain_vj(vj: dict) -> dict:
 def check_fond_saveable() -> None:
     """Un fond n'est propose en preset que s'il y a quelque chose a enregistrer."""
     import tempfile
-    import randomizer as rz
+    from core import randomizer as rz
     print("fond enregistrable en preset")
     with tempfile.TemporaryDirectory() as tmp:
         video = Path(tmp) / "v.mp4"
@@ -3938,8 +3941,8 @@ def check_randomizer() -> None:
     import random as rnd_mod
     import tempfile
 
-    import randomizer as rz
-    import scenes as sc
+    from core import randomizer as rz
+    from core import scenes as sc
     d = Path(tempfile.mkdtemp(prefix="casual_overlay_bank_"))
     (d / "logos").mkdir()
     (d / "loops" / "sous" / "profond").mkdir(parents=True)
@@ -4166,7 +4169,7 @@ def check_randomizer() -> None:
     check(all(isinstance(v, dict) and "default" in v for v in stores.values()),
           "presets des trois modes audio2wave lisibles (config aleatoire du fond)", str({m: len(v) for m, v in stores.items()}))
     import build_portable
-    check("randomizer.py" in build_portable.APP_FILES, "version portable: randomizer.py embarque")
+    check("core" in build_portable.APP_DIRS, "version portable: le dossier core/ (randomizer, scenes, reglages...) est embarque")
 
 
 def gui_random_steps(c, s, out) -> None:
@@ -4734,8 +4737,215 @@ def check_skin() -> None:
     finally:
         root.destroy()
     import build_portable
-    check(all(f in build_portable.APP_FILES for f in ("skin.py", "theme.py", "sessionlog.py")),
-          "version portable: skin.py, theme.py et sessionlog.py embarques")
+    check(all(f in build_portable.APP_FILES for f in ("skin.py", "theme.py")),
+          "version portable: skin.py et theme.py embarques")
+
+
+def check_portable_modules() -> None:
+    """Chaque module du depot importe par le code embarque (y compris les imports tardifs dans une fonction) est dans le dossier portable.
+    Le script de fabrication ne lance pas la GUI : un module oublie ne se verrait qu'au premier lancement sur le PC de la soiree."""
+    print("version portable : modules embarques")
+    import ast
+    import build_portable as bp
+    here = Path(__file__).resolve().parent
+    local = {p.stem for p in here.glob("*.py")}
+    shipped_files = [here / n for n in bp.APP_FILES if n.endswith(".py") and n != "check_gl.py"] + sorted((here / "core").glob("*.py"))     # (check_gl lui-meme importe les outils de fabrication)
+    missing = []
+    for path in shipped_files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else []
+            for m in mods:
+                top = m.split(".")[0]
+                if top in local and f"{top}.py" not in bp.APP_FILES and top != "check_gl":
+                    missing.append((path.name, m))
+    check(not missing, f"portable: {len(shipped_files)} modules embarques, aucun import d'un module du depot qui n'y soit pas", str(missing[:3]))
+    check(all((here / n).is_file() for n in bp.APP_FILES), "portable: tous les fichiers de la liste existent",
+          str([n for n in bp.APP_FILES if not (here / n).is_file()]))
+
+def check_core_purity() -> None:
+    """core/ est du Python pur : stdlib seulement, jamais le moteur (audio2wave_gl) ni la GUI (gl_gui). Verifie par l'analyse des imports
+    ET en important tout core/ dans un interpreteur ou ces modules sont interdits."""
+    print("core/ : Python pur")
+    import ast
+    import subprocess
+    here = Path(__file__).resolve().parent
+    forbidden = ("audio2wave_gl", "gl_gui", "audio2wave", "tkinter", "numpy", "moderngl", "glfw", "PIL", "sounddevice", "skin", "theme",
+                 "gui_colors", "gui_gates", "py_modes", "diagnostics", "tkinterdnd2")
+    files = sorted((here / "core").glob("*.py"))
+    bad = []
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else []
+            for m in mods:
+                if m.split(".")[0] in forbidden:
+                    bad.append((path.name, m))
+    check(len(files) >= 8 and not bad, f"core/: {len(files)} modules, aucun import du moteur, de la GUI ni d'une dependance", str(bad[:3]))
+    code = ("import sys, importlib.abc\n"
+            f"BLOCK = {forbidden!r}\n"
+            "class Block(importlib.abc.MetaPathFinder):\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name.split('.')[0] in BLOCK:\n"
+            "            raise ImportError('interdit dans core/: ' + name)\n"
+            "sys.meta_path.insert(0, Block())\n"
+            f"sys.path.insert(0, {str(here)!r})\n"
+            "import pkgutil, core\n"
+            "mods = [m.name for m in pkgutil.iter_modules(core.__path__)]\n"
+            "for m in mods: __import__('core.' + m)\n"
+            "print(len(mods))\n")
+    res = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+    check(res.returncode == 0 and res.stdout.strip().isdigit(),
+          "core/: tout s'importe sans numpy, GL, Tk ni le moteur", (res.stderr or res.stdout).strip().splitlines()[-1] if (res.stderr or res.stdout).strip() else "")
+
+def check_engine_layer() -> None:
+    """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""
+    print("engine/ : couche moteur")
+    import ast
+    import build_portable
+    here = Path(__file__).resolve().parent
+    forbidden = ("audio2wave_gl", "gl_gui", "tkinter", "skin", "theme", "gui_colors", "gui_gates", "py_modes", "tkinterdnd2")
+    files = sorted((here / "engine").glob("*.py"))
+    bad = []
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else []
+            bad += [(path.name, m) for m in mods if m.split(".")[0] in forbidden]
+    check(len(files) >= 4 and not bad, f"engine/: {len(files)} modules, aucun import de la GUI ni de la facade", str(bad[:3]))
+    check("engine" in build_portable.APP_DIRS, "version portable: le dossier engine/ est embarque")
+    import engine.audio, engine.render, engine.session, engine.projection, engine.app, engine.video, engine.window
+    check(gl.FeatureExtractor is engine.audio.FeatureExtractor and gl.FrameReader is engine.video.FrameReader
+          and gl.Window is engine.window.Window, "la facade audio2wave_gl rend les memes objets que engine/")
+
+def check_params_schema() -> None:
+    """Table unique des reglages (params_schema.py) : integrite, derivations, validation, et coherence avec le moteur, la GUI, les
+    presets integres, les automations et le hasard (rien ne doit sortir des plages declarees)."""
+    print("table unique des reglages")
+    import json
+    import random
+    import re
+    from core import params_schema as ps
+    here = Path(__file__).resolve().parent
+    # --- integrite de la table
+    bad = [p.key for p in ps.TABLE if p.key != "logo_path" and not _in_range(p, p.default)]
+    check(not bad, "table: chaque valeur par defaut est dans sa plage", str(bad))
+    check(list(gl.DEFAULT_PARAMS) == [p.key for p in ps.TABLE], "table: DEFAULT_PARAMS = la table, dans le meme ordre")
+    check(all(p.doc for p in ps.TABLE), "table: chaque reglage est documente", str([p.key for p in ps.TABLE if not p.doc]))
+    check(set(gl.TRANSIENT_KEYS) <= set(gl.ROOM_KEYS) and not set(gl.TRANSIENT_KEYS) & set(gl.MEMORY_KEYS)
+          and set(gl.MEMORY_KEYS) | set(gl.TRANSIENT_KEYS) == set(gl.ROOM_KEYS),
+          "portees: etats du moment dans la salle, memoires = salle sans les etats du moment")
+    groups = [set(ps.keys(s)) for s in ps.SCOPES]
+    check(sum(len(g) for g in groups) == len(ps.TABLE) and not any(a & b for i, a in enumerate(groups) for b in groups[i + 1:]),
+          "portees: chaque reglage a une portee et une seule")
+    check(not set(gl.BG_KEYS) & set(gl.ROOM_KEYS) and not set(gl.BG_KEYS) & set(gl.OVERLAY_PRESET_EXCLUDED),
+          "portees: le fond et la salle ne se recouvrent pas (bg_master est un reglage de salle)")
+    check("sensitivity" in gl.OVERLAY_PRESET_EXCLUDED and set(gl.ROOM_KEYS) <= set(gl.OVERLAY_PRESET_EXCLUDED),
+          "portees: sensibilite et salle hors presets et scenes")
+    # --- regression : un preset de fond ou une scene ne touche plus au master « Fond » (bg_master etait compte comme un reglage du fond)
+    cur = json.loads(json.dumps(gl.DEFAULT_PARAMS))
+    cur["bg_master"] = 0.4
+    check("bg_master" not in gl.capture_background(cur) and "bg_master" not in gl.background_preset_values({"bg_speed": 2.0}, cur),
+          "fond: capture et preset de fond ne contiennent pas bg_master")
+    check(gl.overlay_preset_values({"logo_glow": 2.0}, cur)["bg_master"] == 0.4
+          and gl.background_preset_values({"bg_speed": 2.0}, cur).get("bg_master", 0.4) == 0.4,
+          "fond: appliquer un preset (overlay ou fond) laisse le master Fond du VJ tel qu'il est")
+    from core import scenes as _sc
+    check(_sc.scene_values({"bg": "pattern", "fond": gl.capture_background(cur), "overlay": gl.capture_overlay(cur)}, cur)["bg_master"] == 0.4,
+          "fond: une scene a motif ne remet pas le master Fond a 100 %")
+    # --- validation : type, longueur, enum, plage
+    out = gl.coerce_params({"strobe_max_hz": 9999, "tempo": -3, "comp_sym": "x", "logo_source": "weird", "bg_palette": "duo",
+                            "fx_on": [5, 0, 0, 0, 0], "fx_int": [9.0, 0, 0, 0, -1], "fx_link": True, "inconnue": 1, "text_align": "left"})
+    check(out["strobe_max_hz"] == 30.0 and out["tempo"] == 0.0, "validation: un nombre hors plage est ramene dans la plage",
+          f"{out['strobe_max_hz']} {out['tempo']}")
+    check(out["comp_sym"] == 0 and out["logo_source"] == "image" and out["fx_link"] == 1.0 and "inconnue" not in out,
+          "validation: mauvais type, enum inconnu, booleen et cle inconnue ignores")
+    check(out["bg_palette"] == "duo" and out["text_align"] == "left", "validation: une valeur d'enum valide est gardee")
+    check(out["fx_on"] == [1, 0, 0, 0, 0] and out["fx_int"] == [2.0, 0.0, 0.0, 0.0, 0.0],
+          "validation: listes bornees element par element, longueur controlee", f"{out['fx_on']} {out['fx_int']}")
+    check(gl.coerce_params({"fx_on": [1, 1]})["fx_on"] == [1, 1, 1, 1, 1], "validation: liste de mauvaise longueur ignoree")
+    # un ancien fichier sauve qui contenait bg_master dans un preset de fond se charge sans erreur
+    check(gl.coerce_params({"bg_master": 0.5, "bg_speed": 2.0})["bg_master"] == 0.5, "compat: un ancien preset avec bg_master se charge")
+    # --- presets integres : tous valides, aucune valeur ramenee par la validation
+    moved = []
+    for book, name in ((gl.OVERLAY_PRESETS, "overlay"), (gl.BACKGROUND_PRESETS, "fond")):
+        for pname, values in book.items():
+            clean = gl.coerce_params(values)
+            for k, v in values.items():
+                if k in clean and clean[k] != v and not (isinstance(v, (int, float)) and abs(clean[k] - v) < 1e-9):
+                    moved.append((name, pname, k, v, clean[k]))
+    check(not moved, "presets integres: aucune valeur hors plage ni de mauvais type", str(moved[:3]))
+    # --- automations : leur plage reste dans celle du reglage
+    wide = []
+    for key, spec in gl.AUTOMATION_SPECS.items():
+        base = re.sub(r"^(fxl?_int)\d$", r"\1", key)
+        p = ps.BY_KEY.get(base)
+        if p is None:
+            wide.append((key, "reglage absent de la table"))
+        elif (p.lo is not None and spec[1] < p.lo) or (p.hi is not None and spec[2] > p.hi):
+            wide.append((key, (spec[1], spec[2]), (p.lo, p.hi)))
+    check(not wide, "automations: chaque courbe reste dans la plage de son reglage", str(wide[:3]))
+    # --- curseurs de la GUI : leur plage tient dans celle de la table
+    src = "".join(path.read_text(encoding="utf-8") for path in [here / "gl_gui.py", *sorted(here.glob("gui_*.py"))])     # la GUI est repartie en plusieurs modules
+    out_of = []
+    n_sliders = 0
+    for m in re.finditer(r'param_slider\(\w+, "[^"]*", "(\w+)", ([-\d.]+), ([-\d.]+),', src):
+        n_sliders += 1
+        key, lo, hi = m.group(1), float(m.group(2)), float(m.group(3))
+        p = ps.BY_KEY.get(key)
+        if p is None or (p.lo is not None and lo < p.lo - 1e-9) or (p.hi is not None and hi > p.hi + 1e-9):
+            out_of.append((key, lo, hi, None if p is None else (p.lo, p.hi)))
+    for m in re.finditer(r'\("(\w+)", "[^"]*", ([-\d.]+), ([-\d.]+), ([-\d.]+), ([-\d.]+), "[^"]*", ([-\d.]+),', src):
+        key, lo, hi, factor = m.group(1), float(m.group(2)), float(m.group(3)), float(m.group(5))
+        p = ps.BY_KEY.get(key)
+        if p is None:
+            continue
+        n_sliders += 1
+        if (p.lo is not None and lo / factor < p.lo - 1e-9) or (p.hi is not None and hi / factor > p.hi + 1e-9):
+            out_of.append((key, lo / factor, hi / factor, (p.lo, p.hi)))
+    check(n_sliders >= 40 and not out_of, f"GUI: {n_sliders} curseurs verifies, aucun ne depasse la plage de la table", str(out_of[:3]))
+    # --- le code ne lit/ecrit que des reglages declares
+    unknown = set()
+    allowed = {"_automation", "fx_on", "fx_int"}
+    for fname in ("audio2wave_gl.py", "gl_gui.py", *sorted(p.name for p in here.glob("gui_*.py")), "core/randomizer.py", "core/scenes.py", "core/params.py", "core/controls.py"):
+        text = (here / fname).read_text(encoding="utf-8")
+        for m in re.finditer(r'\b(?:params|p|cur|current|values|full)\[\s*"([a-z][a-z0-9_]*)"\s*\]', text):
+            key = m.group(1)
+            if key.startswith(("logo_", "bg_", "holo_", "melt_", "cell_", "fx", "comp_", "strobe_", "text_", "noise_", "silence_", "breath_")) \
+                    or key in ("tempo", "master", "build", "idle", "sensitivity", "auto_master", "react_master", "overlay_master", "hue_master",
+                               "hue_cycle", "build_time"):
+                if key not in ps.BY_KEY and key not in allowed:
+                    unknown.add((fname, key))
+    check(not unknown, "code: aucun reglage lu ou ecrit sans etre dans la table", str(sorted(unknown)[:5]))
+    # --- hasard : tout ce que tire le Full Randomizer reste dans les plages
+    from core import randomizer
+    rng = random.Random(1234)
+    stray = []
+    for _ in range(300):
+        for fn in (randomizer.random_background_params, randomizer.random_overlay_params, randomizer.random_effects):
+            for k, v in fn(rng).items():
+                if k == "_automation":
+                    continue
+                ok, val = ps.validate(k, v)
+                if not ok or (isinstance(v, (int, float)) and not isinstance(v, bool) and abs(val - v) > 1e-9) \
+                        or (isinstance(v, list) and any(abs(a - b) > 1e-9 for a, b in zip(val, v))):
+                    stray.append((fn.__name__, k, v))
+    check(not stray, "hasard: les tirages du Full Randomizer restent dans les plages de la table", str(stray[:3]))
+    import build_portable
+    check((Path(build_portable.__file__).parent / "core" / "params_schema.py").is_file() and "core" in build_portable.APP_DIRS,
+          "version portable: core/params_schema.py embarque")
+
+
+def _in_range(p, value) -> bool:
+    vals = value if isinstance(value, list) else [value]
+    for v in vals:
+        if isinstance(v, str):
+            if p.choices is not None and v not in p.choices:
+                return False
+            continue
+        if (p.lo is not None and v < p.lo) or (p.hi is not None and v > p.hi):
+            return False
+    return True
 
 
 def check_safeguards() -> None:
@@ -4849,7 +5059,7 @@ def check_safeguards() -> None:
     check(not snap.exists(), "sortie propre: l'instantane est efface")
     check(not gl.write_autosave(params, None, tmp / "absent" / "x" / "\0bad"), "auto-sauvegarde: un chemin impossible ne leve pas d'erreur")
     # --- journal de session
-    import sessionlog
+    from core import sessionlog
     log_path = tmp / "casual-overlay.log"
     sessionlog.setup(log_path)
     sessionlog.event("Scene : Purple")
@@ -4880,6 +5090,10 @@ def main() -> None:
     check_cells()
     check_noise()
     check_masters()
+    check_portable_modules()
+    check_core_purity()
+    check_engine_layer()
+    check_params_schema()
     check_safeguards()
     check_scenes()
     check_bg_video()
