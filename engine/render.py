@@ -415,7 +415,7 @@ class Renderer:
             return False
         for gone in self.wall.step(now):
             self._release_doodle(gone)
-        visible = self.wall.visible(now)
+        visible = self.wall.posed(now)
         if not visible:
             return False
         sp = self.scene_prog
@@ -427,13 +427,16 @@ class Renderer:
         self._set(sp, "u_logo_on", 1.0)
         self._set(sp, "u_logo_straight", 0.0)
         try:
-            for ident, rect, a in visible:
+            for ident, rect, a, scale, rot in visible:
                 x, y, w, h = (float(v) for v in rect)
                 self.doodle_tex[ident].use(1)
-                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2, h / 2))
+                # apparition / disparition animees : echelle autour du centre et rotation (voir core.doodles.pose)
+                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2 * scale, h / 2 * scale))
+                self._set(sp, "u_logo_cs", (math.cos(rot), math.sin(rot)))
                 self._set(sp, "u_logo_opacity", float(a) * presence)
                 self.scene_vao.render(moderngl.TRIANGLE_STRIP)
         finally:
+            self._set(sp, "u_logo_cs", (1.0, 0.0))                      # le logo, lui, reste droit
             self.ctx.disable(moderngl.BLEND)
         return True
 

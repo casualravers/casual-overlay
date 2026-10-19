@@ -4933,9 +4933,14 @@ def check_doodles() -> None:
     check(abs(rh - 0.30) < 1e-9 and abs(rw * 16 / 9 / rh - 2.0) < 1e-9, "position: hauteur 30 % de l'ecran, ratio de l'image garde")
     xs = {round(dd.place(rng, 1.0, 16 / 9)[0], 3) for _ in range(40)}
     check(len(xs) > 20, "position: tirage different a chaque apparition")
-    a = [dd.alpha(t) for t in (-1, 0, 0.75, 1.5, 7, 13, 14, 15, 16)]
+    a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, 14.3, 14.65, 15, 16)]
     check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
           and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
+    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, 14.55, 15.0))
+    check(abs(p0[0]) < 1e-9 and abs(p0[1]) > 0.2 and 1.05 < p1[0] < 1.15 and p2 == (1.0, 0.0) and p3 == (1.0, 0.0)
+          and p4[0] > 1.0 and p5 == (0.0, 0.0) and dd.pose(1.0, -1)[1] == dd.pose(1.0, 1)[1] == 0.0
+          and dd.pose(0.1, -1)[1] == -dd.pose(0.1, 1)[1] and dd.pose(-1.0) == (0.0, 0.0),
+          "animation: apparition (pop avec depassement, rotation), palier droit, disparition (gonfle puis rapetisse), sens alterne", str((p0, p1, p4)))
     wall = dd.Wall()
     dropped = []
     for i in range(7):
@@ -5141,6 +5146,21 @@ def check_doodles() -> None:
     check(top[0] > 240 and top[1] < 20 and bottom[1] > 240 and bottom[0] < 20, "rendu: image dans le bon sens (haut = rouge, bas = vert)", f"{top} {bottom}")
     outside = img[~changed]
     check((np.abs(outside.astype(int) - base[~changed].astype(int)).sum() == 0), "rendu: le reste de l'image est strictement intact")
+    # animation : a l'apparition le doodle est plus petit et incline, pres de la fin il rapetisse
+    def anim_box(age):
+        ra = gl.Renderer(ctx, size, None)
+        ra._doodle_rng = __import__("random").Random(7)
+        ra.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
+        ra.draw(fbo, size, st, params, 0.0)                       # une premiere image : le rendu connait le rapport de l'ecran
+        ra.add_doodle(top_red_bottom_green, time.monotonic() - age)
+        ra.draw(fbo, size, st, params, 0.0)
+        im = read_target(ctx, fbo, size).astype(int).sum(axis=2) > 3
+        yy, xx = np.nonzero(im)
+        return (xx.max() - xx.min() + 1, yy.max() - yy.min() + 1) if len(xx) else (0, 0), im
+    (w5, h5), _im5 = anim_box(5.0)
+    (wa, ha), _ima = anim_box(0.3)
+    (wb, hb), _imb = anim_box(14.9)
+    check(w5 > 0 and 0 < wa and wa * ha != w5 * h5 and 0 < wb * hb < w5 * h5, "doodle: apparition et disparition animees (taille et inclinaison changent)", f"{(w5, h5)} {(wa, ha)} {(wb, hb)}")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
     def doodle_render(pre=None, **kw):
         rr = gl.Renderer(ctx, size, None)
