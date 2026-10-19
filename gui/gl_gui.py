@@ -30,6 +30,7 @@ tkinter garde le fil principal ; la fenetre GL (`Projection`, ouverte par le bou
 from __future__ import annotations
 
 import copy
+import os
 import json
 import random
 import sys
@@ -215,15 +216,19 @@ def activate_mode(s, live, new: str) -> str | None:
     celle des autres. Les options de chaque mode sont gardees (`s.mode_args`) : revenir a Snap retrouve ses
     reglages."""
     import py_modes
+    from engine import native_modes
 
     old = s.mode
     if new == old:
         return None
-    if s.manager is None:
+    if not hasattr(s, "base_reader"):
+        s.base_reader = s.reader                  # le flux d'origine (ffmpeg, ou le flux de test en --synthetic) : on y revient en mode Live
+    native = native_modes.available() and not os.environ.get("CASUAL_MODES_PYTHON")      # dessin en GL ; CASUAL_MODES_PYTHON=1 : rendus Python d'audio2wave
+    if s.manager is None and not native:
         return "Les modes Snap et Ridge ne sont pas disponibles en --synthetic"
     old_src = s.pysrc
     device = (old_src.args.device if old_src is not None else s.live_args.device) or ""
-    if new == "ridge" and not device:
+    if new == "ridge" and not device and not (native and s.audio.synthetic):
         return "Ridge a besoin d'une entree audio : choisis-la d'abord dans le mode Live ou Snap"
     src = None
     if new != "live":
@@ -233,22 +238,28 @@ def activate_mode(s, live, new: str) -> str | None:
             if args is None:
                 args = s.mode_args[new] = py_modes.make_args(mod, new, device, s.render_size)
             args.device = device or None
-            src = py_modes.PyModeSource(new, mod, args, s.render_size, gl.FrameReader)
+            if native:
+                src = native_modes.NativeModeSource(new, mod, args, s.render_size, s.audio)
+            else:
+                src = py_modes.PyModeSource(new, mod, args, s.render_size, gl.FrameReader)
             src.start()
         except Exception as exc:
             return f"{new}: demarrage impossible ({exc})"
     if old_src is not None:
         old_src.stop()
-    elif old == "live":
+    elif old == "live" and s.manager is not None:
         s.manager.suspend()
     s.mode, s.pysrc = new, src
     if new == "live":
         if device:
             s.live_args.device = device
-        s.reader = s.manager.reader
-        resumed = copy.copy(s.live_args)
-        resumed.size = f"{s.render_size[0]}x{s.render_size[1]}"
-        s.manager.resume(resumed)
+        if s.manager is not None:
+            s.reader = s.manager.reader
+            resumed = copy.copy(s.live_args)
+            resumed.size = f"{s.render_size[0]}x{s.render_size[1]}"
+            s.manager.resume(resumed)
+        else:
+            s.reader = s.base_reader
     else:
         s.reader = src.reader
     return None

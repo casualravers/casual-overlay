@@ -218,6 +218,8 @@ def _gl_main(s: Session) -> None:
     finally:
         if getattr(s, "bgvideo", None) is not None:
             s.bgvideo.stop()
+        if getattr(s.pysrc, "native", False):
+            s.pysrc.release_gl()                      # les ressources GL d'un mode se liberent dans le fil GL
         if s.renderer is not None:
             s.renderer.release_logo_video()
         s.renderer = None
@@ -390,6 +392,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
           "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante | X PANIQUE | . tap tempo | / aide (avec --gui)")
     print(status_line())
 
+    last_native = None
+    native_warned = False
     bgvideo = s.bgvideo = BgVideoManager(s.render_size, s.status)     # fond "video" : decodage lance / arrete selon les reglages
     query = ctx.query(time=True)      # une image sur 8 (toutes avec --stats) : le garde-fou de charge et les mesures
     guard = PerfGuard(glfw.get_video_mode(window.monitor).refresh_rate or 60)
@@ -445,6 +449,21 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         bg_reader = bgvideo.reader_for(params)
         if bg_reader is not None:               # fond "video" pret : son flux remplace celui d'audio2wave
             reader = bg_reader
+        native = s.pysrc if getattr(s.pysrc, "native", False) else None      # Snap / Ridge dessines en GL : leur texture remplace le flux
+        if native is not last_native:
+            if last_native is not None:
+                last_native.release_gl()
+            last_native = native
+        mode_tex = None
+        if native is not None and bg_reader is None:
+            try:
+                mode_tex = native.render(ctx, now)
+            except Exception as exc:            # un mode ne doit jamais faire tomber la fenetre : on garde le fond d'avant
+                if not native_warned:
+                    print(f"Mode {native.name} (GL) : {exc}", file=sys.stderr)
+                    s.status["msg"] = f"Mode {native.name} : {exc}"
+                    native_warned = True
+        renderer.mode_tex = mode_tex
         if reader.upload_to(renderer.video_tex):
             up_ms += (time.perf_counter() - u0) * 1000.0
             up_n += 1
