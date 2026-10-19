@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 from core import automation as auto
+from core import controls
 from core import params as prm
 from core import randomizer
 
@@ -28,7 +29,8 @@ KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
 MAX_NAME = 200                    # pas de limite pratique : les noms longs sont affiches en entier ou raccourcis a l'ecran
 VJ_SECONDS = (10, 20, 30, 60, 120, 300)          # durees proposees dans le menu du VJ
-VJ_DEFAULTS = {"seconds": 30, "order": "seq"}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
+VJ_BARS = controls.BAR_CHOICES                     # changement en rythme : toutes les N mesures (4 kicks detectes chacune)
+VJ_DEFAULTS = {"seconds": 30, "order": "seq", "unit": "seconds", "bars": 8}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
                                                  # "alea" = Full Randomizer (scene tiree a chaque changement, voir randomizer.py)
 VJ_ORDERS = ("seq", "random", "alea")
 VJ_DEFAULTS["random"] = randomizer.clean_settings(None)       # reglages du hasard du set (banque, sources, verrous)
@@ -115,6 +117,10 @@ class SceneBook:
                 out["seconds"] = min(max(float(raw["seconds"]), 5.0), 300.0)
             if raw.get("order") in VJ_ORDERS:
                 out["order"] = raw["order"]
+            if raw.get("unit") in ("seconds", "bars"):
+                out["unit"] = raw["unit"]
+            if isinstance(raw.get("bars"), int) and not isinstance(raw["bars"], bool) and raw["bars"] in VJ_BARS:
+                out["bars"] = raw["bars"]
         out["random"] = randomizer.clean_settings(raw.get("random") if isinstance(raw, dict) else None)
         return out
 

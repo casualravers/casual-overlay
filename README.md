@@ -254,7 +254,6 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 - **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre, au hasard ou Full Randomizer, flash a
   chaque changement, Espace et fleche droite, panneau « Etendre » avec duree propre et exclusion par scene, ordre libre,
   medias lies aux scenes par glisser-deposer). Reste a faire :
-  - **Changer en rythme** (toutes les N mesures, en comptant les kicks detectes) plutot qu'a la seconde.
   - **Full Randomizer** : duree tiree dans une plage, poids / favoris et exclusions de la banque, tirage du mode audio2wave
     (Live / Snap / Ridge), position et taille du logo, tag par fichier (au lieu de tout classer par dossier).
   - **Une vraie transition** (fondu des reglages numeriques ; un changement de mode Live -> Snap coupe la source, donc

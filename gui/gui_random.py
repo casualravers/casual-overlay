@@ -10,7 +10,6 @@ from core import scenes
 import audio2wave_gl as gl
 import json
 import random
-import time
 import tkinter as tk
 
 
@@ -36,6 +35,7 @@ def install(c):
     scene_ui = c.scene_ui
     sync_automation_now = c.sync_automation_now
     vj = c.vj
+    vj_arm = c.vj_arm
 
     rnd = getattr(s, "rnd", None)
     if rnd is None:
@@ -134,7 +134,7 @@ def install(c):
         s.commands.put("flash")
         random_draw()
         if vj["running"]:
-            vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
+            vj_arm()
         refresh_scene_bar()
 
     def keep_a2w_mode(scene: dict | None) -> str | None:

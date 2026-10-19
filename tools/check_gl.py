@@ -851,6 +851,24 @@ def check_gui() -> None:
                     vjc["advance"]()
                     rnd.append(s.active_scene)
                 out["vj_rand"] = (all(a != b for a, b in zip(rnd, rnd[1:])), set(rnd) == set(names))
+                # VJ en rythme : N mesures de 4 kicks detectes au lieu de N secondes
+                fake = {"beats": 100}
+                real_latest = s.audio.analyzer.latest
+                s.audio.analyzer.latest = lambda: {**real_latest(), "beats": fake["beats"]}
+                try:
+                    sbook.set_vj(unit="bars", bars=2, order="seq")
+                    vjc["arm"]()
+                    bar = vst["bar"]
+                    fake["beats"] = 107
+                    early = bar.due(fake["beats"], gl.time.monotonic())
+                    fake["beats"] = 108
+                    out["vj_bars"] = (bar is not None and bar.total == 8, early, bar.due(fake["beats"], gl.time.monotonic()),
+                                      vjc["remaining_text"]())
+                    sbook.set_vj(unit="seconds")
+                    vjc["arm"]()
+                    out["vj_bars_off"] = vst["bar"] is None
+                finally:
+                    s.audio.analyzer.latest = real_latest
                 s.scene_requests.put("vj")                      # Espace: le VJ tournait, il se met en pause
                 sc["poll"]()
                 out["vj_key_space"] = vst["running"]
@@ -1060,6 +1078,9 @@ def check_gui() -> None:
     check(len(vs[0]) == 3 and all(a != b for a, b in zip(vs[0], vs[0][1:])) and set(vs[0]) <= set(vs[1]),
           "VJ (GUI): dans l'ordre, chaque scene suivante est differente", str(vs))
     check(out.get("vj_rand") == (True, True), "VJ (GUI): au hasard, jamais deux fois de suite, toutes jouees", str(out.get("vj_rand")))
+    vb = out.get("vj_bars", (False,) * 4)
+    check(vb[0] and vb[1] is False and vb[2] is True and vb[3].startswith("mesure ") and out.get("vj_bars_off") is True,
+          "VJ en rythme (GUI): 2 mesures = 8 kicks, la 8e declenche, libelle « mesure x/y », retour aux secondes", str((vb, out.get("vj_bars_off"))))
     check(out.get("vj_key_space") is False and out.get("vj_key_next") == (True, False) and running_after_space(out),
           "VJ: Espace (lecture / pause) et fleche droite (suivante) via la file de la fenetre de rendu", str((out.get("vj_key_space"), out.get("vj_key_next"))))
     check(out.get("vj_pause") == (True, False, True), "VJ (GUI): choisir une scene a la main met le VJ en pause",
@@ -5542,6 +5563,19 @@ def check_safeguards() -> None:
     check(abs(gl.tap_bpm([0.0, 0.5, 5.0, 5.4, 5.8]) - 150.0) < 1e-6, "tap tempo: un trou de plus de 2 s recommence la serie")
     check(abs(gl.tap_bpm([0, 1, 1.5, 2, 2.5, 3, 3.5, 4]) - 120.0) < 1e-6,
           "tap tempo: seuls les derniers appuis comptent (le debut hesitant est oublie)")
+    # --- VJ en rythme : N mesures = 4 N kicks, avec garde-fou temporel
+    from core import controls as cc, scenes as sc_
+    bt = cc.BarTimer(2).arm(10, 100.0, 1.0)
+    check(bt.total == 8 and not bt.due(17, 101.0) and bt.due(18, 101.0) and bt.label(10) == "1/2" and bt.label(15) == "2/2",
+          "VJ en rythme: 2 mesures = 8 kicks, libelle de la mesure en cours")
+    check(not bt.due(10, 107.9) and bt.due(10, 108.0) and cc.BarTimer(1).arm(0, 0.0, 1.0).deadline == 8.0,
+          "VJ en rythme: sans kicks, le changement a lieu apres le double de la duree attendue (au moins 8 s)")
+    check(cc.BarTimer(8).arm(0, 0.0, 2.0).deadline == 16.0 and cc.BarTimer(8).arm(0, 0.0, 1.0).deadline == 32.0,
+          "VJ en rythme: le garde-fou suit le master du tempo (240 BPM = deux fois plus court)")
+    cv = sc_.SceneBook._clean_vj({"unit": "bars", "bars": 16, "seconds": 20})
+    check(cv["unit"] == "bars" and cv["bars"] == 16 and sc_.SceneBook._clean_vj({"unit": "x", "bars": 3})["unit"] == "seconds"
+          and sc_.SceneBook._clean_vj({"bars": 3})["bars"] == 8 and sc_.SceneBook._clean_vj(None)["unit"] == "seconds",
+          "VJ en rythme: reglages valides (unite, nombre de mesures), valeurs inconnues ramenees aux defauts")
     # --- auto-sauvegarde
     tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_autosave_"))
     snap = tmp / "autosave.json"

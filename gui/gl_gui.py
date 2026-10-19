@@ -56,6 +56,7 @@ import gui_sets
 import gui_vj
 import gui_colors
 import gui_gates
+from core import controls as core_controls
 from core import params as core_params
 from core import scenes, sessionlog
 
@@ -1368,11 +1369,44 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # ---- Mode VJ : enchaine les scenes du set actif toutes les N secondes, avec un flash court a chaque changement.
     vj = getattr(s, "vj_state", None)
     if vj is None:
-        vj = s.vj_state = {"running": False, "t_next": 0.0}
+        vj = s.vj_state = {"running": False, "t_next": 0.0, "bar": None}
     vj_ui: dict = {}
+
+    def beat_count() -> int:
+        """Kicks detectes depuis le lancement (compteur croissant de l'analyse audio) ; 0 si l'analyse n'est pas disponible."""
+        try:
+            return int(s.audio.analyzer.latest().get("beats", 0))
+        except Exception:
+            return 0
+
+    def vj_arm(own: float | None = None) -> None:
+        """Arme le minuteur du prochain changement : N secondes, ou N mesures de kicks si le set est « en rythme ». Une duree propre
+        a l'entree (`own`, en secondes) l'emporte et reste en secondes."""
+        st = scene_book.vj()
+        now = time.monotonic()
+        if st["unit"] == "bars" and not own:
+            vj["bar"] = core_controls.BarTimer(st["bars"]).arm(beat_count(), now, float(params.get("tempo", 1.0)))
+            vj["t_next"] = vj["bar"].deadline                 # garde-fou si les kicks ne viennent pas
+        else:
+            vj["bar"] = None
+            vj["t_next"] = now + (own or st["seconds"])
+
+    def vj_due() -> bool:
+        now = time.monotonic()
+        bar = vj.get("bar")
+        return now >= vj["t_next"] or (bar is not None and bar.due(beat_count(), now))
+
+    def vj_period_text() -> str:
+        st = scene_book.vj()
+        return f"{st['bars']} mesure(s) (4 kicks chacune)" if st["unit"] == "bars" else f"{st['seconds']:.0f} s"
 
     def vj_remaining() -> float:
         return max(vj["t_next"] - time.monotonic(), 0.0)
+
+    def vj_remaining_text() -> str:
+        """Ce qui reste avant la scene suivante : « 12 s », ou « mesure 3/8 » en rythme."""
+        bar = vj.get("bar")
+        return f"mesure {bar.label(beat_count())}" if bar is not None else f"{vj_remaining():.0f} s"
 
     def update_vj_button() -> None:
         btn = vj_ui.get("toggle")
@@ -1380,7 +1414,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         try:
             if vj["running"]:
-                btn.config(text=f"\u25a0 VJ  {vj_remaining():.0f} s", bg=SCENE_COLOR, fg=BANNER_FG)
+                btn.config(text=f"\u25a0 VJ  {vj_remaining_text()}", bg=SCENE_COLOR, fg=BANNER_FG)
             else:
                 btn.config(text="\u25b6 VJ", bg=a2w.GUI_BG, fg=a2w.GUI_FG)
         except tk.TclError:
@@ -1408,7 +1442,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         scene_msg=scene_msg,
         scene_ui=Late(lambda: scene_ui),
         sync_automation_now=sync_automation_now,
-        vj=vj))
+        vj=vj,
+        vj_arm=vj_arm))
     add_random_scene = gui_random_ctl.add_random_scene
     duplicate_last_scene = gui_random_ctl.duplicate_last_scene
     random_bank = gui_random_ctl.random_bank
@@ -1428,7 +1463,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if scene_book.vj()["order"] == "alea":
             s.commands.put("flash")
             random_draw()
-            vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
+            vj_arm()
             update_vj_button()
             return
         if sum(1 for r in rows if not r["skip"]) < 2:
@@ -1440,7 +1475,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         index = scenes.next_entry_index(rows, current_index(rows), settings["order"], random)
         s.commands.put("flash")
         apply_entry_core(index)
-        vj["t_next"] = time.monotonic() + (rows[index]["seconds"] or settings["seconds"])     # duree propre a l'entree
+        vj_arm(rows[index]["seconds"])                     # duree propre a l'entree (en secondes) sinon celle du set
         update_vj_button()
 
     def scene_locked(say: bool = True) -> bool:
@@ -1467,7 +1502,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             s.scene_lock = False
             if getattr(s, "lock_resume", False):
                 vj["running"] = True
-                vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
+                vj_arm()
             s.lock_resume = False
             scene_msg.set("Scene deverrouillee" + (" : VJ relance" if vj["running"] else ""))
         else:
@@ -1490,8 +1525,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             scene_msg.set("Il faut au moins 2 scenes actives dans le set pour enchainer")
         else:
             vj["running"] = True
-            vj["t_next"] = time.monotonic() + scene_book.vj()["seconds"]
-            scene_msg.set(f"VJ: une scene toutes les {scene_book.vj()['seconds']:.0f} s"
+            vj_arm()
+            scene_msg.set(f"VJ: une scene toutes les {vj_period_text()}"
                           + (" (Full Randomizer)" if scene_book.vj()["order"] == "alea" else ""))
         update_vj_button()
 
@@ -1499,7 +1534,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         """Minuteur du VJ (250 ms). Chaque etape est isolee et la suivante est TOUJOURS programmee : une erreur (affichee sur la console)
         ne doit jamais tuer le minuteur, sinon Play ne ferait plus rien et le VJ ne passerait plus jamais a la scene suivante."""
         try:
-            if vj["running"] and time.monotonic() >= vj["t_next"]:
+            if vj["running"] and vj_due():
                 vj_advance()
         except Exception:
             traceback.print_exc()
@@ -1837,6 +1872,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         vj=vj,
         vj_advance=vj_advance,
         vj_remaining=vj_remaining,
+        vj_remaining_text=vj_remaining_text,
         vj_toggle=vj_toggle,
         vj_ui=vj_ui))
     autosave_tick = gui_vj_ctl.autosave_tick
@@ -1886,7 +1922,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         opts.pack(side="right", padx=(0, 6), pady=5)
         menu = tk.Menu(opts, tearoff=0)
         order_var = tk.StringVar(value=scene_book.vj()["order"])
-        secs_var = tk.IntVar(value=int(scene_book.vj()["seconds"]))
+        when_var = tk.StringVar(value=f"b{scene_book.vj()['bars']}" if scene_book.vj()["unit"] == "bars" else f"s{int(scene_book.vj()['seconds'])}")
+
+        def set_when() -> None:
+            kind, value = when_var.get()[0], int(when_var.get()[1:])
+            set_vj_option(unit="bars", bars=value) if kind == "b" else set_vj_option(unit="seconds", seconds=float(value))
         for label, value in (("Dans l'ordre", "seq"), ("Au hasard (jamais la meme deux fois)", "random"),
                              ("Full Randomizer (banques d'assets)", "alea")):
             menu.add_radiobutton(label=label, variable=order_var, value=value,
@@ -1894,8 +1934,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         menu.add_separator()
         for value in scenes.VJ_SECONDS:
             label = f"Toutes les {value} s" if value < 60 else f"Toutes les {value // 60} min"
-            menu.add_radiobutton(label=label, variable=secs_var, value=value,
-                                 command=lambda: set_vj_option(seconds=float(secs_var.get())))
+            menu.add_radiobutton(label=label, variable=when_var, value=f"s{value}", command=set_when)
+        menu.add_separator()
+        for value in scenes.VJ_BARS:
+            menu.add_radiobutton(label=f"Toutes les {value} mesure{'s' if value > 1 else ''} (en rythme)", variable=when_var,
+                                 value=f"b{value}", command=set_when)
         menu.add_separator()
         menu.add_command(label="Console VJ (grosses commandes)...", command=console_window)
         menu.add_command(label="Raccourcis clavier (?)...", command=help_window)
@@ -2185,7 +2228,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
-            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "panic": do_panic, "tap": do_tap, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
+            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "remaining_text": vj_remaining_text, "arm": vj_arm, "panic": do_panic, "tap": do_tap, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
             "random": {"draw": random_draw, "draw_now": random_draw_now, "keep": random_keep, "save": random_save, "check": random_keep_check, "bank": random_bank,
                        "option": set_random_option, "state": rnd},
             "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,
