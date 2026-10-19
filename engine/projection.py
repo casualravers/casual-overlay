@@ -51,6 +51,11 @@ class Projection:
                 s.commands.get_nowait()
             except queue.Empty:
                 break
+        while True:                                     # doodles arrives projection fermee : perimes aussi (seuls les nouveaux s'affichent)
+            try:
+                s.doodle_queue.get_nowait()
+            except queue.Empty:
+                break
         self.thread = threading.Thread(target=self._run, name="gl", daemon=True)
         self.thread.start()
         if a.fullscreen:
@@ -426,6 +431,12 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             break
 
         apply_logo_request(s, renderer)
+        while True:                             # doodles du site decodes par le fil de recuperation : poses ici (fil GL)
+            try:
+                item = s.doodle_queue.get_nowait()
+            except queue.Empty:
+                break
+            renderer.add_doodle(item["rgba"], now)
         automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
 

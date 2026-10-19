@@ -81,6 +81,7 @@ TABLE: tuple[Param, ...] = (
     _p("strobe_on", 0.0, 0.0, 1.0, scope="state", doc="Strobe arme / maintenu."),
     _p("strobe_mode", "manual", choices=("manual", "kick", "rate"), scope="room", doc="Mode du strobe."),
     _p("strobe_rate", 8.0, 1.0, 20.0, scope="room", doc="Cadence du strobe en Hz (modes manuel maintenu et cadence)."),
+    _p("doodle_on", 0.0, 0.0, 1.0, scope="state", doc="Recuperation des doodles du site (case de l'onglet Affichage) : jamais sauvee, jamais dans un preset ni une scene."),
     _p("strobe_hits", 0, 0, 10 ** 9, scope="state", doc="Compteur d'appuis : un appui plus court qu'une image declenche quand meme un eclair."),
     _p("tempo", 1.0, 0.0, 2.0, scope="room", doc="Master du tempo : vitesse des animations et des automations (1 = normal)."),
     _p("fx_master", 1.0, 0.0, 2.0, scope="room", doc="Master des effets : x l'intensite de TOUS les effets ; 0 = aucun."),

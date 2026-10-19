@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import time
 from pathlib import Path
 
 from core import sessionlog
+from core import doodles
 from core.automation import FX_EFFECTS
 from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, effective_tempo
 from core.params import DEFAULT_PARAMS
@@ -258,6 +260,11 @@ class Renderer:
         self.logo_requested = logo_path
         self.set_logo(logo_rgba, logo_path)
 
+        self.wall = doodles.Wall()                 # doodles du site visibles (par-dessus tout, apres le post-traitement)
+        self.doodle_tex: dict = {}                 # identifiant -> texture
+        self._doodle_id = 0
+        self.screen_size = (1, 1)                  # taille du dernier rendu (pour le rapport d'aspect des doodles)
+        self._doodle_rng = random.Random()
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
@@ -319,9 +326,12 @@ class Renderer:
             scene = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("scene.frag"))
             post = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("post.frag"))
             holo = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("holo.frag"))
+            doodle = self.ctx.program(vertex_shader=self._read("doodle.vert"), fragment_shader=self._read("doodle.frag"))
         except Exception as exc:
             raise ShaderError(str(exc)) from exc
         self.scene_prog, self.post_prog, self.holo_prog = scene, post, holo
+        self.doodle_prog = doodle
+        self.doodle_vao = self.ctx.vertex_array(doodle, [(self.vbo, "2f", "in_pos")])
         self.scene_vao = self.ctx.vertex_array(scene, [(self.vbo, "2f", "in_pos")])
         self.post_vao = self.ctx.vertex_array(post, [(self.vbo, "2f", "in_pos")])
         self.holo_vao = self.ctx.vertex_array(holo, [(self.vbo, "2f", "in_pos")])
@@ -377,6 +387,50 @@ class Renderer:
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
         return max(0.0, 1.0 - (now - self._strobe_last) / 0.07)
 
+    # ---- Doodles du site : par-dessus tout, apres la trainee et le post-traitement (ni symetrie, ni teinte, ni PANIQUE n'y touchent)
+    def add_doodle(self, rgba, now: float) -> None:
+        """Pose un doodle (tableau uint8 RGBA premultiplie, premiere ligne = haut) a un endroit tire au hasard, entierement dans le cadre.
+        A appeler depuis le fil GL. Au-dela de 5 medias le plus ancien part."""
+        h, w = rgba.shape[:2]
+        tex = self.ctx.texture((w, h), 4, data=rgba.tobytes())
+        tex.build_mipmaps()
+        tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        tex.repeat_x = tex.repeat_y = False
+        self._doodle_id += 1
+        ident = self._doodle_id
+        self.doodle_tex[ident] = tex
+        sw, sh = self.screen_size
+        rect = doodles.place(self._doodle_rng, w / h, sw / max(sh, 1))
+        for gone in self.wall.add(ident, rect, now):
+            self._release_doodle(gone)
+
+    def _release_doodle(self, ident) -> None:
+        tex = self.doodle_tex.pop(ident, None)
+        if tex is not None:
+            tex.release()
+
+    def _draw_doodles(self, target, size: tuple[int, int], now: float) -> None:
+        self.screen_size = size
+        if not self.wall.items:                     # liste vide : aucun cout
+            return
+        for gone in self.wall.step(now):
+            self._release_doodle(gone)
+        visible = self.wall.visible(now)
+        if not visible:
+            return
+        target.viewport = (0, 0, size[0], size[1])
+        target.use()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE_MINUS_SRC_ALPHA        # alpha premultiplie
+        try:
+            for ident, rect, a in visible:
+                self.doodle_tex[ident].use(0)
+                self._set(self.doodle_prog, "u_tex", 0)
+                self._set(self.doodle_prog, "u_rect", tuple(float(v) for v in rect))
+                self._set(self.doodle_prog, "u_alpha", float(a))
+                self.doodle_vao.render(moderngl.TRIANGLE_STRIP)
+        finally:
+            self.ctx.disable(moderngl.BLEND)
     @staticmethod
     def _set(prog, name: str, value) -> None:
         if name in prog:   # un uniform inutilise est elimine par le compilateur
@@ -606,6 +660,7 @@ class Renderer:
         if dest is not target:
             self.ctx.copy_framebuffer(target, dest)
             self._fb_i = 1 - self._fb_i
+        self._draw_doodles(target, size, time.monotonic())
 
 
 def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> tuple[float, float, float]:

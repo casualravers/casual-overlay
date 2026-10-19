@@ -50,6 +50,7 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   sessionlog     journal de session
   scenes         scenes, sets, memoires de masters (stockage, export / import)
   randomizer     Full Randomizer (banques d'assets, tirages)
+  doodles        doodles du site : config, liste du bucket, fichiers vus, validation, position, cycle de vie, mur (voir plus bas)
 engine/          moteur sans rendu GL (importe core/ et les dependances facultatives, jamais la GUI ni la facade) :
   deps           numpy / glfw / moderngl / sounddevice / Pillow importes une fois (`None` si absents, `MISSING`)
   audio          FeatureExtractor, RingBuffer, AudioAnalyzer, entrees micro / synthetique
@@ -57,6 +58,7 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   window         fenetre glfw, choix du moniteur, plein ecran
   render         Renderer (passes GL), noise, texte / logo, PerfGuard
   session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
+  doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
   app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
 audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths) + facade qui re-exporte core/ et engine/ (gl.X) ;
@@ -422,6 +424,29 @@ Le logo **se decompose en cellules** (Voronoi + cell shading) ; il garde sa form
   (`check_cells`) : intact a 0, decompose, couleurs gardees, **les cellules ne couvrent que la forme du logo** (logo
   a moitie transparent), rien hors du rectangle, contour de la couleur choisie, derive, audio.
 
+### Doodles du site (case « Recuperer les medias », onglet Affichage)
+
+Recupere les fichiers deposes sur le site Casual Ravers (bucket Supabase Storage public `doodles` : PNG / JPEG, 5 Mo max) et les affiche **par-dessus
+la projection**. Desactive par defaut.
+- **Configuration** : `~/.audio2wave/depot.json` = `{"url": "https://<projet>.supabase.co", "anon_key": "..."}` (jamais dans le code ni versionne). Absente
+  ou incomplete : la case reste active, le statut (ligne d'etat de la GUI) dit ce qui manque ; la config est relue a chaque tour tant qu'elle manque.
+- **Reglage `doodle_on`** : portee `state` (ni sauve par P, ni dans l'auto-sauvegarde, ni presets overlay / fond, ni scenes, ni memoires de masters) ;
+  PANIQUE n'y touche pas (comme le logo et le texte). Decocher arrete l'interrogation ; les doodles deja affiches finissent leur fondu.
+- **`core/doodles.py`** (pur) : `parse_config` / `load_config`, `list_request` (POST `/storage/v1/object/list/doodles`, `sortBy created_at desc`, `limit` 100 :
+  les plus recents d'abord, sinon passe 100 fichiers les nouveaux n'apparaitraient plus), `download_url`, `parse_listing`, `Seen` (`arm` a l'activation =
+  l'existant est memorise sans etre affiche ; `fresh` du plus ancien au plus recent ; `mark`), `check_download` (vide, > 5 Mo, signature PNG / JPEG : le
+  suffixe ne prouve rien), `check_size` (<= 4096 px), `place` (rectangle tire au hasard, toujours entierement dans le cadre, hauteur 30 % de l'ecran, ratio
+  garde), `alpha` (fondu 1,5 s / palier / fondu 2 s sur 15 s), `Wall` (5 visibles au plus, le plus ancien part), `poll_once` (un tour sans fil : reseau injecte).
+- **`engine/doodle_feed.py`** : `DoodleFeed` = fil d'arriere-plan (tick toutes les 250 ms, interrogation toutes les 5 s, timeout 6 s), jamais dans le fil GL
+  ni Tk. Une erreur reseau est dite dans le statut (`status["doodles"]`), journalisee **une seule fois** (`sessionlog`) et reessayee au tour suivant ; un
+  telechargement en echec n'est pas marque « vu » (reessai), un fichier invalide l'est. Decodage Pillow (`decode` : taille lue avant tout decodage,
+  `exif_transpose` pour les photos, `_premultiplied` comme le logo) puis `Session.doodle_queue`. Demarre par `run_app` (le fil dort tant que la case est decochee).
+- **Rendu** (`Renderer.add_doodle` / `_draw_doodles`, `doodle.vert` / `doodle.frag`) : la boucle GL vide la file a chaque image et pose les doodles ; la passe
+  vient **apres** le post-traitement et la trainee, donc ni symetrie, ni pixelisation, ni teinte globale, ni strobe ne les touchent ; melange premultiplie
+  (ONE, ONE_MINUS_SRC_ALPHA), textures a mipmaps. Liste vide = passe sautee (aucun cout). Les doodles arrives projection fermee sont jetes (`Projection.start`).
+- `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
+  injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
+  sauvegarde, case de la GUI.
 ### Noise : un hasard unique et prereglé (`noise_amount`, `noise_fx`)
 
 **Un seul noise, non parametrable** (`NoiseDrive`, audio2wave_gl.py) : une valeur continue au hasard (`noise_value`, noise de

@@ -10,6 +10,7 @@ from core.automation import merge_automation
 from core.autosave import clear_autosave, recover_autosave
 from core.params import load_params
 from engine.audio import RingBuffer, find_input_device
+from engine.doodle_feed import DoodleFeed
 from engine.projection import Projection, gl_main
 from engine.session import AudioController, NoDeviceManager, Session
 from engine.video import FrameReader, ProducerManager, SyntheticVideoStream
@@ -84,8 +85,10 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
     if recovery_msg:
         s.status["msg"] = recovery_msg
         print(recovery_msg, file=sys.stderr)
+    feed = DoodleFeed(s)                                  # doodles du site : le fil dort tant que la case est decochee
     clean = False
     try:
+        feed.start()
         audio.start()
         if manager is not None:
             manager.start()
@@ -106,6 +109,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
         if clean:
             clear_autosave()
         s.stop_event.set()
+        feed.stop()
         if s.projection is not None:
             s.projection.stop(wait=5.0)
         if s.pysrc is not None:
