@@ -752,13 +752,14 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   des reglages, `master` (les 4 deformations), `melt_depth`, `cell_amount`, `noise_amount` et le halo (intensite, deformation, poussiere).
   0 % = image identique a tous les effets coupes ; ne touche pas aux composition / teinte (masters a part).
 - **Tap tempo** (`gl.tap_bpm(taps)`, pure : moyenne des 6 derniers intervalles, un trou de plus de 2 s recommence ; bouton de l'onglet *Masters*,
-  touche **point** dans la fenetre de rendu, console) : BPM -> master du tempo (**120 BPM = 100 %**, 30..300 BPM) ; en strobe a cadence fixe
+  touche **point** dans la fenetre de rendu, console) : BPM -> master du tempo (**120 BPM = 100 %**, 30..300 BPM ; le curseur « Tempo » est gradue en **BPM** (0..240, `factor` 120 : le reglage `tempo` reste 0..2) ; un **voyant de kick + BPM detecte** est affiche dans la barre du haut, `kick_tick` 50 ms, « cassure » / « MONTEE » quand le detecteur les repere) ; en strobe a cadence fixe
   (`strobe_mode` = `rate`) la cadence suit (BPM / 60 Hz, bornee a 1..20 puis par le limiteur). Le tap reste la reference manuelle ; le BPM detecte est decrit juste apres.
 - **Rythme detecte** (`core/rhythm.py`, pur, temps injecte ; `AudioAnalyzer.rhythm`, nourri par le fil d'analyse a chaque kick et chaque pas d'analyse : independant de la projection) :
   `BpmEstimator` garde les kicks des 24 dernieres secondes ; les intervalles entre kicks consecutifs ET distants de 2, 3 ou 4 rangs (divises par l'ecart : un kick manque ne fausse rien) sont ramenes dans 70..180 BPM
   (`fold_bpm` : un kick sur deux = le meme morceau) ; le groupe d'estimations qui s'accordent a 3 % pres le plus nombreux donne le BPM, sa part du total la confiance (>= 0,45 sinon pas de BPM, 6 kicks au moins).
-  `Rhythm.bpm` est lisse (+25 % de l'ecart, saute apres 3 estimations de suite en desaccord = changement de morceau, perdu apres 5 s sans kick). `DropDetector` : basses sous 30 % de leur niveau habituel
-  (plus haut recent, oublie avec une demi-vie de 40 s, au moins 0,25) pendant 1,5 s = cassure (`break`), apres 3,5 s = montee probable (evenement `build`), retour des basses a plus de 60 % = `drop` (pause de 12 s entre deux ;
+  `Rhythm.bpm` est lisse (+25 % de l'ecart, saute apres 3 estimations de suite en desaccord = changement de morceau, perdu apres 5 s sans kick). `DropDetector` : basses sous 20 % de leur niveau habituel
+  (plus haut recent, oublie avec une demi-vie de 40 s, au moins 0,30) pendant 3 s = cassure (`break`) ; apres 5 s de cassure ET si la courbe des mediums / aigus a gagne au moins 0,12 en 4 s et continue de monter
+  (`_rising` : une simple absence de basses n'est PAS une montee) = evenement `build` ; retour des basses a plus de 60 % = `drop` (pause de 12 s entre deux ;
   un retour pendant la pause remet au calme sans drop en retard ; cassure de plus de 45 s abandonnee et non rearmee tant que les basses ne reviennent pas). Un silence depuis le debut ne declenche rien.
   GUI (`gui_vj.rhythm_step`, toutes les 100 ms, ne reagit qu'aux EVENEMENTS survenus depuis le dernier pas) : case **Tempo auto** (`bpm_auto`, onglet *Masters* : tempo = BPM / 120, cadence du strobe en mode Cadence) ;
   case **Montee / drop auto** (`drop_auto` : une cassure detectee lance la montee, le drop la relache avec flash et eclair ; montee annulee si la cassure finit sans drop) ; reglage du set `vj["on_drop"]` (menu « reglages VJ ») :

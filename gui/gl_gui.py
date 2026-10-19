@@ -2033,6 +2033,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             Tooltip(lockbar, "La scene est VERROUILLEE : le VJ (Play, Suivante), les touches de scene, F1..F9 et les tirages sont sans effet. "
                              "Clique pour deverrouiller (touche K dans la fenetre de rendu).")
         update_vj_button()
+        kick = tk.Label(scene_bar, text="\u25cf -- BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, font=("Segoe UI", 9, "bold"), width=18, anchor="w")
+        kick.pack(side="right", padx=(2, 8), pady=5)
+        vj_ui["kick"] = kick
+        Tooltip(kick, "Voyant de kick : s'allume a chaque kick detecte par l'analyse audio. A droite, le BPM estime a partir des kicks ('-- BPM' tant que "
+                      "les kicks ne sont pas assez reguliers) ; 'cassure' / 'MONTEE' quand l'analyse repere une baisse des basses / une montee.")
         # Set actif : menu pour en changer, creer, renommer, supprimer, exporter, importer
         current_set = scene_book.active_set_name()
         set_btn = tk.Menubutton(scene_bar, text=f"SET  {current_set if len(current_set) <= 16 else current_set[:15] + '.'} \u25be",

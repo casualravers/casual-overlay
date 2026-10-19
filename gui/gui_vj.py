@@ -315,9 +315,9 @@ def install(c):
             for i, args in enumerate((
                     ("react_master", "Reac", 0, 200, 5, 100.0, "%", 100, "Master de l'audioreactivite : multiplie tout ce qui vient du son (basses, mediums, aigus, kick) "
                                                                         "pour tous les effets. 0 % = le visuel ne reagit plus a l'audio, 100 % = normal, 200 % = double."),
-                    ("tempo", "Tempo", 0, 200, 5, 100.0, "%", 100, "Master du tempo : vitesse des animations (halo, fonte, cellules, fond anime, noise) et des courbes "
-                                                                   "d'automation. 100 % = normal, 50 % = deux fois plus lent. Reglage manuel (ou « Tempo auto » : BPM detecte) : la video de fond "
-                                                                   "et le logo anime gardent leur cadence."),
+                    ("tempo", "Tempo", 0, 240, 1, 120.0, " BPM", 120, "Tempo des animations (halo, fonte, cellules, fond anime, noise) et des courbes d'automation, en BPM : "
+                                                                   "120 BPM = vitesse normale, 60 BPM = deux fois plus lent. Le tap tempo et « Tempo auto » (BPM detecte) "
+                                                                   "le posent pour toi. La video de fond et le logo anime gardent leur cadence."),
                     ("overlay_master", "Overlay", 0, 100, 5, 100.0, "%", 100, "Presence de l'overlay (logo, texte, contour, halo) : 100 % = normal, 0 % = invisible, "
                                                                               "les effets du fond continuent."),
                     ("bg_master", "Fond", 0, 100, 5, 100.0, "%", 100, "Luminosite du fond (video, spectre ou motif) : 100 % = normal, 0 % = fond noir, "
@@ -562,7 +562,7 @@ def install(c):
         if params.get("strobe_mode") == "rate":
             params["strobe_rate"] = min(max(bpm / 60.0, 1.0), 20.0)
         sync_master_panel()
-        scene_msg.set(f"Tap tempo : {bpm:.0f} BPM (tempo {params['tempo'] * 100:.0f} %, 120 BPM = 100 %)")
+        scene_msg.set(f"Tap tempo : {bpm:.0f} BPM")
 
     def status_text() -> str:
         """Une ligne lisible de l'etat du spectacle : scene, VJ (lecture, pause, verrou), BPM, projection."""
@@ -761,6 +761,33 @@ def install(c):
                         btn.configure(text=build_text())
                     except tk.TclError:
                         vj_ui.pop("build", None)
+
+    def kick_tick() -> None:
+        """Voyant de la barre : s'allume a chaque kick detecte, avec le BPM detecte (et la cassure / montee reperee)."""
+        lbl = vj_ui.get("kick")
+        try:
+            if lbl is not None and lbl.winfo_exists():
+                latest = s.audio.analyzer.latest()
+                on = float(latest.get("beat", 0.0)) > 0.4
+                r = rhythm_source()
+                det = detected_bpm()
+                text = "\u25cf " + (f"{det:.0f} BPM" if det else "-- BPM")
+                state = getattr(r, "state", "idle")
+                if state != "idle":
+                    text += "  cassure" if state == "break" else "  MONTEE"
+                if lbl.cget("text") != text:
+                    lbl.configure(text=text)
+                color = SCENE_COLOR if on else a2w.GUI_MUTED_FG
+                if str(lbl.cget("fg")) != color:
+                    lbl.configure(fg=color)
+        except tk.TclError:
+            vj_ui.pop("kick", None)
+        except Exception:
+            pass
+        finally:
+            after(50, kick_tick)
+
+    after(300, kick_tick)
 
     def rhythm_tick() -> None:
         try:

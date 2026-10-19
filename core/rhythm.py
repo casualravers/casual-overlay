@@ -73,28 +73,36 @@ class BpmEstimator:
 
 
 class DropDetector:
-    """Montee et drop a partir des basses (niveau 0..1 normalise et lisse par l'analyse) et du niveau global.
+    """Montee et drop a partir des basses (niveau 0..1 normalise et lisse par l'analyse) et de l'energie des mediums / aigus.
 
-    Un morceau electronique alterne des passages pleins (kick + basse) et des cassures : les basses disparaissent un moment (la
-    montee y prepare le retour), puis reviennent d'un coup = le drop. Etats : `idle` -> `break` (basses sous 30 % de leur niveau
-    habituel pendant au moins `BREAK_MIN_S`) -> `build` (cassure qui dure : la montee est probablement lancee) -> drop (les basses
-    reviennent a plus de 60 % de leur niveau habituel). `update` rend "build" au passage en montee, "drop" au drop, sinon None.
-    Une pause entre deux drops (`COOLDOWN_S`) evite les doubles declenchements."""
+    Un morceau electronique alterne des passages pleins (kick + basse) et des cassures : les basses disparaissent un moment, une
+    **montee** (riser, caisse claire qui s'accelere, filtre qui s'ouvre) fait monter les mediums et les aigus, puis les basses
+    reviennent d'un coup = le drop. Etats : `idle` -> `break` (basses sous 20 % de leur niveau habituel pendant au moins
+    `BREAK_MIN_S`) -> `build` (la cassure dure `BUILD_AFTER_S` ET l'energie des mediums / aigus monte nettement : sans cette montee
+    reelle une simple baisse des basses ne compte pas) -> drop (les basses reviennent a plus de 60 % de leur niveau habituel).
+    `update` rend "build" au passage en montee, "drop" au drop, sinon None. Pause de `COOLDOWN_S` entre deux drops."""
 
-    BREAK_MIN_S = 1.5                  # basses absentes depuis ce temps = cassure
-    BUILD_AFTER_S = 3.5                # cassure qui dure : on parle de montee
+    BREAK_MIN_S = 3.0                  # basses absentes depuis ce temps = cassure (une demi-mesure sans kick ne suffit pas)
+    BUILD_AFTER_S = 5.0                # cassure qui dure ET qui monte : montee
     BREAK_MAX_S = 45.0                 # au-dela, ce n'est plus une cassure (fin de morceau, silence) : on abandonne
     COOLDOWN_S = 12.0
-    SLOW_TAU = 1.0                     # moyenne lente des basses
+    SLOW_TAU = 2.0                     # moyenne lente des basses
+    TOP_TAU = 1.2                      # moyenne des mediums / aigus (la montee se juge sur cette courbe)
     REF_HALF_LIFE = 40.0               # niveau habituel des basses : plus haut recent, oublie lentement
-    REF_MIN = 0.25                     # sans basses franches avant, rien a detecter
-    LOW_RATIO = 0.30
+    REF_MIN = 0.30                     # sans basses franches avant, rien a detecter
+    LOW_RATIO = 0.20
     BACK_RATIO = 0.60
+    RISE_MIN = 0.12                    # la courbe des mediums / aigus doit avoir gagne au moins ca en 4 s...
+    RISE_RECENT = 0.03                 # ... et continuer de monter sur les 2 dernieres secondes
+    TOP_MIN = 0.15                     # ... en etant audible
+    SAMPLE_EVERY_S = 0.25
 
     def __init__(self) -> None:
         self.state = "idle"
         self.slow = 0.0
         self.ref = 0.0
+        self.top = 0.0
+        self._hist: list[tuple[float, float]] = []             # (instant, courbe des mediums / aigus) toutes les 0,25 s, 8 dernieres secondes
         self._last: float | None = None
         self._low_since: float | None = None
         self._break_at: float | None = None
@@ -107,20 +115,37 @@ class DropDetector:
     def break_age(self) -> float:
         return 0.0 if self._break_at is None or self._last is None else self._last - self._break_at
 
-    def update(self, now: float, bass: float, rms: float = 0.0) -> str | None:
+    def _rising(self, now: float) -> bool:
+        """Les mediums / aigus ont-ils nettement monte ? (courbe lissee : maintenant contre il y a 4 s, et contre il y a 2 s)"""
+        def at(age: float):
+            old = [v for t_, v in self._hist if t_ <= now - age]
+            return old[-1] if old else None
+        v4, v2 = at(4.0), at(2.0)
+        return (v4 is not None and v2 is not None and self.top >= self.TOP_MIN
+                and self.top - v4 >= self.RISE_MIN and self.top - v2 >= self.RISE_RECENT)
+
+    def update(self, now: float, bass: float, rms: float = 0.0, top: float | None = None) -> str | None:
+        """`top` : niveau des mediums / aigus (0..1) ; a defaut, le niveau global `rms`."""
         dt = 0.0 if self._last is None else min(max(now - self._last, 0.0), 0.5)
         self._last = now
         bass = min(max(float(bass), 0.0), 1.0)
+        top = min(max(float(rms if top is None else top), 0.0), 1.0)
         if dt > 0:
             self.slow += (bass - self.slow) * (1.0 - math.exp(-dt / self.SLOW_TAU))
+            self.top += (top - self.top) * (1.0 - math.exp(-dt / self.TOP_TAU))
             self.ref = max(self.slow, self.ref * 0.5 ** (dt / self.REF_HALF_LIFE))
         else:
             self.slow = max(self.slow, bass * 0.5)
+            self.top = max(self.top, top * 0.5)
             self.ref = max(self.ref, self.slow)
+        if not self._hist or now - self._hist[-1][0] >= self.SAMPLE_EVERY_S:
+            self._hist.append((now, self.top))
+            while self._hist and self._hist[0][0] < now - 8.0:
+                self._hist.pop(0)
         low = self.ref >= self.REF_MIN and self.slow < self.LOW_RATIO * self.ref
-        event = None
         if not low:
             self._armed = True
+        event = None
         if self.state == "idle":
             if low and self._armed:
                 if self._low_since is None:
@@ -140,9 +165,9 @@ class DropDetector:
                     self.drops += 1
                     self.last_drop = now
                     self._cool_until = now + self.COOLDOWN_S
-                self.state, self._low_since, self._break_at = "idle", None, None      # basses revenues pendant la pause : retour au calme, sans drop
+                self.state, self._low_since, self._break_at = "idle", None, None      # basses revenues pendant la pause : retour au calme, sans drop en retard
                 self.slow = bass                             # la moyenne lente suit tout de suite : pas de fausse cassure derriere
-            elif self.state == "break" and age >= self.BUILD_AFTER_S:
+            elif self.state == "break" and age >= self.BUILD_AFTER_S and self._rising(now):
                 self.state = "build"
                 event = "build"
         return event
@@ -206,7 +231,8 @@ class Rhythm:
         if now - self._eval_at >= self.EVAL_EVERY_S:
             self._eval_at = now
             self._evaluate(now)
-        event = self.drop.update(now, float(levels.get("bass", 0.0)), float(levels.get("rms", 0.0)))
+        top = max(float(levels.get("mid", 0.0)), float(levels.get("high", 0.0)))
+        event = self.drop.update(now, float(levels.get("bass", 0.0)), float(levels.get("rms", 0.0)), top)
         if event == "build":
             self.builds += 1
         return event

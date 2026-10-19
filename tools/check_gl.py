@@ -1150,6 +1150,7 @@ def check_gui() -> None:
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
+    check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %, cadence du strobe en mode Cadence",
@@ -2914,7 +2915,7 @@ def gui_expand_steps(c, s, out) -> None:
     knobs = [w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
     keys = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master")
     before = {k: params[k] for k in keys}
-    for w, v in zip(knobs[:5], (150, 50, 40, 30, 90)):                       # onglet « Masters »
+    for w, v in zip(knobs[:5], (150, 60, 40, 30, 90)):                       # onglet « Masters »
         w.set(v)
     root.update()
     got = tuple(round(params[k], 2) for k in keys)
@@ -3035,6 +3036,9 @@ def gui_expand_steps(c, s, out) -> None:
     params["drop_auto"] = 0.0
     fake_rhythm.builds, fake_rhythm.state = 2, "build"
     vjc["rhythm_step"]()
+    kick_lbl = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Label" and str(w.cget("text")).startswith("\u25cf")]
+    tempo_knob = next((w for w in walk_(c["vj"]["master_box"]()) if w.winfo_class() == "Scale" and float(w.cget("to")) == 240.0), None)
+    out["x_kick_led"] = (len(kick_lbl) == 1, tempo_knob is not None)
     out["x_rhythm_manual"] = (params["build"] == 0.0 and s.commands.empty(),)                # drop_auto coupe : rien ne part tout seul
     book_ = book
     book_.set_vj(on_drop=True, order="seq")
@@ -5988,33 +5992,42 @@ def check_safeguards() -> None:
         now_ = start2 + i * 0.6
         r.update(now_, {"bass": 0.5}, True)
     check(r.bpm is not None and abs(r.bpm - 100.0) < 3.0, "BPM detecte: le tempo suit un changement de morceau", str(r.bpm))
-    # montee et drop : pleine energie, cassure (basses absentes), retour
+    # montee et drop : pleine energie, cassure (basses absentes), retour ; la montee exige que les mediums / aigus montent vraiment
+    def play(det, segments):
+        """segments : (secondes, basses, mediums-aigus au debut, a la fin) ; rend [(evenement, instant)]."""
+        ev_, clk = [], 0.0
+        for seconds, bass_lv, top0, top1 in segments:
+            n_ = int(seconds * 100)
+            for k_ in range(n_):
+                clk += 0.01
+                wob = bass_lv * 0.1 * (1.0 if (k_ // 25) % 2 else -1.0)
+                top_lv = top0 + (top1 - top0) * k_ / max(n_ - 1, 1)
+                e_ = det.update(clk, bass_lv + wob, 0.5, top_lv)
+                if e_:
+                    ev_.append((e_, round(clk, 1)))
+        return ev_
     dd = rh.DropDetector()
-    events = []
-    clock = 0.0
-
-    def run_bass(seconds, level, wobble=0.1):
-        nonlocal clock
-        for k_ in range(int(seconds * 100)):
-            clock += 0.01
-            lv = level + wobble * (1.0 if (k_ // 25) % 2 else -1.0) * level
-            ev = dd.update(clock, lv, level)
-            if ev:
-                events.append((ev, round(clock, 1)))
-    run_bass(20, 0.7)
-    run_bass(8, 0.04, 0.0)
-    run_bass(10, 0.7)
-    names = [e for e, _ in events]
-    check(names == ["build", "drop"] and dd.drops == 1 and dd.state == "idle",
-          "montee / drop: cassure des basses puis retour = une montee puis un drop", str(events))
-    check(events and 24.0 <= events[0][1] <= 25.5 and 28.0 <= events[1][1] <= 29.0, "montee / drop: montee apres ~3,5 s de cassure, drop des le retour des basses", str(events))
+    events = play(dd, [(20, 0.7, 0.3, 0.3), (12, 0.04, 0.15, 0.8), (10, 0.7, 0.3, 0.3)])
+    check([e for e, _ in events] == ["build", "drop"] and dd.drops == 1 and dd.state == "idle",
+          "montee / drop: cassure des basses + montee des aigus, puis retour des basses = une montee puis un drop", str(events))
+    check(len(events) == 2 and 28.0 <= events[0][1] <= 33.0 and 31.5 <= events[1][1] <= 32.5,
+          "montee / drop: la montee n'est annoncee qu'apres une cassure installee, le drop des le retour des basses", str(events))
+    ddf = rh.DropDetector()
+    flat = play(ddf, [(20, 0.7, 0.3, 0.3), (12, 0.04, 0.3, 0.3), (10, 0.7, 0.3, 0.3)])
+    check("build" not in [e for e, _ in flat] and ddf.state == "idle",
+          "montee: une simple absence de basses SANS montee des mediums / aigus n'est pas une montee", str(flat))
+    ddp = rh.DropDetector()
+    short = play(ddp, [(20, 0.7, 0.3, 0.3), (2.5, 0.04, 0.15, 0.8), (6, 0.7, 0.3, 0.3)])
+    check(not short, "montee / drop: une baisse des basses de moins de 3 s (un break d'une mesure, un trou dans le motif) ne declenche rien", str(short))
+    ddk = rh.DropDetector()
+    sparse = []
+    for i in range(6000):                                              # kicks espaces de 2 s (basses 0,9 pendant 0,15 s), mediums constants
+        tt = i * 0.01
+        sparse.append(ddk.update(tt, 0.9 if (tt % 2.0) < 0.15 else 0.05, 0.4, 0.3 + 0.02 * (i % 7)))
+    check(not any(sparse), "montee / drop: des kicks espaces / un motif de basses clairseme ne declenchent rien (60 s)")
     dd5 = rh.DropDetector()
-    clock5 = 0.0
-    for seconds_, level_ in ((15, 0.7), (3, 0.04), (3, 0.7), (3, 0.04), (3, 0.7)):         # drop, puis une deuxieme cassure close : pause de 12 s
-        for _ in range(int(seconds_ * 100)):
-            clock5 += 0.01
-            dd5.update(clock5, level_, level_)
-    check(dd5.drops == 1 and dd5.state == "idle", "montee / drop: pas de second drop pendant la pause de 12 s (retour au calme, pas de drop en retard)", f"{dd5.drops} {dd5.state}")
+    ev5 = play(dd5, [(15, 0.7, 0.3, 0.3), (8, 0.04, 0.3, 0.3), (3, 0.7, 0.3, 0.3), (8, 0.04, 0.3, 0.3), (3, 0.7, 0.3, 0.3)])   # drop, puis une 2e cassure : pause de 12 s
+    check(dd5.drops == 1 and dd5.state == "idle" and [e for e, _ in ev5] == ["drop"], "montee / drop: pas de second drop pendant la pause de 12 s (retour au calme, pas de drop en retard)", f"{dd5.drops} {dd5.state} {ev5}")
     dd2 = rh.DropDetector()
     ev2 = [dd2.update(i * 0.01, 0.6 + (0.1 if (i // 20) % 2 else -0.1), 0.6) for i in range(3000)]
     check(not any(ev2), "montee / drop: un passage plein et regulier ne declenche rien")
