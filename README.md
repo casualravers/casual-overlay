@@ -117,6 +117,10 @@ elles n'ont pas de touche mais restent dans la barre (le VJ les joue toutes). *+
 enregistree. La barre met toutes les touches dans une **bande qui defile** (molette, fleches ◀ ▶ qui apparaissent quand tout ne tient pas ;
 la scene active reste visible) : les boutons du VJ restent toujours visibles. Clic droit sur une touche : mettre a jour la
 scene, media, monter / descendre, retirer du set, supprimer de la bibliotheque.
+**Rythme detecte** : l'application estime le **BPM** a partir des kicks (libelle « BPM auto » dans l'onglet *Masters*). *Tempo auto* cale le master du
+tempo (et la cadence du strobe en mode Cadence) dessus ; le tap tempo reste disponible. Elle repere aussi la **montee et le drop** (les basses disparaissent
+un moment, puis reviennent d'un coup) : *Montee / drop auto* lance la montee sur la cassure et la relache au drop (flash), et le reglage de set
+*Changer de scene sur le drop detecte* (menu « reglages VJ ») fait enchainer la scene suivante au drop.
 **Bouton *Etendre*** (a droite de la barre) : un panneau sous la barre montre le set en detail, et la fenetre grandit de sa
 hauteur (elle reprend sa taille quand on *Reduit*). Une ligne par entree : sa scene (clic = la charger), son **media lie avec
 sa vignette** (image, premiere image d'une video ; pour un texte, le texte ; en rouge si le fichier est introuvable), la

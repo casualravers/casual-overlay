@@ -28,6 +28,7 @@ def install(c):
     params = c.params
     projection = c.projection
     refresh_scene_bar = c.refresh_scene_bar
+    rhythm_source = c.rhythm_source
     root = c.root
     s = c.s
     scene_book = c.scene_book
@@ -59,6 +60,18 @@ def install(c):
             return "Montee"
         return f"Montee {round(float(params['build']) * 100)}%"
 
+    def detected_bpm() -> float | None:
+        r = rhythm_source()
+        value = getattr(r, "bpm", None)
+        return float(value) if value else None
+
+    def bpm_text() -> str:
+        """BPM detecte (kicks) s'il est fiable, sinon celui du tap tempo."""
+        det = detected_bpm()
+        if det:
+            return f"{det:.0f} BPM auto"
+        return f"{tap_state['bpm']:.0f} BPM (tap)" if tap_state["bpm"] else "\u2014 BPM"
+
     def update_master_panel() -> None:
         """Libelles des boutons du panneau de controle (les touches S / K peuvent les avoir changes) et voyant du mode silence."""
         sb = vj_ui.get("strobe")
@@ -72,7 +85,7 @@ def install(c):
         bpm = vj_ui.get("bpm")
         if bpm is not None:
             try:
-                bpm.configure(text=f"{tap_state['bpm']:.0f} BPM" if tap_state["bpm"] else "\u2014 BPM")
+                bpm.configure(text=bpm_text())
             except tk.TclError:
                 vj_ui.pop("bpm", None)
         try:
@@ -265,6 +278,17 @@ def install(c):
             Tooltip(scale, tip)
             knobs.append((key, var, factor, dec, shown, unit))
 
+        def toggle(f, key, text, tip, **grid) -> tk.Checkbutton:
+            """Case a cocher liee a un reglage 0 / 1 (relue par `sync_master_panel` : la panique la decoche)."""
+            var = tk.IntVar(value=int(round(float(params.get(key, 0.0)))))
+            vars_[key] = var
+            cb = tk.Checkbutton(f, text=text, variable=var, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, selectcolor=a2w.GUI_BG, bd=0,
+                                activebackground=a2w.GUI_PANEL_BG, activeforeground=a2w.GUI_FG,
+                                command=lambda: params.__setitem__(key, float(var.get())))
+            cb.grid(**grid)
+            Tooltip(cb, tip)
+            return cb
+
         def button(f, text, command=None, **grid) -> tk.Button:
             b = tk.Button(f, text=text, command=command, relief="flat", bd=0, padx=8, pady=2, cursor="hand2", bg=a2w.GUI_BG,
                           fg=a2w.GUI_FG, activebackground=SCENE_COLOR, activeforeground=BANNER_FG, font=("Segoe UI", 9, "bold"))
@@ -292,7 +316,7 @@ def install(c):
                     ("react_master", "Reac", 0, 200, 5, 100.0, "%", 100, "Master de l'audioreactivite : multiplie tout ce qui vient du son (basses, mediums, aigus, kick) "
                                                                         "pour tous les effets. 0 % = le visuel ne reagit plus a l'audio, 100 % = normal, 200 % = double."),
                     ("tempo", "Tempo", 0, 200, 5, 100.0, "%", 100, "Master du tempo : vitesse des animations (halo, fonte, cellules, fond anime, noise) et des courbes "
-                                                                   "d'automation. 100 % = normal, 50 % = deux fois plus lent. Ce n'est pas un BPM detecte : la video de fond "
+                                                                   "d'automation. 100 % = normal, 50 % = deux fois plus lent. Reglage manuel (ou « Tempo auto » : BPM detecte) : la video de fond "
                                                                    "et le logo anime gardent leur cadence."),
                     ("overlay_master", "Overlay", 0, 100, 5, 100.0, "%", 100, "Presence de l'overlay (logo, texte, contour, halo) : 100 % = normal, 0 % = invisible, "
                                                                               "les effets du fond continuent."),
@@ -308,6 +332,13 @@ def install(c):
                          "(120 BPM = 100 %), et la cadence du strobe en mode Cadence. Une pause de 2 s recommence.")
             bpm = vj_ui["bpm"] = tk.Label(f, text="\u2014 BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
             bpm.grid(row=3, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %) ; en strobe a cadence fixe, "
+                                                 "la cadence suit aussi. Il faut des kicks reguliers : sans BPM fiable, le tempo ne bouge pas.",
+                   row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            toggle(f, "drop_auto", "Montee / drop auto", "Une cassure detectee (les basses disparaissent un moment) lance la montee ; le retour des basses "
+                                                         "= le drop : flash blanc et retour aux reglages normaux. Le VJ peut aussi changer de scene au "
+                                                         "drop (menu « reglages VJ »).",
+                   row=4, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
 
         new_tab("Masters", fill_0)
 
@@ -540,8 +571,8 @@ def install(c):
         else:
             vj_txt = "VJ en pause"
         parts = [scene, vj_txt]
-        if tap_state["bpm"]:
-            parts.append(f"{tap_state['bpm']:.0f} BPM")
+        if detected_bpm() or tap_state["bpm"]:
+            parts.append(bpm_text())
         if projection is not None and not projection.running():
             parts.append("projection fermee")
         return "  |  ".join(parts)
@@ -671,5 +702,73 @@ def install(c):
 
     after(int(gl.AUTOSAVE_EVERY_S * 1000), autosave_tick)
 
+    # ---- rythme detecte : tempo automatique, montee / drop automatiques, changement de scene au drop
+    rhythm_ui: dict = {"drops": None, "builds": None, "auto_build": False}
+
+    def handle_drop() -> None:
+        """Un drop vient d'etre detecte (retour des basses apres une cassure)."""
+        auto = float(params.get("drop_auto", 0.0)) >= 0.5
+        if auto and build_ui["t0"] is not None:
+            do_drop()                                        # relache la montee : flash + eclair
+        elif auto:
+            s.commands.put("flash")
+            params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+            scene_msg.set("DROP detecte")
+        else:
+            scene_msg.set("Drop detecte")
+        rhythm_ui["auto_build"] = False
+        if vj["running"] and scene_book.vj().get("on_drop"):
+            vj_advance()                                     # le changement de scene a son propre flash
+
+    def rhythm_step() -> None:
+        """Un pas (100 ms) : lit le rythme detecte par l'analyse et agit selon les reglages. N'agit que sur les EVENEMENTS survenus depuis
+        le dernier pas (compteurs de drops et de montees), jamais sur ceux d'avant l'ouverture de la fenetre."""
+        r = rhythm_source()
+        if r is None:
+            return
+        if rhythm_ui["drops"] is None:
+            rhythm_ui["drops"], rhythm_ui["builds"] = int(r.drops), int(r.builds)
+        bpm = detected_bpm()
+        if bpm and float(params.get("bpm_auto", 0.0)) >= 0.5:
+            tempo = min(max(bpm / TAP_REF_BPM, 0.0), 2.0)
+            if abs(tempo - float(params.get("tempo", 1.0))) > 0.01:
+                params["tempo"] = tempo
+                if params.get("strobe_mode") == "rate":
+                    params["strobe_rate"] = min(max(bpm / 60.0, 1.0), 20.0)
+                sync_master_panel()
+        if int(r.builds) != rhythm_ui["builds"]:
+            rhythm_ui["builds"] = int(r.builds)
+            if float(params.get("drop_auto", 0.0)) >= 0.5 and build_ui["t0"] is None:
+                start_build()
+                rhythm_ui["auto_build"] = True
+                scene_msg.set("Cassure detectee : montee automatique")
+        if int(r.drops) != rhythm_ui["drops"]:
+            rhythm_ui["drops"] = int(r.drops)
+            handle_drop()
+        elif rhythm_ui["auto_build"]:
+            if build_ui["t0"] is None:
+                rhythm_ui["auto_build"] = False
+            elif r.state == "idle":                          # la cassure s'est terminee sans drop : la montee automatique est annulee
+                build_ui["t0"] = None
+                params["build"] = 0.0
+                rhythm_ui["auto_build"] = False
+                btn = vj_ui.get("build")
+                if btn is not None:
+                    try:
+                        btn.configure(text=build_text())
+                    except tk.TclError:
+                        vj_ui.pop("build", None)
+
+    def rhythm_tick() -> None:
+        try:
+            rhythm_step()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        finally:
+            after(100, rhythm_tick)
+
+    after(500, rhythm_tick)
+
     import types
-    return types.SimpleNamespace(autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)
+    return types.SimpleNamespace(rhythm_step=rhythm_step, autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)

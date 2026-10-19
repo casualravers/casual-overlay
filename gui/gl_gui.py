@@ -1393,13 +1393,22 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         except Exception:
             return 0
 
+    def rhythm_source():
+        """BPM et drop detectes par l'analyse audio (`core.rhythm.Rhythm`), ou None si l'analyse n'est pas disponible."""
+        try:
+            return s.audio.analyzer.rhythm
+        except Exception:
+            return None
+
     def vj_arm(own: float | None = None) -> None:
         """Arme le minuteur du prochain changement : N secondes, ou N mesures de kicks si le set est « en rythme ». Une duree propre
         a l'entree (`own`, en secondes) l'emporte et reste en secondes."""
         st = scene_book.vj()
         now = time.monotonic()
         if st["unit"] == "bars" and not own:
-            vj["bar"] = core_controls.BarTimer(st["bars"]).arm(beat_count(), now, float(params.get("tempo", 1.0)))
+            rhythm = rhythm_source()
+            vj["bar"] = core_controls.BarTimer(st["bars"]).arm(beat_count(), now, float(params.get("tempo", 1.0)),
+                                                               getattr(rhythm, "bpm", None))
             vj["t_next"] = vj["bar"].deadline                 # garde-fou si les kicks ne viennent pas
         else:
             vj["bar"] = None
@@ -1879,6 +1888,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         params=params,
         projection=projection,
         refresh_scene_bar=lambda *a, **k: refresh_scene_bar(*a, **k),
+        rhythm_source=rhythm_source,
         root=root,
         s=s,
         scene_book=scene_book,
@@ -1907,6 +1917,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     master_box = gui_vj_ctl.master_box
     record_history = gui_vj_ctl.record_history
     start_build = gui_vj_ctl.start_build
+    rhythm_step = gui_vj_ctl.rhythm_step
     status_text = gui_vj_ctl.status_text
     update_master_panel = gui_vj_ctl.update_master_panel
 
@@ -1962,6 +1973,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         for value in scenes.VJ_BARS:
             menu.add_radiobutton(label=f"Toutes les {value} mesure{'s' if value > 1 else ''} (en rythme)", variable=when_var,
                                  value=f"b{value}", command=set_when)
+        menu.add_separator()
+        drop_var = tk.IntVar(value=int(bool(scene_book.vj()["on_drop"])))
+        menu.add_checkbutton(label="Changer de scene sur le drop detecte", variable=drop_var,
+                             command=lambda: set_vj_option(on_drop=bool(drop_var.get())))
         menu.add_separator()
         menu.add_command(label="Console VJ (grosses commandes)...", command=console_window)
         menu.add_command(label="Raccourcis clavier (?)...", command=help_window)
@@ -2292,7 +2307,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
-            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "remaining_text": vj_remaining_text, "arm": vj_arm, "panic": do_panic, "tap": do_tap, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
+            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "rhythm_step": rhythm_step, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "remaining_text": vj_remaining_text, "arm": vj_arm, "panic": do_panic, "tap": do_tap, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
             "random": {"draw": random_draw, "draw_now": random_draw_now, "keep": random_keep, "save": random_save, "check": random_keep_check, "bank": random_bank,
                        "option": set_random_option, "state": rnd},
             "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,

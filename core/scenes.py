@@ -30,7 +30,7 @@ DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.
 MAX_NAME = 200                    # pas de limite pratique : les noms longs sont affiches en entier ou raccourcis a l'ecran
 VJ_SECONDS = (10, 20, 30, 60, 120, 300)          # durees proposees dans le menu du VJ
 VJ_BARS = controls.BAR_CHOICES                     # changement en rythme : toutes les N mesures (4 kicks detectes chacune)
-VJ_DEFAULTS = {"seconds": 30, "order": "seq", "unit": "seconds", "bars": 8}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
+VJ_DEFAULTS = {"seconds": 30, "order": "seq", "unit": "seconds", "bars": 8, "on_drop": False}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
                                                  # "alea" = Full Randomizer (scene tiree a chaque changement, voir randomizer.py)
 VJ_ORDERS = ("seq", "random", "alea")
 VJ_DEFAULTS["random"] = randomizer.clean_settings(None)       # reglages du hasard du set (banque, sources, verrous)
@@ -121,6 +121,8 @@ class SceneBook:
                 out["unit"] = raw["unit"]
             if isinstance(raw.get("bars"), int) and not isinstance(raw["bars"], bool) and raw["bars"] in VJ_BARS:
                 out["bars"] = raw["bars"]
+            if isinstance(raw.get("on_drop"), bool):
+                out["on_drop"] = raw["on_drop"]                  # changer de scene au drop detecte (en plus du minuteur)
         out["random"] = randomizer.clean_settings(raw.get("random") if isinstance(raw, dict) else None)
         return out
 

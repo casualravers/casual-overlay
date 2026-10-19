@@ -1146,6 +1146,10 @@ def check_gui() -> None:
     check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
+    check(out.get("x_rhythm") == (True,) * 4,
+          "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
+    check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %, cadence du strobe en mode Cadence",
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
@@ -2903,6 +2907,54 @@ def gui_expand_steps(c, s, out) -> None:
             time.sleep(0.02)
     out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, 1.7 <= params["strobe_rate"] <= 2.3, "BPM" in c["scenes"]["msg"].get())
     params["tempo"], params["strobe_mode"], params["strobe_rate"] = 1.0, "manual", 8.0
+    # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
+    from types import SimpleNamespace as NS_
+    fake_rhythm = NS_(bpm=128.0, drops=0, builds=0, state="idle", confidence=0.9)
+    real_audio = s.audio
+    s.audio = NS_(analyzer=NS_(rhythm=fake_rhythm, latest=lambda: {"beats": 0}))
+    vjc["rhythm_step"]()
+    params["bpm_auto"], params["tempo"] = 0.0, 1.0
+    vjc["rhythm_step"]()
+    r_off = params["tempo"]
+    params["bpm_auto"], params["strobe_mode"] = 1.0, "rate"
+    vjc["rhythm_step"]()
+    r_on = (round(params["tempo"], 3), round(params["strobe_rate"], 2))
+    params["bpm_auto"], params["strobe_mode"], params["tempo"], params["strobe_rate"] = 0.0, "manual", 1.0, 8.0
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    params["drop_auto"] = 1.0
+    fake_rhythm.builds, fake_rhythm.state = 1, "build"
+    vjc["rhythm_step"]()
+    auto_started = "montee automatique" in c["scenes"]["msg"].get()
+    hits0 = params["strobe_hits"]
+    fake_rhythm.drops, fake_rhythm.state = 1, "idle"
+    vjc["rhythm_step"]()
+    out["x_rhythm"] = (r_off == 1.0, r_on == (round(128.0 / 120.0, 3), 2.13), auto_started,
+                       params["build"] == 0.0 and params["strobe_hits"] == hits0 + 1 and not s.commands.empty()
+                       and "DROP" in c["scenes"]["msg"].get())
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    params["drop_auto"] = 0.0
+    fake_rhythm.builds, fake_rhythm.state = 2, "build"
+    vjc["rhythm_step"]()
+    out["x_rhythm_manual"] = (params["build"] == 0.0 and s.commands.empty(),)                # drop_auto coupe : rien ne part tout seul
+    book_ = book
+    book_.set_vj(on_drop=True, order="seq")
+    vjc["state"]["running"] = True
+    s.active_scene, s.active_entry = None, 0
+    vjc["advance"]()
+    before_idx = s.active_entry
+    fake_rhythm.drops, fake_rhythm.state = 2, "idle"
+    vjc["rhythm_step"]()
+    after_idx = s.active_entry
+    book_.set_vj(on_drop=False)
+    fake_rhythm.drops = 3
+    vjc["rhythm_step"]()
+    out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
+    vjc["state"]["running"] = False
+    s.audio = real_audio
+    while not s.commands.empty():
+        s.commands.get_nowait()
     c["scenes"]["ui"]["help"]()
     root.update()
     tops = [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
@@ -5631,6 +5683,91 @@ def check_safeguards() -> None:
     check(cv["unit"] == "bars" and cv["bars"] == 16 and sc_.SceneBook._clean_vj({"unit": "x", "bars": 3})["unit"] == "seconds"
           and sc_.SceneBook._clean_vj({"bars": 3})["bars"] == 8 and sc_.SceneBook._clean_vj(None)["unit"] == "seconds",
           "VJ en rythme: reglages valides (unite, nombre de mesures), valeurs inconnues ramenees aux defauts")
+    check(cc.BarTimer(8).arm(0, 0.0, 1.0, bpm=240.0).deadline == 16.0 and cc.BarTimer(8).arm(0, 0.0, 2.0, bpm=60.0).deadline == 64.0,
+          "VJ en rythme: le BPM detecte l'emporte sur le master du tempo pour le garde-fou")
+    check("bpm_auto" in gl.PANIC_RESET and "drop_auto" in gl.PANIC_RESET, "panique: coupe aussi le tempo auto et la montee / drop auto")
+    check(sc_.SceneBook._clean_vj({"on_drop": True})["on_drop"] is True and sc_.SceneBook._clean_vj({"on_drop": "oui"})["on_drop"] is False
+          and sc_.SceneBook._clean_vj(None)["on_drop"] is False, "VJ sur le drop: reglage valide (booleen), faux par defaut")
+    # --- rythme detecte : BPM a partir des kicks, montee et drop a partir des basses
+    from core import rhythm as rh
+
+    def feed_kicks(times):
+        r = rh.Rhythm()
+        for tk_ in times:
+            r.update(tk_, {"bass": 0.5, "rms": 0.5}, True)
+        r.update(times[-1] + 0.3, {"bass": 0.5, "rms": 0.5}, False)
+        return r
+
+    steady = [i * 60.0 / 128.0 for i in range(24)]
+    r = feed_kicks(steady)
+    check(r.bpm is not None and abs(r.bpm - 128.0) < 1.5 and r.confidence > 0.9, "BPM detecte: kicks reguliers a 128 BPM", f"{r.bpm} {r.confidence}")
+    r = feed_kicks([i * 60.0 / 64.0 for i in range(20)])
+    check(r.bpm is not None and abs(r.bpm - 128.0) < 2.0, "BPM detecte: un kick sur deux (64) est ramene a 128", str(r.bpm))
+    rng_ = __import__("random").Random(4)
+    jitter = [i * 60.0 / 124.0 + rng_.uniform(-0.012, 0.012) for i in range(32)]
+    r = feed_kicks(jitter)
+    check(r.bpm is not None and abs(r.bpm - 124.0) < 2.0, "BPM detecte: kicks avec un peu de gigue (+-12 ms)", str(r.bpm))
+    missing = [x for i, x in enumerate(steady) if i % 5 != 3]
+    r = feed_kicks(missing)
+    check(r.bpm is not None and abs(r.bpm - 128.0) < 2.5, "BPM detecte: un kick manque de temps en temps ne fausse pas le tempo", str(r.bpm))
+    messy = [0.0, 0.31, 1.4, 1.52, 2.9, 3.33, 4.8, 5.1, 6.9, 7.01]
+    r = feed_kicks(messy)
+    check(r.bpm is None, "BPM detecte: kicks irreguliers = pas de BPM (confiance trop faible)", str(r.bpm))
+    check(feed_kicks(steady[:4]).bpm is None, "BPM detecte: moins de 6 kicks = pas de BPM")
+    r = feed_kicks(steady)
+    t_last = steady[-1]
+    r.update(t_last + 6.5, {"bass": 0.0, "rms": 0.0}, False)
+    check(r.bpm is None, "BPM detecte: sans kick depuis 5 s, le BPM est perdu")
+    # changement de morceau : 128 puis 100 BPM => le tempo saute apres quelques estimations
+    r = rh.Rhythm()
+    now_ = 0.0
+    for i in range(24):
+        now_ = i * 60.0 / 128.0
+        r.update(now_, {"bass": 0.5}, True)
+    start2 = now_ + 0.6
+    for i in range(60):
+        now_ = start2 + i * 0.6
+        r.update(now_, {"bass": 0.5}, True)
+    check(r.bpm is not None and abs(r.bpm - 100.0) < 3.0, "BPM detecte: le tempo suit un changement de morceau", str(r.bpm))
+    # montee et drop : pleine energie, cassure (basses absentes), retour
+    dd = rh.DropDetector()
+    events = []
+    clock = 0.0
+
+    def run_bass(seconds, level, wobble=0.1):
+        nonlocal clock
+        for k_ in range(int(seconds * 100)):
+            clock += 0.01
+            lv = level + wobble * (1.0 if (k_ // 25) % 2 else -1.0) * level
+            ev = dd.update(clock, lv, level)
+            if ev:
+                events.append((ev, round(clock, 1)))
+    run_bass(20, 0.7)
+    run_bass(8, 0.04, 0.0)
+    run_bass(10, 0.7)
+    names = [e for e, _ in events]
+    check(names == ["build", "drop"] and dd.drops == 1 and dd.state == "idle",
+          "montee / drop: cassure des basses puis retour = une montee puis un drop", str(events))
+    check(events and 24.0 <= events[0][1] <= 25.5 and 28.0 <= events[1][1] <= 29.0, "montee / drop: montee apres ~3,5 s de cassure, drop des le retour des basses", str(events))
+    dd5 = rh.DropDetector()
+    clock5 = 0.0
+    for seconds_, level_ in ((15, 0.7), (3, 0.04), (3, 0.7), (3, 0.04), (3, 0.7)):         # drop, puis une deuxieme cassure close : pause de 12 s
+        for _ in range(int(seconds_ * 100)):
+            clock5 += 0.01
+            dd5.update(clock5, level_, level_)
+    check(dd5.drops == 1 and dd5.state == "idle", "montee / drop: pas de second drop pendant la pause de 12 s (retour au calme, pas de drop en retard)", f"{dd5.drops} {dd5.state}")
+    dd2 = rh.DropDetector()
+    ev2 = [dd2.update(i * 0.01, 0.6 + (0.1 if (i // 20) % 2 else -0.1), 0.6) for i in range(3000)]
+    check(not any(ev2), "montee / drop: un passage plein et regulier ne declenche rien")
+    dd3 = rh.DropDetector()
+    ev3 = [dd3.update(i * 0.01, 0.01, 0.0) for i in range(3000)]
+    check(not any(ev3), "montee / drop: un silence depuis le debut ne declenche rien (pas de niveau de reference)")
+    dd4 = rh.DropDetector()
+    for i in range(2000):
+        dd4.update(i * 0.01, 0.7, 0.7)
+    for i in range(2000, 2000 + 5200):
+        dd4.update(i * 0.01, 0.03, 0.0)                        # cassure de 52 s : au-dela de 45 s ce n'est plus une cassure
+    check(dd4.state == "idle" and dd4.drops == 0, "montee / drop: une cassure trop longue est abandonnee sans drop", dd4.state)
     # --- auto-sauvegarde
     tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_autosave_"))
     snap = tmp / "autosave.json"

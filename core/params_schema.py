@@ -84,6 +84,8 @@ TABLE: tuple[Param, ...] = (
     _p("doodle_on", 0.0, 0.0, 1.0, scope="state", doc="Recuperation des doodles du site (case de l'onglet Affichage) : jamais sauvee, jamais dans un preset ni une scene."),
     _p("strobe_hits", 0, 0, 10 ** 9, scope="state", doc="Compteur d'appuis : un appui plus court qu'une image declenche quand meme un eclair."),
     _p("tempo", 1.0, 0.0, 2.0, scope="room", doc="Master du tempo : vitesse des animations et des automations (1 = normal)."),
+    _p("bpm_auto", 0.0, 0.0, 1.0, scope="room", doc="Tempo automatique : le master du tempo (et la cadence du strobe en mode Cadence) suit le BPM detecte."),
+    _p("drop_auto", 0.0, 0.0, 1.0, scope="room", doc="Montee / drop automatiques : une cassure detectee lance la montee, le retour des basses la relache (flash)."),
     _p("fx_master", 1.0, 0.0, 2.0, scope="room", doc="Master des effets : x l'intensite de TOUS les effets ; 0 = aucun."),
     _p("strobe_max_hz", 10.0, 1.0, 30.0, scope="room", doc="Limiteur de strobe : cadence maximale (eclairs par seconde)."),
     _p("strobe_max_s", 8.0, 1.0, 120.0, scope="room", doc="Limiteur de strobe : duree maximale d'une rafale continue (s)."),
