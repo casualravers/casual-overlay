@@ -12,9 +12,11 @@ Ce module est pur (aucune fenetre) : stockage ordonne, capture et valeurs a appl
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import random
 import re
+import sys
 from pathlib import Path
 
 from core import automation as auto
@@ -25,12 +27,14 @@ from core import randomizer
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
 MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : quatre emplacements
 MASTER_SLOTS = 4
+PREVIEW_DIR = Path.home() / ".audio2wave" / "previews"            # apercus des scenes (capture reduite de la projection)
+IMPORT_DIR = Path.home() / ".audio2wave" / "imported"        # medias extraits des archives de set importees (voir core/setpack.py)
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
 MAX_NAME = 200                    # pas de limite pratique : les noms longs sont affiches en entier ou raccourcis a l'ecran
 VJ_SECONDS = (10, 20, 30, 60, 120, 300)          # durees proposees dans le menu du VJ
 VJ_BARS = controls.BAR_CHOICES                     # changement en rythme : toutes les N mesures (4 kicks detectes chacune)
-VJ_DEFAULTS = {"seconds": 30, "order": "seq", "unit": "seconds", "bars": 8}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
+VJ_DEFAULTS = {"seconds": 30, "order": "seq", "unit": "seconds", "bars": 8, "on_drop": False}    # "seq" = dans l'ordre, "random" = au hasard (jamais la meme deux fois),
                                                  # "alea" = Full Randomizer (scene tiree a chaque changement, voir randomizer.py)
 VJ_ORDERS = ("seq", "random", "alea")
 VJ_DEFAULTS["random"] = randomizer.clean_settings(None)       # reglages du hasard du set (banque, sources, verrous)
@@ -95,6 +99,17 @@ class SceneBook:
     modifie dans tous les sets. Les touches F1..F9 sont celles des 9 premieres entrees du set actif. Un fichier d'avant les
     sets (`{"scenes": [...], "vj": {...}}`) est lu comme un set `principal` qui les contient toutes."""
 
+    UNDO_LIMIT = 40
+    # etiquette de chaque operation (par nom de la methode qui ecrit), pour « Annuler : ... »
+    LABELS = {"put": "Enregistrer la scene", "delete": "Supprimer la scene", "new_set": "Nouveau set", "rename_set": "Renommer le set",
+              "delete_set": "Supprimer le set", "add_entry": "Ajouter au set", "remove_entry": "Retirer du set",
+              "remove_entries": "Retirer des lignes", "move_entry": "Deplacer une ligne", "set_entry_media": "Media d'une ligne",
+              "set_entry_a2w": "Media d'une ligne", "set_entry_bg_video": "Video de fond d'une ligne", "set_entry_vj": "Duree / VJ d'une ligne",
+              "set_entries_vj": "Duree / VJ des lignes", "duplicate_entries": "Dupliquer des lignes", "copy_entries_to_set": "Copier vers un set",
+              "rename_scene": "Renommer la scene", "set_vj": "Reglages du VJ", "keep_scene": "Garder la scene", "import_set": "Importer un set",
+              "set_preview": "Apercu de la scene"}
+    _HISTORY: dict = {}                            # chemin du fichier -> {"undo": [...], "redo": [...], "depth": 0, "pushed": False, "label": None}
+
     def __init__(self, path_getter) -> None:
         self._path_getter = path_getter            # relu a chaque appel (les tests remplacent le chemin)
 
@@ -121,6 +136,8 @@ class SceneBook:
                 out["unit"] = raw["unit"]
             if isinstance(raw.get("bars"), int) and not isinstance(raw["bars"], bool) and raw["bars"] in VJ_BARS:
                 out["bars"] = raw["bars"]
+            if isinstance(raw.get("on_drop"), bool):
+                out["on_drop"] = raw["on_drop"]                  # changer de scene au drop detecte (en plus du minuteur)
         out["random"] = randomizer.clean_settings(raw.get("random") if isinstance(raw, dict) else None)
         return out
 
@@ -165,10 +182,81 @@ class SceneBook:
             active = sets[0]["name"]
         return {"scenes": library, "sets": sets, "active_set": active}
 
-    def _save(self, data: dict) -> None:
+    def _save(self, data: dict, track: bool = True) -> None:
+        if track:
+            self._track(sys._getframe(1).f_code.co_name)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         out = {"version": 2, "scenes": data["scenes"], "sets": data["sets"], "active_set": data["active_set"]}
         self.path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # ---- annuler / retablir : l'etat d'avant chaque ecriture est garde en memoire (partage entre les fenetres reconstruites)
+    def _hist(self) -> dict:
+        return SceneBook._HISTORY.setdefault(str(self.path), {"undo": [], "redo": [], "depth": 0, "pushed": False, "label": None})
+
+    def _text(self) -> str:
+        try:
+            return self.path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def _track(self, method: str) -> None:
+        h = self._hist()
+        if h["depth"] and h["pushed"]:
+            return                                        # meme groupe : un seul pas d'annulation
+        h["undo"].append((h["label"] if h["depth"] else self.LABELS.get(method, "Modification du set"), self._text()))
+        del h["undo"][:-self.UNDO_LIMIT]
+        h["redo"].clear()
+        if h["depth"]:
+            h["pushed"] = True
+
+    @contextlib.contextmanager
+    def group(self, label: str):
+        """Les ecritures faites dans ce bloc ne forment qu'UN pas d'annulation (ex. « +5 » = cinq scenes, un seul Annuler)."""
+        h = self._hist()
+        if h["depth"] == 0:
+            h["pushed"], h["label"] = False, label
+        h["depth"] += 1
+        try:
+            yield
+        finally:
+            h["depth"] -= 1
+
+    def undo_label(self) -> str | None:
+        h = self._hist()
+        return h["undo"][-1][0] if h["undo"] else None
+
+    def redo_label(self) -> str | None:
+        h = self._hist()
+        return h["redo"][-1][0] if h["redo"] else None
+
+    def clear_history(self) -> None:
+        h = self._hist()
+        h["undo"].clear()
+        h["redo"].clear()
+
+    def _swap(self, src_key: str, dst_key: str) -> str | None:
+        h = self._hist()
+        if not h[src_key]:
+            return None
+        label, text = h[src_key].pop()
+        h[dst_key].append((label, self._text()))
+        keep_active = self._read().get("active_set")
+        try:
+            data = json.loads(text) if text.strip() else {}
+        except ValueError:
+            data = {}
+        if isinstance(data, dict) and keep_active and any(isinstance(x, dict) and x.get("name") == keep_active for x in data.get("sets", [])):
+            data["active_set"] = keep_active              # annuler ne change pas le set affiche (sauf s'il n'existait pas encore)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return label
+
+    def undo(self) -> str | None:
+        """Annule la derniere modification (scenes, sets, entrees, reglages du VJ) ; rend son etiquette, None s'il n'y a rien."""
+        return self._swap("undo", "redo")
+
+    def redo(self) -> str | None:
+        return self._swap("redo", "undo")
 
     @staticmethod
     def _find(items: list[dict], name: str) -> int | None:
@@ -241,7 +329,7 @@ class SceneBook:
         if i is None:
             return False
         data["active_set"] = data["sets"][i]["name"]
-        self._save(data)
+        self._save(data, track=False)                  # changer de set n'est pas une modification a annuler
         return True
 
     def new_set(self, name: str, copy_of: str | None = None) -> bool:
@@ -293,14 +381,116 @@ class SceneBook:
     def row_names(self) -> list[str]:
         return [r["name"] for r in self.rows()]
 
-    def add_entry(self, scene_name: str, media: dict | None = None) -> bool:
+    def add_entry(self, scene_name: str, media: dict | None = None, at: int | None = None) -> bool:
+        """Ajoute une entree au set actif : a la fin, ou au rang `at` (glisser-deposer depuis la bibliotheque)."""
         data = self._load()
         i = self._find(data["scenes"], scene_name)
         if i is None:
             return False
-        self._active(data)["entries"].append(self._entry({"media": media}, data["scenes"][i]["name"]))
+        entries = self._active(data)["entries"]
+        entry = self._entry({"media": media}, data["scenes"][i]["name"])
+        if at is None or at >= len(entries):
+            entries.append(entry)
+        else:
+            entries.insert(max(int(at), 0), entry)
         self._save(data)
         return True
+
+    # ---- operations sur plusieurs entrees du set actif (selection multiple)
+    def _valid_indexes(self, entries: list, indexes) -> list[int]:
+        return sorted({int(i) for i in indexes if isinstance(i, int) and 0 <= i < len(entries)})
+
+    def remove_entries(self, indexes) -> int:
+        """Retire plusieurs entrees du set actif (les scenes restent dans la bibliotheque) ; rend combien."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        for i in reversed(idx):
+            entries.pop(i)
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def set_entries_vj(self, indexes, seconds="keep", skip=None) -> int:
+        """`set_entry_vj` pour plusieurs entrees a la fois (duree propre 5..300 ou None = celle du set, participation au VJ)."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        for i in idx:
+            if seconds != "keep":
+                entries[i]["seconds"] = seconds
+            if skip is not None:
+                entries[i]["skip"] = bool(skip)
+            entries[i] = self._entry(entries[i], entries[i]["scene"])
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def duplicate_entries(self, indexes) -> int:
+        """Copie chaque entree choisie juste apres elle (meme scene de la bibliotheque, memes medias, duree et participation au VJ)."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        for i in reversed(idx):
+            entries.insert(i + 1, json.loads(json.dumps(entries[i])))
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def copy_entries_to_set(self, indexes, set_name: str) -> int:
+        """Copie des entrees du set actif a la fin d'un autre set (ou du meme) ; rend combien, -1 si le set n'existe pas."""
+        data = self._load()
+        j = self._find(data["sets"], set_name)
+        if j is None:
+            return -1
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        data["sets"][j]["entries"].extend(json.loads(json.dumps(entries[i])) for i in idx)
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def set_preview(self, name: str, filename: str | None) -> bool:
+        """Associe a la scene le fichier d'apercu `filename` (dans PREVIEW_DIR) ; l'ancien fichier est supprime. Pas un pas d'annulation."""
+        data = self._load()
+        i = self._find(data["scenes"], name)
+        if i is None:
+            return False
+        old = data["scenes"][i].get("preview")
+        if filename:
+            data["scenes"][i]["preview"] = filename
+        else:
+            data["scenes"][i].pop("preview", None)
+        self._save(data, track=False)
+        if old and old != filename:
+            try:
+                (PREVIEW_DIR / Path(old).name).unlink()
+            except OSError:
+                pass
+        return True
+
+    # ---- scenes provisoires (tirees par « + » / « +5 » : a trier)
+    def temp_names(self) -> list[str]:
+        return [x["name"] for x in self.list() if x.get("temp")]
+
+    def keep_scene(self, name: str, new_name: str | None = None) -> str | None:
+        """Garde une scene provisoire (retire le drapeau `temp`), en la renommant si `new_name` est donne. Rend le nom final,
+        None si la scene n'existe pas ou si le nouveau nom est vide ou deja pris."""
+        data = self._load()
+        i = self._find(data["scenes"], name)
+        if i is None:
+            return None
+        final = data["scenes"][i]["name"]
+        with self.group("Garder la scene"):
+            if new_name is not None and new_name.strip()[:MAX_NAME] != final:
+                if not self.rename_scene(final, new_name):
+                    return None
+                final = new_name.strip()[:MAX_NAME]
+            data = self._load()
+            i = self._find(data["scenes"], final)
+            data["scenes"][i].pop("temp", None)
+            self._save(data)
+        return final
 
     def remove_entry(self, index: int) -> bool:
         data = self._load()

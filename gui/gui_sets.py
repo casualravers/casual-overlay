@@ -6,6 +6,7 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 from __future__ import annotations
 
 from core import scenes
+from core import setpack
 from pathlib import Path
 from tkinter import filedialog
 from tkinter import simpledialog
@@ -23,11 +24,13 @@ def install(c):
     media_from_current = c.media_from_current
     move_entry_now = c.move_entry_now
     refresh_scene_bar = c.refresh_scene_bar
+    request_preview = c.request_preview
     remove_entry_now = c.remove_entry_now
     root = c.root
     s = c.s
     scene_book = c.scene_book
     scene_msg = c.scene_msg
+    panel_state = c.panel_state
     scene_state = c.scene_state
     vj = c.vj
     vj_advance = c.vj_advance
@@ -36,13 +39,41 @@ def install(c):
         "chooser": lambda title, text, buttons: choice_dialog(root, title, text, buttons),
         "ask_name": lambda title, prompt, initial="": simpledialog.askstring(title, prompt, parent=root, initialvalue=initial),
         "ask_save": lambda initial: filedialog.asksaveasfilename(
-            parent=root, title="Exporter le set", initialfile=initial, defaultextension=".json",
-            filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+            parent=root, title="Exporter le set", initialfile=initial, defaultextension=".zip",
+            filetypes=[("Archive de set avec medias (.zip)", "*.zip"), ("Set seul, sans medias (.json)", "*.json")]),
         "ask_keep": lambda defaults, fond_ok, validate, a2w_mode=None: keep_dialog(root, defaults, fond_ok, validate, a2w_mode),
         "ask_dir": lambda: filedialog.askdirectory(parent=root, title="Dossier d'assets (images, videos, animations)"),
         "ask_open": lambda: filedialog.askopenfilename(
-            parent=root, title="Importer un set", filetypes=[("Set casual-overlay", "*.json"), ("Tous les fichiers", "*.*")]),
+            parent=root, title="Importer un set", filetypes=[("Set casual-overlay (.zip ou .json)", "*.zip *.json"), ("Tous les fichiers", "*.*")]),
     }
+
+    def _after_history(done: str | None, verb: str, label: str | None) -> bool:
+        if done is None:
+            scene_msg.set(f"Rien a {verb}")
+            return False
+        panel_state["sel"].clear()
+        panel_state["sel_last"] = None
+        s.active_entry = None
+        if getattr(s, "active_scene", None) not in (None, "Full Randomizer") and s.active_scene not in scene_book.names():
+            s.active_scene = None
+        scene_msg.set(("Annule" if verb == "annuler" else "Retabli") + f" : {done}")
+        refresh_scene_bar()
+        return True
+
+    def undo_now() -> bool:
+        """Annule la derniere modification du set / des scenes (Ctrl+Z, menu SET, bouton Annuler du panneau etendu)."""
+        return _after_history(scene_book.undo(), "annuler", None)
+
+    def redo_now() -> bool:
+        return _after_history(scene_book.redo(), "retablir", None)
+
+    def key_history(evt, redo: bool = False) -> None:
+        if evt.widget.winfo_class() in ("Entry", "TEntry", "Text", "Spinbox"):       # Ctrl+Z dans un champ de saisie : ce n'est pas pour nous
+            return
+        redo_now() if redo else undo_now()
+    root.bind_all("<Control-z>", key_history)
+    root.bind_all("<Control-y>", lambda e: key_history(e, True))
+    root.bind_all("<Control-Z>", lambda e: key_history(e, True))
 
     def switch_set(name: str) -> bool:
         """Change de set. Si le VJ tournait, il **redemarre** sur le nouveau set (premiere scene, ou une au hasard)."""
@@ -108,16 +139,28 @@ def install(c):
 
     def export_set_now(path: str | None = None) -> bool:
         name = scene_book.active_set_name()
-        path = path or scene_ui["ask_save"](f"{name}.set.json")
+        path = path or scene_ui["ask_save"](f"{name}.casual-set.zip")
         if not path:
             return False
+        pack = str(path).lower().endswith(".zip")
         try:
             data = scenes.export_set(scene_book, name)
-            Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            if pack:                                       # archive : le set + les medias qu'il utilise (a reimporter sur une autre machine)
+                scene_msg.set(f"Export de '{name}' en cours (copie des medias)...")
+                root.update_idletasks()
+                info = setpack.write_pack(path, data)
+            else:
+                Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         except (OSError, ValueError) as exc:
             scene_msg.set(f"Export impossible: {exc}")
             return False
-        scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes) : {Path(path).name}")
+        if pack:
+            note = f", {info['files']} media(s) embarque(s) ({info['bytes'] / 1048576:.1f} Mo)"
+            if info["missing"]:
+                note += f" - introuvable(s), non embarque(s): {', '.join(Path(m).name for m in info['missing'][:3])}"
+            scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes{note}) : {Path(path).name}")
+        else:
+            scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes, sans medias) : {Path(path).name}")
         return True
 
     def resolve_conflict(title: str, text: str, what: str) -> str | None:
@@ -135,7 +178,12 @@ def install(c):
         if not path:
             return False
         try:
-            parsed = scenes.parse_import(Path(path).read_text(encoding="utf-8"))
+            if setpack.is_pack(path):                      # archive : les medias sont extraits sur cette machine et les chemins refaits
+                scene_msg.set("Import en cours (extraction des medias)...")
+                root.update_idletasks()
+                parsed = scenes.parse_import(setpack.read_pack(path, scenes.IMPORT_DIR / "media"))
+            else:
+                parsed = scenes.parse_import(Path(path).read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as exc:
             scene_msg.set(f"Import impossible: {exc}")
             return False
@@ -178,6 +226,7 @@ def install(c):
         if row["media"]:
             menu.add_command(label=f"Media de cette entree : retirer ({scenes.media_label(row['media'])})",
                              command=lambda: media_clear(i))
+        menu.add_command(label="Mettre a jour l'apercu (capture de la projection)", command=lambda n=row["name"]: request_preview(n))
         menu.add_separator()
         if i > 0:
             menu.add_command(label="Monter", command=lambda: move_entry_now(i, -1))
@@ -187,4 +236,4 @@ def install(c):
         menu.add_command(label="Supprimer la scene de la bibliotheque...", command=lambda n=row["name"]: ask_delete_scene(n))
 
     import types
-    return types.SimpleNamespace(ask_delete_set=ask_delete_set, create_set=create_set, delete_set_now=delete_set_now, export_set_now=export_set_now, fill_entry_menu=fill_entry_menu, import_set_now=import_set_now, new_set_dialog=new_set_dialog, rename_set_dialog=rename_set_dialog, rename_set_now=rename_set_now, scene_ui=scene_ui, switch_set=switch_set)
+    return types.SimpleNamespace(undo_now=undo_now, redo_now=redo_now, ask_delete_set=ask_delete_set, create_set=create_set, delete_set_now=delete_set_now, export_set_now=export_set_now, fill_entry_menu=fill_entry_menu, import_set_now=import_set_now, new_set_dialog=new_set_dialog, rename_set_dialog=rename_set_dialog, rename_set_now=rename_set_now, scene_ui=scene_ui, switch_set=switch_set)

@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 
+from core.rhythm import Rhythm
 from engine.deps import np, sd
 
 
@@ -320,6 +321,7 @@ class AudioAnalyzer:
         self.levels = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "raw_bass": 0.0}
         self.t_beat: float | None = None
         self.beats = 0
+        self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
         self._last_total = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -351,6 +353,10 @@ class AudioAnalyzer:
                 if beat:
                     self.t_beat = now
                     self.beats += 1
+            try:
+                self.rhythm.update(now, levels, beat)
+            except Exception:               # le rythme est un confort : jamais d'arret de l'analyse pour lui
+                pass
 
     def latest(self) -> dict:
         with self.lock:

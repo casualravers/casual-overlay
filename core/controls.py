@@ -104,7 +104,7 @@ PANIC_RESET = {
     "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
     "hue_master": 0.0, "hue_cycle": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
     "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
-    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0,
+    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0, "bpm_auto": 0.0, "drop_auto": 0.0,
 }
 
 
@@ -158,9 +158,9 @@ class BarTimer:
         self.start = 0
         self.deadline = 0.0
 
-    def arm(self, beats: int, now: float, tempo: float = 1.0) -> "BarTimer":
-        """Demarre le compte a l'instant `now` ; `tempo` = master du tempo (1 = 120 BPM)."""
-        bpm = min(max(120.0 * float(tempo), 30.0), 300.0)
+    def arm(self, beats: int, now: float, tempo: float = 1.0, bpm: float | None = None) -> "BarTimer":
+        """Demarre le compte a l'instant `now` ; `tempo` = master du tempo (1 = 120 BPM). `bpm` : tempo detecte (il l'emporte sur le master)."""
+        bpm = min(max(float(bpm) if bpm else 120.0 * float(tempo), 30.0), 300.0)
         self.start = int(beats)
         self.deadline = now + max(2.0 * self.total * 60.0 / bpm, 8.0)
         return self

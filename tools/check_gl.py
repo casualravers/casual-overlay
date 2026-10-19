@@ -1103,10 +1103,12 @@ def check_gui() -> None:
           "sets (GUI): changer de set avec le VJ en marche le redemarre (flash, premiere scene du nouveau set)", str(out.get("set_switch_vj")))
     check(out.get("set_switch_idle") == (False, True, "Soiree"), "sets (GUI): changer de set sans VJ ne le lance pas", str(out.get("set_switch_idle")))
     sm = out.get("set_many", (0, 0, []))
-    check(sm[0] >= 10 and sm[1] == 9 and len(sm[2]) == 1 and sm[2][0].startswith("+"),
-          "sets (GUI): plus de 9 scenes : 9 touches F1..F9 + un menu '+N' pour la suite", str(sm))
+    check(sm[0] >= 10 and sm[1] == sm[0] and not sm[2],
+          "sets (GUI): plus de 9 scenes : une touche par scene dans la bande defilante (plus de menu '+N')", str(sm))
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
+    check(out.get("set_pack") == (True, True, True, True),
+          "sets (GUI): export .zip avec les medias, reimport apres avoir perdu le fichier d'origine = media extrait et chemin refait", str(out.get("set_pack")))
     ir = out.get("set_import_rename", ())
     check(len(ir) == 4 and ir[0].startswith("Soiree (2)") and ir[1] == "Set deja present" and ir[2] == 1 and ir[3] == 4,
           "sets (GUI): import d'un nom de set deja pris -> choix, renommer garde les deux (une seule question : scenes identiques)",
@@ -1146,6 +1148,10 @@ def check_gui() -> None:
     check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
+    check(out.get("x_rhythm") == (True,) * 4,
+          "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
+    check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %, cadence du strobe en mode Cadence",
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
@@ -1180,6 +1186,22 @@ def check_gui() -> None:
           "etendu (GUI): colonne FOND video : une image est refusee, une video deposee remplace le fond de l'entree (meme fichier d'une entree a l'autre), retrait", str((out.get("x_bg_bad"), out.get("x_bg"))))
     check(out.get("x_dup") == (True,) * 5,
           "etendu (GUI): Dupliquer la derniere ajoute une copie de la scene (nom inedit) avec les medias, la duree et le VJ de l'entree", str(out.get("x_dup")))
+    check(out.get("x_undo") == (True,) * 3, "etendu (GUI): Annuler / Retablir : +5 = un seul pas, retirer une ligne se defait", str(out.get("x_undo")))
+    check(out.get("x_gpu_cap") == (True,) * 3,
+          "etendu (GUI): securite GPU : la scene posee par le VJ est allegee (cellules et halo coupes), jamais une scene choisie a la main, desactivable",
+          str(out.get("x_gpu_cap")))
+    check(out.get("x_preview") == (True,) * 4 and out.get("x_preview_closed") == (True, True),
+          "etendu (GUI): apercu d'une scene : capture demandee a la projection, associee a la scene et affichee dans sa ligne ; projection fermee = message, rien demande",
+          str((out.get("x_preview"), out.get("x_preview_closed"))))
+    check(out.get("x_temp") == (True,) * 5 and out.get("x_temp_clean") is True,
+          "etendu (GUI): scenes tirees par +5 = provisoires (repere, Garder avec renommage en ligne, nom pris refuse), Retirer les provisoires",
+          str((out.get("x_temp"), out.get("x_temp_clean"))))
+    check(out.get("x_select") == (True,) * 7, "etendu (GUI): lignes cochees : VJ off / on, duree, dupliquer, copier vers un autre set, retirer", str(out.get("x_select")))
+    check(out.get("x_library") == (True,) * 4, "etendu (GUI): bibliotheque a gauche du set, glisser une scene sur la liste l'ajoute au rang vise", str(out.get("x_library")))
+    check(out.get("x_plus5") == (True,) * 5,
+          "etendu (GUI): le bouton +5 ajoute cinq scenes aleatoires d'un coup (noms inedits, aucun preset, rien d'applique)", str(out.get("x_plus5")))
+    check(out.get("x_drag") == (True,) * 4,
+          "etendu (GUI): plus de fleches ; glisser le numero d'une ligne deplace l'entree ; la barre du haut met toutes les scenes dans une bande defilante", str(out.get("x_drag")))
     check(out.get("x_plus") == (True,) * 6,
           "etendu (GUI): le bouton + ajoute au set une scene aleatoire (nom aleatoire inedit, aucun preset enregistre, rien d'applique, overlay centre)", str(out.get("x_plus")))
     check(out.get("x_thumb_shown") is True, "etendu (GUI): une vignette prete s'affiche sans autre changement (la signature en tient compte)",
@@ -2571,6 +2593,71 @@ def check_sets_pure(sc, tmp) -> None:
             check(False, f"import refuse: {word}")
         except ValueError as exc:
             check(word in str(exc), f"import refuse avec un message clair: {word}", str(exc))
+    # archive d'un set avec ses medias
+    import zipfile
+    from core import setpack as sp
+    srcd = Path(tempfile.mkdtemp(prefix="casual_overlay_pack_"))
+    png = srcd / "logo un.png"
+    png.write_bytes(b"PNGDATA" * 100)
+    vid = srcd / "fond.mp4"
+    vid.write_bytes(b"VIDEO" * 500)
+    same = srcd / "copie.mp4"                                    # meme contenu que fond.mp4 : une seule copie dans l'archive
+    same.write_bytes(b"VIDEO" * 500)
+    pbook = sc.SceneBook(lambda: srcd / "scenes_pack.json")
+    pbook.put({"name": "P1", "bg": "video", "mode": None, "live_overrides": None,
+               "fond": {"bg_mode": "video", "bg_video": str(vid)}, "overlay": {"logo_source": "image", "logo_path": str(png)}})
+    pbook.put({"name": "P2", "bg": "live", "mode": "snap", "live_overrides": {"video": str(same), "gain": 2}, "fond": None,
+               "overlay": {"text_font": "Arial"}})
+    pbook.new_set("Pack")
+    pbook.set_active("Pack")
+    pbook.add_entry("P1", {"logo_source": "video", "logo_video": str(vid)})
+    pbook.add_entry("P2")
+    pbook.set_entry_a2w(1, "video", str(png))
+    pbook.set_entry_bg_video(1, "Z:/absent/zz.mp4")
+    exp_p = sc.export_set(pbook)
+    check(sorted(sp.media_paths(exp_p)) == sorted({str(png), str(vid), str(same), "Z:/absent/zz.mp4", "Arial"}),
+          "archive: tous les emplacements de media sont reperes (logo, video de fond, videos audio2wave, media d'entree)", str(sp.media_paths(exp_p)))
+    zpath = srcd / "set.casual-set.zip"
+    info = sp.write_pack(zpath, exp_p)
+    names_z = zipfile.ZipFile(zpath).namelist()
+    check(info["files"] == 2 and info["missing"] == ["Z:/absent/zz.mp4"] and sp.is_pack(zpath) and not sp.is_pack(png) and "set.json" in names_z
+          and len([n for n in names_z if n.startswith("media/")]) == 2,
+          "archive: un media identique n'est embarque qu'une fois, un media introuvable est signale (et pas embarque)", f"{info} {names_z}")
+    inner = _json.loads(zipfile.ZipFile(zpath).read("set.json").decode("utf-8"))
+    check(all(p_.startswith("pack:media/") for p_ in sp.media_paths(inner) if "absent" not in p_ and p_ != "Arial")
+          and inner["scenes"][1]["overlay"]["text_font"] == "Arial" and inner["scenes"][1]["live_overrides"]["gain"] == 2,
+          "archive: les chemins deviennent des references, les autres reglages (police, gain) sont intacts")
+    elsewhere = srcd / "autre machine" / "media"
+    raw = sp.read_pack(zpath, elsewhere)
+    got = [p_ for p_ in sp.media_paths(raw)]
+    real = [p_ for p_ in got if "absent" not in p_ and p_ != "Arial"]
+    check(len(real) == 2 and all(Path(p_).is_file() and str(elsewhere) in p_ for p_ in real) and "Z:/absent/zz.mp4" in got
+          and Path(raw["scenes"][0]["overlay"]["logo_path"]).read_bytes() == png.read_bytes(),
+          "archive: a l'import les medias sont extraits dans un dossier stable et les chemins pointent dessus", str(got))
+    check(sp.read_pack(zpath, elsewhere) == raw, "archive: reimporter la meme archive redonne exactement les memes chemins (scenes reconnues identiques)")
+    parsed_p = sc.parse_import(raw)
+    dest_p = sc.SceneBook(lambda: srcd / "dest_pack.json")
+    res_p = sc.import_set(dest_p, parsed_p)
+    again = sc.import_conflicts(dest_p, sc.parse_import(sp.read_pack(zpath, elsewhere)))
+    check(res_p["set"] == "Pack" and res_p["missing"] == ["Z:/absent/zz.mp4"] and again == {"set": True, "scenes": []},
+          "archive: le set importe ne signale manquant que le media vraiment absent ; une 2e importation ne cree aucun conflit de scene", str((res_p, again)))
+    evil = srcd / "evil.zip"
+    with zipfile.ZipFile(evil, "w") as ze:
+        ze.writestr("set.json", _json.dumps({**exp_p, "scenes": [{"name": "E", "bg": "live", "overlay": {"logo_path": "pack:media/../../pwn.png"}}],
+                                             "set": {"name": "E", "vj": {}, "entries": []}}))
+        ze.writestr("media/../../pwn.png", b"x")
+    evil_raw = sp.read_pack(evil, srcd / "evil_media")
+    check(evil_raw["scenes"][0]["overlay"]["logo_path"] == "" and not (srcd.parent / "pwn.png").exists() and not (srcd / "pwn.png").exists(),
+          "archive: un nom d'archive qui sort du dossier (..) est refuse, rien n'est ecrit ailleurs")
+    junk = srcd / "junk.zip"
+    with zipfile.ZipFile(junk, "w") as zj:
+        zj.writestr("autre.txt", "x")
+    for bad_zip, word in ((junk, "set.json"),):
+        try:
+            sp.read_pack(bad_zip, srcd / "j")
+            check(False, "archive refusee: pas un set")
+        except ValueError as exc:
+            check(word in str(exc), "archive refusee avec un message clair si ce n'est pas un set", str(exc))
     bgv_path = Path(tempfile.mkdtemp(prefix="casual_overlay_bgv_")) / "scenes.json"
     bgb = sc.SceneBook(lambda: bgv_path)
     bgb.put({"name": "A", "bg": "live", "mode": "snap", "live_overrides": {"gain": 1}, "fond": None, "overlay": {}})
@@ -2637,7 +2724,7 @@ def gui_sets_steps(c, s, out) -> None:
     vst["running"] = False
     sc["switch_set"]("Soiree")
     out["set_switch_idle"] = (vst["running"], s.active_scene is None, book.active_set_name())
-    # au-dela de F9 : 9 touches, un menu pour le reste, F-touches sur les 9 premieres
+    # au-dela de F9 : une touche par scene dans la bande defilante, F-touches sur les 9 premieres
     for _ in range(8):
         sc["add_entry"]("Scene C")
     def _walk(w):
@@ -2665,6 +2752,25 @@ def gui_sets_steps(c, s, out) -> None:
     ui["chooser"] = stub(["Renommer (garder les deux)"])
     sc["import"](str(path))
     out["set_import_rename"] = (book.active_set_name(), calls[0][0] if calls else None, len(calls), len(book.rows()))
+    calls.clear()
+    # archive : exporter avec un media, le perdre, reimporter ailleurs
+    from core import scenes as sc_mod
+    png_src = tmpd / "media origine" / "logo.png"
+    png_src.parent.mkdir()
+    png_src.write_bytes(b"\x89PNG-test-bytes")
+    book.set_entry_media(0, {"logo_source": "image", "logo_path": str(png_src)})
+    zpath = tmpd / "soiree.casual-set.zip"
+    old_import_dir, sc_mod.IMPORT_DIR = sc_mod.IMPORT_DIR, tmpd / "imported"
+    exported_zip = sc["export"](str(zpath))
+    export_msg = sc["msg"].get()
+    png_src.unlink()                                       # « autre machine » : le fichier d'origine n'existe plus
+    ui["chooser"] = stub(["Renommer (garder les deux)", "Renommer (garder les deux)", "Renommer (garder les deux)"])
+    imported_zip = sc["import"](str(zpath))
+    media0 = (book.rows()[0]["media"] or {}).get("logo_path") or ""
+    sc_mod.IMPORT_DIR = old_import_dir
+    out["set_pack"] = (exported_zip and zpath.exists(), imported_zip, "media(s) embarque(s)" in export_msg,
+                       bool(media0) and Path(media0).is_file() and str(tmpd / "imported") in media0 and Path(media0).read_bytes() == b"\x89PNG-test-bytes")
+    book.set_entry_media(0, None)
     calls.clear()
     ui["chooser"] = stub(["Annuler"])
     before = book.set_names()
@@ -2899,6 +3005,54 @@ def gui_expand_steps(c, s, out) -> None:
             time.sleep(0.02)
     out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, 1.7 <= params["strobe_rate"] <= 2.3, "BPM" in c["scenes"]["msg"].get())
     params["tempo"], params["strobe_mode"], params["strobe_rate"] = 1.0, "manual", 8.0
+    # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
+    from types import SimpleNamespace as NS_
+    fake_rhythm = NS_(bpm=128.0, drops=0, builds=0, state="idle", confidence=0.9)
+    real_audio = s.audio
+    s.audio = NS_(analyzer=NS_(rhythm=fake_rhythm, latest=lambda: {"beats": 0}))
+    vjc["rhythm_step"]()
+    params["bpm_auto"], params["tempo"] = 0.0, 1.0
+    vjc["rhythm_step"]()
+    r_off = params["tempo"]
+    params["bpm_auto"], params["strobe_mode"] = 1.0, "rate"
+    vjc["rhythm_step"]()
+    r_on = (round(params["tempo"], 3), round(params["strobe_rate"], 2))
+    params["bpm_auto"], params["strobe_mode"], params["tempo"], params["strobe_rate"] = 0.0, "manual", 1.0, 8.0
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    params["drop_auto"] = 1.0
+    fake_rhythm.builds, fake_rhythm.state = 1, "build"
+    vjc["rhythm_step"]()
+    auto_started = "montee automatique" in c["scenes"]["msg"].get()
+    hits0 = params["strobe_hits"]
+    fake_rhythm.drops, fake_rhythm.state = 1, "idle"
+    vjc["rhythm_step"]()
+    out["x_rhythm"] = (r_off == 1.0, r_on == (round(128.0 / 120.0, 3), 2.13), auto_started,
+                       params["build"] == 0.0 and params["strobe_hits"] == hits0 + 1 and not s.commands.empty()
+                       and "DROP" in c["scenes"]["msg"].get())
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    params["drop_auto"] = 0.0
+    fake_rhythm.builds, fake_rhythm.state = 2, "build"
+    vjc["rhythm_step"]()
+    out["x_rhythm_manual"] = (params["build"] == 0.0 and s.commands.empty(),)                # drop_auto coupe : rien ne part tout seul
+    book_ = book
+    book_.set_vj(on_drop=True, order="seq")
+    vjc["state"]["running"] = True
+    s.active_scene, s.active_entry = None, 0
+    vjc["advance"]()
+    before_idx = s.active_entry
+    fake_rhythm.drops, fake_rhythm.state = 2, "idle"
+    vjc["rhythm_step"]()
+    after_idx = s.active_entry
+    book_.set_vj(on_drop=False)
+    fake_rhythm.drops = 3
+    vjc["rhythm_step"]()
+    out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
+    vjc["state"]["running"] = False
+    s.audio = real_audio
+    while not s.commands.empty():
+        s.commands.get_nowait()
     c["scenes"]["ui"]["help"]()
     root.update()
     tops = [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
@@ -3011,6 +3165,186 @@ def gui_expand_steps(c, s, out) -> None:
                      (s.active_scene, s.active_entry) == applied_before, book.rows()[-1]["scene"]["overlay"].get("logo_x") == 0.5)
     book.remove_entry(len(book.rows()) - 1)
     book.delete(new_name)
+    # bouton +5 : cinq scenes aleatoires d'un coup, a la suite
+    n_before5 = len(book.rows())
+    names5 = sc["add_random5"]()
+    out["x_plus5"] = (len(names5) == 5 and len(set(names5)) == 5, len(book.rows()) == n_before5 + 5,
+                      [r["name"] for r in book.rows()[-5:]] == names5,
+                      (len(gl.OVERLAY_BOOK.all()), len(gl.BACKGROUND_BOOK.all())) == presets_before,
+                      (s.active_scene, s.active_entry) == applied_before)
+    for _ in range(5):
+        book.remove_entry(len(book.rows()) - 1)
+    for nm in names5:
+        book.delete(nm)
+    sc["refresh_panel"](force=True)
+    root.update()
+    # glisser-deposer d'une ligne : plus de fleches, la poignee (numero) deplace l'entree jusqu'a la ligne visee
+    order0 = [r["name"] for r in book.rows()]
+    row_frames = sc["panel_state"]["rows"]
+    arrows = [w for w in walk_(row_frames[0]["frame"]) if w.winfo_class() in ("Button", "Label") and str(w.cget("text")) in ("\u25b2", "\u25bc")]
+    grab = row_frames[0]["num"]
+    target_y = row_frames[2]["frame"].winfo_rooty() + row_frames[2]["frame"].winfo_height() // 2
+    grab.event_generate("<ButtonPress-1>", x=3, y=3)
+    grab.event_generate("<B1-Motion>", x=3, y=3, rooty=target_y, state=0x100)
+    grab.event_generate("<ButtonRelease-1>", x=3, y=3, rooty=target_y)
+    root.update()
+    order1 = [r["name"] for r in book.rows()]
+    sc["move_to"](2, 0)
+    root.update()
+    order2 = [r["name"] for r in book.rows()]
+    out["x_drag"] = (not arrows, order1 == order0[1:3] + order0[:1] + order0[3:], order2 == order0,
+                     len(sc["strip"]().winfo_children()) == 1 and len(sc["strip"]().winfo_children()[0].winfo_children()) == len(book.rows()))
+    sc["refresh_panel"](force=True)
+    # scenes provisoires (tirees par +5) : repere, Garder avec renommage, retirer les provisoires
+    ops = sc["panel_ops"]
+    lib0 = set(book.names())
+    names_t = sc["add_random5"]()
+    root.update()
+    sc["refresh_panel"](force=True)
+    root.update()
+    marks = [sc["panel_state"]["rows"][r["index"]]["num"].cget("text") for r in book.rows() if r["name"] in names_t]
+    garder = [w for r in book.rows() if r["name"] in names_t for w in walk_(sc["panel_state"]["rows"][r["index"]]["frame"])
+              if w.winfo_class() == "Button" and str(w.cget("text")) == "Garder"]
+    kept = ops.keep_now(names_t[0], "Gardee par test")
+    clash = ops.keep_now(names_t[1], "Gardee par test")                       # nom deja pris : refus, la scene reste provisoire
+    still = set(book.temp_names())
+    ops.start_keep(next(r["index"] for r in book.rows() if r["name"] == names_t[2]))
+    root.update()
+    entry_open = any(w.winfo_class() == "Entry" for w in walk_(sc["panel_state"]["rows"][next(r["index"] for r in book.rows() if r["name"] == names_t[2])]["frame"]))
+    removed = ops.drop_temp(ask=False)
+    out["x_temp"] = (all(m.endswith("\u2736") for m in marks) and len(marks) == 5, len(garder) == 5,
+                     kept == "Gardee par test" and clash is None and "Gardee par test" not in book.temp_names() and names_t[1] in still,
+                     entry_open, removed == 4 and book.temp_names() == [] and "Gardee par test" in book.names()
+                     and not (set(names_t[1:]) & set(book.names())))
+    ops_rows = book.rows()
+    if any(r["name"] == "Gardee par test" for r in ops_rows):
+        book.remove_entry(next(r["index"] for r in ops_rows if r["name"] == "Gardee par test"))
+    book.delete("Gardee par test")
+    out["x_temp_clean"] = set(book.names()) == lib0
+    sc["refresh_panel"](force=True)
+    root.update()
+    # selection multiple : cocher, VJ off / on, duree, dupliquer, copier vers un autre set, retirer
+    n0 = len(book.rows())
+    names0 = [r["name"] for r in book.rows()]
+    ops.toggle_sel(0)
+    ops.toggle_sel(2)
+    boxes = [sc["panel_state"]["rows"][k]["box"].cget("text") for k in (0, 1, 2)]
+    ops.sel_skip(True)
+    skip_on = [book.rows()[k]["skip"] for k in (0, 1, 2)]
+    ops.sel_skip(False)
+    ops.sel_seconds(20.0)
+    secs = [book.rows()[k]["seconds"] for k in (0, 1, 2)]
+    ops.sel_seconds(None)
+    ops.sel_duplicate()
+    after_dup = [r["name"] for r in book.rows()]
+    ops.toggle_sel(0)
+    ops.toggle_sel(2)
+    book.new_set("Copie test")
+    copied = ops.sel_copy_to("Copie test")
+    in_other = [e["scene"] for e in book.get_set("Copie test")["entries"]]
+    book.delete_set("Copie test")
+    ops.select_none()
+    none_msg = ops.sel_remove()
+    ops.toggle_sel(1)
+    ops.toggle_sel(3)
+    removed_n = ops.sel_remove()
+    out["x_select"] = (boxes == ["\u2611", "\u2610", "\u2611"], skip_on == [True, False, True], secs == [20.0, None, 20.0],
+                       len(after_dup) == n0 + 2 and after_dup[0] == after_dup[1] == names0[0] and after_dup[3] == after_dup[4] == names0[2],
+                       copied == 2 and len(in_other) == 2, none_msg == 0, removed_n == 2 and len(book.rows()) == n0)
+    # bibliotheque : colonne a gauche, ajout a un rang precis (glisser-deposer simule par ses evenements)
+    ops.toggle_library()
+    root.update()
+    lib = sc["panel_state"].get("lib")
+    listed = lib is not None and len(lib["names"]) == len(book.names())
+    rows_before = [r["name"] for r in book.rows()]
+    ok_api = ops.add_at(lib["names"][0], 1) if lib else False
+    rows_api = [r["name"] for r in book.rows()]
+    book.remove_entry(1)
+    sc["refresh_panel"](force=True)
+    root.update()
+    lib = sc["panel_state"]["lib"]
+    lb = lib["lb"]
+    row1 = sc["panel_state"]["rows"][1]["frame"]
+    target_y = row1.winfo_rooty() + 2
+    target_x = sc["panel_state"]["cv"].winfo_rootx() + 40
+    lb.event_generate("<ButtonPress-1>", x=5, y=5, rootx=lb.winfo_rootx() + 5, rooty=lb.winfo_rooty() + 5)
+    lb.event_generate("<B1-Motion>", x=5, y=5, rootx=target_x, rooty=target_y, state=0x100)
+    lb.event_generate("<ButtonRelease-1>", x=5, y=5, rootx=target_x, rooty=target_y)
+    root.update()
+    rows_drag = [r["name"] for r in book.rows()]
+    if len(rows_drag) == len(rows_before) + 1:
+        book.remove_entry(1)
+    ops.toggle_library()
+    root.update()
+    out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
+                        len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is not None)
+    sc["refresh_panel"](force=True)
+    # annuler / retablir dans la fenetre
+    rows_u = [r["name"] for r in book.rows()]
+    sc["add_random5"]()
+    after_add = len(book.rows())
+    first_undo = sc["undo"]()
+    back = [r["name"] for r in book.rows()]
+    sc["redo"]()
+    redone = len(book.rows())
+    sc["undo"]()
+    sc["remove_entry"](0)
+    removed_one = len(book.rows())
+    sc["undo"]()
+    restored = [r["name"] for r in book.rows()]
+    out["x_undo"] = (after_add == len(rows_u) + 5 and first_undo and back == rows_u, redone == len(rows_u) + 5, removed_one == len(rows_u) - 1 and restored == rows_u)
+    # securite GPU : scene posee par le VJ allegee selon la charge mesuree, jamais une scene choisie a la main
+    book.put({"name": "Lourde test", "bg": "live", "overlay": {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 0.0}}, add_to_set=False)
+    old_rs, s.render_size = getattr(s, "render_size", None), (1920, 1080)
+    s.status["gpu_ms"], s.status["gpu_budget_ms"] = 14.0, 16.7
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    params["gpu_cap"] = 1.0
+    sc["apply_auto"]("Lourde test")
+    capped = (params["cell_on"], params["holo_on"], "allegee" in sc["msg"].get())
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    sc["apply"]("Lourde test")                                                # a la main : jamais touchee
+    manual = (params["cell_on"], params["holo_on"])
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    params["gpu_cap"] = 0.0
+    sc["apply_auto"]("Lourde test")
+    off = (params["cell_on"], params["holo_on"])
+    params["gpu_cap"] = 1.0
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    s.status.pop("gpu_ms", None)
+    s.status.pop("gpu_budget_ms", None)
+    s.render_size = old_rs
+    book.delete("Lourde test")
+    out["x_gpu_cap"] = (capped == (0.0, 0.0, True), manual == (1.0, 1.0), off == (1.0, 1.0))
+    # apercu d'une scene : demande a la projection (fausse), fichier ecrit par le « fil GL », associe a la scene, affiche dans la ligne
+    from types import SimpleNamespace as _NS
+    from core import scenes as sc_mod_
+    from engine import preview as pvw
+    old_proj, s.projection = s.projection, _NS(running=lambda: True)
+    pv_dir = tmpd / "previews"
+    old_pdir, sc_mod_.PREVIEW_DIR = sc_mod_.PREVIEW_DIR, pv_dir
+    target_name = book.rows()[0]["name"]
+    asked = ops.request_preview(target_name)
+    dest_pv = s.preview_requests.get(timeout=1.0)
+    pvw.write_preview(bytes([200, 30, 30]) * (32 * 18), (32, 18), dest_pv)
+    t_end = time.monotonic() + 2.0
+    while time.monotonic() < t_end and not book.get(target_name).get("preview"):
+        root.update()
+        time.sleep(0.05)
+    sc["refresh_panel"](force=True)
+    root.update()
+    pic = sc["panel_state"]["rows"][0]["prevpic"]
+    out["x_preview"] = (asked, bool(book.get(target_name).get("preview")), str(pic.cget("image")) != "", dest_pv.endswith(book.get(target_name)["preview"]))
+    s.projection = _NS(running=lambda: False)
+    nothing = ops.request_preview(target_name)
+    book.set_preview(target_name, None)
+    s.projection = old_proj
+    sc_mod_.PREVIEW_DIR = old_pdir
+    out["x_preview_closed"] = (nothing is False, s.preview_requests.empty())
+    sc["refresh_panel"](force=True)
     # bouton Dupliquer la derniere : copie de la scene et des reglages de l'entree, a la suite
     sc["entry_vj"](len(book.rows()) - 1, seconds=42.0)
     last_row = book.rows()[-1]
@@ -3085,7 +3419,7 @@ def gui_expand_steps(c, s, out) -> None:
     grip.event_generate("<B1-Motion>", rooty=500 + g0 - small)       # on remet la hauteur d'origine (la suite compare les tailles)
     grip.event_generate("<ButtonRelease-1>", rooty=500 + g0 - small)
     root.update()
-    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + 60, small == 80)
+    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + min(60, max(root.winfo_screenheight() - 80 - gw0, 0)), small == 80)     # la fenetre suit tant qu'elle tient dans l'ecran
     out["x_grip_back"] = (int(body.cget("height")), g0, root.winfo_height(), gw0)
     # renommer depuis le panneau
     # nom tres long : affiche en entier, colonnes alignees d'une ligne a l'autre
@@ -5597,6 +5931,164 @@ def check_safeguards() -> None:
     check(cv["unit"] == "bars" and cv["bars"] == 16 and sc_.SceneBook._clean_vj({"unit": "x", "bars": 3})["unit"] == "seconds"
           and sc_.SceneBook._clean_vj({"bars": 3})["bars"] == 8 and sc_.SceneBook._clean_vj(None)["unit"] == "seconds",
           "VJ en rythme: reglages valides (unite, nombre de mesures), valeurs inconnues ramenees aux defauts")
+    check(cc.BarTimer(8).arm(0, 0.0, 1.0, bpm=240.0).deadline == 16.0 and cc.BarTimer(8).arm(0, 0.0, 2.0, bpm=60.0).deadline == 64.0,
+          "VJ en rythme: le BPM detecte l'emporte sur le master du tempo pour le garde-fou")
+    check("bpm_auto" in gl.PANIC_RESET and "drop_auto" in gl.PANIC_RESET, "panique: coupe aussi le tempo auto et la montee / drop auto")
+    check(sc_.SceneBook._clean_vj({"on_drop": True})["on_drop"] is True and sc_.SceneBook._clean_vj({"on_drop": "oui"})["on_drop"] is False
+          and sc_.SceneBook._clean_vj(None)["on_drop"] is False, "VJ sur le drop: reglage valide (booleen), faux par defaut")
+    # --- rythme detecte : BPM a partir des kicks, montee et drop a partir des basses
+    from core import rhythm as rh
+
+    def feed_kicks(times):
+        r = rh.Rhythm()
+        for tk_ in times:
+            r.update(tk_, {"bass": 0.5, "rms": 0.5}, True)
+        r.update(times[-1] + 0.3, {"bass": 0.5, "rms": 0.5}, False)
+        return r
+
+    steady = [i * 60.0 / 128.0 for i in range(24)]
+    r = feed_kicks(steady)
+    check(r.bpm is not None and abs(r.bpm - 128.0) < 1.5 and r.confidence > 0.9, "BPM detecte: kicks reguliers a 128 BPM", f"{r.bpm} {r.confidence}")
+    r = feed_kicks([i * 60.0 / 64.0 for i in range(20)])
+    check(r.bpm is not None and abs(r.bpm - 128.0) < 2.0, "BPM detecte: un kick sur deux (64) est ramene a 128", str(r.bpm))
+    rng_ = __import__("random").Random(4)
+    jitter = [i * 60.0 / 124.0 + rng_.uniform(-0.012, 0.012) for i in range(32)]
+    r = feed_kicks(jitter)
+    check(r.bpm is not None and abs(r.bpm - 124.0) < 2.0, "BPM detecte: kicks avec un peu de gigue (+-12 ms)", str(r.bpm))
+    missing = [x for i, x in enumerate(steady) if i % 5 != 3]
+    r = feed_kicks(missing)
+    check(r.bpm is not None and abs(r.bpm - 128.0) < 2.5, "BPM detecte: un kick manque de temps en temps ne fausse pas le tempo", str(r.bpm))
+    messy = [0.0, 0.31, 1.4, 1.52, 2.9, 3.33, 4.8, 5.1, 6.9, 7.01]
+    r = feed_kicks(messy)
+    check(r.bpm is None, "BPM detecte: kicks irreguliers = pas de BPM (confiance trop faible)", str(r.bpm))
+    check(feed_kicks(steady[:4]).bpm is None, "BPM detecte: moins de 6 kicks = pas de BPM")
+    r = feed_kicks(steady)
+    t_last = steady[-1]
+    r.update(t_last + 6.5, {"bass": 0.0, "rms": 0.0}, False)
+    check(r.bpm is None, "BPM detecte: sans kick depuis 5 s, le BPM est perdu")
+    # changement de morceau : 128 puis 100 BPM => le tempo saute apres quelques estimations
+    r = rh.Rhythm()
+    now_ = 0.0
+    for i in range(24):
+        now_ = i * 60.0 / 128.0
+        r.update(now_, {"bass": 0.5}, True)
+    start2 = now_ + 0.6
+    for i in range(60):
+        now_ = start2 + i * 0.6
+        r.update(now_, {"bass": 0.5}, True)
+    check(r.bpm is not None and abs(r.bpm - 100.0) < 3.0, "BPM detecte: le tempo suit un changement de morceau", str(r.bpm))
+    # montee et drop : pleine energie, cassure (basses absentes), retour
+    dd = rh.DropDetector()
+    events = []
+    clock = 0.0
+
+    def run_bass(seconds, level, wobble=0.1):
+        nonlocal clock
+        for k_ in range(int(seconds * 100)):
+            clock += 0.01
+            lv = level + wobble * (1.0 if (k_ // 25) % 2 else -1.0) * level
+            ev = dd.update(clock, lv, level)
+            if ev:
+                events.append((ev, round(clock, 1)))
+    run_bass(20, 0.7)
+    run_bass(8, 0.04, 0.0)
+    run_bass(10, 0.7)
+    names = [e for e, _ in events]
+    check(names == ["build", "drop"] and dd.drops == 1 and dd.state == "idle",
+          "montee / drop: cassure des basses puis retour = une montee puis un drop", str(events))
+    check(events and 24.0 <= events[0][1] <= 25.5 and 28.0 <= events[1][1] <= 29.0, "montee / drop: montee apres ~3,5 s de cassure, drop des le retour des basses", str(events))
+    dd5 = rh.DropDetector()
+    clock5 = 0.0
+    for seconds_, level_ in ((15, 0.7), (3, 0.04), (3, 0.7), (3, 0.04), (3, 0.7)):         # drop, puis une deuxieme cassure close : pause de 12 s
+        for _ in range(int(seconds_ * 100)):
+            clock5 += 0.01
+            dd5.update(clock5, level_, level_)
+    check(dd5.drops == 1 and dd5.state == "idle", "montee / drop: pas de second drop pendant la pause de 12 s (retour au calme, pas de drop en retard)", f"{dd5.drops} {dd5.state}")
+    dd2 = rh.DropDetector()
+    ev2 = [dd2.update(i * 0.01, 0.6 + (0.1 if (i // 20) % 2 else -0.1), 0.6) for i in range(3000)]
+    check(not any(ev2), "montee / drop: un passage plein et regulier ne declenche rien")
+    dd3 = rh.DropDetector()
+    ev3 = [dd3.update(i * 0.01, 0.01, 0.0) for i in range(3000)]
+    check(not any(ev3), "montee / drop: un silence depuis le debut ne declenche rien (pas de niveau de reference)")
+    dd4 = rh.DropDetector()
+    for i in range(2000):
+        dd4.update(i * 0.01, 0.7, 0.7)
+    for i in range(2000, 2000 + 5200):
+        dd4.update(i * 0.01, 0.03, 0.0)                        # cassure de 52 s : au-dela de 45 s ce n'est plus une cassure
+    check(dd4.state == "idle" and dd4.drops == 0, "montee / drop: une cassure trop longue est abandonnee sans drop", dd4.state)
+    # --- securite GPU : alleger la scene suivante selon ses effets et la charge mesuree
+    from core import safety as sf
+    heavy = {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 1.0, "bg_hue": 0.3}
+    calm = {"cell_on": 0.0, "holo_on": 0.0, "melt_on": 0.0}
+    full = (1920, 1080)
+    same_v, dropped = sf.cap_values(heavy, calm, 0.0, 16.7, full)
+    check(same_v is heavy and dropped == [], "securite GPU: sans mesure du GPU, rien n'est change")
+    out_v, dropped = sf.cap_values(heavy, calm, 8.0, 16.7, full)
+    check(dropped == ["cellules"] and out_v["cell_on"] == 0.0 and out_v["holo_on"] == 1.0 and out_v["melt_on"] == 1.0 and heavy["cell_on"] == 1.0
+          and out_v["bg_hue"] == 0.3, "securite GPU: GPU a 8 ms + effets lourds = les cellules sautent d'abord, le reste est intact, l'entree n'est pas modifiee", str((out_v, dropped)))
+    out_v, dropped = sf.cap_values(heavy, calm, 13.0, 16.7, full)
+    check(dropped == ["cellules", "halo"] and out_v["melt_on"] == 1.0, "securite GPU: plus la charge est haute, plus d'effets sautent (cellules > halo > fonte)", str(dropped))
+    same_v, dropped = sf.cap_values(heavy, {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 1.0}, 14.0, 16.7, full)
+    check(dropped == [] and same_v is heavy, "securite GPU: un effet deja allume au moment (mesure incluse) n'est pas compte deux fois")
+    same_v, dropped = sf.cap_values(heavy, calm, 1.2, 16.7, (640, 360))
+    check(dropped == [], "securite GPU: a petite taille de rendu les memes effets coutent beaucoup moins (cout proportionnel aux pixels)")
+    check(abs(sf.effects_cost({"cell_on": 1.0, "holo_on": 1.0}, full) - 10.0) < 1e-9 and sf.effects_cost({}, full) == 0.0, "securite GPU: cout estime des effets allumes")
+    # --- annuler / retablir
+    udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
+    ubook = sc_.SceneBook(lambda: udir / "scenes.json")
+    ubook.put({"name": "A", "bg": "live", "overlay": {}})
+    ubook.put({"name": "B", "bg": "live", "overlay": {}})
+    check(ubook.undo_label() == "Enregistrer la scene" and ubook.undo() == "Enregistrer la scene" and ubook.names() == ["A"] and ubook.row_names() == ["A"],
+          "annuler: la derniere ecriture est defaite (scene et entree du set)")
+    check(ubook.redo_label() == "Enregistrer la scene" and ubook.redo() and ubook.names() == ["A", "B"] and ubook.redo() is None, "retablir: on la refait, puis plus rien a retablir")
+    with ubook.group("Trois scenes"):
+        for n_ in "CDE":
+            ubook.put({"name": n_, "bg": "live", "overlay": {}})
+    check(ubook.names() == ["A", "B", "C", "D", "E"] and ubook.undo() == "Trois scenes" and ubook.names() == ["A", "B"],
+          "annuler: un groupe d'ecritures (ex. +5) est UN seul pas")
+    ubook.redo()
+    ubook.remove_entries([1, 3])
+    check(ubook.row_names() == ["A", "C", "E"] and ubook.undo() == "Retirer des lignes" and ubook.row_names() == ["A", "B", "C", "D", "E"],
+          "annuler: retirer plusieurs lignes se defait, l'ordre revient")
+    ubook.move_entry(0, 2)
+    ubook.new_set("Autre")
+    ubook.set_active("Autre")
+    check(ubook.undo() == "Nouveau set" and ubook.set_names() == [sc_.DEFAULT_SET] and ubook.active_set_name() == sc_.DEFAULT_SET,
+          "annuler: creer un set se defait (le set affiche retombe sur un set qui existe)", str(ubook.set_names()))
+    ubook.new_set("S1")
+    ubook.new_set("S2")
+    ubook.set_active("S1")
+    check(ubook.undo() == "Nouveau set" and ubook.set_names() == [sc_.DEFAULT_SET, "S1"] and ubook.active_set_name() == "S1",
+          "annuler: changer de set n'est pas une modification a annuler, et annuler ne change pas le set affiche")
+    ubook.set_active(sc_.DEFAULT_SET)
+    ubook.put({"name": "Z", "bg": "live", "overlay": {}})
+    ubook.undo()
+    ubook.put({"name": "Y", "bg": "live", "overlay": {}})
+    check(ubook.redo() is None, "annuler: une nouvelle modification efface les pas a retablir")
+    ubook2 = sc_.SceneBook(lambda: udir / "autre.json")
+    check(ubook2.undo() is None and ubook2.undo_label() is None, "annuler: l'historique est propre a chaque fichier de scenes")
+    ubook.keep_scene("A", "A renommee")
+    check(ubook.undo() == "Garder la scene" and "A" in ubook.names() and "A renommee" not in ubook.names(), "annuler: garder une scene (renommer + retirer le drapeau) = un seul pas")
+    n_hist = len(sc_.SceneBook._HISTORY[str(udir / "scenes.json")]["undo"])
+    pdir = udir / "previews"
+    old_pdir, sc_.PREVIEW_DIR = sc_.PREVIEW_DIR, pdir
+    pdir.mkdir()
+    (pdir / "old.jpg").write_bytes(b"x")
+    (pdir / "new.jpg").write_bytes(b"y")
+    ubook.set_preview("A", "old.jpg")
+    ubook.set_preview("A", "new.jpg")
+    check(ubook.get("A")["preview"] == "new.jpg" and not (pdir / "old.jpg").exists() and (pdir / "new.jpg").exists()
+          and len(sc_.SceneBook._HISTORY[str(udir / "scenes.json")]["undo"]) == n_hist, "apercu: associe a la scene, l'ancien fichier est supprime, ce n'est pas un pas d'annulation")
+    sc_.PREVIEW_DIR = old_pdir
+    from engine import preview as pv
+    rgb = bytes([255, 0, 0]) * (64 * 18) + bytes([0, 0, 255]) * (64 * 18)           # premiere ligne en bas (OpenGL) : rouge en bas, bleu en haut
+    dest_p = udir / "p" / "apercu.jpg"
+    ok_p = pv.write_preview(rgb, (64, 36), dest_p)
+    from PIL import Image as _Img
+    im_p = _Img.open(dest_p).convert("RGB")
+    check(ok_p and im_p.size == (240, 135) and im_p.getpixel((120, 5))[2] > 200 and im_p.getpixel((120, 130))[0] > 200
+          and not pv.write_preview(b"", (0, 0), udir / "x.jpg"), "apercu: JPEG reduit a 240 px de large, image remise a l'endroit, taille invalide refusee sans exception",
+          str((im_p.size, im_p.getpixel((120, 5)), im_p.getpixel((120, 130)))))
     # --- auto-sauvegarde
     tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_autosave_"))
     snap = tmp / "autosave.json"

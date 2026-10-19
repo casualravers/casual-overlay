@@ -113,15 +113,30 @@ les medias restent des chemins, un media absent sur l'autre machine est signale)
 set ou de scene deja pris : *Renommer* (on garde les deux : `nom (2)`) ou *Remplacer* (avec confirmation) ; un fichier illisible
 ou d'une version plus recente donne un message, sans rien effacer. **Changer de set redemarre le VJ** s'il tournait (premiere
 scene du nouveau set), et chaque set a son ordre et sa duree de VJ. F1..F9 sont les 9 premieres entrees du set actif ; au-dela,
-un menu *+N* les liste (le VJ les joue toutes). *+ Scene* : nouvelle scene depuis l'etat actuel, ou ajout d'une scene deja
-enregistree. Clic droit sur une touche : mettre a jour la scene, media, monter / descendre, retirer du set, supprimer
-de la bibliotheque.
+elles n'ont pas de touche mais restent dans la barre (le VJ les joue toutes). *+ Scene* : nouvelle scene depuis l'etat actuel, ou ajout d'une scene deja
+enregistree. La barre met toutes les touches dans une **bande qui defile** (molette, fleches ◀ ▶ qui apparaissent quand tout ne tient pas ;
+la scene active reste visible) : les boutons du VJ restent toujours visibles. Clic droit sur une touche : mettre a jour la
+scene, media, monter / descendre, retirer du set, supprimer de la bibliotheque.
+**Export en archive** : *Exporter ce set* ecrit par defaut un `.zip` qui embarque le set ET les medias qu'il utilise (images, videos, animations ; un media
+identique n'est copie qu'une fois). Sur une autre machine, *Importer* ce `.zip` extrait les medias (dossier `~/.audio2wave/imported`) et refait les chemins : le set
+se rejoue tel quel. Un `.json` seul reste possible (sans medias). **Annuler / Retablir** (Ctrl+Z / Ctrl+Y, menu SET, boutons du panneau etendu) defait les
+operations sur les scenes et les sets (retrait, deplacement, +5, import...). **Apercu** : chaque scene garde une miniature de la projection (prise a l'enregistrement
+ou au premier passage, clic droit pour la refaire). **Securite GPU** : quand le VJ enchaine, une scene dont les effets (cellules, halo, fonte) ne tiendraient plus
+dans le budget d'une image est allegee ; une scene choisie a la main n'est jamais modifiee.
+**Rythme detecte** : l'application estime le **BPM** a partir des kicks (libelle « BPM auto » dans l'onglet *Masters*). *Tempo auto* cale le master du
+tempo (et la cadence du strobe en mode Cadence) dessus ; le tap tempo reste disponible. Elle repere aussi la **montee et le drop** (les basses disparaissent
+un moment, puis reviennent d'un coup) : *Montee / drop auto* lance la montee sur la cassure et la relache au drop (flash), et le reglage de set
+*Changer de scene sur le drop detecte* (menu « reglages VJ ») fait enchainer la scene suivante au drop.
 **Bouton *Etendre*** (a droite de la barre) : un panneau sous la barre montre le set en detail, et la fenetre grandit de sa
 hauteur (elle reprend sa taille quand on *Reduit*). Une ligne par entree : sa scene (clic = la charger), son **media lie avec
 sa vignette** (image, premiere image d'une video ; pour un texte, le texte ; en rouge si le fichier est introuvable), la
 **duree propre** a l'entree dans le VJ (ou celle du set), une case **VJ** (decochee : le VJ la saute, mais elle reste
-chargeable a la main), monter / descendre, *Renommer* (la scene, dans tous les sets) et *Retirer*. En tete : l'ordre et la
-duree par defaut du set, et la duree d'une boucle.
+chargeable a la main), *Renommer* (la scene, dans tous les sets) et *Retirer*. **Changer l'ordre : glisse le numero
+d'une ligne** sur la ligne visee. **Lignes cochees** (case a gauche, Maj = une plage) : retirer du set, VJ off / on, duree, dupliquer, copier
+vers un autre set. **Bibliotheque** (bouton en bas a droite du panneau) : toute la liste des scenes a gauche du set, a glisser sur la liste pour
+les ajouter a l'endroit voulu. Les scenes tirees par *+* / *+5* sont **provisoires** (✱) : *Garder* (avec renommage sur place) pour les conserver,
+*Retirer les ✱* pour ecarter celles qui ne plaisent pas. Sous la liste : *+* (une scene aleatoire), *+5* (cinq d'un coup) et *Dupliquer la derniere*.
+En tete : l'ordre et la duree par defaut du set, et la duree d'une boucle.
 **Deux familles de medias** : ceux de l'**overlay** (logo image, texte, video du logo) et ceux d'**audio2wave** (en mode
 Snap, style pencil : *video interieure* et *video exterieure*). Une scene capture les siens a l'enregistrement (ceux de
 l'overlay, et ceux du panneau Snap) ; chaque entree d'un set peut en plus en **remplacer** (pose par-dessus ceux de la
