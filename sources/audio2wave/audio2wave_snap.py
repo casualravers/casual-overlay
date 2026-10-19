@@ -2276,6 +2276,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
     add_separator("left", "Apparence")
 
     style_var = tk.StringVar(value=args.style)
+    widgets["style_var"] = style_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
 
     def on_style_change(_value: object = None) -> None:
         if _value is not None:
@@ -2558,6 +2559,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
               tooltip="En pixels. --style pencil seul.", automatable=True)
 
     wave_on = tk.BooleanVar(value=args.wave is not None)
+    widgets["wave_var"] = wave_on          # variable Tk exposee a l'hote (grisages de casual-overlay)
     wave_cycles = tk.IntVar(value=args.wave if args.wave else WAVE_CYCLES)
 
     def on_wave_change() -> None:
@@ -2591,6 +2593,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
     # --kick-glow (pencil seul): purement decoratif, voir detect_kicks. Case a
     # cocher + curseur de rayon, meme mecanique que --wave juste au-dessus.
     kick_glow_var = tk.BooleanVar(value=args.kick_glow)
+    widgets["kick_glow_var"] = kick_glow_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
 
     def on_kick_glow_change(value: object = None) -> None:
         if value is not None:
@@ -2607,6 +2610,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
     # meme halo, pas un effet independant -- n'a d'effet que si la case
     # "Halo sur les kicks" ci-contre est aussi cochee (voir run()).
     glow_live_var = tk.BooleanVar(value=args.glow_live)
+    widgets["glow_live_var"] = glow_live_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
 
     def on_glow_live_change(value: object = None) -> None:
         if value is not None:
@@ -2761,6 +2765,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
     # + curseur plutot que deux widgets independants, pour eviter qu'un utilisateur
     # regle le curseur en pensant qu'il s'applique alors que "auto" est toujours actif.
     gain_auto_var = tk.BooleanVar(value=(args.gain == "auto"))
+    widgets["gain_auto_var"] = gain_auto_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
     gain_db_var = tk.DoubleVar(value=(float(args.gain) if args.gain != "auto" else 0.0))
 
     def on_gain_change() -> None:

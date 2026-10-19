@@ -5277,6 +5277,11 @@ def check_audio2wave_interne() -> None:
     check(origin["commit"] in notes and not unlisted and (not (changed or extra) or "Aucune" not in section),
           f"audio2wave interne: {len(origin['sha256'])} fichiers conformes a l'origine ({origin['commit'][:7]}), ou chaque ecart est note dans VENDORED.md",
           f"modifies: {changed} ajoutes: {extra} non notes: {unlisted}")
+    exposed = {"audio2wave_live.py": ("style_var", "shape_var"), "audio2wave_ridge.py": ("gain_auto_var",),
+               "audio2wave_snap.py": ("style_var", "wave_var", "kick_glow_var", "glow_live_var", "gain_auto_var")}
+    lacking = [f"{n}:{k}" for n, keys in exposed.items() for k in keys
+               if f'widgets["{k}"]' not in (vend / n).read_text(encoding="utf-8")]
+    check(not lacking, "audio2wave interne: les variables Tk qui commandent les grisages sont exposees dans `widgets`", str(lacking))
 
 def check_engine_layer() -> None:
     """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""

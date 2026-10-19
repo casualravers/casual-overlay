@@ -761,6 +761,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
     # audio2wave_snap.py, "auto" recalibre sur les RIDGE_GAIN_WINDOW dernieres
     # lignes (RidgeGain), pas sur la ligne courante seule (voir plus haut).
     gain_auto_var = tk.BooleanVar(value=(args.gain == "auto"))
+    widgets["gain_auto_var"] = gain_auto_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
     gain_db_var = tk.DoubleVar(value=(float(args.gain) if args.gain != "auto" else 0.0))
 
     def on_gain_change() -> None:
