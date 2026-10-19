@@ -30,6 +30,9 @@ PRIMARY = {"Sauvegarder", "Enregistrer", "Demarrer la projection"}      # textes
 BTN_MARGIN = (3, 1)                      # transparent autour d'un bouton : jamais colle a son voisin
 GAP = 6                                  # espace image / texte des radios et cases
 ICON_PX = 14                             # taille des icones des boutons, des titres, des onglets et des cases
+# Boutons dont l'icone suffit : le libelle disparait de l'image (le widget le garde) et devient l'info-bulle.
+ICON_ONLY = {"supprimer", "mettre a jour", "restaurer", "actualiser", "sauvegarder", "dupliquer la derniere", "tirer maintenant",
+             "rescanner", "centrer", "aucun", "aucune", "plein ecran"}
 ICON_TOGGLES = {"image", "texte", "video", "audio2wave", "fond genere", "halo holographique", "fonte acide", "cellules",
                 "recuperer les medias", "automations actives"}      # cases et radios qui recoivent une icone
 _pil_cache: dict = {}
@@ -305,16 +308,70 @@ def _icon_button_image(w: tk.Misc, width: int, height: int, fill: str, fg: str, 
     if key not in _pil_cache:
         base = round_rect_image(width, height, fill, T.RADIUS, margin=BTN_MARGIN).copy()
         d = ImageDraw.Draw(base)
-        text_w = d.textlength(text, font=pf)
-        content = ICON_PX + GAP + text_w
+        text_w = d.textlength(text, font=pf) if text else 0
+        content = ICON_PX + (GAP + text_w if text else 0)
         x0 = BTN_MARGIN[0] + (width - content) / 2
         cy = BTN_MARGIN[1] + height / 2
         ico = icons.image(icon, ICON_PX, fg)
         base.paste(ico, (round(x0), round(cy - ICON_PX / 2)), ico)
-        d.text((x0 + ICON_PX + GAP, cy), text, font=pf, fill=_rgb(fg) + (255,), anchor="lm")
+        if text:
+            d.text((x0 + ICON_PX + GAP, cy), text, font=pf, fill=_rgb(fg) + (255,), anchor="lm")
         _pil_cache[key] = base
     return _pil_cache[key]
 
+
+def _tip_place(w: tk.Misc, tip: tk.Toplevel) -> None:
+    """Place l'info-bulle sous le widget, gardee dans la fenetre (meme regle que celle d'audio2wave)."""
+    tip.update_idletasks()
+    tw, th = tip.winfo_reqwidth(), tip.winfo_reqheight()
+    win = w.winfo_toplevel()
+    left, top = win.winfo_rootx(), win.winfo_rooty()
+    right, bottom = left + win.winfo_width(), top + win.winfo_height()
+    gap = 4
+    x = max(left + gap, min(w.winfo_rootx() + gap, right - tw - gap))
+    y = w.winfo_rooty() + w.winfo_height() + gap
+    if y + th > bottom - gap:
+        above = w.winfo_rooty() - th - gap
+        y = above if above >= top + gap else bottom - th - gap
+    y = max(top + gap, min(y, bottom - th - gap))
+    tip.wm_geometry(f"+{x}+{y}")
+
+
+def _tip_enter(w: tk.Misc, _e=None) -> None:
+    """Bouton a icone seule : le libelle s'affiche en info-bulle. S'il en a deja une (explication), le libelle en devient la premiere ligne."""
+    sk = w._sk
+    if not sk.get("icon_only"):
+        return
+    label = str(_orig_cget(w, "text"))
+    try:
+        theirs = next((c for c in w.winfo_children() if isinstance(c, tk.Toplevel)), None)
+        if theirs is not None:                       # info-bulle existante (posee juste avant par le code de la GUI)
+            lab = next((c for c in theirs.winfo_children() if isinstance(c, tk.Label)), None)
+            if lab is not None and not str(lab.cget("text")).startswith(label + "\n"):
+                lab.configure(text=f"{label}\n{lab.cget('text')}")
+                _tip_place(w, theirs)
+            return
+        if sk.get("tip") is not None:
+            return
+        tip = tk.Toplevel(w)
+        tip.wm_overrideredirect(True)
+        tip.withdraw()
+        tk.Label(tip, text=label, bg=T.PANEL, fg=T.FG, font=T.FONT_SMALL, relief="solid", borderwidth=1, padx=6, pady=3).pack()
+        _tip_place(w, tip)
+        tip.deiconify()
+        sk["tip"] = tip
+    except tk.TclError:
+        sk["tip"] = None
+
+
+def _tip_leave(w: tk.Misc, _e=None) -> None:
+    tip = w._sk.get("tip")
+    w._sk["tip"] = None
+    if tip is not None:
+        try:
+            tip.destroy()
+        except tk.TclError:
+            pass
 
 def _render_button(w: tk.Misc) -> None:
     sk = w._sk
@@ -323,8 +380,12 @@ def _render_button(w: tk.Misc) -> None:
     icon = sk.get("icon") or icons.for_text(text)
     if icon and "\n" in text:
         icon = None
+    icon_only = bool(icon) and " ".join(text.split()).lower() in ICON_ONLY
+    sk["icon_only"] = icon_only
     extra = (ICON_PX + GAP) if icon else 0
-    if sk["chars"]:
+    if icon_only:
+        text_w = ICON_PX
+    elif sk["chars"]:
         text_w = font.measure("0") * sk["chars"]
     else:
         text_w = max((font.measure(line) for line in text.split("\n")), default=0) + extra
@@ -339,11 +400,11 @@ def _render_button(w: tk.Misc) -> None:
         height = max(height, alloc_h - 2 * BTN_MARGIN[1])
     state = _state(w)
     fill, fg = _button_colors(w, state)
-    key = (width, height, fill, fg, state, icon, text if icon else "")
+    key = (width, height, fill, fg, state, icon, text if icon else "", icon_only)
     if sk.get("key") == key:
         return
     sk["key"] = key
-    composite = _icon_button_image(w, width, height, fill, fg, icon, text, font) if icon else None
+    composite = _icon_button_image(w, width, height, fill, fg, icon, "" if icon_only else text, font) if icon else None
     if composite is not None:
         img = photo(w, composite)
         compound = "none"                     # le libelle est dans l'image ; le widget le garde (cget, tests, info-bulles)
@@ -584,6 +645,9 @@ def skin_widget(w: tk.Misc) -> bool:
         w.bind("<Leave>", lambda e, w=w: _on(w, hover=False, down=False), add="+")
         w.bind("<ButtonPress-1>", lambda e, w=w: _on(w, down=True), add="+")
         w.bind("<ButtonRelease-1>", lambda e, w=w: _on(w, down=False), add="+")
+        w.bind("<Enter>", lambda e, w=w: _tip_enter(w), add="+")
+        w.bind("<Leave>", lambda e, w=w: _tip_leave(w), add="+")
+        w.bind("<ButtonPress-1>", lambda e, w=w: _tip_leave(w), add="+")
         if getattr(w, "_skin_stretch", False):
             w.bind("<Configure>", lambda e, w=w: _on_alloc(w, e), add="+")
         _render_button(w)

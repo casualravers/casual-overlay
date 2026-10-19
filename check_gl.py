@@ -5187,14 +5187,33 @@ def check_icons() -> None:
         skin.title(lab, T.OVERLAY)
         skin.apply(root)
         root.update()
-        check(btn.cget("text") == "Supprimer" and str(btn.cget("compound")) == "none" and btn.winfo_reqwidth() > plain.winfo_reqwidth() - 20,
-              "icones: un bouton a icone garde son libelle (cget text), l'image porte l'icone et le texte", str((btn.cget("text"), btn.cget("compound"))))
+        check(btn.cget("text") == "Supprimer" and str(btn.cget("compound")) == "none",
+              "icones: un bouton a icone garde son libelle (cget text), l'image porte l'icone", str((btn.cget("text"), btn.cget("compound"))))
         check(str(plain.cget("compound")) == "center" and plain.cget("text") == "Kick TV", "icones: un bouton sans icone reste comme avant")
         check(str(multi.cget("compound")) == "center", "icones: un libelle sur plusieurs lignes n'a pas d'icone")
         check(chk._sk["key"][2] == "grid" and rad._sk["key"][2] == "video" and other._sk["key"][2] is None, "icones: cases et radios choisies ont une icone, les autres non")
         check(lab.cget("text") == "FOND" and str(lab.cget("image")) != "", "icones: le titre garde son texte et porte repere + icone")
         check(nb.tab(0, "text") == "Effets" and nb.tab(0, "image") and not nb.tab(1, "image"), "icones: onglet connu = icone, texte inchange ; onglet inconnu = rien",
               str((nb.tab(0, "text"), nb.tab(0, "image"), nb.tab(1, "image"))))
+        # icone seule : le libelle devient l'info-bulle (ou la premiere ligne de celle qui existe deja)
+        check(btn._sk["icon_only"] and not plain._sk.get("icon_only") and btn.winfo_reqwidth() < plain.winfo_reqwidth(),
+              "icones: Supprimer = icone seule (bouton plus court), un bouton sans icone garde son texte")
+        skin._tip_enter(btn)
+        own = btn._sk.get("tip")
+        own_text = next((c.cget("text") for c in own.winfo_children()), "") if own is not None else None
+        skin._tip_leave(btn)
+        check(own_text == "Supprimer" and btn._sk.get("tip") is None and not [c for c in btn.winfo_children() if isinstance(c, tk.Toplevel)],
+              "icones: le libelle s'affiche en info-bulle au survol et disparait a la sortie", str(own_text))
+        theirs = tk.Toplevel(btn)
+        theirs.wm_overrideredirect(True)
+        tk.Label(theirs, text="Supprime le preset choisi.").pack()
+        skin._tip_enter(btn)
+        merged = next((c.cget("text") for c in theirs.winfo_children()), "")
+        skin._tip_enter(btn)
+        again = next((c.cget("text") for c in theirs.winfo_children()), "")
+        theirs.destroy()
+        check(merged == "Supprimer\nSupprime le preset choisi." and again == merged and btn._sk.get("tip") is None,
+              "icones: une info-bulle existante recoit le libelle en premiere ligne (une seule fois)", str((merged, again)))
         nb.select(1)
         root.update()
         btn.configure(state="disabled")
