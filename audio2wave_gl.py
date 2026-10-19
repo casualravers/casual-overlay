@@ -38,6 +38,8 @@ import time
 from collections import deque
 from pathlib import Path
 
+# La GUI (gl_gui, gui_*, skin, theme, icons, py_modes) vit dans gui/ : modules plats, importes par leur nom.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "gui"))
 from engine.deps import MISSING, _optional_import, np, glfw, moderngl, sd, PIL_Image, PIL_ImageDraw, PIL_ImageFont  # noqa: E402,F401
 from engine.audio import (  # noqa: E402,F401
     ATTACK_TAU_S, AudioAnalyzer, BANDS, BAND_GATE, BASELINE_FALL_TAU_S, BASELINE_RISE_TAU_S, BEAT_DECAY_TAU_S, BEAT_IDLE_S, DEV_TAU_S, FeatureExtractor, KICK_K, KICK_MIN, KICK_RATIO_EXTRA, KICK_REFRACTORY_S, KICK_WARMUP_S, MIC_WORDS, NOT_A_MIC, PEAK_HALF_LIFE_S, RELEASE_TAU_S, RingBuffer, SoundDeviceInput, SyntheticAudio, _coef, find_input_device, pick_default_device, print_audio_devices, synth_audio_block, system_default_input_name,
@@ -50,7 +52,7 @@ from engine.window import (  # noqa: E402,F401
 )
 
 
-import diagnostics  # noqa: E402  (stdlib seulement : sans dependance a installer)
+from engine import diagnostics  # noqa: E402  (stdlib seulement : sans dependance a installer)
 from core import params as core_params, params_schema, sessionlog  # noqa: E402,F401  (stdlib : table des reglages, journal de session)
 # Facade de compatibilite : ces noms vivent dans core/ (Python pur, sans GL ni Tk) et restent lisibles ici (`gl.X`).
 # Les chemins de fichiers se remplacent dans le module qui les possede (core.params.PARAMS_PATH, core.autosave.AUTOSAVE_PATH...).

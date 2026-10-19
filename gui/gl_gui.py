@@ -42,7 +42,7 @@ from pathlib import Path
 from tkinter import colorchooser, ttk
 
 import audio2wave_gl as gl
-import diagnostics
+from engine import diagnostics
 import skin
 import theme
 import gui_fond
