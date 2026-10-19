@@ -42,7 +42,7 @@ def install(c):
     update_vj_button = c.update_vj_button
     vj = c.vj
     vj_advance = c.vj_advance
-    vj_remaining = c.vj_remaining
+    vj_remaining_text = c.vj_remaining_text
     vj_toggle = c.vj_toggle
     vj_ui = c.vj_ui
 
@@ -536,7 +536,7 @@ def install(c):
         if getattr(s, "scene_lock", False):
             vj_txt = "VERROUILLE"
         elif vj["running"]:
-            vj_txt = f"VJ en marche (suivante dans {vj_remaining():.0f} s)"
+            vj_txt = f"VJ en marche (suivante : {vj_remaining_text()})"
         else:
             vj_txt = "VJ en pause"
         parts = [scene, vj_txt]

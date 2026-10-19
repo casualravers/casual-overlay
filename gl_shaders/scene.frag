@@ -7,6 +7,7 @@ uniform sampler2D u_video;      // rawvideo rgb24, PREMIERE ligne = haut de l'im
 uniform sampler2D u_logo;       // rgba premultiplie, premiere ligne = haut
 uniform vec2  u_res;            // taille du cadre en pixels
 uniform vec4  u_logo_rect;      // centre x, centre y (origine HAUT gauche, 0..1), demi-largeur, demi-hauteur (uv)
+uniform vec2  u_logo_cs;         // cos, sin de la rotation autour du centre (seuls les doodles pivotent ; sin = 0 : droit)
 uniform float u_logo_on;        // 1 si un logo est charge
 uniform float u_pass;           // 0 = couche fond (opaque), 1 = couche logo seule (rgba premultiplie)
 uniform float u_logo_straight;  // 1 = texture en alpha droit (logo video): premultiplie ici
@@ -201,7 +202,12 @@ vec4 logo_cells(vec2 q, vec4 c) {
 
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
 vec4 logo_at(vec2 p) {
-    vec2 q = (p - u_logo_rect.xy) / (2.0 * u_logo_rect.zw) + 0.5;
+    vec2 d = p - u_logo_rect.xy;
+    if (u_logo_cs.y != 0.0) {
+        vec2 px = d * u_res;                                                 // la rotation se fait en pixels (pas d'etirement)
+        d = vec2(u_logo_cs.x * px.x + u_logo_cs.y * px.y, -u_logo_cs.y * px.x + u_logo_cs.x * px.y) / u_res;
+    }
+    vec2 q = d / (2.0 * u_logo_rect.zw) + 0.5;
     float inside = step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
     float n = 1.0;
     if (u_melt > 0.001 && inside > 0.5) {
@@ -250,7 +256,12 @@ void main() {
             float acc = 0.0;
             // Hors du rectangle du logo agrandi du rayon du contour, tous les echantillons seraient vides : on les saute
             // (la plupart des pixels de l'ecran, ~25 appels de logo_at chacun, cellules et fonte comprises).
-            vec2 reach = vec2(u_logo_rect.z + radius * asp.x, u_logo_rect.w + radius);
+            vec2 half_ext = u_logo_rect.zw;
+            if (u_logo_cs.y != 0.0) {                                       // pivote : le carre englobant devient le cercle de la diagonale
+                float diag = length(u_logo_rect.zw * u_res);
+                half_ext = vec2(diag / u_res.x, diag / u_res.y);
+            }
+            vec2 reach = vec2(half_ext.x + radius * asp.x, half_ext.y + radius);
             vec2 away = abs(p - u_logo_rect.xy);
             if (away.x < reach.x && away.y < reach.y) {
                 for (int i = 0; i < 12; i++) {

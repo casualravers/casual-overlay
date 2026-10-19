@@ -53,6 +53,7 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   window         fenetre glfw, choix du moniteur, plein ecran
   render         Renderer (passes GL), noise, texte / logo, PerfGuard
   session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
+  native_modes   Snap (pencil, simple, rekordbox) et Ridge dessines en GL : analyse d'audio2wave + shaders `mode_*.frag`, `NativeModeSource`, `ModeGL`
   doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
   app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
@@ -454,7 +455,8 @@ la projection**. Desactive par defaut.
   de ceux du logo, melangee en alpha premultiplie sur la couche du logo (`layer_fbo`) : il recoit donc **tout ce que recoit le logo** : fonte acide, cellules, contour lumineux, opacite / master overlay, puis (dans `post.frag`) les effets par couche
   (ondulation, onde de choc, aberration, glitch ; lies au fond ou propres au logo, `fx_link`), l'aura holographique (calculee sur l'alpha de la couche ; centree sur le logo), la traînee et la composition (symetrie, pixelisation, teinte, strobe).
   `u_layer_on` (post.frag) garde la couche active meme sans logo. Pas de shader dedie (doodle.vert / doodle.frag supprimes). Liste vide = aucune passe (aucun cout) ; au plus 5 doodles = 5 passes plein cadre en plus.
-  Les doodles arrives projection fermee sont jetes (`Projection.start`). Une animation propre aux doodles est prevue plus tard.
+  Les doodles arrives projection fermee sont jetes (`Projection.start`). 
+  **Animation** (`core.doodles.pose`, `Wall.posed`) : apparition en « pop » (echelle 0 -> 1 avec depassement de ~9 %, rotation de ~17 degres qui se redresse en balancant, 0,9 s), palier droit, disparition (gonfle un instant, rapetisse en pivotant, 0,9 s) ; le sens de rotation alterne d'un doodle a l'autre. Fondus d'opacite courts (0,4 s / 0,7 s). Le shader du logo sait pivoter (`u_logo_cs` = cos, sin ; sin = 0 pour le logo, qui reste droit) : fonte, cellules et contour suivent la rotation.
 - `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
   injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
   sauvegarde, case de la GUI.
@@ -530,6 +532,7 @@ visuel d'audio2wave, il ne le complete pas) :
   fenetre ; chaque `build_window` relance sa boucle `vj_tick` toutes les 250 ms, garde par `alive`). Reglages (`seconds` 5..300,
   `order` `seq` / `random`) **propres a chaque set** (`SceneBook.vj()` / `set_vj()` lisent et ecrivent ceux du set actif). `scenes.next_scene_index(count, current, order, rng)` (pure) : `seq` = la suivante en boucle (la
   premiere si aucune n'est active), `random` = une autre, jamais la meme deux fois de suite.
+  - **En rythme** (`vj["unit"]` = `bars`, `vj["bars"]` dans `scenes.VJ_BARS` = 1, 2, 4, 8, 16, 32, propres a chaque set, menu « reglages VJ » et menu « duree par defaut » du panneau etendu) : le changement a lieu apres N mesures de 4 kicks detectes (`core.controls.BarTimer`, pure ; le compteur est `analyzer.beats`, ce n'est pas un BPM detecte). Garde-fou : sans kicks, le changement a lieu apres le double de la duree attendue a 120 BPM x master du tempo (au moins 8 s), le VJ ne reste jamais fige. Une duree propre a l'entree reste en secondes. `gl_gui.vj_arm(own)` arme le minuteur (a la place de `vj["t_next"] = ...`), `vj_due()` le teste, `vj_remaining_text()` donne « 12 s » ou « mesure 3/8 » (bouton, console, titre).
   - `vj_advance` : scene suivante + `s.commands.put("flash")` + minuteur relance ; `vj_toggle` (refuse si < 2 scenes) ;
     **choisir une scene a la main** (`apply_scene`, `apply_entry`, F1..F9 compris) **met le VJ en pause** (`apply_entry_core` /
     `apply_scene_core` sont les versions que le VJ appelle). Espace / fleche droite : le fil GL met `"vj"` / `"vjnext"` dans `s.scene_requests`, la GUI les lit.
@@ -884,7 +887,8 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   en Python : avec l'API hote d'audio2wave on les lance **sans fenetre ni ffplay** : `parse_args(argv)` (`make_args`) construit leurs
   options, `start_headless(args, size=..., frame_sink=f, status=...)` ouvre la capture micro (ffmpeg dshow, comme leur `run_app`) et leur
   fil de rendu, et chaque image va dans un `PushStream` (derniere gagne, aucune image melangee) lu par un `FrameReader` normal.
-  `PyModeSource` = un mode en marche. Plus de remplacement de leur module `subprocess` ni d'echange de `sys.argv`. Les tests mettent un
+  `PyModeSource` = un mode en marche (**repli** depuis que Snap et Ridge sont dessines en GL : voir `engine/native_modes.py` juste apres ; actif avec
+  `CASUAL_MODES_PYTHON=1` ou sans numpy / moderngl). Plus de remplacement de leur module `subprocess` ni d'echange de `sys.argv`. Les tests mettent un
   faux micro dans le module `subprocess` de snap / ridge (`check_gl.fake_microphone`, test seulement) et verifient qu'aucun ffplay
   n'est lance.
   - Le fil GL relit `s.reader` a chaque image : changer de mode = changer `s.reader` (flux Live du
@@ -909,10 +913,24 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   - Presets : chaque mode a ses presets (`live_presets.json`, `snap_presets.json`, `ridge_presets.json` dans
     `~/.audio2wave/`, memes fichiers que dans audio2wave), section "PRESETS LIVE / SNAP / RIDGE". Ridge exige
     une entree audio (refus avec message sinon) ; Snap sans entree attend qu'on en choisisse une.
-  - Limites : les rendus Snap/Ridge sont en Python pur (CPU, une image au rythme du trace progressif) et leur
-    micro est ouvert une fois de plus (ffmpeg dshow, en plus de sounddevice et du producteur live suspendu) ;
-    la case "Plein ecran" de Snap/Ridge n'existe pas (c'est notre fenetre GL qui gere l'affichage) ; le Mode VJ
-    d'audio2wave (enchainement de presets) n'est pas verifie ici.
+  - **Snap et Ridge dessines en GL** (`engine/native_modes.py`, `gl_shaders/mode_pencil.frag`, `mode_bars.frag`, `mode_ridge.frag` ; par defaut quand
+    numpy et moderngl sont la, **meme en `--synthetic`**, sans ffmpeg ni ffplay ni micro supplementaire) : l'ANALYSE reste celle d'audio2wave (`pencil_heights`,
+    `detect_kicks`, `render_ridge_line`, `resolve_gain`, `RidgeGain`... appelees telles quelles sur le PCM du tampon `session.audio.ring`, mono) mais le DESSIN est un
+    shader : une photo (a chaque `args.interval`, calee sur l'horloge) devient des tableaux de hauteurs de colonnes envoyes en texture (R32F), et la revelation colonne
+    par colonne qui occupait tout l'intervalle n'est qu'un reglage anime (`u_drawn`, calcule sur l'horloge de la photo : `t0` -> `t1` = l'echeance). `NativeModeSource`
+    (fil d'analyse + pont) a les memes attributs que `PyModeSource` (`args`, `status`, `stop_event`, `finished_event`, `capture_state` = `RingCapture` pour le bouton
+    « Mesurer », `module`) ; `render(ctx, now)` est appele par le fil GL (`engine.projection.loop`) et rend la texture du fond, que `Renderer.mode_tex` met a la place de
+    `video_tex` (fond « video » du VJ prioritaire) ; les ressources GL (`ModeGL`) se creent dans le fil GL et se refont si le contexte change (projection fermee puis
+    rouverte). **Verifie pixel a pixel** : pencil (trait, `--wave`, halo des kicks, trait epais / couleurs, video interieure et exterieure, revelation progressive) et Ridge
+    (6 lignes de suite : decalage, occultation, trait) = EXACTEMENT les memes pixels que `compose_pencil` / `paint_ridge_line` (ecart <= 1 niveau) ; simple et rekordbox
+    (barres de `showwavespic` : `bar_scale` = lin / log10(1 + 32767 a) / log10(32768) / racine carree / racine cubique, crete ou moyenne de |x| par colonne, agrandissement au
+    plus proche voisin centre sur le pixel, passe-bas du rekordbox refaits en numpy a 24 dB/octave, sans phase) comparees a ffmpeg : 0,4 a 3 % de pixels differents, des
+    bords a un pixel. Les roundings d'audio2wave (`round()` pair) sont faits cote Python (rangees 5 / 6 des donnees) pour que les halos soient identiques. Videos `--video` /
+    `--video2` : `BgVideo` (cover) -> textures `u_vid` / `u_vid_out`. Changer l'entree dans le panneau du mode fait suivre l'analyse (`_follow_device`, meme nom,
+    comparaison par prefixe). `--stereo` / `--split-channels` : sans objet (tampon mono) ; l'image du mode n'est plus codee en 8 bits RGB par le tube, mais le
+    rendu final passe de toute facon par le post-traitement du fond.
+  - Limites : la case "Plein ecran" de Snap/Ridge n'existe pas (c'est notre fenetre GL qui gere l'affichage) ; le Mode VJ
+    d'audio2wave (enchainement de presets) n'est pas verifie ici ; le repli Python (`PyModeSource`) ouvre le micro une fois de plus (ffmpeg dshow).
 - **Reglages incompatibles grises** ([gui_gates.py](gui/gui_gates.py)) : un reglage sans objet dans le mode ou l'etat
   courant est **grise** (jamais retire : la disposition ne bouge pas et on voit qu'il existe). Pour les panneaux
   d'audio2wave (sans option dediee dans leur code) : `install_mode_gates` retrouve les widgets par leur texte et
@@ -1123,7 +1141,7 @@ une mesure de l'application.
 
 ## Hors POC
 
-Rendu GL natif de Snap/Ridge (aujourd'hui Python pur), presets combines live + overlay (les deux se chargent separement), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
+Presets combines live + overlay (les deux se chargent separement), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
 redemarre ffmpeg), MIDI,
 sortie Spout/NDI, plusieurs logos a la fois, synchro de la lecture du logo anime sur le kick.
 

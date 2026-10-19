@@ -389,13 +389,18 @@ def install(c):
         om.add_command(label="Full Randomizer (fond, overlay et media tires a chaque fois)", command=lambda: set_vj_option(order="alea"))
         order["menu"] = om
         secs = settings["seconds"]
-        default = tk.Menubutton(head, text=f"duree par defaut : {secs:.0f} s \u25be", relief="flat", bd=0, padx=8, cursor="hand2",
+        per = f"{settings['bars']} mesure{'s' if settings['bars'] > 1 else ''}" if settings["unit"] == "bars" else f"{secs:.0f} s"
+        default = tk.Menubutton(head, text=f"duree par defaut : {per} \u25be", relief="flat", bd=0, padx=8, cursor="hand2",
                                 bg=a2w.GUI_BG, fg=a2w.GUI_FG, activebackground=a2w.GUI_PANEL_BG, activeforeground=a2w.GUI_FG)
         default.pack(side="left", padx=2)
         dm = tk.Menu(default, tearoff=0)
         for value in scenes.VJ_SECONDS:
             dm.add_command(label=f"{value} s" if value < 60 else f"{value // 60} min",
-                           command=lambda v=value: set_vj_option(seconds=float(v)))
+                           command=lambda v=value: set_vj_option(unit="seconds", seconds=float(v)))
+        dm.add_separator()
+        for value in scenes.VJ_BARS:
+            dm.add_command(label=f"{value} mesure{'s' if value > 1 else ''} (en rythme)",
+                           command=lambda v=value: set_vj_option(unit="bars", bars=v))
         default["menu"] = dm
         summary = tk.StringVar(value=panel_summary(rows, settings))
         panel_state["summary"] = summary

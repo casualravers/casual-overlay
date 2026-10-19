@@ -4,6 +4,7 @@ cycle de vie, mur de medias). Stdlib seulement : aucun reseau, aucune image, auc
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,8 +16,11 @@ MAX_BYTES = 5 * 1024 * 1024   # taille maximale d'un fichier
 MAX_SIDE = 4096               # dimension maximale (px)
 MAX_VISIBLE = 5               # medias visibles en meme temps
 LIFE_S = 15.0                 # duree d'affichage (fondus compris)
-FADE_IN_S = 1.5
-FADE_OUT_S = 2.0
+FADE_IN_S = 0.4              # courts : le mouvement d'apparition / de disparition (pose) fait le gros du travail
+FADE_OUT_S = 0.7
+INTRO_S = 0.9                 # apparition : le media « pop » (grossit avec un depassement) en tournant un peu
+OUTRO_S = 0.9                 # disparition : il se tasse puis rapetisse en pivotant
+TILT_RAD = 0.30               # inclinaison de depart / d'arrivee (~17 degres)
 MAX_HEIGHT_FRAC = 0.30        # hauteur maximale d'un media (fraction de la hauteur de l'ecran)
 CONFIG_NAME = "depot.json"
 
@@ -163,6 +167,39 @@ def alpha(age: float, life: float = LIFE_S, fade_in: float = FADE_IN_S, fade_out
     return max(0.0, min(1.0, a))
 
 
+_BACK = 1.70158
+
+
+def _ease_out_back(t: float) -> float:
+    """0 -> 1 avec un depassement (~10 %) avant de se poser."""
+    t = max(0.0, min(1.0, t)) - 1.0
+    return 1.0 + (_BACK + 1.0) * t ** 3 + _BACK * t ** 2
+
+
+def _ease_in_back(t: float) -> float:
+    """0 -> 1 en reculant d'abord un peu (anticipation) puis en accelerant."""
+    t = max(0.0, min(1.0, t))
+    return (_BACK + 1.0) * t ** 3 - _BACK * t ** 2
+
+
+def pose(age: float, direction: float = 1.0, life: float = LIFE_S, intro: float = INTRO_S, outro: float = OUTRO_S) -> tuple[float, float]:
+    """Mouvement d'un media d'age `age` : (echelle, rotation en radians). Apparition : l'echelle va de 0 a 1 avec un depassement et le
+    media se redresse en balancant ; palier : echelle 1, droit ; disparition : il gonfle un instant puis rapetisse en pivotant. `direction`
+    (+1 / -1) choisit le sens de la rotation. Aucun mouvement hors de [0, life] (echelle 0). Pure."""
+    if age < 0.0 or age >= life:
+        return 0.0, 0.0
+    tilt = TILT_RAD * (1.0 if direction >= 0 else -1.0)
+    if age < intro:
+        e = _ease_out_back(age / intro)
+        return max(e, 0.0), tilt * (1.0 - e)                 # la rotation depasse aussi : le media se balance avant de se poser
+    left = life - age
+    if left < outro:
+        u = 1.0 - left / outro
+        e = _ease_in_back(u)
+        return max(1.0 - e, 0.0), -tilt * u * u
+    return 1.0, 0.0
+
+
 class Wall:
     """Medias visibles. `add` en ajoute un (au-dela de `max_visible` le plus ancien part) ; `step(now)` retire les expires et rend
     les identifiants retires (pour liberer leurs textures) ; `visible(now)` rend (id, rect, opacite). Le temps est injecte."""
@@ -192,6 +229,17 @@ class Wall:
             a = alpha(now - it["t0"], self.life, self.fade_in, self.fade_out)
             if a > 0.0:
                 out.append((it["id"], it["rect"], a))
+        return out
+
+    def posed(self, now: float) -> list[tuple]:
+        """Comme `visible`, avec le mouvement : (id, rect, opacite, echelle, rotation). Le sens de rotation alterne d'un media a l'autre."""
+        out = []
+        for it in self.items:
+            age = now - it["t0"]
+            a = alpha(age, self.life, self.fade_in, self.fade_out)
+            if a > 0.0:
+                scale, rot = pose(age, 1.0 if hash(it["id"]) % 2 == 0 else -1.0, self.life)
+                out.append((it["id"], it["rect"], a, scale, rot))
         return out
 
     def clear(self) -> list:

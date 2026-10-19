@@ -63,7 +63,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
         params["logo_x"], params["logo_y"] = parse_pair(args.logo_pos, "--logo-pos", ",")
     win_size = tuple(int(v) for v in parse_pair(args.size or "1280x720", "--size", "x"))
 
-    ring = RingBuffer()
+    ring = RingBuffer(1 << 21)             # ~43 s a 48 kHz : les modes Snap / Ridge (GL) lisent des photos de plusieurs secondes
     device = None if args.synthetic else find_input_device(args.audio_device, args.device)
     audio = AudioController(ring, params["sensitivity"], args.synthetic, device)
     print(f"Analyse audio: {audio.name} ({audio.rate} Hz)"

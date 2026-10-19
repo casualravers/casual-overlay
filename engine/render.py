@@ -248,6 +248,7 @@ class Renderer:
         self.video_tex = ctx.texture(video_size, 3, data=bytes(video_size[0] * video_size[1] * 3))
         self.video_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.video_tex.repeat_x = self.video_tex.repeat_y = False
+        self.mode_tex = None               # texture d'un mode Snap / Ridge dessine en GL (engine.native_modes) : remplace le flux video
 
         self.logo_tex = None
         self.logo_aspect = 1.0
@@ -415,7 +416,7 @@ class Renderer:
             return False
         for gone in self.wall.step(now):
             self._release_doodle(gone)
-        visible = self.wall.visible(now)
+        visible = self.wall.posed(now)
         if not visible:
             return False
         sp = self.scene_prog
@@ -427,13 +428,16 @@ class Renderer:
         self._set(sp, "u_logo_on", 1.0)
         self._set(sp, "u_logo_straight", 0.0)
         try:
-            for ident, rect, a in visible:
+            for ident, rect, a, scale, rot in visible:
                 x, y, w, h = (float(v) for v in rect)
                 self.doodle_tex[ident].use(1)
-                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2, h / 2))
+                # apparition / disparition animees : echelle autour du centre et rotation (voir core.doodles.pose)
+                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2 * scale, h / 2 * scale))
+                self._set(sp, "u_logo_cs", (math.cos(rot), math.sin(rot)))
                 self._set(sp, "u_logo_opacity", float(a) * presence)
                 self.scene_vao.render(moderngl.TRIANGLE_STRIP)
         finally:
+            self._set(sp, "u_logo_cs", (1.0, 0.0))                      # le logo, lui, reste droit
             self.ctx.disable(moderngl.BLEND)
         return True
 
@@ -559,7 +563,7 @@ class Renderer:
         self._set(sp, "u_bg_react", react)
         self._set(sp, "u_bg_hue", float(p["bg_hue"]))
         self._set(sp, "u_bg_angle", float(p["bg_angle"]))
-        self.video_tex.use(0)
+        (self.mode_tex or self.video_tex).use(0)
         self.logo_tex.use(1)
         # Passe 1a: couche fond. 1b: couche logo seule (videe si pas de logo: le post-traitement
         # ne la lit alors pas, mais elle reste coherente).
@@ -577,7 +581,7 @@ class Renderer:
         # Les doodles du site passent par la MEME passe que le logo (fonte, cellules, contour, opacite), posee sur sa couche : ils
         # subissent ensuite ses effets par couche, le halo holographique, la trainee et la composition.
         doodles_on = self._draw_doodles(self.layer_fbo, size, time.monotonic(), ov)
-        self.video_tex.use(0)
+        (self.mode_tex or self.video_tex).use(0)
         self.logo_tex.use(1)
         self._set(sp, "u_logo_rect", rect)
         self._set(sp, "u_logo_on", 1.0 if self.has_logo else 0.0)

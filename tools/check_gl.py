@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import time
@@ -851,6 +852,24 @@ def check_gui() -> None:
                     vjc["advance"]()
                     rnd.append(s.active_scene)
                 out["vj_rand"] = (all(a != b for a, b in zip(rnd, rnd[1:])), set(rnd) == set(names))
+                # VJ en rythme : N mesures de 4 kicks detectes au lieu de N secondes
+                fake = {"beats": 100}
+                real_latest = s.audio.analyzer.latest
+                s.audio.analyzer.latest = lambda: {**real_latest(), "beats": fake["beats"]}
+                try:
+                    sbook.set_vj(unit="bars", bars=2, order="seq")
+                    vjc["arm"]()
+                    bar = vst["bar"]
+                    fake["beats"] = 107
+                    early = bar.due(fake["beats"], gl.time.monotonic())
+                    fake["beats"] = 108
+                    out["vj_bars"] = (bar is not None and bar.total == 8, early, bar.due(fake["beats"], gl.time.monotonic()),
+                                      vjc["remaining_text"]())
+                    sbook.set_vj(unit="seconds")
+                    vjc["arm"]()
+                    out["vj_bars_off"] = vst["bar"] is None
+                finally:
+                    s.audio.analyzer.latest = real_latest
                 s.scene_requests.put("vj")                      # Espace: le VJ tournait, il se met en pause
                 sc["poll"]()
                 out["vj_key_space"] = vst["running"]
@@ -1060,6 +1079,9 @@ def check_gui() -> None:
     check(len(vs[0]) == 3 and all(a != b for a, b in zip(vs[0], vs[0][1:])) and set(vs[0]) <= set(vs[1]),
           "VJ (GUI): dans l'ordre, chaque scene suivante est differente", str(vs))
     check(out.get("vj_rand") == (True, True), "VJ (GUI): au hasard, jamais deux fois de suite, toutes jouees", str(out.get("vj_rand")))
+    vb = out.get("vj_bars", (False,) * 4)
+    check(vb[0] and vb[1] is False and vb[2] is True and vb[3].startswith("mesure ") and out.get("vj_bars_off") is True,
+          "VJ en rythme (GUI): 2 mesures = 8 kicks, la 8e declenche, libelle « mesure x/y », retour aux secondes", str((vb, out.get("vj_bars_off"))))
     check(out.get("vj_key_space") is False and out.get("vj_key_next") == (True, False) and running_after_space(out),
           "VJ: Espace (lecture / pause) et fleche droite (suivante) via la file de la fenetre de rendu", str((out.get("vj_key_space"), out.get("vj_key_next"))))
     check(out.get("vj_pause") == (True, False, True), "VJ (GUI): choisir une scene a la main met le VJ en pause",
@@ -4912,9 +4934,14 @@ def check_doodles() -> None:
     check(abs(rh - 0.30) < 1e-9 and abs(rw * 16 / 9 / rh - 2.0) < 1e-9, "position: hauteur 30 % de l'ecran, ratio de l'image garde")
     xs = {round(dd.place(rng, 1.0, 16 / 9)[0], 3) for _ in range(40)}
     check(len(xs) > 20, "position: tirage different a chaque apparition")
-    a = [dd.alpha(t) for t in (-1, 0, 0.75, 1.5, 7, 13, 14, 15, 16)]
+    a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, 14.3, 14.65, 15, 16)]
     check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
           and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
+    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, 14.55, 15.0))
+    check(abs(p0[0]) < 1e-9 and abs(p0[1]) > 0.2 and 1.05 < p1[0] < 1.15 and p2 == (1.0, 0.0) and p3 == (1.0, 0.0)
+          and p4[0] > 1.0 and p5 == (0.0, 0.0) and dd.pose(1.0, -1)[1] == dd.pose(1.0, 1)[1] == 0.0
+          and dd.pose(0.1, -1)[1] == -dd.pose(0.1, 1)[1] and dd.pose(-1.0) == (0.0, 0.0),
+          "animation: apparition (pop avec depassement, rotation), palier droit, disparition (gonfle puis rapetisse), sens alterne", str((p0, p1, p4)))
     wall = dd.Wall()
     dropped = []
     for i in range(7):
@@ -5120,6 +5147,21 @@ def check_doodles() -> None:
     check(top[0] > 240 and top[1] < 20 and bottom[1] > 240 and bottom[0] < 20, "rendu: image dans le bon sens (haut = rouge, bas = vert)", f"{top} {bottom}")
     outside = img[~changed]
     check((np.abs(outside.astype(int) - base[~changed].astype(int)).sum() == 0), "rendu: le reste de l'image est strictement intact")
+    # animation : a l'apparition le doodle est plus petit et incline, pres de la fin il rapetisse
+    def anim_box(age):
+        ra = gl.Renderer(ctx, size, None)
+        ra._doodle_rng = __import__("random").Random(7)
+        ra.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
+        ra.draw(fbo, size, st, params, 0.0)                       # une premiere image : le rendu connait le rapport de l'ecran
+        ra.add_doodle(top_red_bottom_green, time.monotonic() - age)
+        ra.draw(fbo, size, st, params, 0.0)
+        im = read_target(ctx, fbo, size).astype(int).sum(axis=2) > 3
+        yy, xx = np.nonzero(im)
+        return (xx.max() - xx.min() + 1, yy.max() - yy.min() + 1) if len(xx) else (0, 0), im
+    (w5, h5), _im5 = anim_box(5.0)
+    (wa, ha), _ima = anim_box(0.3)
+    (wb, hb), _imb = anim_box(14.9)
+    check(w5 > 0 and 0 < wa and wa * ha != w5 * h5 and 0 < wb * hb < w5 * h5, "doodle: apparition et disparition animees (taille et inclinaison changent)", f"{(w5, h5)} {(wa, ha)} {(wb, hb)}")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
     def doodle_render(pre=None, **kw):
         rr = gl.Renderer(ctx, size, None)
@@ -5542,6 +5584,19 @@ def check_safeguards() -> None:
     check(abs(gl.tap_bpm([0.0, 0.5, 5.0, 5.4, 5.8]) - 150.0) < 1e-6, "tap tempo: un trou de plus de 2 s recommence la serie")
     check(abs(gl.tap_bpm([0, 1, 1.5, 2, 2.5, 3, 3.5, 4]) - 120.0) < 1e-6,
           "tap tempo: seuls les derniers appuis comptent (le debut hesitant est oublie)")
+    # --- VJ en rythme : N mesures = 4 N kicks, avec garde-fou temporel
+    from core import controls as cc, scenes as sc_
+    bt = cc.BarTimer(2).arm(10, 100.0, 1.0)
+    check(bt.total == 8 and not bt.due(17, 101.0) and bt.due(18, 101.0) and bt.label(10) == "1/2" and bt.label(15) == "2/2",
+          "VJ en rythme: 2 mesures = 8 kicks, libelle de la mesure en cours")
+    check(not bt.due(10, 107.9) and bt.due(10, 108.0) and cc.BarTimer(1).arm(0, 0.0, 1.0).deadline == 8.0,
+          "VJ en rythme: sans kicks, le changement a lieu apres le double de la duree attendue (au moins 8 s)")
+    check(cc.BarTimer(8).arm(0, 0.0, 2.0).deadline == 16.0 and cc.BarTimer(8).arm(0, 0.0, 1.0).deadline == 32.0,
+          "VJ en rythme: le garde-fou suit le master du tempo (240 BPM = deux fois plus court)")
+    cv = sc_.SceneBook._clean_vj({"unit": "bars", "bars": 16, "seconds": 20})
+    check(cv["unit"] == "bars" and cv["bars"] == 16 and sc_.SceneBook._clean_vj({"unit": "x", "bars": 3})["unit"] == "seconds"
+          and sc_.SceneBook._clean_vj({"bars": 3})["bars"] == 8 and sc_.SceneBook._clean_vj(None)["unit"] == "seconds",
+          "VJ en rythme: reglages valides (unite, nombre de mesures), valeurs inconnues ramenees aux defauts")
     # --- auto-sauvegarde
     tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_autosave_"))
     snap = tmp / "autosave.json"
@@ -5590,6 +5645,225 @@ def check_safeguards() -> None:
     check(True, "journal: sans fichier branche, un evenement est ignore sans erreur")
 
 
+def check_native_modes() -> None:
+    """Snap (pencil, simple, rekordbox) et Ridge dessines en GL (engine/native_modes.py) : memes pixels que les rendus Python d'audio2wave
+    (pencil, ridge : a un niveau pres ; simple / rekordbox : comparaison a ffmpeg), revelation progressive, video, halo, source complete."""
+    print("modes Snap / Ridge dessines en GL")
+    import random
+    from types import SimpleNamespace as NS
+
+    from engine import native_modes as nm
+    sys.path.insert(0, str(gl.DEFAULT_A2W_DIR)) if str(gl.DEFAULT_A2W_DIR) not in sys.path else None
+    import audio2wave_ridge as ridge_mod
+    import audio2wave_snap as snap_mod
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size, rate = (640, 240), 48000
+
+    def synth(sec, seed=1):
+        rng = np.random.default_rng(seed)
+        t = np.arange(int(rate * sec)) / rate
+        env = 0.15 + 0.6 * np.abs(np.sin(2 * np.pi * 0.7 * t))
+        kick = np.exp(-((t * 2) % 1.0) * 8) * np.sin(2 * np.pi * 55 * t)
+        return (env * 0.5 * np.sin(2 * np.pi * 220 * t) + 0.5 * kick + 0.05 * rng.standard_normal(len(t))).astype(np.float32)
+
+    def pixels(tex):
+        return np.frombuffer(tex.read(), np.uint8).reshape(size[1], size[0], 3).astype(int)
+
+    def rgb8(color):
+        return bytes(round(c * 255) for c in color)
+
+    x = synth(2.0)
+    pcm = nm.to_pcm(x)
+    check(nm.available(), "modes GL: numpy et moderngl presents")
+
+    # --- Snap pencil : meme image que compose_pencil (CPU) ---
+    def pencil_gl(extra, vids=None, frac=1.0, second=None):
+        args = snap_mod.parse_args(["--style", "pencil", "--size", f"{size[0]}x{size[1]}", "--rate", str(rate)] + extra)
+        args.stereo = False
+        gain, _ = snap_mod.resolve_gain(args, pcm)
+        photo = nm.pencil_photo(snap_mod, args, pcm, rate, size, gain, bool(args.kick_glow and args.glow_live))
+        g = nm.ModeGL(ctx, size, snap_mod)
+        if vids:
+            g.videos = [NS(reader=NS(upload_to=lambda t: False), stop=lambda: None), NS(reader=NS(upload_to=lambda t: False), stop=lambda: None)]
+            for i, frame in enumerate(vids):
+                g.vid_tex[i].write(frame)
+        if second is not None:
+            g.install(second(args, gain))
+        g.install(photo)
+        img = pixels(g.draw(frac, None, args))
+        g.release()
+        cols = snap_mod.pencil_heights(args, pcm, gain, size)
+        return img, args, gain, photo, cols
+
+    for label, extra in (("trait seul", []), ("--wave", ["--wave", "6"]), ("halo des kicks", ["--kick-glow", "--kick-glow-size", "50"]),
+                         ("trait epais, couleurs", ["--line-width", "5", "--colors", "0x39c9ff", "--bg-color", "0x14161c"])):
+        img, args, gain, photo, cols = pencil_gl(extra)
+        bg, ink = rgb8(photo["bg"]), rgb8(photo["ink"])
+        kicks = snap_mod.detect_kicks(pcm, 1, rate, size[0]) if args.kick_glow else None
+        ref = np.frombuffer(snap_mod.compose_pencil(size, cols, bg, ink, max(1, args.line_width), kicks=kicks,
+                                                    kick_glow_radius=args.kick_glow_size), np.uint8).reshape(size[1], size[0], 3).astype(int)
+        diff = np.abs(img - ref).max()
+        check(diff <= 1, f"Snap pencil GL ({label}): memes pixels que le rendu Python d'audio2wave", f"ecart max {diff}")
+    # video interieure / exterieure
+    grad = np.zeros((size[1], size[0], 3), np.uint8)
+    grad[..., 0] = np.linspace(0, 255, size[0], dtype=np.uint8)[None, :]
+    grad[..., 1] = np.linspace(0, 255, size[1], dtype=np.uint8)[:, None]
+    other = 255 - grad
+    img, args, gain, photo, cols = pencil_gl([], vids=[grad.tobytes(), other.tobytes()])
+    ref = np.frombuffer(snap_mod.compose_pencil(size, cols, rgb8(photo["bg"]), rgb8(photo["ink"]), 2, grad.tobytes(), other.tobytes()),
+                        np.uint8).reshape(size[1], size[0], 3).astype(int)
+    check(np.abs(img - ref).max() <= 1, "Snap pencil GL: video interieure (dans l'enveloppe) et exterieure (autour), comme audio2wave",
+          f"ecart max {np.abs(img - ref).max()}")
+    # revelation progressive : a moitie, la moitie gauche est la nouvelle photo, la droite la precedente
+    def older(args, gain):
+        return nm.pencil_photo(snap_mod, args, nm.to_pcm(synth(2.0, seed=9)), rate, size, gain, False)
+    half, _a, _g, _p, _c = pencil_gl(["--line-width", "3"], frac=0.5, second=older)
+    full, *_ = pencil_gl(["--line-width", "3"], frac=1.0)
+    old_only, *_ = pencil_gl(["--line-width", "3"], frac=0.0, second=older)
+    w2 = size[0] // 2
+    check(np.array_equal(half[:, :w2], full[:, :w2]) and np.array_equal(half[:, w2:], old_only[:, w2:]) and not np.array_equal(full, old_only),
+          "Snap GL: revelation progressive : colonnes revelees = photo courante, les autres = photo precedente")
+
+    # --- Ridge : memes pixels que shift_canvas + paint_ridge_line (6 lignes de suite) ---
+    rargs = ridge_mod.parse_args(["--size", f"{size[0]}x{size[1]}", "--rate", str(rate)])
+    bg, ink = nm.parse_color(ridge_mod, rargs.bg_color or "black"), nm.parse_color(ridge_mod, rargs.colors or "white")
+    canvas = bytearray(rgb8(bg) * (size[0] * size[1]))
+    tracker, rng = ridge_mod.RidgeGain(rargs.gain_window), random.Random(5)
+    gl_r = nm.ModeGL(ctx, size, ridge_mod)
+    worst = 0
+    for i in range(6):
+        p_i = nm.to_pcm(synth(2.0, seed=10 + i))
+        g, _ = tracker.resolve(rargs, p_i)
+        heights = ridge_mod.render_ridge_line(rargs, p_i, g, size, rng)
+        ridge_mod.shift_canvas(canvas, size, rargs.ridge_spacing, rgb8(bg))
+        canvas[:] = ridge_mod.paint_ridge_line(canvas, size, heights, rgb8(bg), rgb8(ink), max(1, rargs.line_width))
+        gl_r.install({"style": "ridge", "data": np.asarray(heights, np.float32).reshape(1, -1), "thick": max(1, rargs.line_width),
+                      "spacing": rargs.ridge_spacing, "ink": ink, "bg": bg})
+        gl_r.draw(0.4, None, rargs)
+        img = pixels(gl_r.draw(1.0, None, rargs))
+        worst = max(worst, np.abs(img - np.frombuffer(bytes(canvas), np.uint8).reshape(size[1], size[0], 3)).max())
+    check(worst == 0, "Ridge GL: 6 lignes de suite (decalage, occultation, trait) strictement identiques au canevas Python", f"ecart max {worst}")
+    gl_r.release()
+
+    # --- Snap simple / rekordbox : comparaison a ffmpeg (showwavespic + overlay), ecarts d'un pixel sur les bords ---
+    for style, extra in (("simple", []), ("simple", ["--scale", "log", "--filter-mode", "peak"]), ("rekordbox", []),
+                         ("rekordbox", ["--scale", "lin", "--crossover", "120,3000"])):
+        args = snap_mod.parse_args(["--style", style, "--size", f"{size[0]}x{size[1]}", "--rate", str(rate)] + extra)
+        args.stereo = False
+        gain, _ = snap_mod.resolve_gain(args, pcm)
+        out = snap_mod.render_photo(args, pcm, gain, size, None)
+        g = nm.ModeGL(ctx, size, snap_mod)
+        g.install(nm.bars_photo(snap_mod, args, x, rate, size, gain))
+        img = pixels(g.draw(1.0, None, args))
+        g.release()
+        if out is None:
+            check(False, f"Snap {style} GL: ffmpeg a rendu la reference")
+            continue
+        ref = np.frombuffer(out, np.uint8).reshape(size[1], size[0], 3).astype(int)
+        share = float((np.abs(img - ref).max(axis=2) > 40).mean())
+        check(share < 0.045, f"Snap {style} GL ({' '.join(extra) or 'defauts'}): meme image que showwavespic d'ffmpeg (bords a un pixel pres)",
+              f"{share * 100:.2f} % de pixels differents")
+
+    # --- la source complete : analyse dans un fil, photo envoyee au fil GL, memes attributs que PyModeSource ---
+    ring = gl.RingBuffer(1 << 20)
+    audio = NS(ring=ring, rate=rate, synthetic=True)
+    ring.write(synth(3.0))
+    for name, mod in (("snap", snap_mod), ("ridge", ridge_mod)):
+        sargs = mod.parse_args(["--gui"])
+        sargs.size = f"{size[0]}x{size[1]}"
+        sargs.interval = 0.25
+        src = nm.NativeModeSource(name, mod, sargs, size, audio)
+        src.start()
+        tex = None
+        t_end = time.monotonic() + 6.0
+        while time.monotonic() < t_end and tex is None:
+            tex = src.render(ctx, time.monotonic())
+            time.sleep(0.05)
+        img = pixels(tex) if tex is not None else None
+        for _ in range(8):
+            time.sleep(0.12)
+            tex = src.render(ctx, time.monotonic())
+        check(img is not None and np.ptp(pixels(tex)) > 0 and src.photos >= 2 and str(src.status.get("text", "")).startswith("["),
+              f"source GL {name}: photos calculees dans un fil a partir du tampon audio, texture du fond rendue, statut", f"{src.photos} photos")
+        check(src.capture_state["capture"].latest() is not None and src.capture_state["capture"].recent_level(960) is not None
+              and nm.NullReader().upload_to(None) is False and src.native is True,
+              f"source GL {name}: `capture_state` (bouton Mesurer) et lecteur nul comme PyModeSource")
+        src.stop()
+        src.thread.join(3.0)
+        check(src.finished_event.is_set(), f"source GL {name}: arret propre du fil")
+        src.release_gl()
+    # halo temps reel : pilote par le niveau du tampon, sans photo de kicks
+    sargs = snap_mod.parse_args(["--gui", "--kick-glow", "--glow-live"])
+    sargs.interval = 0.25
+    src = nm.NativeModeSource("snap", snap_mod, sargs, size, audio)
+    src.start()
+    time.sleep(0.8)
+    live = [src._live_glow() for _ in range(3)]
+    for _ in range(4):
+        tex = src.render(ctx, time.monotonic())
+        time.sleep(0.05)
+    check(all(v is not None and 0.0 <= v <= 1.0 for v in live) and tex is not None, "Snap GL: halo temps reel (--glow-live) lu sur le tampon audio", str(live))
+    src.stop()
+    src.thread.join(3.0)
+    src.release_gl()
+    class FakeAudio:                                   # l'entree choisie dans le panneau du mode : l'analyse suit sur l'entree sounddevice du meme nom
+        synthetic = False
+
+        @staticmethod
+        def input_choices():
+            return [(3, "[MME] Microphone (Realtek(R) Audio)"), (5, "[WASAPI] Cable Output")]
+
+        def switch(self, index):
+            self.calls.append(index)
+            return f"entree {index}"
+    fa = FakeAudio()
+    fa.rate, fa.ring, fa.calls = rate, ring, []
+    follow = nm.NativeModeSource("snap", snap_mod, snap_mod.parse_args(["--gui"]), size, fa)
+    follow._follow_device("Microphone (Realtek(R) Audio)")
+    follow._follow_device("Inconnue")
+    check(fa.calls == [3] and "introuvable" in follow.status["text"], "mode GL: changer l'entree dans le panneau du mode fait suivre l'analyse (meme nom), nom inconnu signale",
+          f"{fa.calls} {follow.status.get('text')}")
+    ring_small = gl.RingBuffer(1 << 14)
+    short = nm.NativeModeSource("snap", snap_mod, snap_mod.parse_args(["--gui"]), size, NS(ring=ring_small, rate=rate, synthetic=True))
+    check(short.capture_state["capture"].latest() is None, "source GL: fenetre pas encore pleine -> pas de photo (None), comme LiveCapture")
+    # le rendu GL accepte la texture du mode a la place du flux video
+    r = gl.Renderer(ctx, size, None)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    st = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    prm = dict(gl.DEFAULT_PARAMS, master=0.0, logo_glow=0.0, logo_pulse=0.0, logo_jitter=0.0, holo_on=0.0)
+    r.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))
+    r.draw(fbo, size, st, prm, 0.0)
+    plain = np.frombuffer(fbo.read(components=3), np.uint8).reshape(size[1], size[0], 3).astype(int)
+    g = nm.ModeGL(ctx, size, snap_mod)
+    sargs = snap_mod.parse_args(["--style", "pencil", "--size", f"{size[0]}x{size[1]}"])
+    g.install(nm.pencil_photo(snap_mod, sargs, pcm, rate, size, 0.0, False))
+    r.mode_tex = g.draw(1.0, None, sargs)
+    r.draw(fbo, size, st, prm, 0.0)
+    shown = np.frombuffer(fbo.read(components=3), np.uint8).reshape(size[1], size[0], 3).astype(int)
+    check(plain[..., 2].min() == 255 and ((shown[..., 0] == 0) & (shown[..., 2] == 255)).mean() < 0.05 and shown.max() > 200,
+          "rendu: `mode_tex` remplace le flux video (le fond bleu du flux disparait, le trait du mode apparait)")
+    g.release()
+    # bascule de mode (gl_gui.activate_mode) vers un mode GL, sans ffmpeg (--synthetic) puis retour au flux d'origine
+    import gl_gui
+    live_mod = gl.load_live(gl.DEFAULT_A2W_DIR)
+    base_reader = object()
+    sess = NS(mode="live", pysrc=None, manager=None, reader=base_reader, live_args=NS(device=None), mode_args={}, render_size=size, audio=audio)
+    audio.synthetic = True
+    msg = gl_gui.activate_mode(sess, live_mod, "snap")
+    check(msg is None and sess.mode == "snap" and getattr(sess.pysrc, "native", False) and sess.reader is sess.pysrc.reader,
+          "bascule vers Snap en --synthetic : mode GL actif (sans ffmpeg), flux nul", str(msg))
+    msg = gl_gui.activate_mode(sess, live_mod, "ridge")
+    check(msg is None and sess.mode == "ridge" and sess.pysrc.name == "ridge", "bascule Snap -> Ridge : l'ancien mode est arrete, le nouveau demarre", str(msg))
+    first = sess.pysrc
+    msg = gl_gui.activate_mode(sess, live_mod, "live")
+    check(msg is None and sess.mode == "live" and sess.pysrc is None and sess.reader is base_reader and first.stop_event.is_set(),
+          "retour au mode Live en --synthetic : flux d'origine rendu, mode GL arrete", str(msg))
+
+
 def main() -> None:
     check_reader()
     check_features()
@@ -5628,7 +5902,10 @@ def main() -> None:
     check_automation()
     check_params()
     check_manager()
+    check_native_modes()
+    os.environ["CASUAL_MODES_PYTHON"] = "1"          # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
     check_gui()
+    os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
     print()
     if failures:

@@ -254,7 +254,6 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 - **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre, au hasard ou Full Randomizer, flash a
   chaque changement, Espace et fleche droite, panneau « Etendre » avec duree propre et exclusion par scene, ordre libre,
   medias lies aux scenes par glisser-deposer). Reste a faire :
-  - **Changer en rythme** (toutes les N mesures, en comptant les kicks detectes) plutot qu'a la seconde.
   - **Full Randomizer** : duree tiree dans une plage, poids / favoris et exclusions de la banque, tirage du mode audio2wave
     (Live / Snap / Ridge), position et taille du logo, tag par fichier (au lieu de tout classer par dossier).
   - **Une vraie transition** (fondu des reglages numeriques ; un changement de mode Live -> Snap coupe la source, donc
@@ -270,10 +269,9 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   « ombre » (soustractif) pour assombrir aussi le fond.
 - **Synchro du logo anime sur le kick** : vitesse de lecture ou saut d'image au rythme de la musique
   (le fichier est lu a sa cadence propre).
-- **Rendu GL natif de Snap et Ridge** : aujourd'hui ils sont dessines en Python pur par audio2wave (CPU, une
-  image au rythme de leur trace progressif) ; les porter en shaders les rendrait aussi fluides que le motif
-  genere et utilisables a 60 images/s. Pistes liees : brancher leurs automations de courbes sur le moteur GL et
-  charger leur Mode VJ (enchainement de presets) en meme temps qu'un preset overlay.
+- **Modes Snap et Ridge en GL** : faits (60 images/s, tous les styles de Snap, Ridge). Reste : `--stereo` / `--split-channels` (le son
+  vient du tampon mono de l'analyse), brancher leurs automations de courbes sur le moteur GL et charger leur Mode VJ (enchainement de
+  presets) en meme temps qu'un preset overlay.
 - **Doodle dessine a la main depuis un site web** : une page de dessin (PNG transparent) depose le trait sur
   un serveur ; casual-overlay l'interroge toutes les quelques secondes et l'incruste comme logo (nouvelle
   source « Doodle (web) »). A trancher : hebergement, validation manuelle avant affichage (moderation), un doodle

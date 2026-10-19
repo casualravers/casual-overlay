@@ -140,3 +140,38 @@ def tap_bpm(taps: list[float], max_gap: float = 2.0, keep: int = 6) -> float | N
         return None
     mean = (series[-1] - series[0]) / (len(series) - 1)
     return 60.0 / mean if mean > 0 else None
+
+
+BEATS_PER_BAR = 4                      # une mesure = 4 kicks detectes (4/4 ; ce n'est pas un BPM detecte, on compte les kicks)
+BAR_CHOICES = (1, 2, 4, 8, 16, 32)     # durees proposees au VJ « en rythme »
+
+
+class BarTimer:
+    """Minuteur du VJ en rythme : « dans N mesures », en comptant les kicks detectes (`beats`, compteur croissant de l'analyse).
+
+    Garde-fou : si les kicks ne viennent pas (silence, kick manque), le changement a lieu quand meme apres le DOUBLE de la duree attendue
+    au tempo du moment (120 BPM x master du tempo), au moins 8 s : le VJ ne reste jamais fige. Pure : kicks et horloge sont passes en arguments."""
+
+    def __init__(self, bars: int = 8, beats_per_bar: int = BEATS_PER_BAR) -> None:
+        self.per_bar = max(int(beats_per_bar), 1)
+        self.total = max(int(bars), 1) * self.per_bar
+        self.start = 0
+        self.deadline = 0.0
+
+    def arm(self, beats: int, now: float, tempo: float = 1.0) -> "BarTimer":
+        """Demarre le compte a l'instant `now` ; `tempo` = master du tempo (1 = 120 BPM)."""
+        bpm = min(max(120.0 * float(tempo), 30.0), 300.0)
+        self.start = int(beats)
+        self.deadline = now + max(2.0 * self.total * 60.0 / bpm, 8.0)
+        return self
+
+    def done(self, beats: int) -> int:
+        return min(max(int(beats) - self.start, 0), self.total)
+
+    def due(self, beats: int, now: float) -> bool:
+        return int(beats) - self.start >= self.total or now >= self.deadline
+
+    def label(self, beats: int) -> str:
+        """« 3/8 » : la mesure en cours sur le total."""
+        bars = max(self.total // self.per_bar, 1)
+        return f"{min(self.done(beats) // self.per_bar + 1, bars)}/{bars}"
