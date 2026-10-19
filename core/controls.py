@@ -77,7 +77,8 @@ class StrobeLimiter:
     def blocked(self, now: float) -> bool:
         return now < self.blocked_until
 
-    def allow(self, now: float, max_hz: float, max_s: float) -> bool:
+    def allow(self, now: float, max_hz: float, max_s: float, timed: bool = True) -> bool:
+        """`timed` faux (eclairs de la montee) : seule la cadence maximale s'applique, la rafale n'est jamais coupee par sa duree."""
         max_hz = _unit(max_hz, 1.0, 30.0)
         max_s = _unit(max_s, 1.0, 120.0)
         if now < self.blocked_until:
@@ -86,7 +87,9 @@ class StrobeLimiter:
             self.burst_start = None                       # une pause d'une seconde remet la rafale a zero
         if now - self.last < 1.0 / max_hz - 1e-9:
             return False
-        if self.burst_start is None:
+        if not timed:
+            pass
+        elif self.burst_start is None:
             self.burst_start = now
         elif now - self.burst_start > max_s:
             self.blocked_until = now + STROBE_COOLDOWN_S

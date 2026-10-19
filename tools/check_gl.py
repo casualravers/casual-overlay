@@ -5912,6 +5912,17 @@ def check_safeguards() -> None:
     check(gl.panic(dirty) == [], "panique: deuxieme appui sans effet (idempotente)")
     check(not any(k in gl.PANIC_RESET for k in ("logo_x", "logo_path", "bg_video", "logo_opacity", "auto_master")),
           "panique: ne touche ni au logo, ni au fond choisi, ni aux automations")
+    # --- la montee n'est pas coupee par la duree maximale d'une rafale (seule la cadence maximale s'applique)
+    lim_b = gl.StrobeLimiter()
+    fired_b = sum(1 for k_ in range(0, 6000) if lim_b.allow(k_ * 0.1, 10.0, 8.0, timed=False))        # 10 minutes a 10 Hz
+    check(fired_b == 6000 and lim_b.trips == 0 and not lim_b.blocked(600.0),
+          "limiteur de strobe: les eclairs de la montee ne sont jamais coupes par la duree max (60 s ou 10 min), seule la cadence est plafonnee", str((fired_b, lim_b.trips)))
+    lim_c = gl.StrobeLimiter()
+    fired_c = [lim_c.allow(k_ * 0.05, 10.0, 8.0, timed=False) for k_ in range(0, 200)]                  # demande a 20 Hz, plafond 10 Hz
+    check(0.45 < sum(fired_c) / len(fired_c) < 0.55, "limiteur de strobe: la montee reste plafonnee par la cadence maximale", str(sum(fired_c)))
+    lim_d = gl.StrobeLimiter()
+    cut = [lim_d.allow(k_ * 0.1, 10.0, 8.0) for k_ in range(0, 120)]
+    check(lim_d.trips == 1 and not all(cut), "limiteur de strobe: un strobe manuel / kick / cadence est toujours coupe apres la duree max")
     # --- tap tempo
     check(abs(gl.tap_bpm([0.0, 0.5, 1.0, 1.5]) - 120.0) < 1e-6 and gl.tap_bpm([0.0]) is None and gl.tap_bpm([]) is None,
           "tap tempo: 120 BPM a 0,5 s d'intervalle ; un seul appui = pas de BPM")

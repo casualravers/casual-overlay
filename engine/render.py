@@ -376,9 +376,11 @@ class Renderer:
             else:
                 fire = fire or now - self._strobe_last >= 1.0 / min(max(float(p["strobe_rate"]), 1.0), 20.0)
         build = _unit(p.get("build", 0.0))
-        if build > 0.05:                                              # montee : eclairs automatiques de 2 a 16 Hz
-            fire = fire or now - self._strobe_last >= 1.0 / (2.0 + 14.0 * build)
-        if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"])):
+        timed = True
+        if build > 0.05 and not fire:                                 # montee : eclairs automatiques de 2 a 16 Hz
+            fire = now - self._strobe_last >= 1.0 / (2.0 + 14.0 * build)
+            timed = not fire                                          # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
+        if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"]), timed):
             self._strobe_last = now
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
