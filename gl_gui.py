@@ -19,7 +19,7 @@ avec ses presets, ses automations de courbes, ses info-bulles et son theme. Ce m
         PRESETS OVERLAY + FOND (motif genere) + EFFETS + HALO HOLOGRAPHIQUE
         LOGO               + ANALYSE AUDIO + AFFICHAGE + mesures.
 
-Rien n'est modifie dans le depot audio2wave : tout passe par son API hote (`common.API_VERSION` >= 2,
+Tout passe par l'API hote de la copie interne d'audio2wave (`common.API_VERSION` >= 2,
 voir `require_audio2wave_api`).
 
 tkinter garde le fil principal ; la fenetre GL (`Projection`, ouverte par le bouton) tourne dans un fil
@@ -133,9 +133,9 @@ def require_audio2wave_api(live=None, common=None) -> None:
     """Arrete le programme avec un message clair si le depot audio2wave est trop ancien (au lieu d'un AttributeError obscur)."""
     missing = audio2wave_api_missing(live, common)
     if missing:
-        where = Path(getattr(live, "__file__", ".")).resolve().parent if live is not None else "depot voisin"
+        where = Path(getattr(live, "__file__", ".")).resolve().parent if live is not None else "sources/audio2wave"
         raise SystemExit("Le depot audio2wave est trop ancien pour cette version de casual-overlay : il manque "
-                         + " et ".join(missing) + f".\nMets a jour le depot audio2wave ({where}) : git pull, {AUDIO2WAVE_REQUIRED}.")
+                         + " et ".join(missing) + f".\nMets a jour audio2wave ({where}) : {AUDIO2WAVE_REQUIRED}.")
 
 
 def apply_a2w_palette() -> None:
@@ -362,7 +362,7 @@ def make_thumb(media: dict):
 
 def choice_dialog(parent, title: str, text: str, buttons: list[str]) -> str | None:
     """Petite fenetre modale : un texte et des boutons ; renvoie le libelle du bouton choisi (None si on ferme)."""
-    import audio2wave as a2w                 # (palette d'audio2wave : pas un import de module, le depot voisin est deja sur sys.path)
+    import audio2wave as a2w                 # (palette d'audio2wave : pas un import de module, le dossier d'audio2wave est deja sur sys.path)
     top = tk.Toplevel(parent)
     top.title(title)
     top.configure(bg=a2w.GUI_BG)

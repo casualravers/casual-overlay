@@ -3,7 +3,7 @@
 audio2wave_snap.py et audio2wave_ridge.py dessinent leurs images eux-memes (en Python). Avec l'API hote d'audio2wave on les lance
 SANS fenetre ni ffplay : `parse_args(argv)` construit leurs options, `start_headless(args, size=..., frame_sink=f, status=...)`
 ouvre la capture et leur fil de rendu, et `f(frame, size)` range chaque image dans un `PushStream` : le `FrameReader` du rendu GL la lit
-comme n'importe quel flux video. Aucun fichier d'audio2wave n'est modifie, plus aucun remplacement de leur module `subprocess` ni
+comme n'importe quel flux video. Aucun fichier d'audio2wave n'a besoin d'etre modifie pour cela ; plus aucun remplacement de leur module `subprocess` ni
 d'echange de `sys.argv`.
 """
 

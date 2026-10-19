@@ -1,8 +1,8 @@
 """Reglages incompatibles : on les grise (ils ne servent a rien dans le mode ou l'etat courant).
 
 Deux usages :
-  - `install_mode_gates(host, mode)` : fenetre d'un mode d'audio2wave (Live, Snap, Ridge). Aucune modification
-    d'audio2wave : on retrouve les widgets par leur texte, et on suit les variables Tk du mode (style, forme,
+  - `install_mode_gates(host, mode)` : fenetre d'un mode d'audio2wave (Live, Snap, Ridge). Sans option dediee dans le source
+    interne d'audio2wave : on retrouve les widgets par leur texte, et on suit les variables Tk du mode (style, forme,
     cases) par une trace Tcl.
   - `Gates` : le meme moteur pour nos propres panneaux (halo, fonte, cellules, palette du fond).
 

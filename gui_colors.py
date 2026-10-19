@@ -1,7 +1,7 @@
 """Aides a la saisie des couleurs dans les panneaux d'audio2wave (Live, Snap, Ridge).
 
 Leurs champs "Couleurs" / "Couleur de fond" / "Couleur du trait" sont du texte libre (nom ffmpeg, 0xRRGGBB, plusieurs
-couleurs separees par |). On garde le champ tel quel (aucune modification d'audio2wave) et on lui ajoute, dans la
+couleurs separees par |). On garde le champ tel quel (sans option dediee dans le source interne d'audio2wave) et on lui ajoute, dans la
 meme cellule de la grille :
   - une pastille par couleur du champ (fond = la couleur ; un clic ouvre le selecteur de couleur et remplace CETTE
     couleur) ;
