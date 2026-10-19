@@ -5117,6 +5117,20 @@ def check_doodles() -> None:
     check(top[0] > 240 and top[1] < 20 and bottom[1] > 240 and bottom[0] < 20, "rendu: image dans le bon sens (haut = rouge, bas = vert)", f"{top} {bottom}")
     outside = img[~changed]
     check((np.abs(outside.astype(int) - base[~changed].astype(int)).sum() == 0), "rendu: le reste de l'image est strictement intact")
+    # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
+    def doodle_render(**kw):
+        rr = gl.Renderer(ctx, size, None)
+        rr._doodle_rng = __import__("random").Random(7)                      # meme emplacement d'un rendu a l'autre
+        rr.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))
+        rr.add_doodle(top_red_bottom_green, time.monotonic() - 5.0)
+        rr.draw(fbo, size, dict(st, bass=1.0, beat=1.0, since_beat=0.0), dict(params, master=1.0, fx_link=0.0, **kw), 0.7)
+        return read_target(ctx, fbo, size).astype(int), rr.wall.items[-1]["rect"]
+    off, rc = doodle_render(fx_on=[0.0] * 5, fxl_on=[0.0] * 4)
+    on_logo, _ = doodle_render(fx_on=[0.0] * 5, fxl_on=[1.0] * 4, fxl_int=[1.0] * 4)
+    on_bg, _ = doodle_render(fx_on=[1.0, 1.0, 1.0, 0.0, 0.0], fx_int=[1.0] * 5, fxl_on=[0.0] * 4)
+    mask = np.abs(off - np.array([0, 0, 255])).sum(axis=2) > 60                # emplacement du doodle
+    check(np.abs(on_logo - off).sum() > 2000, "doodle: les effets de la couche du logo le deforment", str(np.abs(on_logo - off).sum()))
+    check(np.abs(on_bg - off)[mask].sum() == 0, "doodle: les effets propres au fond (logo delie) ne le touchent pas")
     # alpha premultiplie : 50 % d'opacite sur du bleu ne doit pas noircir les bords (pas de halo sombre)
     r2 = gl.Renderer(ctx, size, None)
     r2.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))

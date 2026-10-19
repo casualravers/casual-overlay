@@ -409,15 +409,16 @@ class Renderer:
         if tex is not None:
             tex.release()
 
-    def _draw_doodles(self, target, size: tuple[int, int], now: float) -> None:
+    def _draw_doodles(self, target, size: tuple[int, int], now: float) -> bool:
+        """Pose les doodles visibles sur `target` ; rend True si au moins un est dessine."""
         self.screen_size = size
         if not self.wall.items:                     # liste vide : aucun cout
-            return
+            return False
         for gone in self.wall.step(now):
             self._release_doodle(gone)
         visible = self.wall.visible(now)
         if not visible:
-            return
+            return False
         target.viewport = (0, 0, size[0], size[1])
         target.use()
         self.ctx.enable(moderngl.BLEND)
@@ -431,6 +432,8 @@ class Renderer:
                 self.doodle_vao.render(moderngl.TRIANGLE_STRIP)
         finally:
             self.ctx.disable(moderngl.BLEND)
+        return True
+
     @staticmethod
     def _set(prog, name: str, value) -> None:
         if name in prog:   # un uniform inutilise est elimine par le compilateur
@@ -587,6 +590,9 @@ class Renderer:
         if not holo_on:
             # Sans mipmaps construites, le filtre a mipmaps rendrait la texture incomplete (noire).
             self.layer_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        # Les doodles du site sont poses sur la couche du logo (apres le champ du halo : ils n'en changent pas la forme) : ils subissent
+        # donc les memes effets que lui (ondulation, onde de choc, aberration, glitch, trainee, composition...), liee ou non au fond.
+        doodles_on = self._draw_doodles(self.layer_fbo, size, time.monotonic())
 
         # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.
         fx_bg, fx_logo = layer_effects(p)
@@ -598,6 +604,7 @@ class Renderer:
         self._set(pp, "u_scene", 0)
         self._set(pp, "u_logo", 1)
         self._set(pp, "u_logo_on", 1.0 if self.has_logo else 0.0)
+        self._set(pp, "u_layer_on", 1.0 if (self.has_logo or doodles_on) else 0.0)
         self._set(pp, "u_fx_bg", tuple(fx_bg))
         self._set(pp, "u_fx_logo", tuple(fx_logo))
         self._set(pp, "u_center_logo", (float(center[0]), float(center[1])))
@@ -660,7 +667,6 @@ class Renderer:
         if dest is not target:
             self.ctx.copy_framebuffer(target, dest)
             self._fb_i = 1 - self._fb_i
-        self._draw_doodles(target, size, time.monotonic())
 
 
 def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> tuple[float, float, float]:

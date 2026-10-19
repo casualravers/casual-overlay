@@ -44,6 +44,7 @@ uniform vec4  u_fx_logo;
 uniform vec2  u_center_logo;  // centre de l'onde de choc / de l'aberration sur la couche logo (origine bas gauche)
 uniform float u_salt_logo;    // decale le hasard du glitch du logo (0 = memes bandes que le fond)
 uniform float u_logo_on;
+uniform float u_layer_on;   // 1 si la couche logo contient quelque chose (logo ou doodles)
 
 // Halo holographique: lumiere irisee a grande portee qui deforme le FOND autour du logo (le logo reste
 // intact) et y traine de la poussiere d'etoiles. u_holo = 0 => coupe.
@@ -238,7 +239,7 @@ void main() {
     }
     // Fond et logo deformes chacun avec leurs reglages, puis logo pose par-dessus (alpha premultiplie).
     vec3 col = layer_fx(u_scene, u_fx_bg, vec2(0.5), 0.0, disp).rgb * u_bg_level + light;
-    if (u_logo_on > 0.5) {
+    if (u_layer_on > 0.5) {
         vec4 lg = layer_fx(u_logo, u_fx_logo, u_center_logo, u_salt_logo, vec2(0.0));
         col = lg.rgb + col * (1.0 - lg.a);
     }
