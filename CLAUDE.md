@@ -42,6 +42,8 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   automation     courbes, AutomationEngine, liaison fond / logo (get_param, set_param, set_fx_link)
   controls       tempo effectif, SilenceGuard, strobe (appui), StrobeLimiter, panique, tap tempo, BarTimer
   rhythm         BPM estime a partir des kicks, montee et drop detectes a partir des basses (`Rhythm`, `BpmEstimator`, `DropDetector`)
+  setpack        archive .zip d'un set avec ses medias (ecriture, lecture, extraction sure)
+  safety         securite GPU du VJ : alleger la scene suivante selon ses effets couteux et la charge mesuree
   autosave       instantane toutes les minutes, reprise apres un arret brutal
   sessionlog     journal de session
   scenes         scenes, sets, memoires de masters (stockage, export / import)
@@ -54,6 +56,7 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   window         fenetre glfw, choix du moniteur, plein ecran
   render         Renderer (passes GL), noise, texte / logo, PerfGuard
   session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
+  preview        apercu d'une scene : capture reduite (JPEG) de la fenetre de rendu
   native_modes   Snap (pencil, simple, rekordbox) et Ridge dessines en GL : analyse d'audio2wave + shaders `mode_*.frag`, `NativeModeSource`, `ModeGL`
   doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
@@ -568,6 +571,23 @@ visuel d'audio2wave, il ne le complete pas) :
     version plus recente (`EXPORT_VERSION`). Conflits : nom de set deja pris, nom de scene deja pris **avec un autre contenu**
     (une scene identique est reutilisee) ; `rename` (`nom (2)`, `unique_name`) ou `replace` ; l'ecriture est faite en une fois.
     La GUI (`import_set_now`, `resolve_conflict`) pose la question puis **demande confirmation avant de remplacer**.
+  - **Archive avec medias** (`core/setpack.py`, stdlib) : un export dont le nom finit par `.zip` (defaut du dialogue) est une archive `set.json` (meme contenu que l'export JSON, mais chaque chemin de media est une
+    reference `pack:media/<empreinte>_<nom>`) + `media/` (une copie par contenu distinct : le meme fichier sous deux noms n'est embarque qu'une fois). Emplacements : logo / video / police des scenes et des entrees,
+    video de fond, videos audio2wave (`_walk_media`). Un media introuvable n'est pas embarque (liste `missing`, signale dans le message). A l'import (`read_pack`, detecte par `zipfile.is_zipfile`) les medias sont extraits
+    dans `scenes.IMPORT_DIR/media` (`~/.audio2wave/imported/media`, fichier deja present de meme taille = reutilise) et les references redeviennent des chemins absolus : reimporter la meme archive donne exactement les memes chemins,
+    donc les scenes identiques sont reconnues (pas de faux conflit). Noms d'archive suspects (`..`, absolu, hors `media/`) refuses sans ecrire ailleurs. L'export `.json` seul reste possible (sans medias).
+    Limite : la copie est synchrone (un set de plusieurs Go fige la fenetre le temps de l'ecriture) ; les dossiers des banques du Full Randomizer ne sont pas embarques.
+  - **Annuler / Retablir** (`SceneBook.undo` / `redo` / `group`, Ctrl+Z / Ctrl+Y hors champ de saisie, menu SET, boutons du panneau etendu) : `_save` garde en memoire le contenu du fichier AVANT chaque ecriture (40 pas, partage
+    entre les fenetres reconstruites : `SceneBook._HISTORY` par chemin de fichier). Etiquette = nom de la methode qui ecrit (`LABELS`) ou celle du groupe ; `with book.group("...")` regroupe plusieurs ecritures en UN pas (+5,
+    Dupliquer la derniere, Garder). Changer de set et poser un apercu (`track=False`) ne sont pas des pas. Annuler ne change pas le set affiche (sauf s'il n'existait pas encore). Une nouvelle modification efface les pas a retablir.
+    Ce que l'on peut annuler : tout ce qui passe par `SceneBook` (scenes, sets, entrees, medias, reglages du VJ, import, +5, retirer, deplacer, lignes cochees). Pas les reglages de salle ni les presets.
+  - **Apercu des scenes** (`engine/preview.py`, `scene["preview"]` = nom d'un JPEG de 240 px dans `scenes.PREVIEW_DIR` = `~/.audio2wave/previews`) : capture de la fenetre de rendu, lue dans le fil GL (`s.preview_requests`, chemins a ecrire,
+    traites juste avant `swap_buffers`). Declencheurs : enregistrement d'une scene (`capture_scene_now`), premier passage d'une scene sans apercu projection ouverte (1,5 s apres, si elle est toujours a l'ecran), clic droit
+    « Mettre a jour l'apercu ». Projection fermee : message, rien n'est demande. La ligne du panneau etendu montre la miniature (96 x 54). Pas un pas d'annulation.
+  - **Securite GPU du VJ** (`core/safety.py`, reglage de salle `gpu_cap`, case « Securite GPU » de l'onglet *Masters*, defaut 1) : quand le VJ (`vj_advance`, Full Randomizer compris : `vj_auto["on"]`) pose une scene, `cap_values` estime
+    le cout de ses effets couteux (cellules 6,7 ms, halo 3,3 ms, fonte 1,5 ms a 1080p, proportionnel aux pixels du rendu) et, si `gpu_ms` (temps GPU lisse mesure par `PerfGuard`, `s.status["gpu_ms"]` / `gpu_budget_ms`) + la difference
+    depasse 90 % du budget d'une image, coupe d'abord les cellules, puis le halo, puis la fonte DE CETTE SCENE (le reste est intact) ; message « allegee pour le GPU » et ligne du journal. Sans mesure du GPU : rien. Une scene choisie a la main
+    n'est jamais touchee. `check_gl.py` : `check_safeguards` (pur), `x_gpu_cap`, `x_undo`, `x_preview`.
   - Dialogues dans `scene_ui` (`chooser`, `ask_name`, `ask_save`, `ask_open`) : les tests les remplacent, jamais de fenetre
     bloquante. `choice_dialog` (module) = fenetre modale a boutons.
 - **Full Randomizer** (`core/randomizer.py`, ordre VJ `alea`, `scenes.VJ_ORDERS`, libelle « Full Randomizer » partout dans la GUI) : a chaque changement `vj_advance` appelle `random_draw()`

@@ -93,12 +93,13 @@ def install(c):
         """Bouton +5 : `count` scenes tirees au hasard (comme +), ajoutees a la suite ; la barre n'est reconstruite qu'une fois."""
         names: list[str] = []
         info = ""
-        for _ in range(max(1, int(count))):
-            scene, info, record = random_scene()
-            rnd["last"] = record
-            name = randomizer.random_name(rnd["rng"], scene_book.names())
-            scene_book.put(dict(scene, name=name, temp=True))       # provisoire : a garder ou a retirer (panneau etendu)
-            names.append(name)
+        with scene_book.group("Ajouter des scenes aleatoires" if count > 1 else "Ajouter une scene aleatoire"):
+            for _ in range(max(1, int(count))):
+                scene, info, record = random_scene()
+                rnd["last"] = record
+                name = randomizer.random_name(rnd["rng"], scene_book.names())
+                scene_book.put(dict(scene, name=name, temp=True))       # provisoire : a garder ou a retirer (panneau etendu)
+                names.append(name)
         if len(names) == 1:
             scene_msg.set(f"Scene aleatoire '{names[0]}' ajoutee au set (aucun preset enregistre) : {info}")
         else:
@@ -115,15 +116,16 @@ def install(c):
             return None
         last = rows[-1]
         name = scenes.unique_name(f"{last['name']} (2)", scene_book.names())
-        scene_book.put(dict(json.loads(json.dumps(last["scene"])), name=name))
-        index = len(scene_book.rows()) - 1
-        if last["media"]:
-            scene_book.set_entry_media(index, dict(last["media"]))
-        for key, path in (last["a2w"] or {}).items():
-            scene_book.set_entry_a2w(index, key, path)
-        if last.get("bg_video"):
-            scene_book.set_entry_bg_video(index, last["bg_video"])
-        scene_book.set_entry_vj(index, seconds=last["seconds"], skip=last["skip"])
+        with scene_book.group("Dupliquer la derniere scene"):
+            scene_book.put(dict(json.loads(json.dumps(last["scene"])), name=name))
+            index = len(scene_book.rows()) - 1
+            if last["media"]:
+                scene_book.set_entry_media(index, dict(last["media"]))
+            for key, path in (last["a2w"] or {}).items():
+                scene_book.set_entry_a2w(index, key, path)
+            if last.get("bg_video"):
+                scene_book.set_entry_bg_video(index, last["bg_video"])
+            scene_book.set_entry_vj(index, seconds=last["seconds"], skip=last["skip"])
         scene_msg.set(f"Scene '{last['name']}' dupliquee en '{name}' : change ses medias, sa duree ou son nom")
         refresh_scene_bar()
         def show_last() -> None:                                       # la nouvelle ligne est visible

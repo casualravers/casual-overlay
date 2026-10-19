@@ -117,6 +117,12 @@ elles n'ont pas de touche mais restent dans la barre (le VJ les joue toutes). *+
 enregistree. La barre met toutes les touches dans une **bande qui defile** (molette, fleches ◀ ▶ qui apparaissent quand tout ne tient pas ;
 la scene active reste visible) : les boutons du VJ restent toujours visibles. Clic droit sur une touche : mettre a jour la
 scene, media, monter / descendre, retirer du set, supprimer de la bibliotheque.
+**Export en archive** : *Exporter ce set* ecrit par defaut un `.zip` qui embarque le set ET les medias qu'il utilise (images, videos, animations ; un media
+identique n'est copie qu'une fois). Sur une autre machine, *Importer* ce `.zip` extrait les medias (dossier `~/.audio2wave/imported`) et refait les chemins : le set
+se rejoue tel quel. Un `.json` seul reste possible (sans medias). **Annuler / Retablir** (Ctrl+Z / Ctrl+Y, menu SET, boutons du panneau etendu) defait les
+operations sur les scenes et les sets (retrait, deplacement, +5, import...). **Apercu** : chaque scene garde une miniature de la projection (prise a l'enregistrement
+ou au premier passage, clic droit pour la refaire). **Securite GPU** : quand le VJ enchaine, une scene dont les effets (cellules, halo, fonte) ne tiendraient plus
+dans le budget d'une image est allegee ; une scene choisie a la main n'est jamais modifiee.
 **Rythme detecte** : l'application estime le **BPM** a partir des kicks (libelle « BPM auto » dans l'onglet *Masters*). *Tempo auto* cale le master du
 tempo (et la cadence du strobe en mode Cadence) dessus ; le tap tempo reste disponible. Elle repere aussi la **montee et le drop** (les basses disparaissent
 un moment, puis reviennent d'un coup) : *Montee / drop auto* lance la montee sur la cassure et la relache au drop (flash), et le reglage de set

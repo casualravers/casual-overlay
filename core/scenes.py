@@ -12,9 +12,11 @@ Ce module est pur (aucune fenetre) : stockage ordonne, capture et valeurs a appl
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import random
 import re
+import sys
 from pathlib import Path
 
 from core import automation as auto
@@ -25,6 +27,7 @@ from core import randomizer
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
 MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : quatre emplacements
 MASTER_SLOTS = 4
+PREVIEW_DIR = Path.home() / ".audio2wave" / "previews"            # apercus des scenes (capture reduite de la projection)
 IMPORT_DIR = Path.home() / ".audio2wave" / "imported"        # medias extraits des archives de set importees (voir core/setpack.py)
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)
 DEFAULT_SET = "principal"        # set qui recoit les scenes d'un ancien scenes.json
@@ -95,6 +98,17 @@ class SceneBook:
     chaque entree pouvant porter son propre `media` (logo / texte / video, voir `capture_media`). Modifier une scene la
     modifie dans tous les sets. Les touches F1..F9 sont celles des 9 premieres entrees du set actif. Un fichier d'avant les
     sets (`{"scenes": [...], "vj": {...}}`) est lu comme un set `principal` qui les contient toutes."""
+
+    UNDO_LIMIT = 40
+    # etiquette de chaque operation (par nom de la methode qui ecrit), pour « Annuler : ... »
+    LABELS = {"put": "Enregistrer la scene", "delete": "Supprimer la scene", "new_set": "Nouveau set", "rename_set": "Renommer le set",
+              "delete_set": "Supprimer le set", "add_entry": "Ajouter au set", "remove_entry": "Retirer du set",
+              "remove_entries": "Retirer des lignes", "move_entry": "Deplacer une ligne", "set_entry_media": "Media d'une ligne",
+              "set_entry_a2w": "Media d'une ligne", "set_entry_bg_video": "Video de fond d'une ligne", "set_entry_vj": "Duree / VJ d'une ligne",
+              "set_entries_vj": "Duree / VJ des lignes", "duplicate_entries": "Dupliquer des lignes", "copy_entries_to_set": "Copier vers un set",
+              "rename_scene": "Renommer la scene", "set_vj": "Reglages du VJ", "keep_scene": "Garder la scene", "import_set": "Importer un set",
+              "set_preview": "Apercu de la scene"}
+    _HISTORY: dict = {}                            # chemin du fichier -> {"undo": [...], "redo": [...], "depth": 0, "pushed": False, "label": None}
 
     def __init__(self, path_getter) -> None:
         self._path_getter = path_getter            # relu a chaque appel (les tests remplacent le chemin)
@@ -168,10 +182,81 @@ class SceneBook:
             active = sets[0]["name"]
         return {"scenes": library, "sets": sets, "active_set": active}
 
-    def _save(self, data: dict) -> None:
+    def _save(self, data: dict, track: bool = True) -> None:
+        if track:
+            self._track(sys._getframe(1).f_code.co_name)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         out = {"version": 2, "scenes": data["scenes"], "sets": data["sets"], "active_set": data["active_set"]}
         self.path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # ---- annuler / retablir : l'etat d'avant chaque ecriture est garde en memoire (partage entre les fenetres reconstruites)
+    def _hist(self) -> dict:
+        return SceneBook._HISTORY.setdefault(str(self.path), {"undo": [], "redo": [], "depth": 0, "pushed": False, "label": None})
+
+    def _text(self) -> str:
+        try:
+            return self.path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def _track(self, method: str) -> None:
+        h = self._hist()
+        if h["depth"] and h["pushed"]:
+            return                                        # meme groupe : un seul pas d'annulation
+        h["undo"].append((h["label"] if h["depth"] else self.LABELS.get(method, "Modification du set"), self._text()))
+        del h["undo"][:-self.UNDO_LIMIT]
+        h["redo"].clear()
+        if h["depth"]:
+            h["pushed"] = True
+
+    @contextlib.contextmanager
+    def group(self, label: str):
+        """Les ecritures faites dans ce bloc ne forment qu'UN pas d'annulation (ex. « +5 » = cinq scenes, un seul Annuler)."""
+        h = self._hist()
+        if h["depth"] == 0:
+            h["pushed"], h["label"] = False, label
+        h["depth"] += 1
+        try:
+            yield
+        finally:
+            h["depth"] -= 1
+
+    def undo_label(self) -> str | None:
+        h = self._hist()
+        return h["undo"][-1][0] if h["undo"] else None
+
+    def redo_label(self) -> str | None:
+        h = self._hist()
+        return h["redo"][-1][0] if h["redo"] else None
+
+    def clear_history(self) -> None:
+        h = self._hist()
+        h["undo"].clear()
+        h["redo"].clear()
+
+    def _swap(self, src_key: str, dst_key: str) -> str | None:
+        h = self._hist()
+        if not h[src_key]:
+            return None
+        label, text = h[src_key].pop()
+        h[dst_key].append((label, self._text()))
+        keep_active = self._read().get("active_set")
+        try:
+            data = json.loads(text) if text.strip() else {}
+        except ValueError:
+            data = {}
+        if isinstance(data, dict) and keep_active and any(isinstance(x, dict) and x.get("name") == keep_active for x in data.get("sets", [])):
+            data["active_set"] = keep_active              # annuler ne change pas le set affiche (sauf s'il n'existait pas encore)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return label
+
+    def undo(self) -> str | None:
+        """Annule la derniere modification (scenes, sets, entrees, reglages du VJ) ; rend son etiquette, None s'il n'y a rien."""
+        return self._swap("undo", "redo")
+
+    def redo(self) -> str | None:
+        return self._swap("redo", "undo")
 
     @staticmethod
     def _find(items: list[dict], name: str) -> int | None:
@@ -244,7 +329,7 @@ class SceneBook:
         if i is None:
             return False
         data["active_set"] = data["sets"][i]["name"]
-        self._save(data)
+        self._save(data, track=False)                  # changer de set n'est pas une modification a annuler
         return True
 
     def new_set(self, name: str, copy_of: str | None = None) -> bool:
@@ -365,6 +450,25 @@ class SceneBook:
             self._save(data)
         return len(idx)
 
+    def set_preview(self, name: str, filename: str | None) -> bool:
+        """Associe a la scene le fichier d'apercu `filename` (dans PREVIEW_DIR) ; l'ancien fichier est supprime. Pas un pas d'annulation."""
+        data = self._load()
+        i = self._find(data["scenes"], name)
+        if i is None:
+            return False
+        old = data["scenes"][i].get("preview")
+        if filename:
+            data["scenes"][i]["preview"] = filename
+        else:
+            data["scenes"][i].pop("preview", None)
+        self._save(data, track=False)
+        if old and old != filename:
+            try:
+                (PREVIEW_DIR / Path(old).name).unlink()
+            except OSError:
+                pass
+        return True
+
     # ---- scenes provisoires (tirees par « + » / « +5 » : a trier)
     def temp_names(self) -> list[str]:
         return [x["name"] for x in self.list() if x.get("temp")]
@@ -377,14 +481,15 @@ class SceneBook:
         if i is None:
             return None
         final = data["scenes"][i]["name"]
-        if new_name is not None and new_name.strip()[:MAX_NAME] != final:
-            if not self.rename_scene(final, new_name):
-                return None
-            final = new_name.strip()[:MAX_NAME]
-        data = self._load()
-        i = self._find(data["scenes"], final)
-        data["scenes"][i].pop("temp", None)
-        self._save(data)
+        with self.group("Garder la scene"):
+            if new_name is not None and new_name.strip()[:MAX_NAME] != final:
+                if not self.rename_scene(final, new_name):
+                    return None
+                final = new_name.strip()[:MAX_NAME]
+            data = self._load()
+            i = self._find(data["scenes"], final)
+            data["scenes"][i].pop("temp", None)
+            self._save(data)
         return final
 
     def remove_entry(self, index: int) -> bool:

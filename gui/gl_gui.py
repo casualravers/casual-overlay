@@ -59,7 +59,7 @@ import gui_colors
 import gui_gates
 from core import controls as core_controls
 from core import params as core_params
-from core import scenes, sessionlog
+from core import safety, scenes, sessionlog
 
 REFRESH_MS = 500
 METER_MS = 60
@@ -1379,12 +1379,14 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         s.active_entry = current_index(scene_book.rows())
         scene_msg.set(f"Scene '{name}' enregistree" + note)
         refresh_scene_bar()
+        panel_ops.request_preview(scene["name"])      # apercu = ce qu'on voit a l'ecran au moment de l'enregistrement
 
     # ---- Mode VJ : enchaine les scenes du set actif toutes les N secondes, avec un flash court a chaque changement.
     vj = getattr(s, "vj_state", None)
     if vj is None:
         vj = s.vj_state = {"running": False, "t_next": 0.0, "bar": None}
     vj_ui: dict = {}
+    vj_auto: dict = {"on": False}                   # vrai pendant que le VJ (pas la main de l'operateur) pose une scene : securite GPU
 
     def beat_count() -> int:
         """Kicks detectes depuis le lancement (compteur croissant de l'analyse audio) ; 0 si l'analyse n'est pas disponible."""
@@ -1486,7 +1488,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         rows = scene_book.rows()
         if scene_book.vj()["order"] == "alea":
             s.commands.put("flash")
-            random_draw()
+            vj_auto["on"] = True
+            try:
+                random_draw()
+            finally:
+                vj_auto["on"] = False
             vj_arm()
             update_vj_button()
             return
@@ -1498,7 +1504,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         settings = scene_book.vj()
         index = scenes.next_entry_index(rows, current_index(rows), settings["order"], random)
         s.commands.put("flash")
-        apply_entry_core(index)
+        vj_auto["on"] = True
+        try:
+            apply_entry_core(index)
+        finally:
+            vj_auto["on"] = False
         vj_arm(rows[index]["seconds"])                     # duree propre a l'entree (en secondes) sinon celle du set
         update_vj_button()
 
@@ -1627,9 +1637,20 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 note = f" (media introuvable: {Path(missing).name})"      # la scene garde son propre media
             else:
                 values.update(scenes.media_values(media, params))
+        if vj_auto["on"] and float(params.get("gpu_cap", 1.0)) >= 0.5:
+            # securite GPU : la scene posee par le VJ est allegee si, avec ses effets, l'image ne tiendrait plus dans le budget
+            values, lightened = safety.cap_values(values, params, float(s.status.get("gpu_ms", 0.0)), float(s.status.get("gpu_budget_ms", 16.7)),
+                                                  getattr(s, "render_size", None))
+            if lightened:
+                note += f" (allegee pour le GPU : {', '.join(lightened)} coupe(s))"
+                sessionlog.event(f"Securite GPU : scene '{scene.get('name')}' allegee ({', '.join(lightened)})")
         apply_values(values)
         s.active_scene = scene["name"]
         s.active_entry = index
+        try:
+            panel_ops.schedule_preview(scene["name"])      # premier passage de la scene sans apercu : capture de la projection
+        except NameError:
+            pass
         scene_msg.set(f"Scene '{scene['name']}'" + (f" + {scenes.media_label(media)}" if media and not note else "") + note)
         if scene["bg"] == "live" and scene.get("mode"):
             overrides = scene.get("live_overrides")
@@ -1760,8 +1781,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         media_from_current=media_from_current,
         move_entry_now=move_entry_now,
         move_entry_to=move_entry_to,
+        panel_state=panel_state,
         refresh_scene_bar=lambda *a, **k: refresh_scene_bar(*a, **k),
         remove_entry_now=remove_entry_now,
+        request_preview=lambda name: panel_ops.request_preview(name),
         root=root,
         s=s,
         scene_book=scene_book,
@@ -1770,6 +1793,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         vj=vj,
         vj_advance=vj_advance))
     ask_delete_set = gui_sets_ctl.ask_delete_set
+    undo_now = gui_sets_ctl.undo_now
+    redo_now = gui_sets_ctl.redo_now
     create_set = gui_sets_ctl.create_set
     delete_set_now = gui_sets_ctl.delete_set_now
     export_set_now = gui_sets_ctl.export_set_now
@@ -1827,6 +1852,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         move_entry_now=move_entry_now,
         move_entry_to=move_entry_to,
         panel_state=panel_state,
+        redo_now=lambda: redo_now(),
+        undo_now=lambda: undo_now(),
         random_bank=random_bank,
         random_draw_now=random_draw_now,
         random_keep=random_keep,
@@ -2024,7 +2051,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         set_menu.add_command(label="Renommer ce set...", command=rename_set_dialog)
         set_menu.add_command(label="Supprimer ce set...", command=ask_delete_set)
         set_menu.add_separator()
-        set_menu.add_command(label="Exporter ce set (fichier)...", command=export_set_now)
+        undo_l, redo_l = scene_book.undo_label(), scene_book.redo_label()
+        set_menu.add_command(label=f"Annuler : {undo_l}  (Ctrl+Z)" if undo_l else "Annuler  (Ctrl+Z)", command=undo_now,
+                             state="normal" if undo_l else "disabled")
+        set_menu.add_command(label=f"Retablir : {redo_l}  (Ctrl+Y)" if redo_l else "Retablir  (Ctrl+Y)", command=redo_now,
+                             state="normal" if redo_l else "disabled")
+        set_menu.add_separator()
+        set_menu.add_command(label="Exporter ce set (archive avec medias, ou JSON seul)...", command=export_set_now)
         set_menu.add_command(label="Importer un set (fichier)...", command=import_set_now)
         set_btn["menu"] = set_menu
         Tooltip(set_btn, "Set = un enchainement de scenes (les memes scenes peuvent servir dans plusieurs sets, chacune avec son "
@@ -2319,7 +2352,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel, "refresh_panel": refresh_scene_panel, "panel_state": panel_state,
                        "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "add_random5": add_random_scenes, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
-                       "move_entry": move_entry_now, "move_to": move_entry_to, "panel_ops": panel_ops, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
+                       "move_entry": move_entry_now, "move_to": move_entry_to, "apply_auto": lambda name: (vj_auto.__setitem__("on", True), apply_scene_core(name), vj_auto.__setitem__("on", False)), "undo": lambda: undo_now(), "redo": lambda: redo_now(), "panel_ops": panel_ops, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,

@@ -339,6 +339,9 @@ def install(c):
                                                          "= le drop : flash blanc et retour aux reglages normaux. Le VJ peut aussi changer de scene au "
                                                          "drop (menu « reglages VJ »).",
                    row=4, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            toggle(f, "gpu_cap", "Securite GPU", "Quand le VJ enchaine une scene, ses effets couteux (cellules, halo, fonte) sont coupes si, ajoutes a la charge mesuree "
+                                                  "du GPU, ils ne tiendraient plus dans le budget d'une image. Une scene choisie a la main n'est jamais touchee.",
+                   row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
 
         new_tab("Masters", fill_0)
 

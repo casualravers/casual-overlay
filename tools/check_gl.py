@@ -1186,6 +1186,13 @@ def check_gui() -> None:
           "etendu (GUI): colonne FOND video : une image est refusee, une video deposee remplace le fond de l'entree (meme fichier d'une entree a l'autre), retrait", str((out.get("x_bg_bad"), out.get("x_bg"))))
     check(out.get("x_dup") == (True,) * 5,
           "etendu (GUI): Dupliquer la derniere ajoute une copie de la scene (nom inedit) avec les medias, la duree et le VJ de l'entree", str(out.get("x_dup")))
+    check(out.get("x_undo") == (True,) * 3, "etendu (GUI): Annuler / Retablir : +5 = un seul pas, retirer une ligne se defait", str(out.get("x_undo")))
+    check(out.get("x_gpu_cap") == (True,) * 3,
+          "etendu (GUI): securite GPU : la scene posee par le VJ est allegee (cellules et halo coupes), jamais une scene choisie a la main, desactivable",
+          str(out.get("x_gpu_cap")))
+    check(out.get("x_preview") == (True,) * 4 and out.get("x_preview_closed") == (True, True),
+          "etendu (GUI): apercu d'une scene : capture demandee a la projection, associee a la scene et affichee dans sa ligne ; projection fermee = message, rien demande",
+          str((out.get("x_preview"), out.get("x_preview_closed"))))
     check(out.get("x_temp") == (True,) * 5 and out.get("x_temp_clean") is True,
           "etendu (GUI): scenes tirees par +5 = provisoires (repere, Garder avec renommage en ligne, nom pris refuse), Retirer les provisoires",
           str((out.get("x_temp"), out.get("x_temp_clean"))))
@@ -3271,6 +3278,72 @@ def gui_expand_steps(c, s, out) -> None:
     root.update()
     out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
                         len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is not None)
+    sc["refresh_panel"](force=True)
+    # annuler / retablir dans la fenetre
+    rows_u = [r["name"] for r in book.rows()]
+    sc["add_random5"]()
+    after_add = len(book.rows())
+    first_undo = sc["undo"]()
+    back = [r["name"] for r in book.rows()]
+    sc["redo"]()
+    redone = len(book.rows())
+    sc["undo"]()
+    sc["remove_entry"](0)
+    removed_one = len(book.rows())
+    sc["undo"]()
+    restored = [r["name"] for r in book.rows()]
+    out["x_undo"] = (after_add == len(rows_u) + 5 and first_undo and back == rows_u, redone == len(rows_u) + 5, removed_one == len(rows_u) - 1 and restored == rows_u)
+    # securite GPU : scene posee par le VJ allegee selon la charge mesuree, jamais une scene choisie a la main
+    book.put({"name": "Lourde test", "bg": "live", "overlay": {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 0.0}}, add_to_set=False)
+    old_rs, s.render_size = getattr(s, "render_size", None), (1920, 1080)
+    s.status["gpu_ms"], s.status["gpu_budget_ms"] = 14.0, 16.7
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    params["gpu_cap"] = 1.0
+    sc["apply_auto"]("Lourde test")
+    capped = (params["cell_on"], params["holo_on"], "allegee" in sc["msg"].get())
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    sc["apply"]("Lourde test")                                                # a la main : jamais touchee
+    manual = (params["cell_on"], params["holo_on"])
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    params["gpu_cap"] = 0.0
+    sc["apply_auto"]("Lourde test")
+    off = (params["cell_on"], params["holo_on"])
+    params["gpu_cap"] = 1.0
+    for k_ in ("cell_on", "holo_on"):
+        params[k_] = 0.0
+    s.status.pop("gpu_ms", None)
+    s.status.pop("gpu_budget_ms", None)
+    s.render_size = old_rs
+    book.delete("Lourde test")
+    out["x_gpu_cap"] = (capped == (0.0, 0.0, True), manual == (1.0, 1.0), off == (1.0, 1.0))
+    # apercu d'une scene : demande a la projection (fausse), fichier ecrit par le « fil GL », associe a la scene, affiche dans la ligne
+    from types import SimpleNamespace as _NS
+    from core import scenes as sc_mod_
+    from engine import preview as pvw
+    old_proj, s.projection = s.projection, _NS(running=lambda: True)
+    pv_dir = tmpd / "previews"
+    old_pdir, sc_mod_.PREVIEW_DIR = sc_mod_.PREVIEW_DIR, pv_dir
+    target_name = book.rows()[0]["name"]
+    asked = ops.request_preview(target_name)
+    dest_pv = s.preview_requests.get(timeout=1.0)
+    pvw.write_preview(bytes([200, 30, 30]) * (32 * 18), (32, 18), dest_pv)
+    t_end = time.monotonic() + 2.0
+    while time.monotonic() < t_end and not book.get(target_name).get("preview"):
+        root.update()
+        time.sleep(0.05)
+    sc["refresh_panel"](force=True)
+    root.update()
+    pic = sc["panel_state"]["rows"][0]["prevpic"]
+    out["x_preview"] = (asked, bool(book.get(target_name).get("preview")), str(pic.cget("image")) != "", dest_pv.endswith(book.get(target_name)["preview"]))
+    s.projection = _NS(running=lambda: False)
+    nothing = ops.request_preview(target_name)
+    book.set_preview(target_name, None)
+    s.projection = old_proj
+    sc_mod_.PREVIEW_DIR = old_pdir
+    out["x_preview_closed"] = (nothing is False, s.preview_requests.empty())
     sc["refresh_panel"](force=True)
     # bouton Dupliquer la derniere : copie de la scene et des reglages de l'entree, a la suite
     sc["entry_vj"](len(book.rows()) - 1, seconds=42.0)
@@ -5943,6 +6016,79 @@ def check_safeguards() -> None:
     for i in range(2000, 2000 + 5200):
         dd4.update(i * 0.01, 0.03, 0.0)                        # cassure de 52 s : au-dela de 45 s ce n'est plus une cassure
     check(dd4.state == "idle" and dd4.drops == 0, "montee / drop: une cassure trop longue est abandonnee sans drop", dd4.state)
+    # --- securite GPU : alleger la scene suivante selon ses effets et la charge mesuree
+    from core import safety as sf
+    heavy = {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 1.0, "bg_hue": 0.3}
+    calm = {"cell_on": 0.0, "holo_on": 0.0, "melt_on": 0.0}
+    full = (1920, 1080)
+    same_v, dropped = sf.cap_values(heavy, calm, 0.0, 16.7, full)
+    check(same_v is heavy and dropped == [], "securite GPU: sans mesure du GPU, rien n'est change")
+    out_v, dropped = sf.cap_values(heavy, calm, 8.0, 16.7, full)
+    check(dropped == ["cellules"] and out_v["cell_on"] == 0.0 and out_v["holo_on"] == 1.0 and out_v["melt_on"] == 1.0 and heavy["cell_on"] == 1.0
+          and out_v["bg_hue"] == 0.3, "securite GPU: GPU a 8 ms + effets lourds = les cellules sautent d'abord, le reste est intact, l'entree n'est pas modifiee", str((out_v, dropped)))
+    out_v, dropped = sf.cap_values(heavy, calm, 13.0, 16.7, full)
+    check(dropped == ["cellules", "halo"] and out_v["melt_on"] == 1.0, "securite GPU: plus la charge est haute, plus d'effets sautent (cellules > halo > fonte)", str(dropped))
+    same_v, dropped = sf.cap_values(heavy, {"cell_on": 1.0, "holo_on": 1.0, "melt_on": 1.0}, 14.0, 16.7, full)
+    check(dropped == [] and same_v is heavy, "securite GPU: un effet deja allume au moment (mesure incluse) n'est pas compte deux fois")
+    same_v, dropped = sf.cap_values(heavy, calm, 1.2, 16.7, (640, 360))
+    check(dropped == [], "securite GPU: a petite taille de rendu les memes effets coutent beaucoup moins (cout proportionnel aux pixels)")
+    check(abs(sf.effects_cost({"cell_on": 1.0, "holo_on": 1.0}, full) - 10.0) < 1e-9 and sf.effects_cost({}, full) == 0.0, "securite GPU: cout estime des effets allumes")
+    # --- annuler / retablir
+    udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
+    ubook = sc_.SceneBook(lambda: udir / "scenes.json")
+    ubook.put({"name": "A", "bg": "live", "overlay": {}})
+    ubook.put({"name": "B", "bg": "live", "overlay": {}})
+    check(ubook.undo_label() == "Enregistrer la scene" and ubook.undo() == "Enregistrer la scene" and ubook.names() == ["A"] and ubook.row_names() == ["A"],
+          "annuler: la derniere ecriture est defaite (scene et entree du set)")
+    check(ubook.redo_label() == "Enregistrer la scene" and ubook.redo() and ubook.names() == ["A", "B"] and ubook.redo() is None, "retablir: on la refait, puis plus rien a retablir")
+    with ubook.group("Trois scenes"):
+        for n_ in "CDE":
+            ubook.put({"name": n_, "bg": "live", "overlay": {}})
+    check(ubook.names() == ["A", "B", "C", "D", "E"] and ubook.undo() == "Trois scenes" and ubook.names() == ["A", "B"],
+          "annuler: un groupe d'ecritures (ex. +5) est UN seul pas")
+    ubook.redo()
+    ubook.remove_entries([1, 3])
+    check(ubook.row_names() == ["A", "C", "E"] and ubook.undo() == "Retirer des lignes" and ubook.row_names() == ["A", "B", "C", "D", "E"],
+          "annuler: retirer plusieurs lignes se defait, l'ordre revient")
+    ubook.move_entry(0, 2)
+    ubook.new_set("Autre")
+    ubook.set_active("Autre")
+    check(ubook.undo() == "Nouveau set" and ubook.set_names() == [sc_.DEFAULT_SET] and ubook.active_set_name() == sc_.DEFAULT_SET,
+          "annuler: creer un set se defait (le set affiche retombe sur un set qui existe)", str(ubook.set_names()))
+    ubook.new_set("S1")
+    ubook.new_set("S2")
+    ubook.set_active("S1")
+    check(ubook.undo() == "Nouveau set" and ubook.set_names() == [sc_.DEFAULT_SET, "S1"] and ubook.active_set_name() == "S1",
+          "annuler: changer de set n'est pas une modification a annuler, et annuler ne change pas le set affiche")
+    ubook.set_active(sc_.DEFAULT_SET)
+    ubook.put({"name": "Z", "bg": "live", "overlay": {}})
+    ubook.undo()
+    ubook.put({"name": "Y", "bg": "live", "overlay": {}})
+    check(ubook.redo() is None, "annuler: une nouvelle modification efface les pas a retablir")
+    ubook2 = sc_.SceneBook(lambda: udir / "autre.json")
+    check(ubook2.undo() is None and ubook2.undo_label() is None, "annuler: l'historique est propre a chaque fichier de scenes")
+    ubook.keep_scene("A", "A renommee")
+    check(ubook.undo() == "Garder la scene" and "A" in ubook.names() and "A renommee" not in ubook.names(), "annuler: garder une scene (renommer + retirer le drapeau) = un seul pas")
+    n_hist = len(sc_.SceneBook._HISTORY[str(udir / "scenes.json")]["undo"])
+    pdir = udir / "previews"
+    old_pdir, sc_.PREVIEW_DIR = sc_.PREVIEW_DIR, pdir
+    pdir.mkdir()
+    (pdir / "old.jpg").write_bytes(b"x")
+    (pdir / "new.jpg").write_bytes(b"y")
+    ubook.set_preview("A", "old.jpg")
+    ubook.set_preview("A", "new.jpg")
+    check(ubook.get("A")["preview"] == "new.jpg" and not (pdir / "old.jpg").exists() and (pdir / "new.jpg").exists()
+          and len(sc_.SceneBook._HISTORY[str(udir / "scenes.json")]["undo"]) == n_hist, "apercu: associe a la scene, l'ancien fichier est supprime, ce n'est pas un pas d'annulation")
+    sc_.PREVIEW_DIR = old_pdir
+    from engine import preview as pv
+    rgb = bytes([255, 0, 0]) * (64 * 18) + bytes([0, 0, 255]) * (64 * 18)           # premiere ligne en bas (OpenGL) : rouge en bas, bleu en haut
+    dest_p = udir / "p" / "apercu.jpg"
+    ok_p = pv.write_preview(rgb, (64, 36), dest_p)
+    from PIL import Image as _Img
+    im_p = _Img.open(dest_p).convert("RGB")
+    check(ok_p and im_p.size == (240, 135) and im_p.getpixel((120, 5))[2] > 200 and im_p.getpixel((120, 130))[0] > 200
+          and not pv.write_preview(b"", (0, 0), udir / "x.jpg"), "apercu: JPEG reduit a 240 px de large, image remise a l'endroit, taille invalide refusee sans exception",
+          str((im_p.size, im_p.getpixel((120, 5)), im_p.getpixel((120, 130)))))
     # --- auto-sauvegarde
     tmp = Path(tempfile.mkdtemp(prefix="casual_overlay_autosave_"))
     snap = tmp / "autosave.json"

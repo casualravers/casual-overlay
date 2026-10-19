@@ -17,6 +17,8 @@ import tkinter as tk
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
     from gl_gui import BANNER_FG, MIN_WIN_H, SCENE_COLOR, THUMB_H          # import tardif : gl_gui importe ce module
+    import queue
+    import uuid
     Tooltip = c.Tooltip
     a2w = c.a2w
     a2w_clear = c.a2w_clear
@@ -34,6 +36,7 @@ def install(c):
     random_bank = c.random_bank
     random_draw_now = c.random_draw_now
     random_keep = c.random_keep
+    redo_now = c.redo_now
     refresh_scene_bar = c.refresh_scene_bar
     register_drop = c.register_drop
     register_tree = c.register_tree
@@ -50,6 +53,7 @@ def install(c):
     set_random_option = c.set_random_option
     set_vj_option = c.set_vj_option
     thumb_photo = c.thumb_photo
+    undo_now = c.undo_now
 
     PANEL_BODY_H = 200
     PANEL_BODY_MIN = 80
@@ -393,6 +397,70 @@ def install(c):
         Tooltip(lib_btn, "Ouvre la liste de toutes les scenes a gauche du set : glisse-en une sur la liste pour l'ajouter a l'endroit voulu.")
         return bar_
 
+    # ---- apercu des scenes : capture reduite de la projection (fichier dans scenes.PREVIEW_DIR, nom dans scene["preview"])
+    PREV_W, PREV_H = 96, 54
+
+    def preview_photo(scene: dict):
+        name = scene.get("preview")
+        if not name:
+            return None
+        path = scenes.PREVIEW_DIR / Path(name).name
+        try:
+            key = (str(path), path.stat().st_mtime_ns)
+        except OSError:
+            return None
+        cache = s.__dict__.setdefault("preview_photos", {})
+        if key not in cache:
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(path)
+                img.load()
+                img.thumbnail((PREV_W, PREV_H))
+                cache[key] = ImageTk.PhotoImage(img)
+            except Exception:
+                return None
+        return cache[key]
+
+    def request_preview(scene_name: str) -> bool:
+        """Demande a la projection une capture reduite de ce qu'elle affiche et l'associe a la scene. False si la projection est fermee."""
+        proj = getattr(s, "projection", None)
+        if proj is None or not proj.running():
+            scene_msg.set("Apercu : ouvre la projection (bouton Demarrer la projection) pour capturer l'image de la scene")
+            return False
+        fname = f"{uuid.uuid4().hex[:12]}.jpg"
+        dest = scenes.PREVIEW_DIR / fname
+        s.__dict__.setdefault("preview_requests", queue.SimpleQueue()).put(str(dest))     # (Session l'a deja ; un faux de test non)
+
+        def poll(tries: int = 0) -> None:
+            if dest.exists():
+                if scene_book.set_preview(scene_name, fname):
+                    refresh_scene_bar()
+            elif tries < 20:
+                root.after(150, lambda: poll(tries + 1))
+        root.after(150, poll)
+        return True
+
+    def schedule_preview(scene_name: str) -> None:
+        """Scene qui vient d'etre posee et qui n'a pas d'apercu : on laisse l'image se former (1,5 s) puis on la capture."""
+        proj = getattr(s, "projection", None)
+        if proj is None or not proj.running():
+            return
+        scene = scene_book.get(scene_name)
+        if scene is None:
+            return
+        have = scene.get("preview")
+        if have and (scenes.PREVIEW_DIR / Path(have).name).exists():
+            return
+        if scene_name in panel_state.setdefault("preview_pending", set()):
+            return
+        panel_state["preview_pending"].add(scene_name)
+
+        def go() -> None:
+            panel_state["preview_pending"].discard(scene_name)
+            if getattr(s, "active_scene", None) == scene_name:       # toujours a l'ecran : sinon on n'est plus sur la scene, tant pis
+                request_preview(scene_name)
+        root.after(1500, go)
+
     def build_panel_row(parent, row: dict, active: bool) -> dict:
         """Une ligne du panneau ; rend ses references (`frame`, `num`, `name`, `dur`, `cards`, `active`) pour la repeindre sur place."""
         bg = row_bg(active)
@@ -407,6 +475,16 @@ def install(c):
         refs["box"].bind("<Button-1>", lambda e, k=i: toggle_sel(k, bool(e.state & 0x1)))
         refs["num"] = tk.Label(fr, text=str(i + 1) + ("\u2736" if temp else ""), width=4, bg=bg, fg=SCENE_COLOR, font=BOLD)
         refs["num"].pack(side="left")
+        pbox = tk.Frame(fr, bg=bg, width=PREV_W + 4, height=PREV_H + 2)               # apercu de la scene (colonne de largeur fixe)
+        pbox.pack(side="left", padx=2)
+        pbox.pack_propagate(False)
+        photo = preview_photo(row["scene"])
+        pic = tk.Label(pbox, image=photo, bg=bg) if photo else tk.Label(pbox, text="pas d'apercu", bg=bg, fg=a2w.GUI_MUTED_FG, font=("Segoe UI", 7))
+        pic.image = photo
+        pic.pack(expand=True)
+        refs["prevbox"], refs["prevpic"] = pbox, pic
+        Tooltip(pic, "Apercu de la scene : capture de la projection (a l'enregistrement, ou au premier passage projection ouverte). "
+                     "Clic droit sur la touche de la scene : mettre a jour l'apercu.")
         shown = row["name"]                             # en entier (largeur commune a toutes les lignes : panel_state["name_w"])
         name_btn = tk.Button(fr, text=shown, command=lambda k=i: apply_entry(k), relief="flat", bd=0, cursor="hand2", font=BOLD,
                              bg=SCENE_COLOR if active else a2w.GUI_PANEL_BG, fg=BANNER_FG if active else a2w.GUI_FG,
@@ -553,6 +631,8 @@ def install(c):
             refs["frame"].configure(bg=bg)
             refs["num"].configure(bg=bg)
             refs["box"].configure(bg=bg)
+            refs["prevbox"].configure(bg=bg)
+            refs["prevpic"].configure(bg=bg)
             for w in refs["frame"].winfo_children():
                 if w is refs["name"]:
                     w.configure(bg=SCENE_COLOR if active else a2w.GUI_PANEL_BG, fg=BANNER_FG if active else a2w.GUI_FG)
@@ -810,6 +890,13 @@ def install(c):
         plus5.pack(side="left", padx=4, pady=3)
         Tooltip(plus5, "Ajoute a la suite du set cinq scenes tirees au hasard d'un coup (comme +, cinq fois). "
                        "Aucun preset n'est enregistre et rien n'est applique.")
+        un = tk.Button(foot, text="Annuler", command=undo_now, relief="flat", bd=0, padx=10, cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG)
+        un.pack(side="right", padx=(2, 8), pady=3)
+        Tooltip(un, "Annule la derniere modification du set ou des scenes (ajout, retrait, deplacement, +5, duree...) : Ctrl+Z. "
+                    + (f"Prochaine annulation : {scene_book.undo_label()}." if scene_book.undo_label() else "Rien a annuler pour l'instant."))
+        re_ = tk.Button(foot, text="Retablir", command=redo_now, relief="flat", bd=0, padx=10, cursor="hand2", bg=a2w.GUI_BG, fg=a2w.GUI_FG)
+        re_.pack(side="right", padx=2, pady=3)
+        Tooltip(re_, "Refait ce qui vient d'etre annule : Ctrl+Y.")
         dup = tk.Button(foot, text="Dupliquer la derniere", command=duplicate_last_scene, relief="flat", bd=0, padx=10, cursor="hand2",
                         bg=a2w.GUI_BG, fg=a2w.GUI_FG)
         dup.pack(side="left", padx=4, pady=3)
@@ -927,5 +1014,6 @@ def install(c):
     import types
     ops = types.SimpleNamespace(toggle_sel=toggle_sel, select_all=select_all, select_none=select_none, sel_remove=sel_remove, sel_skip=sel_skip,
                                 sel_seconds=sel_seconds, sel_duplicate=sel_duplicate, sel_copy_to=sel_copy_to, add_at=add_at, keep_now=keep_now,
-                                start_keep=start_keep, drop_temp=drop_temp, drop_pos=drop_pos, toggle_library=toggle_library)
+                                start_keep=start_keep, drop_temp=drop_temp, drop_pos=drop_pos, toggle_library=toggle_library,
+                                request_preview=request_preview, schedule_preview=schedule_preview, preview_photo=preview_photo)
     return types.SimpleNamespace(panel_update_in_place=panel_update_in_place, refresh_scene_panel=refresh_scene_panel, set_expanded=set_expanded, ops=ops)

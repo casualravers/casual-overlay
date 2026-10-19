@@ -24,11 +24,13 @@ def install(c):
     media_from_current = c.media_from_current
     move_entry_now = c.move_entry_now
     refresh_scene_bar = c.refresh_scene_bar
+    request_preview = c.request_preview
     remove_entry_now = c.remove_entry_now
     root = c.root
     s = c.s
     scene_book = c.scene_book
     scene_msg = c.scene_msg
+    panel_state = c.panel_state
     scene_state = c.scene_state
     vj = c.vj
     vj_advance = c.vj_advance
@@ -44,6 +46,34 @@ def install(c):
         "ask_open": lambda: filedialog.askopenfilename(
             parent=root, title="Importer un set", filetypes=[("Set casual-overlay (.zip ou .json)", "*.zip *.json"), ("Tous les fichiers", "*.*")]),
     }
+
+    def _after_history(done: str | None, verb: str, label: str | None) -> bool:
+        if done is None:
+            scene_msg.set(f"Rien a {verb}")
+            return False
+        panel_state["sel"].clear()
+        panel_state["sel_last"] = None
+        s.active_entry = None
+        if getattr(s, "active_scene", None) not in (None, "Full Randomizer") and s.active_scene not in scene_book.names():
+            s.active_scene = None
+        scene_msg.set(("Annule" if verb == "annuler" else "Retabli") + f" : {done}")
+        refresh_scene_bar()
+        return True
+
+    def undo_now() -> bool:
+        """Annule la derniere modification du set / des scenes (Ctrl+Z, menu SET, bouton Annuler du panneau etendu)."""
+        return _after_history(scene_book.undo(), "annuler", None)
+
+    def redo_now() -> bool:
+        return _after_history(scene_book.redo(), "retablir", None)
+
+    def key_history(evt, redo: bool = False) -> None:
+        if evt.widget.winfo_class() in ("Entry", "TEntry", "Text", "Spinbox"):       # Ctrl+Z dans un champ de saisie : ce n'est pas pour nous
+            return
+        redo_now() if redo else undo_now()
+    root.bind_all("<Control-z>", key_history)
+    root.bind_all("<Control-y>", lambda e: key_history(e, True))
+    root.bind_all("<Control-Z>", lambda e: key_history(e, True))
 
     def switch_set(name: str) -> bool:
         """Change de set. Si le VJ tournait, il **redemarre** sur le nouveau set (premiere scene, ou une au hasard)."""
@@ -196,6 +226,7 @@ def install(c):
         if row["media"]:
             menu.add_command(label=f"Media de cette entree : retirer ({scenes.media_label(row['media'])})",
                              command=lambda: media_clear(i))
+        menu.add_command(label="Mettre a jour l'apercu (capture de la projection)", command=lambda n=row["name"]: request_preview(n))
         menu.add_separator()
         if i > 0:
             menu.add_command(label="Monter", command=lambda: move_entry_now(i, -1))
@@ -205,4 +236,4 @@ def install(c):
         menu.add_command(label="Supprimer la scene de la bibliotheque...", command=lambda n=row["name"]: ask_delete_scene(n))
 
     import types
-    return types.SimpleNamespace(ask_delete_set=ask_delete_set, create_set=create_set, delete_set_now=delete_set_now, export_set_now=export_set_now, fill_entry_menu=fill_entry_menu, import_set_now=import_set_now, new_set_dialog=new_set_dialog, rename_set_dialog=rename_set_dialog, rename_set_now=rename_set_now, scene_ui=scene_ui, switch_set=switch_set)
+    return types.SimpleNamespace(undo_now=undo_now, redo_now=redo_now, ask_delete_set=ask_delete_set, create_set=create_set, delete_set_now=delete_set_now, export_set_now=export_set_now, fill_entry_menu=fill_entry_menu, import_set_now=import_set_now, new_set_dialog=new_set_dialog, rename_set_dialog=rename_set_dialog, rename_set_now=rename_set_now, scene_ui=scene_ui, switch_set=switch_set)

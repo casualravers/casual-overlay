@@ -98,6 +98,7 @@ class Session:
         self.pysrc = None                  # PyModeSource courant (modes snap / ridge)
         self.mode_args: dict = {}          # options de chaque mode Snap / Ridge, gardees entre deux bascules
         self.scene_requests: queue.SimpleQueue = queue.SimpleQueue()   # F1..F9 (fil GL) -> la GUI applique la scene
+        self.preview_requests: queue.SimpleQueue = queue.SimpleQueue()  # chemins de fichiers d'apercu a ecrire (GUI -> fil GL, voir engine.preview)
 
 
 class NoDeviceManager(ProducerManager):

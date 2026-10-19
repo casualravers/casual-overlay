@@ -12,6 +12,7 @@ from core import params as core_params, params_schema, sessionlog
 from core.automation import AutomationEngine, set_fx_link
 from core.controls import SilenceGuard, panic, strobe_press, strobe_release
 from core.params import FX_NAMES, load_params, save_params
+from engine.preview import write_preview
 from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_text
 from engine.deps import PIL_Image, glfw, moderngl
 from engine.session import Session
@@ -494,6 +495,12 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             img.save(args.screenshot)
             print(f"Capture: {args.screenshot}")
             shot_done = True
+        while True:                             # apercus de scenes demandes par la GUI : lecture du tampon ici (fil GL), avant l'echange
+            try:
+                dest = s.preview_requests.get_nowait()
+            except queue.Empty:
+                break
+            write_preview(ctx.screen.read(viewport=(0, 0, size[0], size[1]), components=3), size, dest)
         s.status["noise"] = renderer.noise_out
         glfw.swap_buffers(handle)
         if period:
@@ -512,6 +519,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             gpu_ms += elapsed
             gpu_n += 1
             warning = guard.update(elapsed, time.monotonic(), params)
+            s.status["gpu_ms"], s.status["gpu_budget_ms"] = guard.avg, guard.budget_ms       # lus par la securite GPU du VJ (core.safety)
             if warning:
                 s.status["perf"] = warning
                 if not perf_warned:
