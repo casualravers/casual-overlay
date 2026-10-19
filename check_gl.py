@@ -1587,8 +1587,9 @@ def check_render() -> None:
         check(0.08 < height_frac < 0.3 and abs((ys.min() + ys.max()) / 2 / size[1] - 0.5) < 0.06
               and abs((xs.min() + xs.max()) / 2 / size[0] - 0.5) < 0.06,
               "texte centre, hauteur proportionnelle a la taille du texte", f"hauteur {height_frac:.2f}")
-    original_render_text, calls = gl.render_text, []
-    gl.render_text = lambda *a, **k: (calls.append(1), original_render_text(*a, **k))[1]
+    import engine.projection as engine_projection
+    original_render_text, calls = engine_projection.render_text, []
+    engine_projection.render_text = lambda *a, **k: (calls.append(1), original_render_text(*a, **k))[1]
     try:
         gl.apply_logo_request(fake, rt)                               # rien n'a change
         unchanged = len(calls)
@@ -1599,7 +1600,7 @@ def check_render() -> None:
         gl.apply_logo_request(fake, rt)
         retyped = len(calls)
     finally:
-        gl.render_text = original_render_text
+        engine_projection.render_text = original_render_text
     check((unchanged, moved, retyped) == (0, 0, 1),
           "texture regeneree seulement quand le texte/la police/la couleur changent", f"{(unchanged, moved, retyped)}")
     text_params["text_content"] = "  "
@@ -4813,7 +4814,7 @@ def check_engine_layer() -> None:
             bad += [(path.name, m) for m in mods if m.split(".")[0] in forbidden]
     check(len(files) >= 4 and not bad, f"engine/: {len(files)} modules, aucun import de la GUI ni de la facade", str(bad[:3]))
     check("engine" in build_portable.APP_DIRS, "version portable: le dossier engine/ est embarque")
-    import engine.audio, engine.render, engine.session, engine.video, engine.window
+    import engine.audio, engine.render, engine.session, engine.projection, engine.app, engine.video, engine.window
     check(gl.FeatureExtractor is engine.audio.FeatureExtractor and gl.FrameReader is engine.video.FrameReader
           and gl.Window is engine.window.Window, "la facade audio2wave_gl rend les memes objets que engine/")
 

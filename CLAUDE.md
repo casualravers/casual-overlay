@@ -57,8 +57,10 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   window         fenetre glfw, choix du moniteur, plein ecran
   render         Renderer (passes GL), noise, texte / logo, PerfGuard
   session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
-audio2wave_gl.py  facade + Session, Projection, boucle de rendu, demarrage ; re-exporte les noms de core/ et d'engine/ (`gl.X`) ;
-                  Session / Projection / loop restent ici (les tests y patchent des noms) ; suite prevue : une vraie classe Session dans engine/ (check_gl.py `check_engine_layer` impose le sens des imports)
+  projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
+  app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
+audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths) + facade qui re-exporte core/ et engine/ (gl.X) ;
+                  les tests qui remplacent un nom visent le module qui l'utilise (ex. engine.projection.loop)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
 gui_fond / gui_effects / gui_logo / gui_audio   onglets de la partie LIVE et OVERLAY (fond, effets + halo / fonte / cellules / noise, logo, analyse)
 gui_sets / gui_drop / gui_random / gui_panel    sets, medias (glisser-deposer, vignettes), Full Randomizer, panneau etendu
