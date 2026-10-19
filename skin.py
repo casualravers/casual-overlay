@@ -32,9 +32,9 @@ GAP = 6                                  # espace image / texte des radios et ca
 ICON_PX = 14                             # taille des icones des boutons, des titres, des onglets et des cases
 # Boutons dont l'icone suffit : le libelle disparait de l'image (le widget le garde) et devient l'info-bulle.
 ICON_ONLY = {"supprimer", "mettre a jour", "restaurer", "actualiser", "sauvegarder", "dupliquer la derniere", "tirer maintenant",
-             "rescanner", "centrer", "aucun", "aucune", "plein ecran"}
+             "rescanner", "centrer", "aucun", "aucune", "plein ecran", "renommer", "retirer"}
 ICON_TOGGLES = {"image", "texte", "video", "audio2wave", "fond genere", "halo holographique", "fonte acide", "cellules",
-                "recuperer les medias", "automations actives"}      # cases et radios qui recoivent une icone
+                "recuperer les medias", "automations actives", "mode silence"}      # cases et radios qui recoivent une icone
 _pil_cache: dict = {}
 _installed = False
 
@@ -671,6 +671,11 @@ def skin_widget(w: tk.Misc) -> bool:
             return True
         # Menubutton "ghost" (la fleche est dans le texte) : pas d'image, un survol discret
         _orig_configure(w, relief="flat", borderwidth=0, highlightthickness=0, cursor="hand2", activebackground=T.CARD)
+        icon = icons.for_text(text)
+        if icon:                                  # menu deroulant a fleche dans le texte : icone a gauche (Tk la pose, le texte reste le meme)
+            fg = _norm(w, _orig_cget(w, "fg"))
+            w._sk_icon = photo(w, icons.image(icon, ICON_PX, fg))
+            _orig_configure(w, image=w._sk_icon, compound="left", padx=6)
         w.bind("<Enter>", lambda e, w=w: _orig_configure(w, bg=T.CARD), add="+")
         w.bind("<Leave>", lambda e, w=w, b=parent: _orig_configure(w, bg=b), add="+")
         return True

@@ -130,12 +130,15 @@ def _menu(p): p.line([(4, 7), (20, 7)]); p.line([(4, 12), (20, 12)]); p.line([(4
 def _mic(p): p.rect(9, 3, 15, 14, 3); p.arc(12, 12, 7, 20, 160); p.line([(12, 19), (12, 22)])
 def _palette(p): p.circle(12, 12, 9.2); [p.dot(x, y, 1.4) for x, y in ((8, 9), (13, 7.5), (17, 11), (8, 14.5))]
 def _star(p): p.poly([(12, 3), (14.6, 9.2), (21, 9.7), (16, 14), (17.7, 20.5), (12, 17), (6.3, 20.5), (8, 14), (3, 9.7), (9.4, 9.2)])
+def _minus(p): p.circle(12, 12, 9.2); p.line([(7.5, 12), (16.5, 12)])
+def _mute(p): p.poly([(4, 9.5), (8, 9.5), (13, 5), (13, 19), (8, 14.5), (4, 14.5)]); p.line([(17, 9.5), (21.5, 14.5)]); p.line([(21.5, 9.5), (17, 14.5)])
+def _shuffle(p): p.line([(3, 17), (8, 17), (16, 7), (20, 7)]); p.line([(3, 7), (8, 7), (10.5, 10.5)]); p.line([(13.5, 13.5), (16, 17), (20, 17)]); p.line([(17.5, 4.5), (20.5, 7), (17.5, 9.5)]); p.line([(17.5, 14.5), (20.5, 17), (17.5, 19.5)])
 def _cube(p): p.line([(12, 3), (20.5, 7.5), (20.5, 16.5), (12, 21), (3.5, 16.5), (3.5, 7.5)], closed=True); p.line([(3.5, 7.5), (12, 12), (20.5, 7.5)]); p.line([(12, 12), (12, 21)])
 
 
 _NAMES = ("play pause stop next prev bolt alert lock unlock tap save trash plus close edit folder image text video wave sliders monitor refresh undo "
           "up down right dice sparkle layers eye download check grid drop sun zigzag clock bookmark crosshair fullscreen bars code copy list menu "
-          "mic palette star cube").split()
+          "mic palette star cube minus mute shuffle").split()
 ICONS = {n: globals()["_" + n] for n in _NAMES}
 
 
@@ -158,7 +161,7 @@ TEXT_ICONS = {
     "supprimer": "trash", "restaurer": "undo", "annuler": "close", "aucun": "close", "aucune": "close", "fermer": "close",
     "centrer": "crosshair", "ambiance par defaut": "sparkle", "diagnostic": "check", "plein ecran": "fullscreen", "barres debug": "bars",
     "demarrer la projection": "monitor", "arreter la projection": "monitor", "panique": "alert", "dupliquer la derniere": "copy",
-    "tirer maintenant": "dice", "+ dossier": "folder", "tap tempo": "tap", "strobe": "bolt", "drop": "bolt", "montee": "up", "charger": "download",
+    "tirer maintenant": "dice", "+ dossier": "folder", "tap tempo": "tap", "strobe": "bolt", "drop": "down", "montee": "up", "renommer": "edit", "retirer": "minus", "mode silence": "mute", "charger": "download",
     "verrou": "lock", "retour": "prev", "snap": "image", "ridge": "wave",
     # onglets, titres de partie et de section
     "fond": "layers", "effets": "sparkle", "logo": "image", "aura du logo": "sun", "fonte du logo": "drop", "cellules": "grid", "noise": "zigzag",
@@ -167,7 +170,8 @@ TEXT_ICONS = {
     "source": "mic", "spectre": "wave", "couleurs": "palette", "sortie": "monitor", "effets sur le logo": "image", "motif genere": "palette",
     "image": "image", "texte": "text", "video": "video", "audio2wave": "wave", "fond genere": "palette",
 }
-_PREFIX = (("verrou", "lock"), ("set ", "list"), ("+ scene", "plus"), ("reglages vj", "sliders"), ("recuperer les medias", "download"))
+_PREFIX = (("verrou", "lock"), ("strobe", "bolt"), ("montee", "up"), ("set ", "list"), ("reglages vj", "sliders"), ("duree", "clock"),
+           ("ordre", "shuffle"), ("recuperer les medias", "download"))
 
 
 def for_text(text: str) -> str | None:

@@ -1126,6 +1126,9 @@ def check_gui() -> None:
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
           str((out.get("x_help"), out.get("x_help_once"))))
+    check(out.get("x_row_icons") == (True, True), "liste des scenes (VJ): Renommer et Retirer en icone seule (libelle inchange)", str(out.get("x_row_icons")))
+    check(out.get("x_console_icons") == ["Drop", "Montee", "PANIQUE", "Strobe", "Tap tempo", "Verrou"],
+          "console VJ: icones sur Strobe, Montee, Drop, Verrou, Tap tempo et PANIQUE (libelles inchanges)", str(out.get("x_console_icons")))
     check(out.get("x_console") == (True, True, True), "console VJ: grosses commandes (PANIQUE, Drop, Suivante) et ligne d'etat", str(out.get("x_console")))
     check(out.get("x_title") is True, "titre de la fenetre: l'etat du spectacle (scene, VJ) lisible dans la barre des taches")
     check(out.get("x_autosave") is True, "auto-sauvegarde: reglages (sans etats du moment), scene et set ecrits", str(out.get("x_autosave")))
@@ -2892,6 +2895,9 @@ def gui_expand_steps(c, s, out) -> None:
     clab = [w.cget("text") for top in cons for w in walk_(top) if w.winfo_class() == "Label"]
     out["x_console"] = (len(cons) == 1, "PANIQUE" in cbtn and "Drop" in cbtn and any(t_.startswith("Suivante") for t_ in cbtn),
                         any("VJ" in t_ for t_ in clab))
+    rows_ = [w for w in walk_(root) if w.winfo_class() == "Button" and w.cget("text") in ("Renommer", "Retirer")]
+    out["x_row_icons"] = (len(rows_) >= 2, all(getattr(w, "_sk", {}).get("icon_only") for w in rows_))
+    out["x_console_icons"] = sorted(w.cget("text") for top in cons for w in walk_(top) if w.winfo_class() == "Button" and str(w.cget("image")))
     for top in cons:
         top.destroy()
     root.update()
@@ -5195,6 +5201,16 @@ def check_icons() -> None:
         check(lab.cget("text") == "FOND" and str(lab.cget("image")) != "", "icones: le titre garde son texte et porte repere + icone")
         check(nb.tab(0, "text") == "Effets" and nb.tab(0, "image") and not nb.tab(1, "image"), "icones: onglet connu = icone, texte inchange ; onglet inconnu = rien",
               str((nb.tab(0, "text"), nb.tab(0, "image"), nb.tab(1, "image"))))
+        # menus deroulants du VJ (SET, ordre, duree, reglages) : icone a gauche du texte
+        menus = {}
+        for label in ("SET  Entropie ▾", "ordre : dans l'ordre ▾", "duree par defaut : 10 s ▾", "reglages VJ ▾", "+ Scene ▾"):
+            mb = tk.Menubutton(root, text=label, bg=T.BG, fg=T.FG)
+            mb.pack()
+            menus[label] = mb
+        skin.apply(root)
+        check(all(str(menus[l].cget("image")) for l in list(menus)[:4]) and not str(menus["+ Scene ▾"].cget("image"))
+              and menus["SET  Entropie ▾"].cget("text") == "SET  Entropie ▾",
+              "icones: les menus du VJ (SET, ordre, duree, reglages) ont leur icone, texte inchange ; + Scene n'en double pas le plus")
         # icone seule : le libelle devient l'info-bulle (ou la premiere ligne de celle qui existe deja)
         check(btn._sk["icon_only"] and not plain._sk.get("icon_only") and btn.winfo_reqwidth() < plain.winfo_reqwidth(),
               "icones: Supprimer = icone seule (bouton plus court), un bouton sans icone garde son texte")
