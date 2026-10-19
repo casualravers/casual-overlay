@@ -4740,6 +4740,28 @@ def check_skin() -> None:
           "version portable: skin.py et theme.py embarques")
 
 
+def check_portable_modules() -> None:
+    """Chaque module du depot importe par le code embarque (y compris les imports tardifs dans une fonction) est dans le dossier portable.
+    Le script de fabrication ne lance pas la GUI : un module oublie ne se verrait qu'au premier lancement sur le PC de la soiree."""
+    print("version portable : modules embarques")
+    import ast
+    import build_portable as bp
+    here = Path(__file__).resolve().parent
+    local = {p.stem for p in here.glob("*.py")}
+    shipped_files = [here / n for n in bp.APP_FILES if n.endswith(".py") and n != "check_gl.py"] + sorted((here / "core").glob("*.py"))     # (check_gl lui-meme importe les outils de fabrication)
+    missing = []
+    for path in shipped_files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+                [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else []
+            for m in mods:
+                top = m.split(".")[0]
+                if top in local and f"{top}.py" not in bp.APP_FILES and top != "check_gl":
+                    missing.append((path.name, m))
+    check(not missing, f"portable: {len(shipped_files)} modules embarques, aucun import d'un module du depot qui n'y soit pas", str(missing[:3]))
+    check(all((here / n).is_file() for n in bp.APP_FILES), "portable: tous les fichiers de la liste existent",
+          str([n for n in bp.APP_FILES if not (here / n).is_file()]))
+
 def check_core_purity() -> None:
     """core/ est du Python pur : stdlib seulement, jamais le moteur (audio2wave_gl) ni la GUI (gl_gui). Verifie par l'analyse des imports
     ET en important tout core/ dans un interpreteur ou ces modules sont interdits."""
@@ -4843,7 +4865,7 @@ def check_params_schema() -> None:
             wide.append((key, (spec[1], spec[2]), (p.lo, p.hi)))
     check(not wide, "automations: chaque courbe reste dans la plage de son reglage", str(wide[:3]))
     # --- curseurs de la GUI : leur plage tient dans celle de la table
-    src = (here / "gl_gui.py").read_text(encoding="utf-8")
+    src = "".join(path.read_text(encoding="utf-8") for path in [here / "gl_gui.py", *sorted(here.glob("gui_*.py"))])     # la GUI est repartie en plusieurs modules
     out_of = []
     n_sliders = 0
     for m in re.finditer(r'param_slider\(\w+, "[^"]*", "(\w+)", ([-\d.]+), ([-\d.]+),', src):
@@ -4864,7 +4886,7 @@ def check_params_schema() -> None:
     # --- le code ne lit/ecrit que des reglages declares
     unknown = set()
     allowed = {"_automation", "fx_on", "fx_int"}
-    for fname in ("audio2wave_gl.py", "gl_gui.py", "core/randomizer.py", "core/scenes.py", "core/params.py", "core/controls.py"):
+    for fname in ("audio2wave_gl.py", "gl_gui.py", *sorted(p.name for p in here.glob("gui_*.py")), "core/randomizer.py", "core/scenes.py", "core/params.py", "core/controls.py"):
         text = (here / fname).read_text(encoding="utf-8")
         for m in re.finditer(r'\b(?:params|p|cur|current|values|full)\[\s*"([a-z][a-z0-9_]*)"\s*\]', text):
             key = m.group(1)
@@ -5047,6 +5069,7 @@ def main() -> None:
     check_cells()
     check_noise()
     check_masters()
+    check_portable_modules()
     check_core_purity()
     check_params_schema()
     check_safeguards()

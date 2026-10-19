@@ -51,8 +51,11 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   scenes         scenes, sets, memoires de masters (stockage, export / import)
   randomizer     Full Randomizer (banques d'assets, tirages)
 audio2wave_gl.py  moteur : rendu GL, analyse audio, lecteurs ffmpeg, Projection, demarrage ; ré-exporte les noms de core/ (`gl.X`)
-gl_gui.py + skin / theme / gui_*   GUI Tk (importe core/ et le moteur)
-```
+gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
+gui_fond / gui_effects / gui_logo / gui_audio   onglets de la partie LIVE et OVERLAY (fond, effets + halo / fonte / cellules / noise, logo, analyse)
+gui_sets / gui_drop / gui_random / gui_panel    sets, medias (glisser-deposer, vignettes), Full Randomizer, panneau etendu
+gui_vj            espace de controle global du Mode VJ (masters, historique, montee / drop) + garde-fous (panique, tap tempo, aide, console, auto-sauvegarde)
+skin / theme / gui_colors / gui_gates           habillage, couleurs, grisages```
 
 **Regle de dependance** : `core/` n'importe jamais le moteur (`audio2wave_gl`), la GUI, Tk, numpy, GL, PIL ni audio2wave ; le moteur et la GUI
 importent `core/`. `check_gl.py` (`check_core_purity`) l'impose par l'analyse des imports et en important tout `core/` dans un interpreteur
@@ -62,8 +65,23 @@ qui interdit ces modules. Un module deplace dans `core/` l'a ete **tel quel** (b
   (`core.params.PARAMS_PATH` / `OVERLAY_PRESETS_PATH` / `BACKGROUND_PRESETS_PATH`, `core.autosave.AUTOSAVE_PATH`, `core.scenes.SCENES_PATH` /
   `MASTERS_PATH`) : remplacer l'alias `gl.X` ne change rien aux fonctions de core/ (c'est ce que font les tests).
 - Le dossier portable embarque `core/` entier (`APP_DIRS`), verifie par le script (diagnostic + rendu synthetique avec le Python du dossier).
-- Suite prevue : decouper `build_window` (gl_gui) par panneaux, sortir le moteur de rendu en `engine/`, puis (si audio2wave est internalise)
-  `sources/` ; la GUI ne devra parler au moteur que par `Session` (params, commandes, requetes).
+- **`build_window` decoupee en blocs `gui_*.py`** (`gl_gui.py` : 3675 -> ~2000 lignes, la fonction de ~3500 -> ~1500) : chaque module est un bloc
+  contigu de `build_window` **coupe tel quel** (memes noms, meme indentation) en `install(c)`. Les noms de la fenetre dont le bloc depend arrivent
+  par le contexte `c` (`types.SimpleNamespace` construit a l'appel dans `build_window`), ceux que le reste utilise sont rendus par `install` puis
+  re-lies dans `build_window` (`ask_delete_set = gui_sets_ctl.ask_delete_set`...), si bien que les fermetures d'origine continuent de marcher.
+  Un nom defini PLUS LOIN dans `build_window` arrive par un renvoi tardif (`lambda *a, **k: refresh_scene_bar(*a, **k)` pour une fonction,
+  `Late(lambda: scene_ui)` pour un objet : `gl_gui.Late` relit l'objet a chaque acces). Les constantes et fonctions de niveau module de `gl_gui`
+  (`SCENE_COLOR`, `Zone`, `choice_dialog`...) sont importees dans `install` (import tardif : `gl_gui` importe ces modules, pas l'inverse).
+  **Pour extraire un autre bloc** : trouver un bloc contigu dont les dependances sont peu nombreuses (analyse des noms libres avec `ast` : noms
+  definis dans le bloc / utilises hors du bloc / a fournir), le couper, generer le module, relier les noms rendus, puis `check_gl.py`. Tout
+  etat partage que deux blocs creent doit etre cree AVANT eux (ex. `panel_state`, partage par le panneau etendu et le Full Randomizer, est
+  defini dans `build_window`). Les tests lisent les sources de `gl_gui.py` ET de tous les `gui_*.py` (curseurs, reglages lus par le code).
+- **Version portable** : `build_portable.APP_FILES` inclut tous les `gui_*.py` (glob) ; `check_portable_modules` verifie qu'aucun module du depot
+  importe par le code embarque ne manque (le script de fabrication ne lance pas la GUI : un oubli ne se verrait que sur le PC de la soiree).
+- Reste dans `build_window` : mise en page adaptative, barre des scenes (`refresh_scene_bar`), scenes / VJ (`apply_scene*`, `vj_*`), presets,
+  helpers de disposition (`add_slider`, `param_slider`...), pont vers le moteur. Suite prevue : continuer le decoupage (scenes / VJ, barre,
+  mise en page), sortir le moteur de rendu en `engine/`, puis (si audio2wave est internalise) `sources/` ; la GUI ne devra parler au moteur que
+  par `Session` (params, commandes, requetes).
 ## Design de la fenetre de reglages (`theme.py`, `skin.py`)
 
 Direction : **sombre sobre, un accent fin par partie** (LIVE bleu `#3b82f6`, OVERLAY violet, SCENES ambre), boutons arrondis, radios en
