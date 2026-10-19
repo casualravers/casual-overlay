@@ -1578,6 +1578,7 @@ def build_gui(args: argparse.Namespace, width: int, height: int, status: dict,
              command=lambda: request_switch("ridge")).pack(side="left", padx=(4, 0))
 
     style_var = tk.StringVar(value=args.style)
+    widgets["style_var"] = style_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
     r = next_row("left")
     add_label("Style", r, LEFT_LABEL_COL)
     style_frame = tk.Frame(root)
@@ -1588,6 +1589,7 @@ def build_gui(args: argparse.Namespace, width: int, height: int, status: dict,
     controls["style"] = style_var.set
 
     shape_var = tk.StringVar(value=args.shape)
+    widgets["shape_var"] = shape_var          # variable Tk exposee a l'hote (grisages de casual-overlay)
     r = next_row("left")
     add_label("Forme", r, LEFT_LABEL_COL, tooltip="Uniquement pour le style analyzer: barres (bar) ou "
                                                   "courbe qui ondule (line).")

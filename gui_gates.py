@@ -1,9 +1,9 @@
 """Reglages incompatibles : on les grise (ils ne servent a rien dans le mode ou l'etat courant).
 
 Deux usages :
-  - `install_mode_gates(host, mode)` : fenetre d'un mode d'audio2wave (Live, Snap, Ridge). Aucune modification
-    d'audio2wave : on retrouve les widgets par leur texte, et on suit les variables Tk du mode (style, forme,
-    cases) par une trace Tcl.
+  - `install_mode_gates(host, mode)` : fenetre d'un mode d'audio2wave (Live, Snap, Ridge). Les variables Tk des
+    choix (style, forme, cases) sont exposees par audio2wave (`GuiController.widgets`) ; les lignes sans widget nomme
+    restent retrouvees par leur texte. Ces variables sont suivies par une trace Tcl.
   - `Gates` : le meme moteur pour nos propres panneaux (halo, fonte, cellules, palette du fond).
 
 Un widget peut etre vise par plusieurs regles (ex. "Rayon du halo" : style pencil ET halo coche) : il n'est actif
@@ -141,11 +141,15 @@ def install_mode_gates(host, mode: str, muted_fg: str, widgets: dict | None = No
         w = widgets.get(attr)
         return row_widgets(host, w) if w is not None else row_of_label(host, label)
 
-    def rb(text):                                   # variable Tcl d'un groupe de boutons radio, via l'un d'eux
+    def rb(key, text):                              # variable Tcl d'un groupe de boutons radio (exposee par audio2wave, sinon via l'un d'eux)
+        if widgets.get(key) is not None:
+            return str(widgets[key])
         w = find(host, "Radiobutton", text)
         return str(w.cget("variable")) if w is not None else None
 
-    def cb_var(text):
+    def cb_var(key, text):
+        if widgets.get(key) is not None:
+            return str(widgets[key])
         w = find(host, "Checkbutton", text)
         return str(w.cget("variable")) if w is not None else None
 
@@ -158,7 +162,7 @@ def install_mode_gates(host, mode: str, muted_fg: str, widgets: dict | None = No
     watched: list[str] = []
 
     if mode == "live":
-        style_v, shape_v = rb("analyzer"), rb("bar")
+        style_v, shape_v = rb("style_var", "analyzer"), rb("shape_var", "bar")
         watched += [style_v, shape_v]
         analyzer = lambda: value(style_v) == "analyzer"
         # Forme, lissage et echelle des frequences n'existent que pour l'analyseur (la radio est une onde, sans FFT)
@@ -168,8 +172,9 @@ def install_mode_gates(host, mode: str, muted_fg: str, widgets: dict | None = No
         gates.add(row("bar_gap", "Espace entre barres"), lambda: analyzer() and value(shape_v) == "bar")
 
     elif mode == "snap":
-        style_v = rb("pencil")
-        wave_v, glow_v, auto_v = cb_var("Sinusoide"), cb_var("Halo sur les kicks"), cb_var("Gain automatique")
+        style_v = rb("style_var", "pencil")
+        wave_v, glow_v, auto_v = (cb_var("wave_var", "Sinusoide"), cb_var("kick_glow_var", "Halo sur les kicks"),
+                                  cb_var("gain_auto_var", "Gain automatique"))
         watched += [style_v, wave_v, glow_v, auto_v]
         pencil = lambda: value(style_v) == "pencil"
         not_pencil = lambda: value(style_v) != "pencil"
@@ -196,7 +201,7 @@ def install_mode_gates(host, mode: str, muted_fg: str, widgets: dict | None = No
         gates.add(row_of_label(host, "Gain manuel"), lambda: not checked(auto_v))
 
     elif mode == "ridge":
-        auto_v = cb_var("Gain automatique")
+        auto_v = cb_var("gain_auto_var", "Gain automatique")
         watched.append(auto_v)
         gates.add(row("gain", "Gain manuel (dB)"), lambda: not checked(auto_v))
 

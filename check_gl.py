@@ -4426,7 +4426,7 @@ def check_audio2wave_api() -> None:
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
     import common
     check(isinstance(common.API_VERSION, int) and common.API_VERSION >= gl_gui.AUDIO2WAVE_API_MIN,
-          "audio2wave: le depot voisin annonce une API_VERSION assez recente", str(getattr(common, "API_VERSION", None)))
+          "audio2wave: audio2wave annonce une API_VERSION assez recente", str(getattr(common, "API_VERSION", None)))
     check(gl_gui.audio2wave_api_missing(live) == [], "audio2wave: rien ne manque", str(gl_gui.audio2wave_api_missing(live)))
     gl_gui.require_audio2wave_api(live)
     check(True, "audio2wave: require_audio2wave_api laisse passer un depot a jour")
@@ -4443,7 +4443,7 @@ def check_audio2wave_api() -> None:
         message = ""
     except SystemExit as exc:
         message = str(exc)
-    check("Mets a jour le depot audio2wave" in message and "API_VERSION" in message and gl_gui.AUDIO2WAVE_REQUIRED in message
+    check("Mets a jour audio2wave" in message and "API_VERSION" in message and gl_gui.AUDIO2WAVE_REQUIRED in message
           and "AttributeError" not in message, "audio2wave ancien: arret avec un message clair (quoi, ou et comment mettre a jour)", message[:200])
 
 
@@ -4576,7 +4576,7 @@ def check_line_resolution() -> None:
 
 
 def check_contract() -> None:
-    """Test de contrat d'audio2wave (`check_contract.py` du depot voisin : noms et signatures dont depend casual-overlay) :
+    """Test de contrat d'audio2wave (`check_contract.py` d'audio2wave : noms et signatures dont depend casual-overlay) :
     un code de sortie non nul fait echouer la suite. Si c'est un nom dont on depend qui est casse, c'est cote audio2wave
     qu'il faut le corriger (on n'y touche pas)."""
     print("contrat d'audio2wave (check_contract.py)")
@@ -5252,7 +5252,7 @@ def check_audio2wave_interne() -> None:
     need = ("audio2wave.py", "audio2wave_live.py", "audio2wave_snap.py", "audio2wave_ridge.py", "common.py", "preset_registry.py", "check_contract.py",
             "VENDORED.md", "ORIGINE.json")
     check(all((vend / n).is_file() for n in need), "audio2wave interne: tous les fichiers sont la", str([n for n in need if not (vend / n).is_file()]))
-    # ordre de recherche : portable (audio2wave/ a cote du programme) > copie interne > depot voisin
+    # ordre de recherche : portable (audio2wave/ a cote du programme) > copie interne > depot voisin (dernier recours)
     tmp = Path(tempfile.mkdtemp(prefix="a2w_order_"))
     prog = tmp / "prog"
     (prog / "audio2wave").mkdir(parents=True)
@@ -5277,6 +5277,11 @@ def check_audio2wave_interne() -> None:
     check(origin["commit"] in notes and not unlisted and (not (changed or extra) or "Aucune" not in section),
           f"audio2wave interne: {len(origin['sha256'])} fichiers conformes a l'origine ({origin['commit'][:7]}), ou chaque ecart est note dans VENDORED.md",
           f"modifies: {changed} ajoutes: {extra} non notes: {unlisted}")
+    exposed = {"audio2wave_live.py": ("style_var", "shape_var"), "audio2wave_ridge.py": ("gain_auto_var",),
+               "audio2wave_snap.py": ("style_var", "wave_var", "kick_glow_var", "glow_live_var", "gain_auto_var")}
+    lacking = [f"{n}:{k}" for n, keys in exposed.items() for k in keys
+               if f'widgets["{k}"]' not in (vend / n).read_text(encoding="utf-8")]
+    check(not lacking, "audio2wave interne: les variables Tk qui commandent les grisages sont exposees dans `widgets`", str(lacking))
 
 def check_engine_layer() -> None:
     """engine/ depend de core/ et des dependances facultatives, jamais de la GUI ni de la facade audio2wave_gl ; il est embarque dans le portable."""

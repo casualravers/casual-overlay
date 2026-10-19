@@ -98,8 +98,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   `mix` / `lighten` / `darken`. `BG` et `PANEL` sont ceux d'audio2wave (`common.GUI_*`) : ses panneaux se fondent avec les notres.
 - **`skin.py`** : habille les VRAIS widgets Tk (classe, `invoke()`, `state`, variables inchanges : `gui_gates`, `gui_colors`, les tests
   et le code d'audio2wave marchent tels quels) avec des **images arrondies Pillow** (dessinees a 4x, reduites ; coins transparents sur le
-  fond du parent). `skin.apply(racine)` parcourt l'arbre **apres la construction**, y compris les panneaux d'audio2wave (aucun de leurs
-  fichiers touche) ; idempotent. Appelee dans `build_window` **avant de mesurer `layout["wide_need"]`** (les images changent la largeur
+  fond du parent). `skin.apply(racine)` parcourt l'arbre **apres la construction**, y compris les panneaux d'audio2wave (sans option dediee dans leurs fichiers) ; idempotent. Appelee dans `build_window` **avant de mesurer `layout["wide_need"]`** (les images changent la largeur
   naturelle : apres, la fenetre se croyait trop etroite et passait en mise en page empilee, 1013 px de haut), par `refresh_scene_bar`
   (barre + panneau etendu) et `choice_dialog`. Un widget habille a une `_sk` ; `configure` / `cget` des classes Button, Radiobutton,
   Checkbutton, Menubutton, Scale sont interceptes **seulement pour lui** (`bg` = couleur de remplissage voulue, le vrai fond du widget
@@ -170,7 +169,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   dans `choice_dialog`.
 - **Version portable** (`build_portable.py`, stdlib, Windows) : un dossier `dist/casual-overlay-portable/` = `python/` (copie de
   l'installation Python de base du venv, sans Doc / tests / pip, avec tcl/tk, + `site-packages` du `.venv`), les `.py`, `gl_shaders/`,
-  `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, jamais modifies), `ffmpeg/` (ffmpeg.exe +
+  `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, copie de `sources/audio2wave/`), `ffmpeg/` (ffmpeg.exe +
   ffprobe.exe), `start.bat`, `LISEZMOI.txt`. **Pas de gel (PyInstaller)** : audio2wave est importe dynamiquement et tkinter /
   modules varient selon le mode. `audio2wave_gl.bundled_paths(script_dir, path)` : `audio2wave/` a cote du programme l'emporte sur le
   copie interne (`DEFAULT_A2W_DIR`), `ffmpeg/` est ajoute en tete du `PATH` (donc `shutil.which`, audio2wave et nos sous-processus le
@@ -803,7 +802,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
 
 1. appelle `live.build_gui(live_args, largeur, hauteur, status, restart_event, stop_event, finished_event, on_switch_mode=...,
    parent=host, embedded=True, compact=True, presets_first=True)` et garde le `common.GuiController` renvoye (`panel["ctrl"]`).
-   Contrat (**aucune modification du depot audio2wave**) : `build_gui` mute les options `args` en place (un `apply()` par reglage,
+   Contrat (API hote de la copie interne) : `build_gui` mute les options `args` en place (un `apply()` par reglage,
    anti-rebond de 400 ms, ou `AUTO_RESTART_INTERVAL_S` = 2 s pour les automations), puis positionne `restart_event` ;
    `status["text"]` alimente sa ligne de statut ; `finished_event` ne ferme plus rien (`embedded`) ; pas de `mainloop()` (il est
    ici). Le **controleur** remplace tout ce qu'on faisait en fouillant leurs widgets : `capture_state()` (etat du panneau, automations
@@ -910,7 +909,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
     d'audio2wave (enchainement de presets) n'est pas verifie ici.
 - **Reglages incompatibles grises** ([gui_gates.py](gui_gates.py)) : un reglage sans objet dans le mode ou l'etat
   courant est **grise** (jamais retire : la disposition ne bouge pas et on voit qu'il existe). Pour les panneaux
-  d'audio2wave (aucune modification de leur code) : `install_mode_gates` retrouve les widgets par leur texte et
+  d'audio2wave (sans option dediee dans leur code) : `install_mode_gates` retrouve les widgets par leur texte et
   suit leurs variables Tk par une **trace Tcl** (`trace add variable`) ; surtout pas `tk.StringVar(name=...)`, dont
   le ramasse-miettes detruirait la variable d'audio2wave. Regles : Live radio -> Forme, Lissage, Echelle des
   frequences, Espace entre barres ; analyzer en ligne -> Espace entre barres ; Snap pencil -> Echelle, Filtre
