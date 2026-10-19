@@ -97,7 +97,7 @@ def install(c):
             scene, info, record = random_scene()
             rnd["last"] = record
             name = randomizer.random_name(rnd["rng"], scene_book.names())
-            scene_book.put(dict(scene, name=name))
+            scene_book.put(dict(scene, name=name, temp=True))       # provisoire : a garder ou a retirer (panneau etendu)
             names.append(name)
         if len(names) == 1:
             scene_msg.set(f"Scene aleatoire '{names[0]}' ajoutee au set (aucun preset enregistre) : {info}")

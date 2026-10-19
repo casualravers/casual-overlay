@@ -1839,6 +1839,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         root=root,
         s=s,
         scene_book=scene_book,
+        scene_msg=scene_msg,
         scene_panel=scene_panel,
         scene_ui=scene_ui,
         set_entry_vj=set_entry_vj,
@@ -1848,6 +1849,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     panel_update_in_place = gui_panel_ctl.panel_update_in_place
     refresh_scene_panel = gui_panel_ctl.refresh_scene_panel
     set_expanded = gui_panel_ctl.set_expanded
+    panel_ops = gui_panel_ctl.ops
 
     def proj_text() -> str:
         return "Arreter la projection" if projection is not None and projection.running() else "Demarrer la projection"
@@ -2317,7 +2319,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel, "refresh_panel": refresh_scene_panel, "panel_state": panel_state,
                        "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "add_random5": add_random_scenes, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
-                       "move_entry": move_entry_now, "move_to": move_entry_to, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
+                       "move_entry": move_entry_now, "move_to": move_entry_to, "panel_ops": panel_ops, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,

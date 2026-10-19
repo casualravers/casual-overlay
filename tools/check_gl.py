@@ -1184,6 +1184,11 @@ def check_gui() -> None:
           "etendu (GUI): colonne FOND video : une image est refusee, une video deposee remplace le fond de l'entree (meme fichier d'une entree a l'autre), retrait", str((out.get("x_bg_bad"), out.get("x_bg"))))
     check(out.get("x_dup") == (True,) * 5,
           "etendu (GUI): Dupliquer la derniere ajoute une copie de la scene (nom inedit) avec les medias, la duree et le VJ de l'entree", str(out.get("x_dup")))
+    check(out.get("x_temp") == (True,) * 5 and out.get("x_temp_clean") is True,
+          "etendu (GUI): scenes tirees par +5 = provisoires (repere, Garder avec renommage en ligne, nom pris refuse), Retirer les provisoires",
+          str((out.get("x_temp"), out.get("x_temp_clean"))))
+    check(out.get("x_select") == (True,) * 7, "etendu (GUI): lignes cochees : VJ off / on, duree, dupliquer, copier vers un autre set, retirer", str(out.get("x_select")))
+    check(out.get("x_library") == (True,) * 4, "etendu (GUI): bibliotheque a gauche du set, glisser une scene sur la liste l'ajoute au rang vise", str(out.get("x_library")))
     check(out.get("x_plus5") == (True,) * 5,
           "etendu (GUI): le bouton +5 ajoute cinq scenes aleatoires d'un coup (noms inedits, aucun preset, rien d'applique)", str(out.get("x_plus5")))
     check(out.get("x_drag") == (True,) * 4,
@@ -3097,6 +3102,90 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_drag"] = (not arrows, order1 == order0[1:3] + order0[:1] + order0[3:], order2 == order0,
                      len(sc["strip"]().winfo_children()) == 1 and len(sc["strip"]().winfo_children()[0].winfo_children()) == len(book.rows()))
     sc["refresh_panel"](force=True)
+    # scenes provisoires (tirees par +5) : repere, Garder avec renommage, retirer les provisoires
+    ops = sc["panel_ops"]
+    lib0 = set(book.names())
+    names_t = sc["add_random5"]()
+    root.update()
+    sc["refresh_panel"](force=True)
+    root.update()
+    marks = [sc["panel_state"]["rows"][r["index"]]["num"].cget("text") for r in book.rows() if r["name"] in names_t]
+    garder = [w for r in book.rows() if r["name"] in names_t for w in walk_(sc["panel_state"]["rows"][r["index"]]["frame"])
+              if w.winfo_class() == "Button" and str(w.cget("text")) == "Garder"]
+    kept = ops.keep_now(names_t[0], "Gardee par test")
+    clash = ops.keep_now(names_t[1], "Gardee par test")                       # nom deja pris : refus, la scene reste provisoire
+    still = set(book.temp_names())
+    ops.start_keep(next(r["index"] for r in book.rows() if r["name"] == names_t[2]))
+    root.update()
+    entry_open = any(w.winfo_class() == "Entry" for w in walk_(sc["panel_state"]["rows"][next(r["index"] for r in book.rows() if r["name"] == names_t[2])]["frame"]))
+    removed = ops.drop_temp(ask=False)
+    out["x_temp"] = (all(m.endswith("\u2736") for m in marks) and len(marks) == 5, len(garder) == 5,
+                     kept == "Gardee par test" and clash is None and "Gardee par test" not in book.temp_names() and names_t[1] in still,
+                     entry_open, removed == 4 and book.temp_names() == [] and "Gardee par test" in book.names()
+                     and not (set(names_t[1:]) & set(book.names())))
+    ops_rows = book.rows()
+    if any(r["name"] == "Gardee par test" for r in ops_rows):
+        book.remove_entry(next(r["index"] for r in ops_rows if r["name"] == "Gardee par test"))
+    book.delete("Gardee par test")
+    out["x_temp_clean"] = set(book.names()) == lib0
+    sc["refresh_panel"](force=True)
+    root.update()
+    # selection multiple : cocher, VJ off / on, duree, dupliquer, copier vers un autre set, retirer
+    n0 = len(book.rows())
+    names0 = [r["name"] for r in book.rows()]
+    ops.toggle_sel(0)
+    ops.toggle_sel(2)
+    boxes = [sc["panel_state"]["rows"][k]["box"].cget("text") for k in (0, 1, 2)]
+    ops.sel_skip(True)
+    skip_on = [book.rows()[k]["skip"] for k in (0, 1, 2)]
+    ops.sel_skip(False)
+    ops.sel_seconds(20.0)
+    secs = [book.rows()[k]["seconds"] for k in (0, 1, 2)]
+    ops.sel_seconds(None)
+    ops.sel_duplicate()
+    after_dup = [r["name"] for r in book.rows()]
+    ops.toggle_sel(0)
+    ops.toggle_sel(2)
+    book.new_set("Copie test")
+    copied = ops.sel_copy_to("Copie test")
+    in_other = [e["scene"] for e in book.get_set("Copie test")["entries"]]
+    book.delete_set("Copie test")
+    ops.select_none()
+    none_msg = ops.sel_remove()
+    ops.toggle_sel(1)
+    ops.toggle_sel(3)
+    removed_n = ops.sel_remove()
+    out["x_select"] = (boxes == ["\u2611", "\u2610", "\u2611"], skip_on == [True, False, True], secs == [20.0, None, 20.0],
+                       len(after_dup) == n0 + 2 and after_dup[0] == after_dup[1] == names0[0] and after_dup[3] == after_dup[4] == names0[2],
+                       copied == 2 and len(in_other) == 2, none_msg == 0, removed_n == 2 and len(book.rows()) == n0)
+    # bibliotheque : colonne a gauche, ajout a un rang precis (glisser-deposer simule par ses evenements)
+    ops.toggle_library()
+    root.update()
+    lib = sc["panel_state"].get("lib")
+    listed = lib is not None and len(lib["names"]) == len(book.names())
+    rows_before = [r["name"] for r in book.rows()]
+    ok_api = ops.add_at(lib["names"][0], 1) if lib else False
+    rows_api = [r["name"] for r in book.rows()]
+    book.remove_entry(1)
+    sc["refresh_panel"](force=True)
+    root.update()
+    lib = sc["panel_state"]["lib"]
+    lb = lib["lb"]
+    row1 = sc["panel_state"]["rows"][1]["frame"]
+    target_y = row1.winfo_rooty() + 2
+    target_x = sc["panel_state"]["cv"].winfo_rootx() + 40
+    lb.event_generate("<ButtonPress-1>", x=5, y=5, rootx=lb.winfo_rootx() + 5, rooty=lb.winfo_rooty() + 5)
+    lb.event_generate("<B1-Motion>", x=5, y=5, rootx=target_x, rooty=target_y, state=0x100)
+    lb.event_generate("<ButtonRelease-1>", x=5, y=5, rootx=target_x, rooty=target_y)
+    root.update()
+    rows_drag = [r["name"] for r in book.rows()]
+    if len(rows_drag) == len(rows_before) + 1:
+        book.remove_entry(1)
+    ops.toggle_library()
+    root.update()
+    out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
+                        len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is not None)
+    sc["refresh_panel"](force=True)
     # bouton Dupliquer la derniere : copie de la scene et des reglages de l'entree, a la suite
     sc["entry_vj"](len(book.rows()) - 1, seconds=42.0)
     last_row = book.rows()[-1]
@@ -3171,7 +3260,7 @@ def gui_expand_steps(c, s, out) -> None:
     grip.event_generate("<B1-Motion>", rooty=500 + g0 - small)       # on remet la hauteur d'origine (la suite compare les tailles)
     grip.event_generate("<ButtonRelease-1>", rooty=500 + g0 - small)
     root.update()
-    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + 60, small == 80)
+    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + min(60, max(root.winfo_screenheight() - 80 - gw0, 0)), small == 80)     # la fenetre suit tant qu'elle tient dans l'ecran
     out["x_grip_back"] = (int(body.cget("height")), g0, root.winfo_height(), gw0)
     # renommer depuis le panneau
     # nom tres long : affiche en entier, colonnes alignees d'une ligne a l'autre

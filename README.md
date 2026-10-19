@@ -126,7 +126,10 @@ hauteur (elle reprend sa taille quand on *Reduit*). Une ligne par entree : sa sc
 sa vignette** (image, premiere image d'une video ; pour un texte, le texte ; en rouge si le fichier est introuvable), la
 **duree propre** a l'entree dans le VJ (ou celle du set), une case **VJ** (decochee : le VJ la saute, mais elle reste
 chargeable a la main), *Renommer* (la scene, dans tous les sets) et *Retirer*. **Changer l'ordre : glisse le numero
-d'une ligne** sur la ligne visee. Sous la liste : *+* (une scene aleatoire), *+5* (cinq d'un coup) et *Dupliquer la derniere*.
+d'une ligne** sur la ligne visee. **Lignes cochees** (case a gauche, Maj = une plage) : retirer du set, VJ off / on, duree, dupliquer, copier
+vers un autre set. **Bibliotheque** (bouton en bas a droite du panneau) : toute la liste des scenes a gauche du set, a glisser sur la liste pour
+les ajouter a l'endroit voulu. Les scenes tirees par *+* / *+5* sont **provisoires** (✱) : *Garder* (avec renommage sur place) pour les conserver,
+*Retirer les ✱* pour ecarter celles qui ne plaisent pas. Sous la liste : *+* (une scene aleatoire), *+5* (cinq d'un coup) et *Dupliquer la derniere*.
 En tete : l'ordre et la duree par defaut du set, et la duree d'une boucle.
 **Deux familles de medias** : ceux de l'**overlay** (logo image, texte, video du logo) et ceux d'**audio2wave** (en mode
 Snap, style pencil : *video interieure* et *video exterieure*). Une scene capture les siens a l'enregistrement (ceux de

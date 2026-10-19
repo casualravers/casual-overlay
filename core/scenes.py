@@ -295,14 +295,96 @@ class SceneBook:
     def row_names(self) -> list[str]:
         return [r["name"] for r in self.rows()]
 
-    def add_entry(self, scene_name: str, media: dict | None = None) -> bool:
+    def add_entry(self, scene_name: str, media: dict | None = None, at: int | None = None) -> bool:
+        """Ajoute une entree au set actif : a la fin, ou au rang `at` (glisser-deposer depuis la bibliotheque)."""
         data = self._load()
         i = self._find(data["scenes"], scene_name)
         if i is None:
             return False
-        self._active(data)["entries"].append(self._entry({"media": media}, data["scenes"][i]["name"]))
+        entries = self._active(data)["entries"]
+        entry = self._entry({"media": media}, data["scenes"][i]["name"])
+        if at is None or at >= len(entries):
+            entries.append(entry)
+        else:
+            entries.insert(max(int(at), 0), entry)
         self._save(data)
         return True
+
+    # ---- operations sur plusieurs entrees du set actif (selection multiple)
+    def _valid_indexes(self, entries: list, indexes) -> list[int]:
+        return sorted({int(i) for i in indexes if isinstance(i, int) and 0 <= i < len(entries)})
+
+    def remove_entries(self, indexes) -> int:
+        """Retire plusieurs entrees du set actif (les scenes restent dans la bibliotheque) ; rend combien."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        for i in reversed(idx):
+            entries.pop(i)
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def set_entries_vj(self, indexes, seconds="keep", skip=None) -> int:
+        """`set_entry_vj` pour plusieurs entrees a la fois (duree propre 5..300 ou None = celle du set, participation au VJ)."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        for i in idx:
+            if seconds != "keep":
+                entries[i]["seconds"] = seconds
+            if skip is not None:
+                entries[i]["skip"] = bool(skip)
+            entries[i] = self._entry(entries[i], entries[i]["scene"])
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def duplicate_entries(self, indexes) -> int:
+        """Copie chaque entree choisie juste apres elle (meme scene de la bibliotheque, memes medias, duree et participation au VJ)."""
+        data = self._load()
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        for i in reversed(idx):
+            entries.insert(i + 1, json.loads(json.dumps(entries[i])))
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    def copy_entries_to_set(self, indexes, set_name: str) -> int:
+        """Copie des entrees du set actif a la fin d'un autre set (ou du meme) ; rend combien, -1 si le set n'existe pas."""
+        data = self._load()
+        j = self._find(data["sets"], set_name)
+        if j is None:
+            return -1
+        entries = self._active(data)["entries"]
+        idx = self._valid_indexes(entries, indexes)
+        data["sets"][j]["entries"].extend(json.loads(json.dumps(entries[i])) for i in idx)
+        if idx:
+            self._save(data)
+        return len(idx)
+
+    # ---- scenes provisoires (tirees par « + » / « +5 » : a trier)
+    def temp_names(self) -> list[str]:
+        return [x["name"] for x in self.list() if x.get("temp")]
+
+    def keep_scene(self, name: str, new_name: str | None = None) -> str | None:
+        """Garde une scene provisoire (retire le drapeau `temp`), en la renommant si `new_name` est donne. Rend le nom final,
+        None si la scene n'existe pas ou si le nouveau nom est vide ou deja pris."""
+        data = self._load()
+        i = self._find(data["scenes"], name)
+        if i is None:
+            return None
+        final = data["scenes"][i]["name"]
+        if new_name is not None and new_name.strip()[:MAX_NAME] != final:
+            if not self.rename_scene(final, new_name):
+                return None
+            final = new_name.strip()[:MAX_NAME]
+        data = self._load()
+        i = self._find(data["scenes"], final)
+        data["scenes"][i].pop("temp", None)
+        self._save(data)
+        return final
 
     def remove_entry(self, index: int) -> bool:
         data = self._load()
