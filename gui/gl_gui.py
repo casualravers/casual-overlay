@@ -681,7 +681,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def on_wheel(e) -> None:
         step = -1 if e.delta > 0 else 1
         pcv = panel_state["cv"]                           # liste des scenes du panneau etendu : elle defile sous la souris
-        if pcv is not None and (str(e.widget) == str(pcv) or str(e.widget).startswith(str(pcv) + ".")):
+        strip = proj_ui.get("strip")                      # bande des touches de scene (barre du haut) : defile en largeur
+        if strip is not None and (str(e.widget) == str(strip) or str(e.widget).startswith(str(strip) + ".")):
+            strip.xview_scroll(step * 2, "units")
+        elif pcv is not None and (str(e.widget) == str(pcv) or str(e.widget).startswith(str(pcv) + ".")):
             pcv.yview_scroll(step, "units")
         elif str(e.widget).startswith(str(canvas)) and active_panel().winfo_reqheight() > visible_height() + 1:
             canvas.yview_scroll(step, "units")            # le panneau d'audio2wave defile d'abord...
@@ -1456,6 +1459,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         vj=vj,
         vj_arm=vj_arm))
     add_random_scene = gui_random_ctl.add_random_scene
+    add_random_scenes = gui_random_ctl.add_random_scenes
     duplicate_last_scene = gui_random_ctl.duplicate_last_scene
     random_bank = gui_random_ctl.random_bank
     random_draw = gui_random_ctl.random_draw
@@ -1659,6 +1663,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             scene_msg.set(f"'{name}' retiree du set (la scene reste dans la bibliotheque)")
             refresh_scene_bar()
 
+    def move_entry_to(index: int, target: int) -> None:
+        """Glisser-deposer d'une ligne du panneau : l'entree `index` prend le rang `target`."""
+        move_entry_now(index, target - index)
+
     def move_entry_now(index: int, delta: int) -> None:
         if scene_book.move_entry(index, delta) is not None:
             s.active_entry = None
@@ -1742,6 +1750,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         media_clear=media_clear,
         media_from_current=media_from_current,
         move_entry_now=move_entry_now,
+        move_entry_to=move_entry_to,
         refresh_scene_bar=lambda *a, **k: refresh_scene_bar(*a, **k),
         remove_entry_now=remove_entry_now,
         root=root,
@@ -1798,6 +1807,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         a2w=a2w,
         a2w_clear=a2w_clear,
         add_random_scene=add_random_scene,
+        add_random_scenes=add_random_scenes,
         apply_entry=apply_entry,
         bg_clear=bg_clear,
         current_index=current_index,
@@ -1806,6 +1816,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         master_box=Late(lambda: master_box),
         media_clear=media_clear,
         move_entry_now=move_entry_now,
+        move_entry_to=move_entry_to,
         panel_state=panel_state,
         random_bank=random_bank,
         random_draw_now=random_draw_now,
@@ -1903,6 +1914,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         for child in scene_bar.winfo_children():
             child.destroy()
         proj_ui["btn"] = None
+        proj_ui["strip"] = None
         if projection is not None:
             btn = tk.Button(scene_bar, text=proj_text(), command=toggle_projection, padx=10)
             btn.pack(side="left", padx=(8, 4), pady=5)
@@ -2001,40 +2013,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         Tooltip(set_btn, "Set = un enchainement de scenes (les memes scenes peuvent servir dans plusieurs sets, chacune avec son "
                          "propre media). Changer de set change la rangee, F1..F9 et le VJ (qui redemarre). "
                          "Exporter / importer : un seul fichier a partager.")
-        rows = scene_book.rows()
-        current = current_index(rows)
-        for row in rows[:scenes.KEYS]:
-            i = row["index"]
-            name = row["name"]
-            on = i == current
-            btn = tk.Button(scene_bar, text=f"{i + 1}  {name if len(name) <= 14 else name[:13] + '.'}"
-                            + (" \u25cf" if row["media"] else ""), command=lambda k=i: apply_entry(k), relief="flat", bd=0,
-                            padx=12, pady=3, cursor="hand2", font=("Segoe UI", 9, "bold"),
-                            bg=SCENE_COLOR if on else a2w.GUI_BG, fg=BANNER_FG if on else a2w.GUI_FG,
-                            activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
-            btn.pack(side="left", padx=2, pady=5)
-            register_drop(btn, i)                                      # un fichier depose sur la touche = media de la scene
-            menu = tk.Menu(btn, tearoff=0)
-            fill_entry_menu(menu, row)
-            btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
-            scene = row["scene"]
-            Tooltip(btn, f"{name} - clic: charger la scene (F{i + 1} dans la fenetre de rendu). "
-                         f"{ {'pattern': 'Fond: fond genere. ', 'video': 'Fond: video. '}.get(scene['bg']) or 'Fond: audio2wave (' + str(scene.get('mode')) + '). '}"
-                         + (f"Media: {scenes.media_label(row['media'])}. " if row["media"] else "")
-                         + "Glisse un fichier (image / video) dessus pour lui lier un media. "
-                         + "Clic droit: mettre a jour, media, deplacer, retirer, supprimer.")
-        if len(rows) > scenes.KEYS:                    # au-dela de F9 : un menu (le VJ les joue toutes)
-            more = tk.Menubutton(scene_bar, text=f"+{len(rows) - scenes.KEYS} \u25be", relief="flat", bd=0, padx=8, pady=3,
-                                 cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, activebackground=a2w.GUI_BG,
-                                 activeforeground=a2w.GUI_FG, font=("Segoe UI", 9, "bold"))
-            more.pack(side="left", padx=2, pady=5)
-            more_menu = tk.Menu(more, tearoff=0)
-            for row in rows[scenes.KEYS:]:
-                sub = tk.Menu(more_menu, tearoff=0)
-                fill_entry_menu(sub, row)
-                more_menu.add_cascade(label=f"{row['index'] + 1}  {row['name']}" + (" \u25cf" if row["media"] else ""), menu=sub)
-            more["menu"] = more_menu
-            Tooltip(more, "Les scenes du set au-dela de F9 : accessibles ici et par le VJ.")
         if scene_state["adding"]:
             entry = tk.Entry(scene_bar, textvariable=scene_entry_var, width=16)
             entry.pack(side="left", padx=(6, 2), pady=5)
@@ -2060,8 +2038,83 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             Tooltip(add, "Nouvelle scene = l'etat actuel (fond audio2wave ou motif genere + overlay), ajoute au set. "
                          "Ou ajoute au set une scene deja enregistree (autant de fois que tu veux, par exemple avec un autre "
                          "media). Reglages a part des presets : retouche d'abord ce que tu veux.")
+        # Touches des scenes : une bande qui defile (molette, fleches, ou « ◀ ▶ »), posee EN DERNIER avec expand : elle prend la place
+        # que les autres boutons laissent, et un set de 40 scenes ne repousse plus rien hors de la barre.
+        strip_bg = a2w.GUI_PANEL_BG
+        arrows = {}
+        for side, text, step in (("right", "\u25b6", 1), ("left", "\u25c0", -1)):
+            arrows[side] = tk.Button(scene_bar, text=text, command=lambda st=step: strip.xview_scroll(st * 6, "units"), relief="flat", bd=0,
+                                     padx=5, pady=3, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, activebackground=a2w.GUI_BG,
+                                     activeforeground=SCENE_COLOR, font=("Segoe UI", 9, "bold"))
+        strip = tk.Canvas(scene_bar, highlightthickness=0, bd=0, bg=strip_bg, height=28, width=40)
+        inner = tk.Frame(strip, bg=strip_bg)
+        strip.create_window((0, 0), window=inner, anchor="nw")
+        proj_ui["strip"] = strip
+        rows = scene_book.rows()
+        current = current_index(rows)
+        active_btn = None
+        for row in rows:
+            i = row["index"]
+            name = row["name"]
+            on = i == current
+            btn = tk.Button(inner, text=f"{i + 1}  {name if len(name) <= 14 else name[:13] + '.'}"
+                            + (" \u25cf" if row["media"] else ""), command=lambda k=i: apply_entry(k), relief="flat", bd=0,
+                            padx=12, pady=3, cursor="hand2", font=("Segoe UI", 9, "bold"),
+                            bg=SCENE_COLOR if on else a2w.GUI_BG, fg=BANNER_FG if on else a2w.GUI_FG,
+                            activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+            btn.pack(side="left", padx=2, pady=5)
+            if on:
+                active_btn = btn
+            register_drop(btn, i)                                      # un fichier depose sur la touche = media de la scene
+            menu = tk.Menu(btn, tearoff=0)
+            fill_entry_menu(menu, row)
+            btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
+            scene = row["scene"]
+            Tooltip(btn, f"{name} - clic: charger la scene ({'F' + str(i + 1) + ' dans la fenetre de rendu' if i < scenes.KEYS else 'pas de touche F au-dela de F9'}). "
+                         f"{ {'pattern': 'Fond: fond genere. ', 'video': 'Fond: video. '}.get(scene['bg']) or 'Fond: audio2wave (' + str(scene.get('mode')) + '). '}"
+                         + (f"Media: {scenes.media_label(row['media'])}. " if row["media"] else "")
+                         + "Glisse un fichier (image / video) dessus pour lui lier un media. "
+                         + "Clic droit: mettre a jour, media, deplacer, retirer, supprimer.")
+        strip.pack(side="left", fill="x", expand=True, padx=2, pady=0)
         tk.Label(scene_bar, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="e").pack(
             side="right", padx=10)
+        scene_bar.update_idletasks()
+        strip.configure(height=max(inner.winfo_reqheight(), 24))
+
+        def sync_strip(_e=None) -> None:
+            """Region defilable = largeur des touches ; fleches visibles seulement si tout ne tient pas."""
+            try:
+                need = inner.winfo_reqwidth()
+                strip.configure(scrollregion=(0, 0, need, max(inner.winfo_reqheight(), 24)))
+                over = need > strip.winfo_width() > 1
+                for side, b in arrows.items():
+                    if over and not b.winfo_ismapped():
+                        b.pack(side=side, padx=1, pady=5, before=strip) if side == "left" else b.pack(side=side, padx=1, pady=5)
+                    elif not over and b.winfo_ismapped():
+                        b.pack_forget()
+                proj_ui["strip_x"] = strip.xview()[0]
+            except tk.TclError:
+                pass
+
+        def show_active() -> None:
+            """Garde la touche active visible : elle est recentree si elle sort de la bande, sinon la position est conservee."""
+            try:
+                need = max(inner.winfo_reqwidth(), 1)
+                view = strip.winfo_width()
+                if need <= view:
+                    strip.xview_moveto(0)
+                    return
+                strip.xview_moveto(proj_ui.get("strip_x") or 0.0)
+                if active_btn is not None:
+                    left, right = active_btn.winfo_x(), active_btn.winfo_x() + active_btn.winfo_reqwidth()
+                    x0 = strip.canvasx(0)
+                    if left < x0 or right > x0 + view:
+                        strip.xview_moveto(max(0.0, (left + right - view) / 2 / need))
+                sync_strip()
+            except tk.TclError:
+                pass
+        strip.bind("<Configure>", lambda e: (sync_strip(), show_active()))
+        after(60, lambda: (sync_strip(), show_active()))
         refresh_scene_panel()
         skin.apply(scene_top)
         # La rangee ne dicte pas la largeur de la fenetre : trop de touches ou de boutons sont rognes a droite (les boutons du VJ,
@@ -2247,9 +2300,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "new_from_entry": new_scene_from_entry, "switch_set": switch_set, "create_set": create_set,
                        "rename_set": rename_set_now, "delete_set": delete_set_now, "export": export_set_now,
                        "import": import_set_now, "ui": scene_ui, "expand": set_expanded, "panel": scene_panel, "refresh_panel": refresh_scene_panel, "panel_state": panel_state,
-                       "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
+                       "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "add_random5": add_random_scenes, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
-                       "move_entry": move_entry_now, "media_current": media_from_current, "media_clear": media_clear},
+                       "move_entry": move_entry_now, "move_to": move_entry_to, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
             "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,

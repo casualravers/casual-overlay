@@ -513,11 +513,11 @@ visuel d'audio2wave, il ne le complete pas) :
   (overlay + soit le motif, soit seulement `bg_mode = live` ; automations `bg_*` du fond, les autres de l'overlay).
 - Stockage : `SceneBook` (`~/.audio2wave/scenes.json`) : **bibliotheque de scenes** (sans limite, meme nom a la casse pres =
   remplace) + **sets** (voir plus bas). Le rang d'une entree dans le set actif donne la touche F1..F9 (`scenes.KEYS` = 9
-  premieres ; la suite dans un menu `+N`).
+  premieres ; les suivantes n'ont pas de touche F mais ont leur bouton dans la barre).
 - **Changement de mode** (Live -> Snap...) : la fenetre est reconstruite par `request_mode` ; le preset est garde dans
   `s.pending_live_overrides` et applique a la fin de `build_window` du panneau neuf (`after(150)`).
 - **Interface** : rangee ambre posee en ligne 0 de `root` (au-dessus de la page defilante : toujours visible), une touche par
-  scene (active = ambre), « + Nouvelle scene » (champ de nom + Enregistrer / Annuler, Entree / Echap), clic droit = mettre a
+  scene (active = ambre) dans une **bande defilante** (`Canvas` `proj_ui["strip"]`, posee EN DERNIER avec `expand` : les boutons du VJ posees avant ne sont jamais repoussees ; molette via `on_wheel`, fleches ◀ ▶ visibles seulement si tout ne tient pas, la touche active est recentree si elle sort de la bande, `proj_ui["strip_x"]` garde la position d'une reconstruction a l'autre ; plus de menu `+N`), « + Nouvelle scene » (champ de nom + Enregistrer / Annuler, Entree / Echap), clic droit = mettre a
   jour (capture l'etat actuel) / supprimer (confirmation). `refresh_scene_bar` reconstruit la rangee.
 - **F1..F9** : `key_actions` du fil GL -> `s.scene_requests` (file) -> `poll_scene_requests()` dans `refresh()` du fil tkinter
   (la scene s'applique dans le fil de la GUI ; sans `--gui` : message). Un rang sans scene : message, rien ne casse.
@@ -630,7 +630,7 @@ visuel d'audio2wave, il ne le complete pas) :
   `Etendre` / `Reduire` dans la barre ; l'etat est `s.scenes_expanded` (survit aux reconstructions de la fenetre). La fenetre
   grandit de `scene_panel.winfo_reqheight()` (memorise dans `s.scene_panel_h`, plafonne a la hauteur de l'ecran - 80) et la
   reprend a la fermeture ; le corps du panneau a une hauteur fixe (190 px) avec son ascenseur. Une ligne par entree du set :
-  scene, **media avec vignette**, duree propre, case VJ, monter / descendre, renommer, retirer. `refresh_scene_bar` appelle
+  scene, **media avec vignette**, duree propre, case VJ, renommer, retirer. **Ordre par glisser-deposer** : on glisse le numero de la ligne (`row_drag_start` / `row_drag_move` / `row_drag_end`, la ligne visee est entouree) ; `move_entry_to(index, cible)` -> `move_entry_now`. Les fleches ▲ ▼ n'existent plus (« Monter / Descendre » reste dans le menu du clic droit d'une touche). Sous la liste : « + » (une scene aleatoire), « +5 » (`add_random_scenes`, cinq d'un coup, une seule reconstruction) et « Dupliquer la derniere ». `refresh_scene_bar` appelle
   `refresh_scene_panel`, qui **ne reconstruit presque jamais** :
   - **Signature** (`panel_signature` : reglages du set, lignes, resume du tirage, nombre de vignettes, glisser-deposer) : identique =
     rien n'est reconstruit, seule la ligne active est **repeinte sur place** (`restyle_row` : fond de ligne, cartes, bouton du nom, via

@@ -1103,8 +1103,8 @@ def check_gui() -> None:
           "sets (GUI): changer de set avec le VJ en marche le redemarre (flash, premiere scene du nouveau set)", str(out.get("set_switch_vj")))
     check(out.get("set_switch_idle") == (False, True, "Soiree"), "sets (GUI): changer de set sans VJ ne le lance pas", str(out.get("set_switch_idle")))
     sm = out.get("set_many", (0, 0, []))
-    check(sm[0] >= 10 and sm[1] == 9 and len(sm[2]) == 1 and sm[2][0].startswith("+"),
-          "sets (GUI): plus de 9 scenes : 9 touches F1..F9 + un menu '+N' pour la suite", str(sm))
+    check(sm[0] >= 10 and sm[1] == sm[0] and not sm[2],
+          "sets (GUI): plus de 9 scenes : une touche par scene dans la bande defilante (plus de menu '+N')", str(sm))
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
     ir = out.get("set_import_rename", ())
@@ -1180,6 +1180,10 @@ def check_gui() -> None:
           "etendu (GUI): colonne FOND video : une image est refusee, une video deposee remplace le fond de l'entree (meme fichier d'une entree a l'autre), retrait", str((out.get("x_bg_bad"), out.get("x_bg"))))
     check(out.get("x_dup") == (True,) * 5,
           "etendu (GUI): Dupliquer la derniere ajoute une copie de la scene (nom inedit) avec les medias, la duree et le VJ de l'entree", str(out.get("x_dup")))
+    check(out.get("x_plus5") == (True,) * 5,
+          "etendu (GUI): le bouton +5 ajoute cinq scenes aleatoires d'un coup (noms inedits, aucun preset, rien d'applique)", str(out.get("x_plus5")))
+    check(out.get("x_drag") == (True,) * 4,
+          "etendu (GUI): plus de fleches ; glisser le numero d'une ligne deplace l'entree ; la barre du haut met toutes les scenes dans une bande defilante", str(out.get("x_drag")))
     check(out.get("x_plus") == (True,) * 6,
           "etendu (GUI): le bouton + ajoute au set une scene aleatoire (nom aleatoire inedit, aucun preset enregistre, rien d'applique, overlay centre)", str(out.get("x_plus")))
     check(out.get("x_thumb_shown") is True, "etendu (GUI): une vignette prete s'affiche sans autre changement (la signature en tient compte)",
@@ -2637,7 +2641,7 @@ def gui_sets_steps(c, s, out) -> None:
     vst["running"] = False
     sc["switch_set"]("Soiree")
     out["set_switch_idle"] = (vst["running"], s.active_scene is None, book.active_set_name())
-    # au-dela de F9 : 9 touches, un menu pour le reste, F-touches sur les 9 premieres
+    # au-dela de F9 : une touche par scene dans la bande defilante, F-touches sur les 9 premieres
     for _ in range(8):
         sc["add_entry"]("Scene C")
     def _walk(w):
@@ -3011,6 +3015,36 @@ def gui_expand_steps(c, s, out) -> None:
                      (s.active_scene, s.active_entry) == applied_before, book.rows()[-1]["scene"]["overlay"].get("logo_x") == 0.5)
     book.remove_entry(len(book.rows()) - 1)
     book.delete(new_name)
+    # bouton +5 : cinq scenes aleatoires d'un coup, a la suite
+    n_before5 = len(book.rows())
+    names5 = sc["add_random5"]()
+    out["x_plus5"] = (len(names5) == 5 and len(set(names5)) == 5, len(book.rows()) == n_before5 + 5,
+                      [r["name"] for r in book.rows()[-5:]] == names5,
+                      (len(gl.OVERLAY_BOOK.all()), len(gl.BACKGROUND_BOOK.all())) == presets_before,
+                      (s.active_scene, s.active_entry) == applied_before)
+    for _ in range(5):
+        book.remove_entry(len(book.rows()) - 1)
+    for nm in names5:
+        book.delete(nm)
+    sc["refresh_panel"](force=True)
+    root.update()
+    # glisser-deposer d'une ligne : plus de fleches, la poignee (numero) deplace l'entree jusqu'a la ligne visee
+    order0 = [r["name"] for r in book.rows()]
+    row_frames = sc["panel_state"]["rows"]
+    arrows = [w for w in walk_(row_frames[0]["frame"]) if w.winfo_class() in ("Button", "Label") and str(w.cget("text")) in ("\u25b2", "\u25bc")]
+    grab = row_frames[0]["num"]
+    target_y = row_frames[2]["frame"].winfo_rooty() + row_frames[2]["frame"].winfo_height() // 2
+    grab.event_generate("<ButtonPress-1>", x=3, y=3)
+    grab.event_generate("<B1-Motion>", x=3, y=3, rooty=target_y, state=0x100)
+    grab.event_generate("<ButtonRelease-1>", x=3, y=3, rooty=target_y)
+    root.update()
+    order1 = [r["name"] for r in book.rows()]
+    sc["move_to"](2, 0)
+    root.update()
+    order2 = [r["name"] for r in book.rows()]
+    out["x_drag"] = (not arrows, order1 == order0[1:3] + order0[:1] + order0[3:], order2 == order0,
+                     len(sc["strip"]().winfo_children()) == 1 and len(sc["strip"]().winfo_children()[0].winfo_children()) == len(book.rows()))
+    sc["refresh_panel"](force=True)
     # bouton Dupliquer la derniere : copie de la scene et des reglages de l'entree, a la suite
     sc["entry_vj"](len(book.rows()) - 1, seconds=42.0)
     last_row = book.rows()[-1]

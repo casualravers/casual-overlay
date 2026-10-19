@@ -21,6 +21,8 @@ def install(c):
     a2w = c.a2w
     a2w_clear = c.a2w_clear
     add_random_scene = c.add_random_scene
+    add_random_scenes = c.add_random_scenes
+    move_entry_to = c.move_entry_to
     apply_entry = c.apply_entry
     bg_clear = c.bg_clear
     current_index = c.current_index
@@ -28,7 +30,6 @@ def install(c):
     duplicate_last_scene = c.duplicate_last_scene
     master_box = c.master_box
     media_clear = c.media_clear
-    move_entry_now = c.move_entry_now
     panel_state = c.panel_state
     random_bank = c.random_bank
     random_draw_now = c.random_draw_now
@@ -53,7 +54,7 @@ def install(c):
     PANEL_BODY_MIN = 80
     NAME_MIN, NAME_MAX = 14, 70                     # largeur (caracteres) du bouton du nom : la plus longue entree, bornee
     DUR_W = 13
-    BTN_W = {"▲": 3, "▼": 3, "Renommer": 9, "Retirer": 8}
+    BTN_W = {"Renommer": 9, "Retirer": 8}
     BOLD = ("Segoe UI", 9, "bold")
 
     def row_bg(active: bool) -> str:
@@ -151,10 +152,7 @@ def install(c):
         cb.var = var
         cb.pack(side="left", padx=4)
         Tooltip(cb, "Coche : le VJ joue cette entree. Decoche : elle reste chargeable a la main (clic, F-touche) mais le VJ la saute.")
-        n = len(scene_book.rows())
-        for text, cmd, ok in (("\u25b2", lambda k=i: move_entry_now(k, -1), i > 0),
-                              ("\u25bc", lambda k=i: move_entry_now(k, 1), i < n - 1),
-                              ("Renommer", lambda nm=row["name"]: rename_scene_dialog(nm), True),
+        for text, cmd, ok in (("Renommer", lambda nm=row["name"]: rename_scene_dialog(nm), True),
                               ("Retirer", lambda k=i: remove_entry_now(k), True)):
             b = tk.Button(fr, text=text, command=cmd, state="normal" if ok else "disabled", relief="flat", bd=0, padx=6, width=BTN_W[text],
                           cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, disabledforeground=a2w.GUI_MUTED_FG,
@@ -163,7 +161,52 @@ def install(c):
             b.pack(side="left", fill="y", padx=1, pady=2)
         register_drop(fr, i)
         register_drop(name_btn, i)
+        grab = refs["num"]                                  # poignee : glisser le numero pour changer l'ordre
+        grab.configure(cursor="fleur")
+        Tooltip(grab, "Glisse ce numero vers le haut ou le bas pour changer l'ordre des scenes.")
+        grab.bind("<ButtonPress-1>", lambda e, k=i: row_drag_start(k))
+        grab.bind("<B1-Motion>", lambda e, k=i: row_drag_move(k, e.y_root))
+        grab.bind("<ButtonRelease-1>", lambda e, k=i: row_drag_end(k, e.y_root))
         return refs
+
+    def row_target(y_root: int) -> int:
+        """Rang de la ligne du panneau sous l'ordonnee ecran `y_root` (borne aux lignes existantes)."""
+        frames = sorted(((r["frame"].winfo_rooty(), r["frame"].winfo_height(), r["index"]) for r in panel_state["rows"].values()))
+        if not frames:
+            return 0
+        for top, height, index in frames:
+            if y_root < top + height:
+                return index
+        return frames[-1][2]
+
+    def row_drag_start(index: int) -> None:
+        panel_state["drag"] = {"from": index, "to": index}
+        refs = panel_state["rows"].get(index)
+        if refs:
+            refs["frame"].configure(highlightthickness=2, highlightbackground=SCENE_COLOR)
+
+    def row_drag_move(index: int, y_root: int) -> None:
+        d = panel_state.get("drag")
+        if not d:
+            return
+        target = row_target(y_root)
+        if target != d["to"]:
+            for r in panel_state["rows"].values():            # repere : la ligne visee est entouree
+                r["frame"].configure(highlightthickness=2 if r["index"] == target else 0, highlightbackground=SCENE_COLOR)
+            d["to"] = target
+
+    def row_drag_end(index: int, y_root: int) -> None:
+        d = panel_state.pop("drag", None)
+        if not d:
+            return
+        target = row_target(y_root)
+        for r in panel_state["rows"].values():
+            try:
+                r["frame"].configure(highlightthickness=0)
+            except tk.TclError:
+                pass
+        if target != index:
+            move_entry_to(index, target)
 
     def restyle_row(refs: dict, active: bool) -> None:
         """Repeint une ligne quand seule la scene active change : fond de ligne, cartes, bouton du nom (aucun widget reconstruit)."""
@@ -423,6 +466,11 @@ def install(c):
         plus.pack(side="left", padx=(8, 4), pady=3)
         Tooltip(plus, "Ajoute a la suite du set une scene tiree au hasard (reglages du Full Randomizer), sous un nom aleatoire. "
                       "Aucun preset n'est enregistre et la scene n'est pas appliquee.")
+        plus5 = tk.Button(foot, text="+5", command=add_random_scenes, relief="flat", bd=0, padx=10, cursor="hand2", bg=SCENE_COLOR,
+                          fg=BANNER_FG, font=BOLD, activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
+        plus5.pack(side="left", padx=4, pady=3)
+        Tooltip(plus5, "Ajoute a la suite du set cinq scenes tirees au hasard d'un coup (comme +, cinq fois). "
+                       "Aucun preset n'est enregistre et rien n'est applique.")
         dup = tk.Button(foot, text="Dupliquer la derniere", command=duplicate_last_scene, relief="flat", bd=0, padx=10, cursor="hand2",
                         bg=a2w.GUI_BG, fg=a2w.GUI_FG)
         dup.pack(side="left", padx=4, pady=3)

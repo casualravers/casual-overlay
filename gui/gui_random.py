@@ -85,15 +85,26 @@ def install(c):
         return True
 
     def add_random_scene() -> str:
-        """Bouton « + » : une scene tiree au hasard, sous un nom aleatoire, ajoutee a la fin du set actif. Aucun preset n'est enregistre
+        """Bouton + : une scene tiree au hasard, sous un nom aleatoire, ajoutee a la fin du set actif. Aucun preset n'est enregistre
         et rien n'est applique (le spectacle en cours n'est pas perturbe). Rend le nom de la scene."""
-        scene, info, record = random_scene()
-        rnd["last"] = record
-        name = randomizer.random_name(rnd["rng"], scene_book.names())
-        scene_book.put(dict(scene, name=name))
-        scene_msg.set(f"Scene aleatoire '{name}' ajoutee au set (aucun preset enregistre) : {info}")
+        return add_random_scenes(1)[0]
+
+    def add_random_scenes(count: int = 5) -> list[str]:
+        """Bouton +5 : `count` scenes tirees au hasard (comme +), ajoutees a la suite ; la barre n'est reconstruite qu'une fois."""
+        names: list[str] = []
+        info = ""
+        for _ in range(max(1, int(count))):
+            scene, info, record = random_scene()
+            rnd["last"] = record
+            name = randomizer.random_name(rnd["rng"], scene_book.names())
+            scene_book.put(dict(scene, name=name))
+            names.append(name)
+        if len(names) == 1:
+            scene_msg.set(f"Scene aleatoire '{names[0]}' ajoutee au set (aucun preset enregistre) : {info}")
+        else:
+            scene_msg.set(f"{len(names)} scenes aleatoires ajoutees au set (aucun preset enregistre) : {', '.join(names)}")
         refresh_scene_bar()
-        return name
+        return names
 
     def duplicate_last_scene(ask: bool = True) -> str | None:
         """Bouton « Dupliquer la derniere » : copie de la derniere scene du set (scene + media, videos, duree, VJ de l'entree) sous un nom
@@ -237,4 +248,4 @@ def install(c):
             refresh_scene_bar()
 
     import types
-    return types.SimpleNamespace(add_random_scene=add_random_scene, duplicate_last_scene=duplicate_last_scene, random_bank=random_bank, random_draw=random_draw, random_draw_now=random_draw_now, random_keep=random_keep, random_keep_check=random_keep_check, random_save=random_save, rnd=rnd, set_random_option=set_random_option)
+    return types.SimpleNamespace(add_random_scene=add_random_scene, add_random_scenes=add_random_scenes, duplicate_last_scene=duplicate_last_scene, random_bank=random_bank, random_draw=random_draw, random_draw_now=random_draw_now, random_keep=random_keep, random_keep_check=random_keep_check, random_save=random_save, rnd=rnd, set_random_option=set_random_option)

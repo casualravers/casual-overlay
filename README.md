@@ -113,15 +113,17 @@ les medias restent des chemins, un media absent sur l'autre machine est signale)
 set ou de scene deja pris : *Renommer* (on garde les deux : `nom (2)`) ou *Remplacer* (avec confirmation) ; un fichier illisible
 ou d'une version plus recente donne un message, sans rien effacer. **Changer de set redemarre le VJ** s'il tournait (premiere
 scene du nouveau set), et chaque set a son ordre et sa duree de VJ. F1..F9 sont les 9 premieres entrees du set actif ; au-dela,
-un menu *+N* les liste (le VJ les joue toutes). *+ Scene* : nouvelle scene depuis l'etat actuel, ou ajout d'une scene deja
-enregistree. Clic droit sur une touche : mettre a jour la scene, media, monter / descendre, retirer du set, supprimer
-de la bibliotheque.
+elles n'ont pas de touche mais restent dans la barre (le VJ les joue toutes). *+ Scene* : nouvelle scene depuis l'etat actuel, ou ajout d'une scene deja
+enregistree. La barre met toutes les touches dans une **bande qui defile** (molette, fleches ◀ ▶ qui apparaissent quand tout ne tient pas ;
+la scene active reste visible) : les boutons du VJ restent toujours visibles. Clic droit sur une touche : mettre a jour la
+scene, media, monter / descendre, retirer du set, supprimer de la bibliotheque.
 **Bouton *Etendre*** (a droite de la barre) : un panneau sous la barre montre le set en detail, et la fenetre grandit de sa
 hauteur (elle reprend sa taille quand on *Reduit*). Une ligne par entree : sa scene (clic = la charger), son **media lie avec
 sa vignette** (image, premiere image d'une video ; pour un texte, le texte ; en rouge si le fichier est introuvable), la
 **duree propre** a l'entree dans le VJ (ou celle du set), une case **VJ** (decochee : le VJ la saute, mais elle reste
-chargeable a la main), monter / descendre, *Renommer* (la scene, dans tous les sets) et *Retirer*. En tete : l'ordre et la
-duree par defaut du set, et la duree d'une boucle.
+chargeable a la main), *Renommer* (la scene, dans tous les sets) et *Retirer*. **Changer l'ordre : glisse le numero
+d'une ligne** sur la ligne visee. Sous la liste : *+* (une scene aleatoire), *+5* (cinq d'un coup) et *Dupliquer la derniere*.
+En tete : l'ordre et la duree par defaut du set, et la duree d'une boucle.
 **Deux familles de medias** : ceux de l'**overlay** (logo image, texte, video du logo) et ceux d'**audio2wave** (en mode
 Snap, style pencil : *video interieure* et *video exterieure*). Une scene capture les siens a l'enregistrement (ceux de
 l'overlay, et ceux du panneau Snap) ; chaque entree d'un set peut en plus en **remplacer** (pose par-dessus ceux de la
