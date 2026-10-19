@@ -61,6 +61,7 @@ PIL_ImageFont = _optional_import("PIL.ImageFont", "Pillow")
 
 
 import diagnostics  # noqa: E402  (stdlib seulement : sans dependance a installer)
+import params_schema  # noqa: E402  (table unique des reglages, stdlib)
 import sessionlog  # noqa: E402  (journal de session, stdlib)
 
 
@@ -105,117 +106,8 @@ os.environ["PATH"] = _bundled_path
 PARAMS_PATH = Path.home() / ".audio2wave" / "gl_params.json"
 
 FX_NAMES = ["wobble", "ripple", "chroma", "glitch", "logo"]
-DEFAULT_PARAMS = {
-    "fx_on": [1, 1, 1, 1, 1],
-    "fx_int": [1.0, 1.0, 1.0, 1.0, 1.0],
-    # Effets de la COUCHE LOGO (wobble, ripple, chroma, glitch). fx_on/fx_int[0..3] sont ceux du FOND ;
-    # l'indice 4 (reaction du logo: pulsation, tremblement, contour) reste a part. Avec fx_link = 1
-    # le logo subit les memes effets que le fond (reglages fx_*, centre de l'image), exactement comme
-    # avant la separation des couches ; a 0 il a les siens (fxl_*) et ses ondes partent de son centre.
-    "fx_link": 1.0,
-    "fxl_on": [1, 1, 1, 1],
-    "fxl_int": [1.0, 1.0, 1.0, 1.0],
-    # Noise (hasard) : UN seul noise, prereglé. Il joue le role d'une musique imaginaire : des ondulations et des "coups"
-    # au hasard (comme des kicks) qui animent les effets coches dans `noise_fx` (wobble, onde de choc, aberration, glitch,
-    # reaction du logo), meme sans son. `noise_amount` = sa force (0 = aucun effet). Rien n'est coche par defaut.
-    "noise_amount": 0.6,
-    "noise_fx": [0, 0, 0, 0, 0],
-    "master": 1.0,
-    "sensitivity": 1.0,
-    "react_master": 1.0,              # master de l'audioreactivite (Mode VJ) : x tout ce qui vient de l'audio, 0 = aucune reaction
-    "overlay_master": 1.0,            # master de la presence de l'overlay (Mode VJ) : 0 = invisible, 1 = normal
-    "hue_cycle": 0.0,                 # cycle de teinte (Mode VJ) : la teinte tourne toute seule, en degres par seconde (0 = fixe)
-    "breath_overlay": 0.0,            # respiration de l'overlay (0..1) : sa presence oscille doucement entre 1 - valeur et 1
-    "breath_bg": 0.0,                 # respiration du fond (0..1), en opposition de phase avec celle de l'overlay
-    "breath_period": 8.0,             # periode de la respiration, en secondes
-    "silence_on": 0.0,                # mode silence : quand le son tombe, le visuel passe en idle (tempo reduit, fond seul)
-    "silence_level": 0.03,            # niveau (rms normalise 0..1) sous lequel on parle de silence
-    "silence_delay": 4.0,             # secondes de silence avant de passer en idle
-    "silence_tempo": 0.3,             # tempo relatif en idle (1 = inchange)
-    "idle": 0.0,                      # etat courant du mode silence (0..1), ecrit par SilenceGuard (jamais sauve)
-    "comp_sym": 0,                    # symetrie : 0 aucune, 1 miroir gauche, 2 miroir haut, 3 quatre quadrants, 4 kaleidoscope
-    "comp_seg": 6,                    # segments du kaleidoscope (2..16)
-    "comp_rot": 0.0,                  # rotation du kaleidoscope, en degres par seconde
-    "comp_pix": 0.0,                  # pixelisation (0..1)
-    "comp_trail": 0.0,                # trainee / feedback (0..0,97) : l'image precedente s'estompe lentement
-    "comp_warp": 0.0,                 # deformation globale (0..1)
-    "build": 0.0,                     # montee en cours (0..1), ecrite par le bouton Montee (jamais sauvee)
-    "build_time": 8.0,                # duree de la montee, en secondes
-    "hue_master": 0.0,                # teinte globale (Mode VJ), en degres 0..360 : rotation de couleur de toute l'image
-    "bg_master": 1.0,                # master de la luminosite du fond (Mode VJ) : 0 = fond noir (logo seul), 1 = normal
-    "strobe_on": 0.0,                 # strobe arme / maintenu (Mode VJ, touche S) ; modes : manual | kick | rate
-    "strobe_mode": "manual",
-    "strobe_rate": 8.0,               # Hz (modes manual maintenu et rate)
-    "strobe_hits": 0,                 # compteur d'appuis (un appui plus court qu'une image declenche quand meme un eclair)
-    "tempo": 1.0,                     # master du tempo (Mode VJ) : vitesse des animations et des automations (0..2, 1 = normal)
-    "fx_master": 1.0,                 # master des effets (Mode VJ) : x l'intensite de TOUS les effets (deformations, halo, fonte, cellules, noise) ; 0 = aucun
-    "strobe_max_hz": 10.0,            # limiteur de strobe : cadence maximale (eclairs / s), securite du public (photosensibilite)
-    "strobe_max_s": 8.0,              # limiteur de strobe : duree maximale d'une rafale continue (s), puis pause forcee de STROBE_COOLDOWN_S
-    # Incrustation du logo (pilotee par la GUI ou --logo*, relue a chaque image)
-    "logo_source": "image",           # "image" (PNG), "text" (texte tape a la main) ou "video" (logo anime)
-    "logo_video": "",                 # fichier video/GIF anime (source "video")
-    "logo_key": "",                   # #rrggbb a detourer si le fichier n'a pas d'alpha ("" = aucun)
-    "logo_path": str(DEFAULT_LOGO),   # "" = aucun logo
-    "text_content": "CASUAL RAVERS",  # source texte: le texte (plusieurs lignes possibles)
-    "text_font": "auto",              # nom de police de TEXT_FONTS, chemin d'un .ttf/.otf, ou "auto"
-    "text_color": "#ffffff",
-    "text_align": "center",           # "left" | "center" | "right" (texte sur plusieurs lignes)
-    "text_scale": 0.16,               # hauteur du bloc de texte, fraction de la hauteur de l'image
-    "logo_x": 0.5,                    # centre, fraction de la largeur (origine a gauche)
-    "logo_y": 0.5,                    # centre, fraction de la hauteur (origine en haut)
-    "logo_scale": 0.35,               # cote du carre englobant, fraction de la hauteur
-    "logo_opacity": 1.0,
-    "logo_pulse": 0.12,               # zoom au kick (0,12 = +12 %)
-    "logo_jitter": 0.004,             # tremblement sur les aigus, fraction de l'ecran
-    "logo_glow": 1.0,                 # intensite du contour lumineux
-    "logo_glow_radius": 1.0,          # multiplicateur du rayon du contour
-    "logo_glow_color": "#5fd4c8",
-    # Halo holographique: une lumiere irisee a grande portee qui DEFORME le fond autour du logo (le logo
-    # reste intact) et y traine de la poussiere d'etoiles. Anime par le temps seulement:
-    # holo_react = 0 => aucune reaction a l'audio.
-    "holo_on": 1.0,
-    "holo_intensity": 1.0,            # force de la lumiere irisee
-    "holo_reach": 1.3,                # portee: multiplicateur de l'etendue du halo (1 = environ 1,5 x le logo)
-    "holo_warp": 1.0,                 # deformation du fond (refraction + ondes)
-    "holo_dust": 1.0,                 # quantite de poussiere d'etoiles
-    "holo_speed": 0.15,               # vitesse de l'animation (ondes, derive des etoiles)
-    "holo_react": 0.0,                # 0 = pas audioreactif; >0: intensite au kick, vitesse aux basses
-    # Fonte acide du logo: il se dissout sur place (trous qui grandissent, lisiere acide) puis se reforme, en boucle.
-    # Coupee par defaut (une marque ne doit pas disparaitre sans l'avoir voulu) ; non audioreactive par defaut.
-    "melt_on": 0.0,
-    "melt_depth": 0.9,                # degre maximal de dissolution (1 = disparait entierement)
-    "melt_period": 14.0,              # secondes pour un cycle complet (fond puis se reforme)
-    "melt_scale": 1.0,                # finesse des trous (petit = grosses plaques, grand = fines piqures)
-    "melt_edge": 1.0,                 # largeur et intensite de la lisiere acide
-    "melt_color": "#a6ff00",          # couleur de l'acide
-    "melt_react": 0.0,                # 0 = pas audioreactif; >0: cycle accelere par les basses
-    # Cellules organiques du logo (Voronoi, cell shading): le logo se DECOMPOSE en cellules (il garde sa forme).
-    # Coupees par defaut, non audioreactives.
-    "cell_on": 0.0,
-    "cell_amount": 0.65,              # decomposition: 0 = logo intact .. 1 = entierement en cellules separees
-    "cell_scale": 1.0,                # finesse des cellules (grand = petites cellules)
-    "cell_fusion": 1.0,               # rayon des cellules: petit = bulles isolees, grand = elles se touchent et se chevauchent
-    "cell_speed": 0.3,                # vitesse de derive des cellules
-    "cell_flat": 0.85,                # 0 = couleurs d'origine, 1 = aplat de la couleur au centre de la cellule
-    "cell_ink": "#14103a",            # contour des cellules
-    "cell_react": 0.0,                # 0 = pas audioreactif; >0: derive acceleree par les basses, fusion pulsee au kick
-    # Fond: "live" = spectre ffmpeg, "pattern" = motif genere dans le shader (degrades + damier),
-    # "video" = un fichier video brut lu en boucle plein cadre (bg_video, bg_video_fit)
-    "bg_mode": "live",
-    "bg_video": "",                   # fichier video / animation du fond "video" ("" = aucun)
-    "bg_video_fit": "cover",          # "cover" = remplit le cadre en recadrant, "stretch" = etire a la taille du rendu
-    "bg_palette": "classic",          # "classic" (arc-en-ciel), "duo" (color1 -> color2) ou "test" (copie exacte du banc de test)
-    "bg_color1": "#3a1cff",           # palette duo
-    "bg_color2": "#14f0d8",
-    "bg_angle": 0.0,                  # direction du degrade duo, en degres
-    "bg_hue": 0.0,                    # rotation de teinte, 0..1 (un tour)
-    "bg_speed": 1.0,                  # vitesse de defilement des degrades
-    "bg_tile": 80.0,                  # cote d'un carreau, en pixels pour 720 px de haut
-    "bg_checker": 0.24,               # contraste du damier
-    "bg_flip": 2.0,                   # bascules du damier par seconde
-    "bg_react": 1.0,                  # reaction a l'audio: flash + damier au kick, defilement aux basses
-    "auto_master": 1.0,               # interrupteur general des automations (1 = actives)
-}
+# Les reglages sont decrits UNE fois, dans params_schema.py (defaut, plage, enum, portee, doc) ; tout le reste en est derive.
+DEFAULT_PARAMS = params_schema.defaults(str(DEFAULT_LOGO))
 
 # --- Automations de reglages ------------------------------------------------------------
 # Meme principe que "Variation automatique" d'audio2wave (voir son CLAUDE.md): chaque reglage
@@ -530,13 +422,11 @@ def clear_autosave(path: Path | None = None) -> None:
         pass
 
 
-# Reglages de salle (Mode VJ, espace de controle global) : relus a chaque image, jamais captures par les presets ni les scenes.
-ROOM_KEYS = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master", "hue_cycle", "breath_overlay", "breath_bg",
-             "breath_period", "silence_on", "silence_level", "silence_delay", "silence_tempo", "idle", "comp_sym", "comp_seg",
-             "comp_rot", "comp_pix", "comp_trail", "comp_warp", "build", "build_time", "strobe_on", "strobe_mode", "strobe_rate",
-             "strobe_hits", "fx_master", "strobe_max_hz", "strobe_max_s")
-TRANSIENT_KEYS = ("idle", "build", "strobe_on", "strobe_hits")           # etats du moment : ni sauves ni recharges
-MEMORY_KEYS = tuple(k for k in ROOM_KEYS if k not in TRANSIENT_KEYS)    # ce qu'une memoire de masters enregistre
+# Portees des reglages (voir params_schema.py) : salle (Mode VJ, relus a chaque image, jamais captures par les presets ni les scenes),
+# etats du moment (ni sauves ni recharges), contenu d'une memoire de masters.
+ROOM_KEYS = params_schema.ROOM_KEYS
+TRANSIENT_KEYS = params_schema.TRANSIENT_KEYS
+MEMORY_KEYS = params_schema.MEMORY_KEYS
 
 
 def _unit(value, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -1643,22 +1533,16 @@ class Renderer:
 
 def coerce_params(saved: dict, base: dict | None = None) -> dict:
     """Reglages valides tires de `saved` (fichier sauve ou preset) par-dessus `base` (defaut: les valeurs
-    par defaut) : cle inconnue, type ou longueur de liste incorrects = ignores. `_automation` est
+    par defaut) : cle inconnue, type, longueur de liste ou valeur d'enum incorrects = ignores, nombre hors plage ramene dans la plage
+    (params_schema.validate). `_automation` est
     fusionne avec l'ambiance par defaut (merge_automation) s'il est present."""
     params = json.loads(json.dumps(base if base is not None else DEFAULT_PARAMS))
-    for key, default in DEFAULT_PARAMS.items():
+    for key in DEFAULT_PARAMS:
         if key not in saved:
             continue
-        value = saved[key]
-        if isinstance(default, list):
-            if isinstance(value, list) and len(value) == len(default) \
-                    and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
-                params[key] = [float(v) if isinstance(d, float) else int(v) for v, d in zip(value, default)]
-        elif isinstance(default, str):
-            if isinstance(value, str):
-                params[key] = value
-        elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            params[key] = float(value)
+        ok, value = params_schema.validate(key, saved[key])      # type, longueur, enum ; un nombre hors plage est ramene dedans
+        if ok:
+            params[key] = value
     if isinstance(saved.get("_automation"), dict):
         params["_automation"] = merge_automation(saved["_automation"])
     return params
@@ -1672,9 +1556,9 @@ def coerce_params(saved: dict, base: dict | None = None) -> dict:
 # micro et de la salle, pas du look).
 OVERLAY_PRESETS_PATH = Path.home() / ".audio2wave" / "overlay_presets.json"
 BACKGROUND_PRESETS_PATH = Path.home() / ".audio2wave" / "background_presets.json"
-OVERLAY_PRESET_EXCLUDED = ("sensitivity",) + ROOM_KEYS# reglages de salle : ni presets ni scenes n'y touchent
-BG_KEYS = tuple(k for k in DEFAULT_PARAMS if k.startswith("bg_"))
-BG_AUTOMATION_KEYS = tuple(k for k in AUTOMATION_SPECS if k.startswith("bg_"))
+OVERLAY_PRESET_EXCLUDED = params_schema.OVERLAY_PRESET_EXCLUDED     # sensibilite + reglages de salle : ni presets ni scenes n'y touchent
+BG_KEYS = params_schema.BG_KEYS                                     # portee « fond » (bg_master est un reglage de SALLE, pas du fond)
+BG_AUTOMATION_KEYS = tuple(k for k in AUTOMATION_SPECS if params_schema.is_bg(k))
 OVERLAY_PRESETS: dict[str, dict] = {
     "default": {},
     # logo net, effets doux : le decorrele fond/logo dans son usage le plus simple
@@ -1784,7 +1668,7 @@ def _split_automation(state, current: dict, want_bg: bool) -> dict:
     `current`."""
     merged = merge_automation(current.get("_automation"))
     for key, entry in merge_automation(state).items():
-        if key.startswith("bg_") == want_bg:
+        if params_schema.is_bg(key) == want_bg:
             merged[key] = entry
     return merged
 
@@ -3060,7 +2944,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             try:
                 renderer.reload_shaders()
                 # ne pas ecraser ce que la GUI vient de regler (ni l'etat des automations qu'elle edite)
-                keep = {"sensitivity", *ROOM_KEYS, "logo_path", "logo_video", "logo_key", "bg_mode", "logo_source", "_automation", "auto_master"}
+                keep = {*params_schema.RELOAD_KEEP_KEYS, "_automation"}
                 params.update({k: v for k, v in load_params().items() if k not in keep})
                 print("Shaders et reglages recharges.")
                 s.status["msg"] = "Shaders recharges"

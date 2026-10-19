@@ -4738,6 +4738,135 @@ def check_skin() -> None:
           "version portable: skin.py, theme.py et sessionlog.py embarques")
 
 
+def check_params_schema() -> None:
+    """Table unique des reglages (params_schema.py) : integrite, derivations, validation, et coherence avec le moteur, la GUI, les
+    presets integres, les automations et le hasard (rien ne doit sortir des plages declarees)."""
+    print("table unique des reglages")
+    import json
+    import random
+    import re
+    import params_schema as ps
+    here = Path(__file__).resolve().parent
+    # --- integrite de la table
+    bad = [p.key for p in ps.TABLE if p.key != "logo_path" and not _in_range(p, p.default)]
+    check(not bad, "table: chaque valeur par defaut est dans sa plage", str(bad))
+    check(list(gl.DEFAULT_PARAMS) == [p.key for p in ps.TABLE], "table: DEFAULT_PARAMS = la table, dans le meme ordre")
+    check(all(p.doc for p in ps.TABLE), "table: chaque reglage est documente", str([p.key for p in ps.TABLE if not p.doc]))
+    check(set(gl.TRANSIENT_KEYS) <= set(gl.ROOM_KEYS) and not set(gl.TRANSIENT_KEYS) & set(gl.MEMORY_KEYS)
+          and set(gl.MEMORY_KEYS) | set(gl.TRANSIENT_KEYS) == set(gl.ROOM_KEYS),
+          "portees: etats du moment dans la salle, memoires = salle sans les etats du moment")
+    groups = [set(ps.keys(s)) for s in ps.SCOPES]
+    check(sum(len(g) for g in groups) == len(ps.TABLE) and not any(a & b for i, a in enumerate(groups) for b in groups[i + 1:]),
+          "portees: chaque reglage a une portee et une seule")
+    check(not set(gl.BG_KEYS) & set(gl.ROOM_KEYS) and not set(gl.BG_KEYS) & set(gl.OVERLAY_PRESET_EXCLUDED),
+          "portees: le fond et la salle ne se recouvrent pas (bg_master est un reglage de salle)")
+    check("sensitivity" in gl.OVERLAY_PRESET_EXCLUDED and set(gl.ROOM_KEYS) <= set(gl.OVERLAY_PRESET_EXCLUDED),
+          "portees: sensibilite et salle hors presets et scenes")
+    # --- regression : un preset de fond ou une scene ne touche plus au master « Fond » (bg_master etait compte comme un reglage du fond)
+    cur = json.loads(json.dumps(gl.DEFAULT_PARAMS))
+    cur["bg_master"] = 0.4
+    check("bg_master" not in gl.capture_background(cur) and "bg_master" not in gl.background_preset_values({"bg_speed": 2.0}, cur),
+          "fond: capture et preset de fond ne contiennent pas bg_master")
+    check(gl.overlay_preset_values({"logo_glow": 2.0}, cur)["bg_master"] == 0.4
+          and gl.background_preset_values({"bg_speed": 2.0}, cur).get("bg_master", 0.4) == 0.4,
+          "fond: appliquer un preset (overlay ou fond) laisse le master Fond du VJ tel qu'il est")
+    import scenes as _sc
+    check(_sc.scene_values({"bg": "pattern", "fond": gl.capture_background(cur), "overlay": gl.capture_overlay(cur)}, cur)["bg_master"] == 0.4,
+          "fond: une scene a motif ne remet pas le master Fond a 100 %")
+    # --- validation : type, longueur, enum, plage
+    out = gl.coerce_params({"strobe_max_hz": 9999, "tempo": -3, "comp_sym": "x", "logo_source": "weird", "bg_palette": "duo",
+                            "fx_on": [5, 0, 0, 0, 0], "fx_int": [9.0, 0, 0, 0, -1], "fx_link": True, "inconnue": 1, "text_align": "left"})
+    check(out["strobe_max_hz"] == 30.0 and out["tempo"] == 0.0, "validation: un nombre hors plage est ramene dans la plage",
+          f"{out['strobe_max_hz']} {out['tempo']}")
+    check(out["comp_sym"] == 0 and out["logo_source"] == "image" and out["fx_link"] == 1.0 and "inconnue" not in out,
+          "validation: mauvais type, enum inconnu, booleen et cle inconnue ignores")
+    check(out["bg_palette"] == "duo" and out["text_align"] == "left", "validation: une valeur d'enum valide est gardee")
+    check(out["fx_on"] == [1, 0, 0, 0, 0] and out["fx_int"] == [2.0, 0.0, 0.0, 0.0, 0.0],
+          "validation: listes bornees element par element, longueur controlee", f"{out['fx_on']} {out['fx_int']}")
+    check(gl.coerce_params({"fx_on": [1, 1]})["fx_on"] == [1, 1, 1, 1, 1], "validation: liste de mauvaise longueur ignoree")
+    # un ancien fichier sauve qui contenait bg_master dans un preset de fond se charge sans erreur
+    check(gl.coerce_params({"bg_master": 0.5, "bg_speed": 2.0})["bg_master"] == 0.5, "compat: un ancien preset avec bg_master se charge")
+    # --- presets integres : tous valides, aucune valeur ramenee par la validation
+    moved = []
+    for book, name in ((gl.OVERLAY_PRESETS, "overlay"), (gl.BACKGROUND_PRESETS, "fond")):
+        for pname, values in book.items():
+            clean = gl.coerce_params(values)
+            for k, v in values.items():
+                if k in clean and clean[k] != v and not (isinstance(v, (int, float)) and abs(clean[k] - v) < 1e-9):
+                    moved.append((name, pname, k, v, clean[k]))
+    check(not moved, "presets integres: aucune valeur hors plage ni de mauvais type", str(moved[:3]))
+    # --- automations : leur plage reste dans celle du reglage
+    wide = []
+    for key, spec in gl.AUTOMATION_SPECS.items():
+        base = re.sub(r"^(fxl?_int)\d$", r"\1", key)
+        p = ps.BY_KEY.get(base)
+        if p is None:
+            wide.append((key, "reglage absent de la table"))
+        elif (p.lo is not None and spec[1] < p.lo) or (p.hi is not None and spec[2] > p.hi):
+            wide.append((key, (spec[1], spec[2]), (p.lo, p.hi)))
+    check(not wide, "automations: chaque courbe reste dans la plage de son reglage", str(wide[:3]))
+    # --- curseurs de la GUI : leur plage tient dans celle de la table
+    src = (here / "gl_gui.py").read_text(encoding="utf-8")
+    out_of = []
+    n_sliders = 0
+    for m in re.finditer(r'param_slider\(\w+, "[^"]*", "(\w+)", ([-\d.]+), ([-\d.]+),', src):
+        n_sliders += 1
+        key, lo, hi = m.group(1), float(m.group(2)), float(m.group(3))
+        p = ps.BY_KEY.get(key)
+        if p is None or (p.lo is not None and lo < p.lo - 1e-9) or (p.hi is not None and hi > p.hi + 1e-9):
+            out_of.append((key, lo, hi, None if p is None else (p.lo, p.hi)))
+    for m in re.finditer(r'\("(\w+)", "[^"]*", ([-\d.]+), ([-\d.]+), ([-\d.]+), ([-\d.]+), "[^"]*", ([-\d.]+),', src):
+        key, lo, hi, factor = m.group(1), float(m.group(2)), float(m.group(3)), float(m.group(5))
+        p = ps.BY_KEY.get(key)
+        if p is None:
+            continue
+        n_sliders += 1
+        if (p.lo is not None and lo / factor < p.lo - 1e-9) or (p.hi is not None and hi / factor > p.hi + 1e-9):
+            out_of.append((key, lo / factor, hi / factor, (p.lo, p.hi)))
+    check(n_sliders >= 40 and not out_of, f"GUI: {n_sliders} curseurs verifies, aucun ne depasse la plage de la table", str(out_of[:3]))
+    # --- le code ne lit/ecrit que des reglages declares
+    unknown = set()
+    allowed = {"_automation", "fx_on", "fx_int"}
+    for fname in ("audio2wave_gl.py", "gl_gui.py", "randomizer.py", "scenes.py"):
+        text = (here / fname).read_text(encoding="utf-8")
+        for m in re.finditer(r'\b(?:params|p|cur|current|values|full)\[\s*"([a-z][a-z0-9_]*)"\s*\]', text):
+            key = m.group(1)
+            if key.startswith(("logo_", "bg_", "holo_", "melt_", "cell_", "fx", "comp_", "strobe_", "text_", "noise_", "silence_", "breath_")) \
+                    or key in ("tempo", "master", "build", "idle", "sensitivity", "auto_master", "react_master", "overlay_master", "hue_master",
+                               "hue_cycle", "build_time"):
+                if key not in ps.BY_KEY and key not in allowed:
+                    unknown.add((fname, key))
+    check(not unknown, "code: aucun reglage lu ou ecrit sans etre dans la table", str(sorted(unknown)[:5]))
+    # --- hasard : tout ce que tire le Full Randomizer reste dans les plages
+    import randomizer
+    rng = random.Random(1234)
+    stray = []
+    for _ in range(300):
+        for fn in (randomizer.random_background_params, randomizer.random_overlay_params, randomizer.random_effects):
+            for k, v in fn(rng).items():
+                if k == "_automation":
+                    continue
+                ok, val = ps.validate(k, v)
+                if not ok or (isinstance(v, (int, float)) and not isinstance(v, bool) and abs(val - v) > 1e-9) \
+                        or (isinstance(v, list) and any(abs(a - b) > 1e-9 for a, b in zip(val, v))):
+                    stray.append((fn.__name__, k, v))
+    check(not stray, "hasard: les tirages du Full Randomizer restent dans les plages de la table", str(stray[:3]))
+    import build_portable
+    check("params_schema.py" in build_portable.APP_FILES, "version portable: params_schema.py embarque")
+
+
+def _in_range(p, value) -> bool:
+    vals = value if isinstance(value, list) else [value]
+    for v in vals:
+        if isinstance(v, str):
+            if p.choices is not None and v not in p.choices:
+                return False
+            continue
+        if (p.lo is not None and v < p.lo) or (p.hi is not None and v > p.hi):
+            return False
+    return True
+
+
 def check_safeguards() -> None:
     """Garde-fous d'exploitation : limiteur de strobe, panique, tap tempo, auto-sauvegarde, journal, master des effets."""
     print("garde-fous d'exploitation")
@@ -4880,6 +5009,7 @@ def main() -> None:
     check_cells()
     check_noise()
     check_masters()
+    check_params_schema()
     check_safeguards()
     check_scenes()
     check_bg_video()

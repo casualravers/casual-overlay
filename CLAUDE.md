@@ -591,6 +591,28 @@ visuel d'audio2wave, il ne le complete pas) :
   valeurs (motif / audio2wave, automations, micro intact), barre, F1/F2/F8, nom deja pris, mise a jour au meme rang, VJ (ordre, reglages persistants, minuteur reel, flash, Espace / fleche droite, pause a la main),
   suppression du preset, **changement de mode Live -> Snap avec chargement du preset `club`**.
 
+### Table unique des reglages (`params_schema.py`)
+
+**Un reglage = une ligne** dans `params_schema.TABLE` (stdlib, aucune dependance au moteur ni a la GUI) : cle, valeur par defaut, plage
+(`lo` / `hi`, par element pour une liste), valeurs permises (`choices`, pour les enums), **portee** (`scope`), drapeau `keep` (la touche R ne
+le recharge pas) et documentation. L'ordre de la table est celui des fichiers sauves. Tout le reste en est **derive** :
+- `gl.DEFAULT_PARAMS` = `params_schema.defaults(logo du depot)` ;
+- `gl.ROOM_KEYS` (portees `room` + `state`), `gl.TRANSIENT_KEYS` (`state`), `gl.MEMORY_KEYS` (`room`), `gl.BG_KEYS` (`bg`),
+  `gl.OVERLAY_PRESET_EXCLUDED` (`device` + salle), et l'ensemble garde par R (`RELOAD_KEEP_KEYS` + `_automation`) ;
+- `gl.coerce_params` appelle `params_schema.validate` : type, longueur d'une liste, valeur d'enum ; **un nombre hors plage est ramene dans la plage**
+  (fichier abime, preset ancien) au lieu d'atteindre le rendu ; une cle inconnue est ignoree.
+- Portees : `look` (overlay : presets overlay et scenes), `bg` (fond : presets de fond et scenes), `room` (reglages de salle : jamais captures,
+  sauves avec P, enregistres par les memoires de masters), `state` (etat du moment : ni sauve, ni recharge, ni memorise), `device`
+  (sensibilite du kick : sauvee, hors presets et scenes).
+- **Ajouter un reglage** : une ligne dans la table (defaut, plage, portee, doc) ; si c'est un curseur, l'ajouter a la GUI avec une plage
+  contenue dans celle de la table ; si c'est un reglage de salle, rien d'autre (les listes se mettent a jour toutes seules).
+- **Bug trouve et corrige par cette table** : `bg_master` (master « Fond » du VJ) etait compte parmi les reglages du fond (`BG_KEYS` = toutes les
+  cles `bg_*`) : charger un preset de fond ou une scene a motif / video **remettait le curseur « Fond » a 100 %** (ou a la valeur
+  capturee). C'est un reglage de salle : il n'est plus dans `BG_KEYS` (les anciens presets qui le contiennent se chargent sans erreur).
+- `check_gl.py` (`check_params_schema`) : valeurs par defaut dans leur plage, table = `DEFAULT_PARAMS`, portees disjointes et completes,
+  regression `bg_master`, validation (hors plage, mauvais type, enum, listes), **presets integres, courbes d'automation, curseurs de la GUI
+  (lus dans le source : `param_slider(...)` et les curseurs des masters) et tirages du Full Randomizer (300 tirages) tous dans les plages**,
+  aucun reglage lu ou ecrit par le code sans etre dans la table, `params_schema.py` dans le portable (`APP_FILES`).
 ### Garde-fous d'exploitation (soiree : fiabilite, robustesse, aisance)
 
 - **Panique** (`gl.panic(params)`, `PANIC_RESET`; bouton rouge **PANIQUE** tout a droite de la barre, touche **X** dans la fenetre de rendu, bouton de la console) :
