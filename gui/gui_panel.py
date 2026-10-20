@@ -914,38 +914,61 @@ def install(c):
         drag: dict = {}
 
         def grip_press(e) -> None:
-            drag.update(y=e.y_root, h=int(body.cget("height")))
+            # tout est calcule depuis l'etat au moment de l'appui (jamais depuis la taille courante de la fenetre, qui n'est pas encore a jour
+            # entre deux mouvements : l'ancien calcul incremental se decalait et faisait trembler la liste et la fenetre pendant le glisser)
+            drag.update(y=e.y_root, h=int(body.cget("height")), win=root.winfo_height(), w=root.winfo_width(),
+                        overflow=getattr(s, "panel_overflow", 0), panel=getattr(s, "scene_panel_h", 0), want=None, job=None)
+
+        def grip_apply() -> None:
+            """Un seul redimensionnement par passage de la boucle d'evenements, avec la derniere position du pointeur."""
+            if not drag:
+                return
+            drag["job"] = None
+            want = drag["want"]
+            if want is None:
+                return
+            delta = want - drag["h"]
+            # la fenetre suit tant qu'elle tient dans l'ecran ; au-dela la liste grandit quand meme (la page du dessous se reduit,
+            # elle defile) et ce « trop-plein » est rendu en premier quand on reduit
+            if delta >= 0:
+                win = min(delta, max(root.winfo_screenheight() - 80 - drag["win"], 0))
+                overflow = drag["overflow"] + delta - win
+            else:
+                take = min(drag["overflow"], -delta)
+                overflow = drag["overflow"] - take
+                win = delta + take
+            s.panel_overflow = overflow
+            body.configure(height=want)
+            s.panel_body_h = want
+            s.scene_panel_h = drag["panel"] + win              # a la fermeture, la fenetre rend exactement ce qu'elle a pris
+            height = max(MIN_WIN_H, drag["win"] + win)
+            if height != root.winfo_height():
+                root.geometry(f"{drag['w']}x{height}")
 
         def grip_move(e) -> None:
             if not drag:
                 return
             want = max(PANEL_BODY_MIN, drag["h"] + e.y_root - drag["y"])
-            old = int(body.cget("height"))
-            delta = want - old
             want = min(want, max(root.winfo_screenheight() - 200, PANEL_BODY_MIN))
-            delta = want - old
-            if delta == 0:
+            if want == drag["want"] or (want == drag["h"] and drag["want"] is None):
                 return
-            # la fenetre suit tant qu'elle tient dans l'ecran ; au-dela la liste grandit quand meme (la page du dessous se reduit,
-            # elle defile) et ce « trop-plein » est rendu en premier quand on reduit
-            overflow = getattr(s, "panel_overflow", 0)
-            if delta > 0:
-                win = min(delta, max(root.winfo_screenheight() - 80 - root.winfo_height(), 0))
-                overflow += delta - win
-            else:
-                take = min(overflow, -delta)
-                overflow -= take
-                win = delta + take
-            s.panel_overflow = overflow
-            body.configure(height=old + delta)
-            s.panel_body_h = old + delta
-            if win:
-                root.geometry(f"{root.winfo_width()}x{max(MIN_WIN_H, root.winfo_height() + win)}")
-                s.scene_panel_h = getattr(s, "scene_panel_h", 0) + win       # a la fermeture, la fenetre rend exactement ce qu'elle a pris
+            drag["want"] = want
+            if drag["job"] is None:
+                drag["job"] = root.after_idle(grip_apply)
+
+        def grip_release(e) -> None:
+            if drag:
+                if drag.get("job") is not None:
+                    try:
+                        root.after_cancel(drag["job"])
+                    except Exception:
+                        pass
+                grip_apply()
+                drag.clear()
 
         grip.bind("<ButtonPress-1>", grip_press)
         grip.bind("<B1-Motion>", grip_move)
-        grip.bind("<ButtonRelease-1>", lambda e: drag.clear())
+        grip.bind("<ButtonRelease-1>", grip_release)
         bar = skin.scrollbar(body)
         hbar = skin.scrollbar(body, orient="horizontal")             # seulement si un nom tres long depasse la largeur
         cv = tk.Canvas(body, highlightthickness=0, bd=0, bg=a2w.GUI_BG, yscrollcommand=bar.set, xscrollcommand=hbar.set)
