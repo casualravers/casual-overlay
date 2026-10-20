@@ -2430,6 +2430,9 @@ def check_scenes() -> None:
     check(sc.strip_live_overrides({"device": "x", "fullscreen": True, "size": "1x1", "gain": 3, "colors": "red"})
           == {"gain": 3, "colors": "red"} and sc.strip_live_overrides(None) is None,
           "scene: entree audio, plein ecran et taille jamais retenus ni appliques")
+    named = sc.capture_scene("P", gl.load_params(), "live", None, presets={"overlay": "neon", "fond": "", "x": "y"})
+    check(named["presets"] == {"overlay": "neon"} and sc.capture_scene("Q", gl.load_params(), "live", None)["presets"] == {},
+          "scene: les noms des presets overlay / fond sont retenus (vides et inconnus ecartes)", str(named["presets"]))
     check(sc.capture_scene("Z", gl.load_params(), "live", {"device": "x", "gain": 3})["live_overrides"] == {"gain": 3},
           "scene: capture sans l'entree audio")
     # VJ : ordre et reglages
@@ -3412,7 +3415,7 @@ def gui_expand_steps(c, s, out) -> None:
     ops.toggle_library()
     root.update()
     out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
-                        len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is not None)
+                        len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is None)
     sc["refresh_panel"](force=True)
     # annuler / retablir dans la fenetre
     rows_u = [r["name"] for r in book.rows()]

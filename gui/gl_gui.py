@@ -1578,7 +1578,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             overrides = capture_live_overrides()
             if overrides is None:
                 note = " (reglages du panneau audio2wave non retenus)"
-        scene = scenes.capture_scene(name, params, s.mode, overrides)
+        shown = {"overlay": overlay_var.get(), "fond": bg_presets["var"].get()}
+        scene = scenes.capture_scene(name, params, s.mode, overrides, presets=shown)
         scene_book.put(scene)                          # nouvelle : bibliotheque + fin du set actif ; sinon mise a jour partout
         s.active_scene = scene["name"]
         s.active_entry = current_index(scene_book.rows())
@@ -1824,6 +1825,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         apply_scene_dict(scene, media, index, a2w, bgv)
 
+    def show_scene_presets(scene: dict) -> None:
+        """Reaffiche dans les menus de presets overlay / fond ceux que la scene avait choisis, s'ils existent encore (les reglages
+        eux-memes viennent de la scene, pas du preset : un preset modifie depuis ne la change pas)."""
+        wanted = scenes.clean_presets(scene.get("presets"))
+        for key, bar in (("overlay", overlay_presets), ("fond", bg_presets)):
+            name = wanted.get(key)
+            if name and name in bar["book"].names():
+                bar["var"].set(name)
+
     def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None,
                          bgv: str | None = None) -> None:
         """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire). `bgv` : video de fond propre a l'entree."""
@@ -1850,6 +1860,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 note += f" (allegee pour le GPU : {', '.join(lightened)} coupe(s))"
                 sessionlog.event(f"Securite GPU : scene '{scene.get('name')}' allegee ({', '.join(lightened)})")
         apply_values(values)
+        show_scene_presets(scene)
         s.active_scene = scene["name"]
         s.active_entry = index
         try:

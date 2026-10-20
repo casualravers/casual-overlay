@@ -625,11 +625,20 @@ def strip_live_overrides(overrides: dict | None) -> dict | None:
     return {k: v for k, v in overrides.items() if k not in SCENE_EXCLUDED}
 
 
-def capture_scene(name: str, params: dict, mode: str, live_overrides: dict | None) -> dict:
-    """Instantane de l'etat courant. `live_overrides` : etat du panneau d'audio2wave (fond audio2wave seulement)."""
+def clean_presets(presets: dict | None) -> dict:
+    """Noms des presets (overlay, fond) affiches au moment de la capture : `{"overlay": nom, "fond": nom}`, sans les vides."""
+    if not isinstance(presets, dict):
+        return {}
+    return {k: str(v) for k, v in presets.items() if k in ("overlay", "fond") and isinstance(v, str) and v.strip()}
+
+
+def capture_scene(name: str, params: dict, mode: str, live_overrides: dict | None, presets: dict | None = None) -> dict:
+    """Instantane de l'etat courant. `live_overrides` : etat du panneau d'audio2wave (fond audio2wave seulement).
+    `presets` : noms des presets overlay / fond choisis dans les menus, gardes pour que charger la scene les reaffiche."""
     bg_mode = params.get("bg_mode")
     own = bg_mode in ("pattern", "video")       # fond genere / fond video : ni mode ni etat d'audio2wave
     return {
+        "presets": clean_presets(presets),
         "name": name,
         "bg": bg_mode if own else "live",
         "mode": None if own else mode,

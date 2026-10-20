@@ -262,32 +262,93 @@ def install(c):
             r["frame"].configure(highlightthickness=2, highlightbackground=SCENE_COLOR, highlightcolor=SCENE_COLOR)
 
     def toggle_library() -> None:
+        """Ouvre / ferme la colonne sans reconstruire le panneau : seule la colonne est creee ou detruite."""
         s.library_open = not getattr(s, "library_open", False)
-        refresh_scene_panel(force=True)
+        wrap, body = panel_state.get("wrap"), panel_state.get("body")
+        try:
+            ok = wrap is not None and body is not None and wrap.winfo_exists()
+        except tk.TclError:
+            ok = False
+        if not ok:
+            refresh_scene_panel(force=True)
+            return
+        if s.library_open:
+            build_library(wrap, scene_book.rows(), before=body)
+            skin.apply(panel_state["lib"]["box"])
+        else:
+            lib = panel_state.pop("lib", None)
+            if lib:
+                lib["box"].destroy()
+        btn = panel_state.get("lib_btn")
+        if btn is not None:
+            try:
+                btn.configure(text="Bibliotheque " + ("\u25c0" if s.library_open else "\u25b6"))
+            except tk.TclError:
+                pass
 
-    def build_library(parent, rows: list[dict]) -> None:
-        """Colonne « bibliotheque » a gauche de la liste : toutes les scenes ; glisser-deposer vers la liste = ajouter au set a cet endroit."""
+    def library_state(rows: list[dict], needle: str = "") -> tuple[list, list]:
+        """Lignes de la bibliotheque (triees, filtrees par `needle`) et noms correspondants."""
         used: dict[str, int] = {}
         for r in rows:
             used[r["name"].lower()] = used.get(r["name"].lower(), 0) + 1
-        box = tk.Frame(parent, bg=a2w.GUI_PANEL_BG, width=220)
-        box.pack(side="left", fill="y", padx=(0, 2))
-        box.pack_propagate(False)
+        needle = needle.strip().lower()
         library = sorted(scene_book.list(), key=lambda x: x["name"].lower())
-        tk.Label(box, text=f"BIBLIOTHEQUE  ({len(library)})", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=("Segoe UI", 8, "bold"),
-                 anchor="w").pack(fill="x", padx=6, pady=(3, 0))
+        total = len(library)
+        if needle:
+            library = [x for x in library if needle in x["name"].lower()]
+        labels = [("\u2736 " if x.get("temp") else "") + x["name"] + (f"   \u00d7{used[x['name'].lower()]}" if used.get(x["name"].lower()) else "")
+                  for x in library]
+        return labels, [x["name"] for x in library], total
+
+    def refresh_library(rows: list[dict]) -> None:
+        """Met la colonne a jour sur place (liste de scenes, compteurs \u00d7N) ; rien si rien n'a change."""
+        lib = panel_state.get("lib")
+        if not lib:
+            return
+        labels, found, total = library_state(rows, lib["filter"].get())
+        sig = (tuple(labels), total)
+        if sig == lib.get("sig"):
+            return
+        lib["sig"] = sig
+        lb = lib["lb"]
+        try:
+            top = lb.yview()[0]
+            lb.delete(0, "end")
+            lb.insert("end", *labels)
+            lib["names"][:] = found
+            lib["title"].configure(text=f"BIBLIOTHEQUE  ({len(found)}" + (f" / {total})" if len(found) != total else ")"))
+            lb.yview_moveto(top)
+        except tk.TclError:
+            pass
+
+    def build_library(parent, rows: list[dict], before=None) -> None:
+        """Colonne « bibliotheque » a gauche de la liste : toutes les scenes ; glisser-deposer vers la liste = ajouter au set a cet endroit.
+        Un champ de recherche filtre par nom ; la colonne se met a jour sur place (`refresh_library`)."""
+        box = tk.Frame(parent, bg=a2w.GUI_PANEL_BG, width=220)
+        if before is not None:
+            box.pack(side="left", fill="y", padx=(0, 2), before=before)
+        else:
+            box.pack(side="left", fill="y", padx=(0, 2))
+        box.pack_propagate(False)
+        labels, found, total = library_state(rows)
+        title = tk.Label(box, text=f"BIBLIOTHEQUE  ({total})", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=("Segoe UI", 8, "bold"),
+                         anchor="w")
+        title.pack(fill="x", padx=6, pady=(3, 0))
+        filter_var = tk.StringVar(value="")
+        search = tk.Entry(box, textvariable=filter_var)
+        search.pack(fill="x", padx=6, pady=(2, 0))
+        Tooltip(search, "Tape une partie du nom pour filtrer la bibliotheque.")
         lbar = skin.scrollbar(box)
         lb = tk.Listbox(box, activestyle="none", exportselection=False, bg=a2w.GUI_BG, fg=a2w.GUI_FG, bd=0, highlightthickness=0,
                         selectbackground=SCENE_COLOR, selectforeground=BANNER_FG, yscrollcommand=lbar.set)
         lbar.config(command=lb.yview)
         lbar.pack(side="right", fill="y")
         lb.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=2)
-        names: list[str] = []
-        for sc_ in library:
-            n = used.get(sc_["name"].lower(), 0)
-            lb.insert("end", ("\u2736 " if sc_.get("temp") else "") + sc_["name"] + (f"   \u00d7{n}" if n else ""))
-            names.append(sc_["name"])
-        panel_state["lib"] = {"lb": lb, "names": names}
+        names: list[str] = list(found)
+        if labels:
+            lb.insert("end", *labels)
+        panel_state["lib"] = {"lb": lb, "names": names, "box": box, "title": title, "filter": filter_var, "sig": (tuple(labels), total)}
+        filter_var.trace_add("write", lambda *_: refresh_library(scene_book.rows()))
         Tooltip(lb, "Toutes les scenes enregistrees. Glisse une scene sur la liste du set pour l'y ajouter a cet endroit (autant de fois que tu "
                     "veux), double-clic = a la fin, clic droit = renommer / garder / supprimer. \u00d7N = nombre d'entrees dans ce set.")
         d: dict = {}
@@ -394,6 +455,7 @@ def install(c):
         lib_btn = tk.Button(bar_, text="Bibliotheque " + ("\u25c0" if getattr(s, "library_open", False) else "\u25b6"), command=toggle_library,
                             relief="flat", bd=0, padx=8, cursor="hand2", bg=SCENE_COLOR, fg=BANNER_FG, font=BOLD)
         lib_btn.pack(side="right", padx=8, pady=3)
+        panel_state["lib_btn"] = lib_btn
         Tooltip(lib_btn, "Ouvre la liste de toutes les scenes a gauche du set : glisse-en une sur la liste pour l'ajouter a l'endroit voulu.")
         return bar_
 
@@ -801,8 +863,7 @@ def install(c):
         """Tout ce qui, hors la scene active, change ce que le panneau affiche : s'il est identique, on ne reconstruit rien."""
         return json.dumps([settings, rows, rnd["info"] if settings["order"] == "alea" else "",
                            [len(b) for b in rnd["bank"].values()], sum(1 for v in getattr(s, "thumb_cache", {}).values() if v != "pending"), dnd["ok"],
-                           scene_book.active_set_name(), [(x["name"], bool(x.get("temp"))) for x in scene_book.list()], scene_book.set_names(),
-                           bool(getattr(s, "library_open", False))], sort_keys=True, default=str)
+                           scene_book.active_set_name(), scene_book.set_names()], sort_keys=True, default=str)
 
     def refresh_scene_panel(force: bool = False) -> None:
         """Construit / met a jour le panneau etendu. Rien n'est reconstruit si seul l'ordre d'affichage actif a change (la ligne
@@ -821,6 +882,7 @@ def install(c):
         if not force and sig == panel_state["sig"] and scene_panel.winfo_children():
             for refs in panel_state["rows"].values():
                 restyle_row(refs, refs["index"] == current)
+            refresh_library(rows)
             return
         from tkinter import font as tkfont
         face = tkfont.Font(root=root, font=BOLD)
@@ -880,8 +942,11 @@ def install(c):
         mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
         if getattr(s, "library_open", False):
             build_library(wrap, rows)
+        else:
+            panel_state.pop("lib", None)
         body = tk.Frame(wrap, bg=a2w.GUI_BG, height=getattr(s, "panel_body_h", PANEL_BODY_H))
         body.pack(side="left", fill="both", expand=True)
+        panel_state["wrap"], panel_state["body"] = wrap, body
         body.pack_propagate(False)
         foot = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)           # sous la liste : ajouter a la suite
         foot.pack(fill="x")
