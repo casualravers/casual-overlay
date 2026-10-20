@@ -215,10 +215,6 @@ def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple
 HOLO_DOWNSCALE = 4      # le champ du halo holographique est calcule a 1/4 de la resolution de l'ecran
 
 
-STROBE_TARGETS = {"all": 0, "bg": 1, "logo": 2}
-STROBE_ZONES = {"full": 0, "left": 1, "right": 2, "top": 3, "bottom": 4, "center": 5, "edges": 6, "alt": 7}
-
-
 class Renderer:
     """Deux passes : scene (video + logo) dans un FBO, puis post-traitement vers `target`."""
 
@@ -237,7 +233,7 @@ class Renderer:
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
-        self._strobe_kicks, self._strobe_side = 0, 0                                # strobe leger : kicks comptes depuis l'armement ; cote de la zone alternee
+        self._strobe_kicks = 0                                                      # strobe leger : kicks comptes depuis l'armement
         self.strobe_limiter = StrobeLimiter()
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
         self._prev_ok = False
@@ -395,7 +391,6 @@ class Renderer:
             timed = not fire                                          # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
         if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"]), timed):
             self._strobe_last = now
-            self._strobe_side ^= 1                                        # zone « alt » : un eclair a gauche, le suivant a droite
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
@@ -646,9 +641,7 @@ class Renderer:
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", self._strobe(p, state))
-        self._set(pp, "u_strobe_target", float(STROBE_TARGETS.get(p.get("strobe_target", "all"), 0)))
-        self._set(pp, "u_strobe_zone", float(STROBE_ZONES.get(p.get("strobe_zone", "full"), 0)))
-        self._set(pp, "u_strobe_side", float(self._strobe_side))
+        self._set(pp, "u_strobe_dark", float(p.get("strobe_dark", 1.0)))
         self._set(pp, "u_hue", math.radians(hue_deg))
         self._set(pp, "u_bg_level", bg_level)
         # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)

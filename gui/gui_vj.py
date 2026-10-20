@@ -52,7 +52,7 @@ def install(c):
 
     def strobe_text() -> str:
         mode = params.get("strobe_mode", "manual")
-        suffix = {"kick": " kick", "light": f" 1/{int(params.get('strobe_div', 4))}", "rate": f" {float(params.get('strobe_rate', 8.0)):g}Hz"}.get(mode, "")
+        suffix = {"kick": " kick", "light": f" 1/{int(params.get('strobe_div', 4))}"}.get(mode, "")
         return "Strobe" + suffix + (" \u25cf" if mode != "manual" and float(params.get("strobe_on", 0.0)) >= 0.5 else "")
 
     def build_text() -> str:
@@ -329,11 +329,11 @@ def install(c):
                 slider(f, i, *args)
             tap = button(f, "Tap tempo", do_tap, row=3, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             Tooltip(tap, "Tape le rythme (au moins deux appuis, touche point dans la fenetre de rendu) : le master du tempo suit le BPM "
-                         "(120 BPM = 100 %), et la cadence du strobe en mode Cadence. Une pause de 2 s recommence.")
+                         "(120 BPM = 100 %). Une pause de 2 s recommence.")
             bpm = vj_ui["bpm"] = tk.Label(f, text="\u2014 BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
             bpm.grid(row=3, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
-            toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %) ; en strobe a cadence fixe, "
-                                                 "la cadence suit aussi. Il faut des kicks reguliers : sans BPM fiable, le tempo ne bouge pas.",
+            toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %). "
+                                                 "Il faut des kicks reguliers : sans BPM fiable, le tempo ne bouge pas.",
                    row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
             toggle(f, "drop_auto", "Montee / drop auto", "Une cassure detectee (les basses disparaissent un moment) lance la montee ; le retour des basses "
                                                          "= le drop : flash blanc et retour aux reglages normaux. Le VJ peut aussi changer de scene au "
@@ -342,6 +342,12 @@ def install(c):
             toggle(f, "gpu_cap", "Securite GPU", "Quand le VJ enchaine une scene, ses effets couteux (cellules, halo, fonte) sont coupes si, ajoutes a la charge mesuree "
                                                   "du GPU, ils ne tiendraient plus dans le budget d'une image. Une scene choisie a la main n'est jamais touchee.",
                    row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+
+            lock = button(f, "Verrou", toggle_scene_lock, row=5, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            vj_ui["lock"] = lock
+            update_lock_button()
+            Tooltip(lock, "Verrou de scene : gele la scene courante. Le VJ se met en pause et ni les touches de scene, F1..F9, la fleche "
+                          "droite ni les tirages ne la changent ; les masters restent actifs. Touche K dans la fenetre de rendu.")
 
         new_tab("Masters", fill_0)
 
@@ -352,33 +358,25 @@ def install(c):
             sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
             sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
             Tooltip(sb, "Strobe : eclair blanc court a la demande. Maintiens le bouton (ou la touche S dans la fenetre de rendu) pour une rafale. "
-                        "Au kick / cadence fixe, un clic arme, un autre desarme.")
+                        "Au kick / en leger, un clic arme, un autre desarme.")
 
             def set_strobe(**kw) -> None:
                 params.update(kw)
                 params["strobe_on"] = 0.0                              # un changement de mode desarme
                 sb.configure(text=strobe_text())
 
-            radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Leger", "light"), ("Cadence", "rate")), row=1, span=4,
-                   tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Cadence : un clic arme, un autre desarme. "
+            radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Leger", "light")), row=1, span=4,
+                   tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Leger : un clic arme, un autre desarme. "
                        "Leger : un seul kick sur N (reglage « 1 kick sur », 4 par defaut = un eclair par mesure).",
                    on_change=lambda: set_strobe())
-            slider(f, (2, 0), "strobe_rate", "Cadence", 1, 20, 1, 1.0, " Hz", 8, "Cadence du strobe (1 a 20 eclairs par seconde) en rafale manuelle et en cadence fixe.")
+            slider(f, (2, 0), "strobe_rate", "Rafale", 1, 20, 1, 1.0, " Hz", 8, "Cadence du strobe maintenu en mode Manuel (1 a 20 eclairs par seconde).")
             slider(f, (3, 0), "strobe_max_hz", "Limite", 1, 20, 1, 1.0, " Hz", 10, "Limiteur de securite : jamais plus de ce nombre d'eclairs par seconde, "
                                                                                     "quelle que soit la cadence demandee (photosensibilite du public).")
             slider(f, (3, 3), "strobe_max_s", "Duree max", 1, 60, 1, 1.0, " s", 8, "Limiteur de securite : une rafale continue de strobe est coupee apres cette duree, "
                                                                                   "puis pause forcee de 3 s.")
-            radios(f, "strobe_target", (("Tout", "all"), ("Fond", "bg"), ("Logo", "logo")), row=4, span=3,
-                   tip="Ce que le strobe blanchit : toute l'image, le fond seul ou le logo seul.")
-            radios(f, "strobe_zone", (("Plein", "full"), ("G", "left"), ("D", "right"), ("Haut", "top"), ("Bas", "bottom"), ("Centre", "center"),
-                                      ("Bords", "edges"), ("G/D", "alt")), row=5, span=6,
-                   tip="Partie de l'image touchee par le strobe : tout, gauche, droite, haut, bas, centre, bords, ou gauche puis droite a tour de role.")
+            slider(f, (4, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100, "Le strobe ne blanchit que les parties SOMBRES de l'image : seuil de luminosite, "
+                                                                                    "plus il est bas, plus le strobe est limite aux zones les plus noires. 100 % = toute l'image.")
             slider(f, (4, 3), "strobe_div", "1 kick sur", 2, 16, 1, 1.0, "", 4, "Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre).")
-            lock = button(f, "Verrou", toggle_scene_lock, row=0, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
-            vj_ui["lock"] = lock
-            update_lock_button()
-            Tooltip(lock, "Verrou de scene : gele la scene courante. Le VJ se met en pause et ni les touches de scene, F1..F9, la fleche "
-                          "droite ni les tirages ne la changent ; les masters restent actifs. Touche K dans la fenetre de rendu.")
             slider(f, (2, 3), "build_time", "Duree", 5, 180, 5, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
             bb = button(f, build_text(), start_build, row=1, column=3, sticky="w", padx=6)
             vj_ui["build"] = bb
@@ -566,8 +564,6 @@ def install(c):
         bpm = min(max(bpm, 30.0), 300.0)
         tap_state["bpm"] = bpm
         params["tempo"] = min(max(bpm / TAP_REF_BPM, 0.0), 2.0)
-        if params.get("strobe_mode") == "rate":
-            params["strobe_rate"] = min(max(bpm / 60.0, 1.0), 20.0)
         sync_master_panel()
         scene_msg.set(f"Tap tempo : {bpm:.0f} BPM")
 
@@ -743,8 +739,6 @@ def install(c):
             tempo = min(max(bpm / TAP_REF_BPM, 0.0), 2.0)
             if abs(tempo - float(params.get("tempo", 1.0))) > 0.01:
                 params["tempo"] = tempo
-                if params.get("strobe_mode") == "rate":
-                    params["strobe_rate"] = min(max(bpm / 60.0, 1.0), 20.0)
                 sync_master_panel()
         if int(r.builds) != rhythm_ui["builds"]:
             rhythm_ui["builds"] = int(r.builds)

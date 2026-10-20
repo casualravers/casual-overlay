@@ -33,9 +33,7 @@ uniform float u_trail;        // trainee : part de l'image precedente conservee
 uniform sampler2D u_prev;     // image finale precedente
 uniform float u_hue;          // teinte globale (radians) : rotation de couleur appliquee a tout (fond et logo)
 uniform float u_strobe;      // eclair blanc court du strobe (1 -> 0 en 70 ms)
-uniform float u_strobe_target;  // 0 tout, 1 fond seul, 2 logo seul
-uniform float u_strobe_zone;    // 0 plein, 1 gauche, 2 droite, 3 haut, 4 bas, 5 centre, 6 bords, 7 alterne
-uniform float u_strobe_side;    // 0 / 1 : cote touche en zone alternee
+uniform float u_strobe_dark;    // seuil de luminosite : le strobe ne touche que les parties plus sombres (1 = tout)
 uniform float u_bg_level;     // master du fond : 0 = noir (logo seul), 1 = normal
 uniform float u_flash;        // transition du VJ : 1 -> 0 en ~0,5 s (flash blanc + bandes de glitch)
 
@@ -232,18 +230,6 @@ vec3 hue_rotate(vec3 c, float a) {           // rotation autour de l'axe du gris
     return c * cos(a) + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - cos(a));
 }
 
-float strobe_zone(vec2 uv) {
-    int z = int(u_strobe_zone + 0.5);
-    if (z == 1) return step(uv.x, 0.5);
-    if (z == 2) return step(0.5, uv.x);
-    if (z == 3) return step(0.5, uv.y);
-    if (z == 4) return step(uv.y, 0.5);
-    if (z == 5) { vec2 d = abs(uv - 0.5); return step(max(d.x, d.y), 0.25); }
-    if (z == 6) { vec2 d = abs(uv - 0.5); return step(0.25, max(d.x, d.y)); }
-    if (z == 7) return u_strobe_side > 0.5 ? step(0.5, uv.x) : step(uv.x, 0.5);
-    return 1.0;
-}
-
 void main() {
     cuv = comp_uv(v_uv);
     // Halo holographique: deformation du fond + lumiere (jamais sur le logo: pose dessus, intact).
@@ -254,17 +240,8 @@ void main() {
     }
     // Fond et logo deformes chacun avec leurs reglages, puis logo pose par-dessus (alpha premultiplie).
     vec3 col = layer_fx(u_scene, u_fx_bg, vec2(0.5), 0.0, disp).rgb * u_bg_level + light;
-    // Strobe partiel : la partie de l'image touchee (zone) et la couche (fond / logo / tout).
-    float zone_k = strobe_zone(v_uv);
-    float st_part = u_strobe * zone_k;
-    if (u_strobe_target > 0.5 && u_strobe_target < 1.5) {
-        col = mix(col, vec3(1.0), st_part);
-    }
     if (u_layer_on > 0.5) {
         vec4 lg = layer_fx(u_logo, u_fx_logo, u_center_logo, u_salt_logo, vec2(0.0));
-        if (u_strobe_target > 1.5) {
-            lg.rgb = mix(lg.rgb, vec3(lg.a), st_part);          // blanc premultiplie : le logo seul s'eclaire
-        }
         col = lg.rgb + col * (1.0 - lg.a);
     }
 
@@ -274,7 +251,10 @@ void main() {
     if (u_trail > 0.001) {                                  // trainee : l'image precedente (finale) s'estompe de u_trail par image
         col = max(col, texture(u_prev, gl_FragCoord.xy / u_res).rgb * u_trail);
     }
-    col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe_target < 0.5 ? st_part : 0.0));
+    // Le strobe ne blanchit que les parties sombres de l'image (luminance sous le seuil, bord adouci) ; seuil a 1 = toute l'image.
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    float dark_k = u_strobe_dark >= 0.999 ? 1.0 : 1.0 - smoothstep(u_strobe_dark - 0.1, u_strobe_dark, lum);
+    col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe * dark_k));
     //        // flash de transition du VJ
 
     // HUD : barres bass / mid / high / rms / beat en bas a gauche + 5 pastilles d'effets.

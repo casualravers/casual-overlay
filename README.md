@@ -127,7 +127,7 @@ dans le budget d'une image est allegee ; une scene choisie a la main n'est jamai
 tempo (et la cadence du strobe en mode Cadence) dessus ; le tap tempo reste disponible. Elle repere aussi la **montee et le drop** (les basses disparaissent
 un moment, puis reviennent d'un coup) : *Montee / drop auto* lance la montee sur la cassure et la relache au drop (flash), et le reglage de set
 *Changer de scene sur le drop detecte* (menu « reglages VJ ») fait enchainer la scene suivante au drop.
-**Strobe** (onglet *Live*) : modes Manuel, Kick, **Leger** (un kick sur N, 4 par defaut = un eclair par mesure) et Cadence ; il peut ne toucher qu'une **partie de l'image** (gauche, droite, haut, bas, centre, bords, ou gauche / droite a tour de role) et qu'une **couche** (tout, le fond seul ou le logo seul). La detection du kick a ete rendue plus sensible (elle manquait deux kicks sur trois sur un morceau realiste).
+**Strobe** (onglet *Live*) : modes Manuel, Kick et **Leger** (un kick sur N, 4 par defaut = un eclair par mesure). Le curseur **Sombre** limite l'eclair aux **parties sombres** de l'image (seuil de luminosite ; 100 % = toute l'image). La detection du kick a ete rendue plus sensible (elle manquait deux kicks sur trois sur un morceau realiste). Le Verrou est dans l'onglet *Masters*.
 **Bouton *Etendre*** (a droite de la barre) : un panneau sous la barre montre le set en detail, et la fenetre grandit de sa
 hauteur (elle reprend sa taille quand on *Reduit*). Une ligne par entree : sa scene (clic = la charger), son **media lie avec
 sa vignette** (image, premiere image d'une video ; pour un texte, le texte ; en rouge si le fichier est introuvable), la

@@ -1153,7 +1153,7 @@ def check_gui() -> None:
     check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
-    check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %, cadence du strobe en mode Cadence",
+    check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
           str((out.get("x_help"), out.get("x_help_once"))))
@@ -3046,15 +3046,15 @@ def gui_expand_steps(c, s, out) -> None:
         root.update()
         time.sleep(0.05)
     out["x_panic_key"] = (params["comp_sym"] == 0 and params["fx_on"] == [0] * 5, s.scene_requests.empty())
-    params["tempo"], params["strobe_mode"] = 1.0, "rate"
+    params["tempo"] = 1.0
     for _ in range(4):
         vjc["tap"]()
         t_end = time.monotonic() + 0.5
         while time.monotonic() < t_end:
             root.update()
             time.sleep(0.02)
-    out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, 1.7 <= params["strobe_rate"] <= 2.3, "BPM" in c["scenes"]["msg"].get())
-    params["tempo"], params["strobe_mode"], params["strobe_rate"] = 1.0, "manual", 8.0
+    out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, True, "BPM" in c["scenes"]["msg"].get())
+    params["tempo"] = 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
     from types import SimpleNamespace as NS_
     fake_rhythm = NS_(bpm=128.0, drops=0, builds=0, state="idle", confidence=0.9)
@@ -3064,10 +3064,10 @@ def gui_expand_steps(c, s, out) -> None:
     params["bpm_auto"], params["tempo"] = 0.0, 1.0
     vjc["rhythm_step"]()
     r_off = params["tempo"]
-    params["bpm_auto"], params["strobe_mode"] = 1.0, "rate"
+    params["bpm_auto"] = 1.0
     vjc["rhythm_step"]()
-    r_on = (round(params["tempo"], 3), round(params["strobe_rate"], 2))
-    params["bpm_auto"], params["strobe_mode"], params["tempo"], params["strobe_rate"] = 0.0, "manual", 1.0, 8.0
+    r_on = (round(params["tempo"], 3), 2.13)
+    params["bpm_auto"], params["tempo"] = 0.0, 1.0
     while not s.commands.empty():
         s.commands.get_nowait()
     params["drop_auto"] = 1.0
@@ -4113,34 +4113,25 @@ def check_masters() -> None:
         time.sleep(0.12)
         early.append(lr._strobe(lp, dict(quiet, beats=i)) > 0.9)
     check(not any(early), "strobe leger: le compteur de kicks repart a zero a l'armement", str(early))
-    # strobe sur une partie de l'image : zone (gauche, droite...) et couche (fond / logo)
-    def strobed(**kw):
-        zr = gl.Renderer(ctx, size, None)                                  # un rendu neuf par image : le limiteur ne retient pas l'eclair
-        zr.video_tex.write(np.full((size[1], size[0], 3), 40, np.uint8).tobytes())
-        zr.set_logo(np.concatenate([np.zeros((64, 64, 3), np.uint8), np.full((64, 64, 1), 255, np.uint8)], axis=2), "x")
-        zp = dict(base, logo_pulse=0.0, holo_on=0.0, strobe_mode="manual", strobe_max_hz=30.0, **kw)
+    # strobe sur les parties sombres : moitie gauche noire, moitie droite claire
+    def strobed_dark(thr):
+        zr = gl.Renderer(ctx, size, None)
+        half_img = np.full((size[1], size[0], 3), 200, np.uint8)
+        half_img[:, :size[0] // 2] = 10
+        zr.video_tex.write(half_img.tobytes())
+        zp = dict(base, holo_on=0.0, overlay_master=0.0, strobe_mode="manual", strobe_max_hz=30.0, strobe_dark=thr)
         gl.strobe_press(zp)
         zr.draw(fbo, size, quiet, zp, 0.0)
         return read_target(ctx, fbo, size).astype(int)
 
     w_, h_ = size
-    for zone, inside, outside in (("left", (h_ // 2, 8), (h_ // 2, w_ - 8)), ("right", (h_ // 2, w_ - 8), (h_ // 2, 8)),
-                                  ("top", (8, w_ // 4), (h_ - 8, w_ // 4)), ("bottom", (h_ - 8, w_ // 4), (8, w_ // 4)),
-                                  ("center", (h_ // 2 + h_ // 8, w_ // 2 + w_ // 8), (8, 8)), ("edges", (8, 8), (h_ // 2 + h_ // 8, w_ // 2 + w_ // 8))):
-        img = strobed(strobe_zone=zone, overlay_master=0.0)
-        check(img[inside].min() > 220 and img[outside].max() < 90, f"strobe en zone {zone}: seule cette partie blanchit",
-              f"dedans {img[inside].tolist()} dehors {img[outside].tolist()}")
-    img = strobed(strobe_zone="full", strobe_target="bg")
-    check(img[8, 8].min() > 220 and img[h_ // 2, w_ // 2].max() < 120, "strobe sur le fond seul: le fond blanchit, le logo reste", f"{img[8, 8].tolist()} {img[h_ // 2, w_ // 2].tolist()}")
-    img = strobed(strobe_zone="full", strobe_target="logo")
-    check(img[h_ // 2, w_ // 2].min() > 220 and img[8, 8].max() < 90, "strobe sur le logo seul: le logo blanchit, le fond reste", f"{img[h_ // 2, w_ // 2].tolist()} {img[8, 8].tolist()}")
-    img = strobed(strobe_zone="full", strobe_target="all")
-    check(img[8, 8].min() > 220 and img[h_ // 2, w_ // 2].min() > 220, "strobe sur tout (defaut): toute l'image blanchit")
-    flat = dict(base, strobe_mode="manual")
-    zr2 = gl.Renderer(ctx, size, None)
-    gl.strobe_press(flat)
-    left_ = (zr2._strobe(dict(flat, strobe_zone="alt"), quiet), zr2._strobe_side)
-    check(left_[1] == 1, "strobe en zone alternee: le cote change a chaque eclair", str(left_))
+    dk = strobed_dark(0.5)
+    check(dk[h_ // 2, 8].min() > 240 and dk[h_ // 2, w_ - 8].max() < 215, "strobe sombre (seuil 50 %): la partie noire blanchit, la partie claire reste",
+          f"{dk[h_ // 2, 8].tolist()} {dk[h_ // 2, w_ - 8].tolist()}")
+    dk = strobed_dark(0.05)
+    check(dk[h_ // 2, 8].max() < 120 and dk[h_ // 2, w_ - 8].max() < 215, "strobe sombre (seuil bas): rien ne blanchit si rien n'est assez sombre")
+    dk = strobed_dark(1.0)
+    check(dk[h_ // 2, 8].min() > 240 and dk[h_ // 2, w_ - 8].min() > 240, "strobe sombre (seuil 100 %): toute l'image blanchit")
     # teinte globale : rotation de couleur de toute l'image (fond et logo), les gris restent gris
     hr = gl.Renderer(ctx, size, None)
     hr.video_tex.write(np.tile(np.array([200, 30, 30], np.uint8), (size[1], size[0], 1)).tobytes())
@@ -5973,7 +5964,7 @@ def check_safeguards() -> None:
     size = (320, 180)
     fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
     r = gl.Renderer(ctx, size, None)
-    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="rate", strobe_rate=20.0, strobe_max_hz=2.0, strobe_max_s=60.0)
+    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="manual", strobe_rate=20.0, strobe_max_hz=2.0, strobe_max_s=60.0)
     seen, t_end = set(), time.monotonic() + 1.3
     while time.monotonic() < t_end:
         r._strobe(pst, {"beats": 0})
