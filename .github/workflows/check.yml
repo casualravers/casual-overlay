@@ -1,11 +1,23 @@
 name: Verifications
 
-# `pur` : les verifications qui n'ont besoin ni de GPU, ni de micro, ni de ffmpeg (python tools/check_gl.py --pur) ; elles doivent passer.
-# `complet` : toute la suite ; sur un serveur sans carte graphique ni peripheriques une partie echoue, on la lit sans bloquer la PR.
+# `pur`      : verifications sans GPU, micro ni ffmpeg (python tools/check_gl.py --pur) ; rapide, bloquant.
+# `complet`  : (bloquant) toute la suite, avec un OpenGL logiciel (Mesa llvmpipe) et ffmpeg installes sur le serveur. Les tests de mise en page de la
+#              fenetre connus pour etre instables (FRAGILES dans check_gl.py) font sortir le programme avec le code 3 : la suite est alors
+#              relancee UNE fois ; tout autre echec, ou un echec qui revient, fait echouer le job.
+# `portable` : fabrication et verification de la version portable (sans ffmpeg).
+# La mesure de latence logicielle est ecrite dans le resume du job (information, jamais un seuil : un serveur partage est trop variable).
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verifications-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
 
 jobs:
   pur:
@@ -24,8 +36,9 @@ jobs:
   complet:
     needs: pur
     runs-on: windows-latest
-    timeout-minutes: 40
-    continue-on-error: true
+    timeout-minutes: 45
+    env:
+      MESA_VERSION: "26.2.4"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,4 +47,67 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-gl.txt
       - run: python -m pip install -r requirements-gl.txt
-      - run: python tools/check_gl.py
+      - uses: ./.github/actions/mesa
+        with:
+          version: ${{ env.MESA_VERSION }}
+      - name: ffmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress | Out-Null
+          ffmpeg -version | Select-Object -First 1
+      - name: Suite complete (relancee une fois si seuls des tests de mise en page instables echouent)
+        shell: pwsh
+        run: |
+          python tools/check_gl.py *> check.log
+          $code = $LASTEXITCODE
+          if ($code -eq 3) {
+            Write-Host "Echecs de mise en page connus pour etre instables : nouvelle execution"
+            Copy-Item check.log check-1.log
+            python tools/check_gl.py *> check.log
+            $code = $LASTEXITCODE
+          }
+          Get-Content check.log -Tail 60
+          exit $code
+      - name: Latence logicielle (information)
+        if: always()
+        shell: pwsh
+        run: |
+          "### Latence audio -> image (chaine logicielle, serveur partage : indicatif)" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          python tools/mesure_latence.py --kicks 8 2>&1 | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Journaux
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journaux-verifications
+          path: check*.log
+          if-no-files-found: ignore
+
+  portable:
+    # La version portable se fabrique et se verifie (diagnostic + rendu synthetique de 3 s avec le Python du dossier) : un module oublie
+    # dans APP_FILES ne se verrait sinon que sur le PC de la soiree. Sans ffmpeg (400 Mo) : seul le reste est controle.
+    needs: pur
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      MESA_VERSION: "26.2.4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/mesa
+        with:
+          version: ${{ env.MESA_VERSION }}
+      - name: ffmpeg (sur le PATH pour la verification ; non embarque dans le dossier)
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress | Out-Null
+          ffmpeg -version | Select-Object -First 1
+      - name: Environnement virtuel (le script de fabrication y prend les modules)
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install -r requirements-gl.txt
+      - name: Fabrication et verification du dossier portable
+        run: .venv\Scripts\python tools\build_portable.py --no-ffmpeg
