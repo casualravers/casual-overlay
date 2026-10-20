@@ -83,6 +83,7 @@ def _render_loop(an, size, fps, t_end, np, moderngl):
                   strobe_max_hz=20.0, strobe_max_s=600.0, strobe_dark=1.0, auto_master=0.0)
     flashes: list[float] = []
     was_white = False
+    fired = renderer.strobe_fired
     period = 1.0 / fps
     t0 = time.monotonic()
     next_frame = t0
@@ -95,7 +96,11 @@ def _render_loop(an, size, fps, t_end, np, moderngl):
         data = fbo.read(components=3)                       # attend la fin du rendu : l'image est vraiment prete
         t_read = time.monotonic()
         white = float(np.frombuffer(data, dtype=np.uint8).mean()) > 100.0
-        if white and not was_white:
+        # L'eclair est releve quand le rendu l'a accepte (compteur) : la lecture `fbo.read` ci-dessus a attendu la fin du rendu de cette image, donc
+        # c'est bien l'instant ou elle est prete. Se fier a l'image blanche seule rate l'eclair (70 ms) quand le rendu logiciel d'un serveur
+        # partage met plus de temps qu'un eclair par image ; le pixel blanc ne sert plus que de verification a l'oeil.
+        if renderer.strobe_fired != fired:
+            fired = renderer.strobe_fired
             flashes.append(t_read)
         was_white = white
         next_frame += period

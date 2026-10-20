@@ -36,8 +36,18 @@ PROFILES = {
     "peak": {"tempo": 1.1, "react": 1.2, "fx": 1.3, "overlay": 1.0, "bg": 1.0, "hue": 0.0, "breath": 0.0},
 }
 
+def thresholds(mean: float) -> tuple[float, float, float, float]:
+    """Planchers (silence, calme, ambiance, montee) : les valeurs absolues d'un micro normal, abaissees en proportion quand le morceau est faible
+    (`mean` = energie moyenne pendant les passages a kicks : un telephone pose a cote du micro donne 10 a 30 fois moins qu'une sono). Sans
+    mesure (`mean` <= 0) ou avec un morceau fort, ce sont les valeurs absolues."""
+    if mean <= 0.0:
+        return SILENCE_ABS, CALM_ABS, QUIET_ABS, BUILD_MIN
+    return (min(SILENCE_ABS, max(0.0008, 0.15 * mean)), min(CALM_ABS, max(0.003, 0.10 * mean)),
+            min(QUIET_ABS, max(0.003, 0.30 * mean)), min(BUILD_MIN, max(0.004, 0.25 * mean)))
+
+
 WARMUP_S = 3.0                # avant cela on ne sait rien : phase « ambient »
-SILENCE_ABS = 0.004           # rms brut (1 = pleine echelle) sous lequel c'est du silence (~ -48 dBFS)
+SILENCE_ABS = 0.002           # rms brut (1 = pleine echelle) sous lequel c'est du silence (~ -54 dBFS) ; plus bas quand le morceau est faible (voir `_thresholds`)
 CALM_ABS = 0.012              # sous cela l'energie est faible quelle que soit la moyenne
 QUIET_ABS = 0.04              # sans kick, sous cette energie : ambiance
 MEAN_TAU_S = 40.0
@@ -67,6 +77,7 @@ class PhaseTracker:
         self.t0: float | None = None
         self._last: float | None = None
         self._e = 0.0                       # energie lissee
+        self._share_mean = 0.0                 # part des basses habituelle pendant les passages a kicks (un telephone en rend tres peu)
         self._mean = 0.0                    # moyenne de l'energie pendant les passages a kicks (0 tant qu'il n'y en a pas eu)
         self._boost = 1.0                   # energie / moyenne
         self._kicks: deque[float] = deque()
@@ -107,6 +118,10 @@ class PhaseTracker:
                     self._mean = max(self._e, CALM_ABS)       # amorce : la moyenne part du premier passage a kicks, pas de zero
                 else:
                     self._mean += (self._e - self._mean) * (1.0 - math.exp(-dt / MEAN_TAU_S))
+                if self._share_mean <= 0.0:
+                    self._share_mean = max(self._bass_share, 0.01)
+                else:
+                    self._share_mean += (self._bass_share - self._share_mean) * (1.0 - math.exp(-dt / MEAN_TAU_S))
         total = bass + mid + high
         if total > 1e-6:
             self._bass_share += (bass / total - self._bass_share) * 0.1
@@ -122,16 +137,17 @@ class PhaseTracker:
                 self._trend.popleft()
             if len(self._trend) >= 6:
                 self._slope = (self._trend[-1][1] - self._trend[0][1]) / max(self._trend[-1][0] - self._trend[0][0], 1e-6)
-        if self._e < SILENCE_ABS:
+        sil, calm, quiet, build_min = thresholds(self._mean)
+        if self._e < sil:
             if self._silent_since is None:
                 self._silent_since = now
         else:
             self._silent_since = None
-        self._adopt(now, self._classify(now, rate, rhythm_state))
+        self._adopt(now, self._classify(now, rate, rhythm_state, calm, quiet, build_min))
         self._ease(dt)
         return self.phase
 
-    def _classify(self, now: float, kick_rate: float, rhythm_state: str) -> str:
+    def _classify(self, now: float, kick_rate: float, rhythm_state: str, calm: float = CALM_ABS, quiet: float = QUIET_ABS, build_min: float = BUILD_MIN) -> str:
         if now - (now if self.t0 is None else self.t0) < WARMUP_S:
             return self.phase
         if self._silent_since is not None and now - self._silent_since >= ENTER_S["silence"]:
@@ -140,18 +156,18 @@ class PhaseTracker:
         kicks_on = self._density >= 0.55 or kick_rate >= 1.2
         if kicks_on:
             limit = PEAK_KEEP if self.phase == "peak" else PEAK_BOOST
-            if self._boost >= limit and self._bass_share >= 0.3 and self._e > 0.03:
+            if self._boost >= limit and self._bass_share >= min(0.3, 0.7 * self._share_mean) and self._e > 2.0 * calm / 3.0:
                 return "peak"
             return "groove"
-        rising = self._slope > BUILD_SLOPE and self._e > BUILD_MIN and kick_rate < 0.5 and self.phase in ("ambient", "break", "groove", "build")
+        rising = self._slope > BUILD_SLOPE and self._e > build_min and kick_rate < 0.5 and self.phase in ("ambient", "break", "groove", "build")
         if rhythm_state == "build" or rising:
             return "build"
         if (self.phase == "build" and self._build_t is not None and now - self._build_t < BUILD_MAX_S and self._slope > -0.01
-                and self._e > CALM_ABS):
+                and self._e > calm):
             return "build"                                 # la montee continue tant que l'energie ne retombe pas
         if rhythm_state == "break":
             return "break"
-        if self._e < QUIET_ABS:
+        if self._e < quiet:
             return "ambient"
         # pas de kick mais de l'energie : cassure si on vient d'un groove / pic (le kick vient de s'arreter), sinon la musique continue
         if now - self._recent_groove < 20.0 and since_kick > 1.2:

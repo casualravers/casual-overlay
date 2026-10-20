@@ -491,6 +491,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 renderer.draw(ctx.screen, size, state, params, now - t0)
         else:
             renderer.draw(ctx.screen, size, state, params, now - t0)
+        s.status["sources"] = renderer.sources_now                                    # voyants de l'interface : sources par couche, dernier eclair
+        s.status["strobe_info"] = renderer.strobe_info
         if args.screenshot and not shot_done and now - t0 >= args.max_seconds - 0.2:
             # Lecture AVANT swap_buffers: apres, le tampon arriere est indefini.
             data = ctx.screen.read(viewport=(0, 0, size[0], size[1]), components=3)

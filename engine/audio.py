@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from core.onset import OnsetDetector
+from core.onset import OnsetDetector, WideRise
 from core.phase import PhaseTracker
 from core.rhythm import Rhythm
 from engine.deps import np, sd
@@ -24,7 +24,8 @@ BAND_GATE = {"bass": 0.0005, "mid": 0.0005, "high": 0.0005, "rms": 0.003}
 PEAK_HALF_LIFE_S = 8.0       # decroissance du maximum glissant de l'auto-gain
 ATTACK_TAU_S = 0.02          # lissage: attaque rapide
 RELEASE_TAU_S = 0.25         # lissage: relachement lent
-KICK_MIN = 0.002             # energie basses minimale pour declarer un kick
+KICK_MIN = 0.0002            # energie basses minimale pour declarer un kick (0,002 avant : un telephone ou un micro eloigne n'atteignait jamais ce niveau)
+KICK_WIDE = (20.0, 400.0)    # bande large du critere de montee rapide (voir core.onset.WideRise)
 # Regles par balayage sur signaux synthetiques (voir CLAUDE.md): a sensibilite 1.0, zero
 # faux positif sur bruit blanc constant, kicks francs detectes meme a -30 dB de micro.
 KICK_RATIO_EXTRA = 1.2       # seuil: energie basses > base * (1 + extra / sensibilite)
@@ -67,6 +68,10 @@ class FeatureExtractor:
         for name, (lo, hi) in BANDS.items():
             idx = np.nonzero((freqs >= lo) & (freqs < min(hi, rate / 2.0)))[0]
             self.slices[name] = slice(int(idx[0]), int(idx[-1]) + 1)
+        idx = np.nonzero((freqs >= KICK_WIDE[0]) & (freqs < KICK_WIDE[1]))[0]
+        self.wide_slice = slice(int(idx[0]), int(idx[-1]) + 1)
+        self.wide_rise = WideRise()
+        self._wide = 0.0
         self.peak = {k: 0.0 for k in (*BANDS, "rms")}
         self.smooth = {k: 0.0 for k in (*BANDS, "rms")}
         self.baseline: float | None = None
@@ -85,6 +90,7 @@ class FeatureExtractor:
         samples = np.asarray(samples, dtype=np.float32)
         mag = np.abs(np.fft.rfft(samples * self.window)) * self.scale
         raw = {name: float(math.sqrt(float(np.mean(mag[sl] ** 2)))) for name, sl in self.slices.items()}
+        self._wide = float(math.sqrt(float(np.mean(mag[self.wide_slice] ** 2))))
         tail = samples[-512:]
         raw["rms"] = float(math.sqrt(float(np.mean(tail * tail))))
 
@@ -102,7 +108,7 @@ class FeatureExtractor:
         levels["edge_hit"] = self.det_hit.update(raw["high"], dt, now, max(self.sensitivity, 0.05) * self.hit_sens)
         for name, det in self.det_layer.items():          # kick de la couche : le kick commun a sensibilite 1, sinon son detecteur
             mult = self.layer_sens[name]
-            own = det.update(raw["bass"], dt, now, max(self.sensitivity, 0.05) * mult)
+            own = det.update(raw["bass"], dt, now, max(self.sensitivity, 0.05) * mult, self._wide)
             levels["edge_" + name] = beat if abs(mult - 1.0) < 1e-6 else own
         levels["raw_bass"] = raw["bass"]
         levels["raw_mid"], levels["raw_high"], levels["raw_rms"] = raw["mid"], raw["high"], raw["rms"]       # bruts (hors auto-gain) pour les phases du morceau
@@ -129,6 +135,9 @@ class FeatureExtractor:
                 and b > self.prev_bass
                 and b > base * ratio
                 and dev > k * std)
+        rise = self.wide_rise.check(self._wide, dt, now, s, self.last_beat, self.elapsed > KICK_WARMUP_S, KICK_REFRACTORY_S)
+        if rise and not beat:                             # montee rapide sur la bande large : telephone sans basses, kick sature a longue queue
+            beat = True
         if beat:
             self.last_beat = now
 
@@ -340,6 +349,7 @@ class AudioAnalyzer:
         self.levels = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "raw_bass": 0.0}
         self.t_beat: float | None = None
         self.t_edge: dict[str, float | None] = {name: None for name in EDGES}
+        self.hits = 0                           # frappes aigues comptees (le strobe auto compte les nouvelles)
         self.beats = 0
         self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
         self.phase = PhaseTracker()             # phases du morceau (silence, ambiance, groove, montee, cassure, pic), nourries ici elles aussi
@@ -375,6 +385,8 @@ class AudioAnalyzer:
                 for name, hit in edges.items():
                     if hit:
                         self.t_edge[name] = now
+                        if name == "hit":
+                            self.hits += 1
                 if beat:
                     self.t_beat = now
                     self.beats += 1
@@ -390,6 +402,7 @@ class AudioAnalyzer:
             t_beat = self.t_beat
             t_edge = dict(self.t_edge)
             state["beats"] = self.beats
+            state["hits"] = self.hits
         state["phase"] = self.phase.snapshot()                  # phase du morceau et multiplicateurs lisses (voir core/phase.py)
         state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)

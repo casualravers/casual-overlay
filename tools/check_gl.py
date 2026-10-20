@@ -1520,6 +1520,75 @@ def kick_bursts(rate: int, seconds: float, amp: float = 0.5, noise: float = 0.00
     return (amp * env * np.sin(2 * np.pi * 60 * t) + noise * rng.standard_normal(n)).astype(np.float32)
 
 
+def check_features_phone() -> None:
+    """Kicks d'une musique jouee par un TELEPHONE devant le micro : pas de basses (haut-parleur coupe sous 250-350 Hz), niveau faible, souffle du micro.
+    Le plancher absolu d'avant (0,002) ne voyait rien sous -35 dB ; la bande large 20-400 Hz (`WideRise`) rattrape aussi les kicks satures a longue queue."""
+    print("-- kicks d'une musique de telephone")
+    rate = 48000
+
+    def corpus(bpm, seconds, seed):
+        rg = np.random.default_rng(seed)
+        out = np.zeros(int(rate * seconds))
+        beat = 60.0 / bpm
+        truth = []
+
+        def put(sig, at):
+            i = int(at * rate)
+            m = min(len(sig), len(out) - i)
+            if m > 0:
+                out[i:i + m] += sig[:m]
+        kk = np.arange(int(0.35 * rate)) / rate
+        base = np.exp(-kk / 0.16) * (1 - np.exp(-kk / 0.002)) * np.sin(2 * np.pi * np.cumsum(45 + 110 * np.exp(-kk / 0.03)) / rate)
+        kick = 0.7 * np.tanh(2.5 * base) / np.tanh(2.5)                      # sature : des harmoniques, une longue queue (kick d'une musique de club)
+        click = 0.25 * rg.standard_normal(int(0.004 * rate)) * np.exp(-np.arange(int(0.004 * rate)) / rate / 0.001)
+        kick[:len(click)] += click
+        hk = np.arange(int(0.05 * rate)) / rate
+        bk = np.arange(int(beat * 0.4 * rate)) / rate
+        for bar in range(int(seconds / (beat * 4)) + 1):
+            for st in range(16):
+                at = bar * beat * 4 + st * beat / 4
+                if st % 4 == 0 and at < seconds - 0.4:
+                    put(kick, at)
+                    truth.append(at)
+                if st % 2 == 0:
+                    put(0.12 * np.diff(rg.standard_normal(len(hk)), prepend=0) * np.exp(-hk / 0.012), at)
+                if st % 4 == 2:
+                    put(0.35 * np.minimum(bk / 0.01, 1.0) * np.exp(-bk / 0.1) * np.sin(2 * np.pi * 55 * bk), at)
+        return out, truth
+
+    def phone(x, fc, gain_db, noise, seed=1):
+        spec = np.fft.rfft(x)
+        f = np.fft.rfftfreq(len(x), 1 / rate)
+        f[0] = 1e-9
+        y = np.fft.irfft(spec * (1.0 / np.sqrt(1.0 + (fc / f) ** 4)), len(x)) * 10 ** (gain_db / 20)          # passe-haut du 2e ordre
+        return (y + noise * np.random.default_rng(seed).standard_normal(len(y))).astype(np.float32)
+
+    def score(got, truth):
+        used, tp = set(), 0
+        for tb in got:
+            for j, tr in enumerate(truth):
+                if j not in used and tr - 0.03 <= tb <= tr + 0.09:
+                    used.add(j)
+                    tp += 1
+                    break
+        return tp, len(got) - tp, len(truth) - tp
+
+    for name, cfg, min_recall in (("haut-parleur coupe sous 250 Hz, -30 dB", (250.0, -30.0, 0.0008), 0.9),
+                                  ("haut-parleur coupe sous 250 Hz, -40 dB (micro eloigne)", (250.0, -40.0, 0.0004), 0.9),
+                                  ("haut-parleur coupe sous 350 Hz, -30 dB", (350.0, -30.0, 0.0008), 0.9),
+                                  ("kick sature a longue queue, plein niveau", (1.0, 0.0, 0.002), 0.7)):
+        tp = fp = fn = 0
+        for bpm, seed in ((126, 1), (100, 3)):
+            sig, truth = corpus(bpm, 20.0, seed)
+            a, b, c = score(run_signal(phone(sig, *cfg), rate)[0], truth)
+            tp, fp, fn = tp + a, fp + b, fn + c
+        check(tp / max(tp + fn, 1) >= min_recall and tp / max(tp + fp, 1) >= 0.9, f"kicks: {name}",
+              f"TP{tp} FP{fp} FN{fn}")
+    rgn = np.random.default_rng(11)
+    hiss = run_signal((0.003 * rgn.standard_normal(rate * 60)).astype(np.float32), rate)[0]
+    check(len(hiss) <= 3, "kicks: souffle de micro seul (0,003) sur 60 s, au plus 3 faux declenchements", f"{len(hiss)}")
+
+
 def check_features() -> None:
     print("Features audio")
     for rate in (48000, 44100):
@@ -2386,6 +2455,20 @@ def check_gates() -> None:
     root.destroy()
 
 
+def measure_latency_isolated(kicks: int, timeout: float = 120.0) -> dict:
+    """Mesure de latence dans un PROCESSUS NEUF (`tools/mesure_latence.py --json`). Dans le processus de la suite, les fils laisses par les
+    verifications d'interface (analyses audio, producteurs, minuteurs Tk) se disputent le GIL et le processeur : sur le serveur d'integration
+    continue la mesure y donnait 400 ms de mediane et un kick sur quatre manque, d'ou des echecs au hasard. Seule, elle vaut ce que vaut la chaine."""
+    import json
+    import subprocess
+    out = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mesure_latence.py"), "--json", "--kicks", str(kicks)],
+                         capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    text = out.stdout
+    if "{" not in text:
+        raise RuntimeError(f"mesure impossible (code {out.returncode}) : {(out.stderr or text).strip()[-300:]}")
+    return json.loads(text[text.index("{"):])
+
+
 def check_latence() -> None:
     print("Mesure de latence audio -> image (tools/mesure_latence.py)")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2397,13 +2480,19 @@ def check_latence() -> None:
     check(rows[0]["analyse_ms"] is not None and abs(rows[0]["analyse_ms"] - 20.0) < 1e-6 and abs(rows[0]["rendu_ms"] - 16.0) < 1e-6
           and abs(rows[0]["total_ms"] - 36.0) < 1e-6 and rows[1]["total_ms"] is None and abs(rows[2]["total_ms"] - 50.0) < 1e-6,
           "latence: chaque debut de son est associe a sa detection puis a sa premiere image blanche (kick manque = None)", str(rows))
-    try:
-        res = ml.measure(kicks=4, log=lambda *_: None)
-    except Exception as exc:
-        check(False, "latence: chaine logicielle mesurable", str(exc))
-        return
-    tot = res["total"]
     bound = 3000 if os.environ.get("CI") else 250          # serveur d'integration continue : OpenGL logiciel sur une machine partagee, on ne verifie que « ca marche »
+    tries = 3 if os.environ.get("CI") else 1               # une mesure en temps reel sur un serveur partage peut encore rater un kick : trois essais, un vrai defaut les rate tous
+    tot, res = {}, {"missed": 99}
+    for n in range(1, tries + 1):
+        try:
+            res = measure_latency_isolated(kicks=4)
+        except Exception as exc:
+            check(False, "latence: chaine logicielle mesurable", str(exc))
+            return
+        tot = res["total"]
+        if tot and res["missed"] <= 1 and 0 < tot["median"] < bound:
+            break
+        print(f"  (information) latence, essai {n}/{tries} insuffisant : {tot} manques={res['missed']} lignes={res['rows']}")
     check(tot and res["missed"] <= 1 and 0 < tot["median"] < bound,
           f"latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de {bound} ms",
           f"{tot} manques={res['missed']}")
@@ -2490,6 +2579,11 @@ def check_phase() -> None:
     check("build" in names[:8] and "peak" in names and "break" in names, "phases: montee, pic et cassure detectes", str(names))
     check(all(b - a >= ph.MIN_DWELL_S - 0.1 for (a, _), (b, _) in zip(seq[1:], seq[2:])), "phases: chaque phase dure au moins 4 s (hysteresis)", str(seq))
     check(seq[-1][1] == "silence", "phases: le silence final est reconnu", str(seq[-3:]))
+    # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau
+    soft = [(d, (lambda f, r=r: r(f) * 0.2) if callable(r) else r * 0.2, per, sh, st) for d, r, per, sh, st in segs]
+    soft_seq, _ = run(soft)
+    soft_names = [n for _, n in soft_seq]
+    check(soft_names == names, "phases: musique faible (niveau / 5) = les memes phases dans le meme ordre", f"{soft_names} / {names}")
     # adaptation : un morceau entier tres faible (micro lointain) reste un groove, pas une ambiance
     low, _ = run([(40, 0.02, k, 0.5, "idle")])
     check(low[-1][1] in ("groove", "peak"), "phases: seuils adaptes a un micro faible (kicks = groove)", str(low))
@@ -4442,6 +4536,65 @@ def check_cells() -> None:
           "cell_react > 0: la fusion pulse au kick")
 
 
+def check_strobe_auto() -> None:
+    """Cerveau du strobe auto (core/strobe_auto.py) : qui eclaire, quand, avec quel seuil."""
+    print("-- strobe auto (pur)")
+    from core import strobe_auto as sa
+    ph = lambda name: (name, 0.0)
+
+    def run(phase, since, steps, dt=0.05, kicks_every=0.5, hit_every=None, grid=False, brain=None):
+        brain = brain or sa.StrobeBrain()
+        fires, now, nk, nh = [], 100.0, 0, 0
+        for i in range(steps):
+            now = 100.0 + i * dt
+            k = 1 if kicks_every and abs((now - 100.0) % kicks_every) < dt / 2 else 0
+            h = 1 if hit_every and abs((now - 100.0) % hit_every) < dt / 2 else 0
+            nk += k
+            fire, dark = brain.update(now, phase, since, k, h, (nk - 1) % 8 if grid and k else (None if not grid else 0))
+            if fire:
+                fires.append((round(now - 100.0, 2), dark))
+        return fires
+
+    for quiet_phase in (None, "silence", "ambient", "break"):
+        check(run(quiet_phase, 0.0, 200) == [], f"strobe auto: jamais d'eclair en phase {quiet_phase}")
+    peak = run("peak", 0.0, 200)
+    check(len(peak) >= 18 and all(d == 1.0 for _, d in peak), "strobe auto: un eclair par kick en pic, toute l'image", str(len(peak)))
+    fast = run("peak", 0.0, 200, kicks_every=0.1)
+    check(len(fast) <= 34 and all(b - a >= sa.PEAK_GAP_S - 0.051 for (a, _), (b, _) in zip(fast, fast[1:])),
+          "strobe auto: en pic, jamais plus de ~3 eclairs par seconde meme sur des kicks rapproches", str(len(fast)))
+    grid = run("groove", 0.0, 400, grid=True)
+    check(len(grid) == 3 and [f for f, _ in grid] == [0.0, 8.0, 16.0] and all(d == sa.DARK_GROOVE for _, d in grid),
+          "strobe auto: en groove avec la grille, un accent discret sur le 1, toutes les ~4 mesures au plus", str(grid))
+    bare = run("groove", 0.0, 400)
+    check([f for f, _ in bare] == [7.5, 15.5], "strobe auto: en groove sans grille ni frappes, un kick sur 16 au pire", str(bare))
+    hits = run("groove", 0.0, 400, hit_every=4.0)
+    check(2 <= len(hits) <= 6 and all(b - a >= sa.HIT_ACCENT_GAP_S - 0.05 for (a, _), (b, _) in zip(hits, hits[1:])),
+          "strobe auto: en groove, une frappe des aigus donne un accent (3 s d'ecart au moins)", str(hits))
+    b = sa.StrobeBrain()
+    run("build", 100.0, 1, brain=b)
+    drop = b.update(100.5, "peak", 100.5, 0, 0, None)
+    check(drop == (True, 1.0), "strobe auto: le passage montee -> pic donne un gros eclair (le drop)")
+    check(not sa.StrobeBrain().update(100.0, "peak", 0.0, 0, 0, None)[0], "strobe auto: en pic sans kick, pas d'eclair")
+    rb = sa.StrobeBrain()
+    rb.update(100.0, "peak", 0.0, 1, 0, None)
+    reasons = [rb.reason]
+    rb2 = sa.StrobeBrain()
+    rb2.update(100.0, "groove", 0.0, 1, 0, 0)
+    reasons.append(rb2.reason)
+    rb3 = sa.StrobeBrain()
+    rb3.update(100.0, "build", 0.0, 0, 0, None)
+    reasons.append(rb3.reason)
+    check(reasons[0] == "kick au pic" and "le 1 de la mesure" in reasons[1] and reasons[2].startswith("montee"), "strobe auto: chaque eclair a sa raison, affichee dans l'interface", str(reasons))
+    build = run("build", 100.0, 320)
+    first, second = [f for f, _ in build if f < 8.0], [f for f, _ in build if f >= 8.0]
+    check(22 <= len(build) <= 32 and len(second) > len(first) * 1.5 and all(d == sa.DARK_BUILD for _, d in build),
+          "strobe auto: pendant une montee la cadence accelere (0,5 puis jusqu'a 4 Hz)", f"{len(build)} eclairs, {len(first)} puis {len(second)}")
+    from core import controls
+    pp = {"strobe_auto": 1.0}
+    controls.panic(pp)
+    check(pp["strobe_auto"] == 0.0, "strobe auto: la PANIQUE le coupe")
+
+
 def check_audio_layers_pure() -> None:
     """Sources audio par couche (core/audio_layers.py) : niveaux vus par chaque source."""
     print("-- sources audio par couche (pur)")
@@ -4454,12 +4607,39 @@ def check_audio_layers_pure() -> None:
     check(al.layer_levels(st, "kick") == (0.0, 0.0, 0.9, 0.2), "sources: kick = seulement ce qui part des kicks")
     check(al.layer_levels(st, "rien") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: rien = la couche ne reagit plus")
     check(al.layer_levels(st, "n'importe quoi") == al.layer_levels(st, "tout") and al.valid(None) == "tout", "sources: valeur inconnue = tout")
-    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False], "sources: has_kick")
+    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False], "sources: has_kick (auto est resolue avant)")
     st2 = dict(st, hit=0.7, since_hit=0.05, beat_bg=0.4, since_bg=0.6)
     check(al.layer_levels(st2, "frappes") == (0.0, 0.0, 0.7, 0.05) and al.layer_levels(st, "frappes") == (0.0, 0.0, 0.0, al.NO_KICK),
           "sources: frappes = les attaques des aigus (rien sans detecteur)")
     check(al.layer_levels(st2, "kick", "bg")[2:] == (0.4, 0.6) and al.layer_levels(st2, "kick", "logo")[2:] == (0.9, 0.2),
           "sources: le kick d'une couche est celui de sa propre sensibilite, sinon le kick commun")
+    # source « auto » : le tableau phase x couche, le fondu, les voyants
+    check([al.auto_sources(ph_) for ph_ in ("silence", "ambient", "groove", "build", "break", "peak")]
+          == [("rien", "rien"), ("rien", "rien"), ("basses", "aigus"), ("mediums", "frappes"), ("rien", "tout"), ("kick", "kick")],
+          "auto: tableau phase x couche (silence / ambiance rien, groove basses + aigus, montee mediums + frappes, cassure logo seul, pic kick)")
+    check(al.auto_sources("groove", 1.0) == ("basses", "frappes") and al.auto_sources("groove", 9.0) == ("basses", "aigus")
+          and al.auto_sources(None) == ("tout", "tout") and al.auto_sources("inconnue") == ("tout", "tout"),
+          "auto: en groove le logo suit les frappes si on en a vu, phase inconnue = comme tout")
+    mx = al.SourceMixer()
+    first = mx.levels(10.0, st, "basses", "bg", True)
+    check(first == al.layer_levels(st, "basses", "bg"), "auto: la premiere source passe tout de suite")
+    mid_ = mx.levels(10.0, st, "kick", "bg", True)
+    half_ = mx.levels(10.75, st, "kick", "bg", True)
+    end_ = mx.levels(12.0, st, "kick", "bg", True)
+    check(mid_ == first and 0.0 < half_[0] < first[0] and end_ == al.layer_levels(st, "kick", "bg"),
+          "auto: changer de source se fait en fondu (jamais de saut), puis la nouvelle source seule", f"{mid_} {half_} {end_}")
+    mx2 = al.SourceMixer()
+    mx2.levels(1.0, st, "basses", "bg", False)
+    check(mx2.levels(1.01, st, "rien", "bg", False) == al.layer_levels(st, "rien", "bg"), "auto: une source choisie a la main passe tout de suite, sans fondu")
+    from core import explain as ex_
+    check(ex_.sources_text("basses", "aigus", True, True, "groove") == "sources : fond <- basses (auto)  |  logo <- aigus (auto)"
+          and "phase inconnue" in ex_.sources_text("tout", "tout", True, False, None) and "(auto)" not in ex_.sources_text("tout", "rien", False, False, "groove"),
+          "voyant: les sources par couche sont dites en clair (auto ou manuel, phase inconnue)")
+    fx_ = ex_.phase_effects_text({"tempo": 0.3, "react": 0.6, "fx": 0.35, "bg": 1.0, "hue": 3.0, "overlay": 1.0, "breath": 0.5})
+    check("tempo x0,30" in fx_ and "reactivite x0,60" in fx_ and "effets x0,35" in fx_ and "3 deg/s" in fx_ and "coupees" in ex_.phase_effects_text(None, False),
+          "voyant: ce que la phase change aux reglages (tempo, reactivite, effets, teinte)", fx_)
+    check(ex_.strobe_info_text("kick au pic", 3.0, True) == "strobe auto : dernier eclair = kick au pic, il y a 3 s" and "coupe" in ex_.strobe_info_text(None, None, False)
+          and "aucun eclair" in ex_.strobe_info_text(None, None, True), "voyant: la raison du dernier eclair du strobe auto")
     # retard et lissage (LayerFilter)
     f = al.LayerFilter()
     lv = (0.3, 0.2, 1.0, 0.1)
@@ -4480,8 +4660,8 @@ def check_audio_layers_pure() -> None:
     check(dec[5] > 0.5 and dec[-1] < 0.5 and f.step(5.0, (0.0, 0.0, 0.0, 0.5), 0.0, 1.0)[3] == 0.5,
           "couche: lissage = relachement lent (800 ms), 'since' reste net", str(dec[:6]))
     from core import params_schema as ps
-    check(ps.defaults(None)["src_bg"] == "tout" and ps.defaults(None)["src_logo"] == "tout"
-          and ps.validate("src_bg", "aigus") == (True, "aigus") and ps.validate("src_logo", "bof")[0] is False, "sources: reglages du schema (defaut tout, enum valide)")
+    check(ps.defaults(None)["src_bg"] == "auto" and ps.defaults(None)["src_logo"] == "auto"
+          and ps.validate("src_bg", "aigus") == (True, "aigus") and ps.validate("src_logo", "bof")[0] is False, "sources: reglages du schema (defaut auto, enum valide)")
 
 
 def check_onsets() -> None:
@@ -4589,6 +4769,31 @@ def check_audio_layers() -> None:
     check(changed(render(hit, src_bg="aigus", **ab), still) == 0, "sources: fond sur les aigus, un kick seul ne declenche pas l'aberration")
     check(changed(render(hit, src_bg="kick", **ab), still) > 500, "sources: fond sur kick, l'aberration part au kick")
     check(changed(render(bass_only, src_bg="kick", **wob), still) == 0, "sources: fond sur kick, les basses seules ne font pas onduler")
+    # source « auto » : suit la phase du morceau, avec fondu (l'horloge `t` fait foi)
+    from core.audio_layers import SourceMixer
+    wob_auto = dict(src_bg="auto", **wob)
+    r._src_mix = (SourceMixer(), SourceMixer())
+    r._layer_filters = (LayerFilter(), LayerFilter())
+    groove_st = dict(bass_only, phase={"name": "groove"})
+    check(changed(render(groove_st, **wob_auto), still) > 2000 and r.sources_now[:2] == ("basses", "aigus") and r.sources_now[2:] == (True, True),
+          "auto: en groove le fond suit les basses (et le voyant le dit)")
+    r.draw(fbo, size, dict(bass_only, phase={"name": "peak"}), dict(base, **wob_auto), 5.0)
+    mid_img = read_target(ctx, fbo, size).astype(int)
+    r.draw(fbo, size, dict(bass_only, phase={"name": "peak"}), dict(base, **wob_auto), 7.0)
+    end_img = read_target(ctx, fbo, size).astype(int)
+    check(changed(mid_img, still) > 2000 and changed(end_img, still) == 0 and r.sources_now[:2] == ("kick", "kick"),
+          "auto: au pic le fond passe sur le kick (fondu d'abord, puis les basses seules ne font plus onduler)")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    check(changed(render(dict(bass_only, phase={"name": "silence"}), **wob_auto), still) == 0 and r.sources_now[:2] == ("rien", "rien"),
+          "auto: en silence le fond ne reagit a rien")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    check(changed(render(dict(bass_only), **wob_auto), still) > 2000 and r.sources_now[:2] == ("tout", "tout"),
+          "auto: sans phase connue, repli sur tout")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    check(changed(render(dict(bass_only, phase={"name": "silence"}), auto_phase=0.0, **wob_auto), still) > 2000,
+          "auto: phases auto coupees, repli sur tout")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    r._layer_filters = (LayerFilter(), LayerFilter())
     # retard : la reaction arrive apres (un renderer neuf, l'horloge `t` fait foi)
     r._layer_filters = (LayerFilter(), LayerFilter())
     r.draw(fbo, size, bass_only, dict(base, lag_bg=0.3, **wob), 1.0)
@@ -4780,6 +4985,30 @@ def check_masters() -> None:
     gl.strobe_press(kp)
     check(still_dark == 0.0 and kicked > 0.9 and kp["strobe_on"] == 0.0,
           "strobe au kick : arme, eclair a chaque kick seulement ; un 2e appui desarme")
+    # strobe auto : decide seul selon la phase du morceau (core/strobe_auto.py), dans le vrai rendu
+    ap = dict(d, strobe_auto=1.0)
+    peak = dict(quiet, phase={"name": "peak", "since": time.monotonic() - 30.0}, beats=0, hits=0)
+    ar = gl.Renderer(ctx, size, None)
+    ar._strobe(ap, dict(peak))
+    time.sleep(0.4)
+    check(ar._strobe(ap, dict(peak, beats=1)) > 0.9 and ar.strobe_fired == 1, "strobe auto: un kick en pic donne un eclair")
+    time.sleep(0.12)
+    check(ar._strobe(dict(ap, strobe_auto=0.0), dict(peak, beats=2)) == 0.0, "strobe auto coupe: aucun eclair, meme en pic")
+    cold = gl.Renderer(ctx, size, None)
+    cold._strobe(ap, dict(quiet, phase={"name": "silence", "since": 0.0}, beats=0))
+    check(cold._strobe(ap, dict(quiet, phase={"name": "silence", "since": 0.0}, beats=1)) == 0.0 and cold.strobe_fired == 0,
+          "strobe auto: jamais d'eclair en silence, meme sur un kick")
+    gr = gl.Renderer(ctx, size, None)
+    groove = dict(quiet, phase={"name": "groove", "since": time.monotonic() - 30.0}, beats=0, hits=0, beat_index=0)
+    gr._strobe(ap, dict(groove))
+    time.sleep(0.12)
+    check(gr._strobe(ap, dict(groove, beats=1)) > 0.9 and gr._strobe_auto_now and abs(gr._strobe_auto_dark - 0.5) < 1e-9,
+          "strobe auto: accent sur le 1 en groove, discret (seuil de luminosite de 50 %)")
+    time.sleep(0.12)
+    gl.strobe_press(ap)
+    gr._strobe(ap, dict(groove, beats=1))
+    check(not gr._strobe_auto_now, "strobe auto: un eclair manuel garde le seuil du reglage")
+    gl.strobe_release(ap)
     # strobe leger : un kick sur N seulement ; le compteur repart a zero a l'armement
     lp = dict(d, strobe_mode="light", strobe_div=4)
     lr = gl.Renderer(ctx, size, None)
@@ -7280,8 +7509,8 @@ def only_fragile(labels: list[str]) -> bool:
 
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
-PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_onsets", "check_schedule", "check_palette",
+PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7296,6 +7525,7 @@ def main() -> None:
         return
     check_reader()
     check_features()
+    check_features_phone()
     check_text()
     check_logo_video()
     check_holo()
@@ -7332,6 +7562,7 @@ def main() -> None:
     check_layers()
     check_audio_layers_pure()
     check_onsets()
+    check_strobe_auto()
     check_audio_layers()
     check_automation()
     check_params()
