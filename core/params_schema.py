@@ -98,6 +98,8 @@ TABLE: tuple[Param, ...] = (
     _p("logo_key", "", keep=True, doc="#rrggbb a detourer si le fichier n'a pas d'alpha ('' = aucun)."),
     _p("logo_path", None, keep=True, doc="Image du logo ('' = aucun) ; defaut : le logo du depot."),
     _p("text_content", "CASUAL RAVERS", doc="Source texte : le texte (plusieurs lignes possibles)."),
+    _p("sched_on", 0.0, 0.0, 1.0, scope="device", doc="Planning de la soiree : le texte du logo change tout seul a l'heure de chaque passage."),
+    _p("sched_lines", "", scope="device", doc="Planning : une ligne par passage, `HH:MM texte` (voir core/schedule.py)."),
     _p("text_font", "auto", doc="Nom de police de TEXT_FONTS, chemin d'un .ttf/.otf, ou auto."),
     _p("text_color", "#ffffff", doc="Couleur du texte."),
     _p("text_align", "center", choices=("left", "center", "right"), doc="Alignement (texte sur plusieurs lignes)."),

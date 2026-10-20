@@ -1502,6 +1502,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         param_slider=param_slider,
         params=params,
         tab_logo=tab_logo,
+        ui_every=ui_every,
         zone_aura=zone_aura,
         zone_logo=zone_logo))
     apply_logo_path = gui_logo_ctl.apply_logo_path
@@ -2778,6 +2779,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
+            "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
             "image_box": image_box, "text_box": text_box, "font_var": font_var})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))

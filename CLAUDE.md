@@ -277,6 +277,8 @@ Le moteur est dans [audio2wave_gl.py](audio2wave_gl.py) (le Python pur est dans 
   chemin ; police introuvable -> repli sur la police integree de Pillow (un texte doit toujours
   s'afficher). Piege : `multiline_textbbox` renvoie des **flottants** pour un texte sur
   plusieurs lignes (et des entiers pour une ligne), d'ou `floor`/`ceil` avant de creer l'image.
+- **Planning du texte** (`core/schedule.py`, pur, heure injectee ; reglages `sched_on` / `sched_lines`, portee `device` : sauves, jamais dans les presets ni les scenes) : dans la source Texte, la case *Suivre le planning* et une zone « une ligne par passage » (`22:30 NOM DU DJ`, `23h30 - NOM`, `\\n` = retour a la ligne).
+  Toutes les 5 s (`gui_logo.sched_tick`) le passage en cours est cherche ; quand il CHANGE, la source passe en Texte et le texte est pose (une fois : taper a la main entre deux passages n'est pas ecrase). Les heures avant 18 h comptent apres minuit (`DAY_START`). Une ligne invalide est ignoree.
 - **Logo anime** (source `video`, `--logo-video`, `--logo-key`, GUI : Source > Video) : un second ffmpeg
   (`LogoVideo`, `logo_video_command`) decode le fichier **en boucle** (`-stream_loop -1`) a sa cadence
   native (`-re`) en rawvideo **rgba** vers un pipe a gros tampon (`spawn_big_pipe`, factorise avec

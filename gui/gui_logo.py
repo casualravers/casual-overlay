@@ -9,7 +9,9 @@ from pathlib import Path
 from tkinter import colorchooser
 from tkinter import filedialog
 import audio2wave_gl as gl
+import time
 import tkinter as tk
+from core import schedule
 
 
 def install(c):
@@ -29,6 +31,7 @@ def install(c):
     param_slider = c.param_slider
     params = c.params
     tab_logo = c.tab_logo
+    ui_every = c.ui_every
     zone_aura = c.zone_aura
     zone_logo = c.zone_logo
 
@@ -101,6 +104,51 @@ def install(c):
 
     text_widget.bind("<KeyRelease>", apply_text)     # couvre aussi le collage (Ctrl+V)
     text_widget.bind("<FocusOut>", apply_text)
+
+    # ---- planning : le texte change tout seul a l'heure de chaque passage
+    r = tz.next_row()
+    add_label(tz, "Planning", r, "Une ligne par passage : « 22:30 NOM DU DJ » (\\n dans le texte = retour a la ligne). Coche la case : a l'heure dite, la source "
+                                 "passe en Texte et le texte devient celui du passage. Les heures avant 18 h comptent apres minuit.")
+    sched_frame = tk.Frame(text_box)
+    sched_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    sched_var = tk.IntVar(value=int(round(float(params.get("sched_on", 0.0)))))
+    bind_param("sched_on", sched_var, float)
+    tk.Checkbutton(sched_frame, text="Suivre le planning", variable=sched_var).pack(anchor="w")
+    sched_text = tk.Text(sched_frame, width=22, height=4, wrap="none", undo=True, bg=a2w.GUI_PANEL_BG,
+                         fg=a2w.GUI_FG, insertbackground=a2w.GUI_FG, relief="flat", highlightthickness=1,
+                         highlightbackground=a2w.GUI_PANEL_BG, highlightcolor=a2w.GUI_ACCENT)
+    sched_text.pack(anchor="w", pady=(3, 0))
+    sched_text.insert("1.0", str(params.get("sched_lines", "")))
+    sched_info = tk.Label(sched_frame, text="", anchor="w", justify="left", fg=a2w.GUI_MUTED_FG, wraplength=220)
+    sched_info.pack(anchor="w", pady=(2, 0))
+    last_planned = {"text": None}
+
+    def apply_sched(_evt=None) -> None:
+        params["sched_lines"] = sched_text.get("1.0", "end-1c")
+        last_planned["text"] = None                  # le planning a change : le passage en cours est repose au prochain tour
+
+    sched_text.bind("<KeyRelease>", apply_sched)
+    sched_text.bind("<FocusOut>", apply_sched)
+
+    def sched_tick(now=None) -> str | None:
+        """Pose le texte du passage en cours quand il change (une fois), et dit ou en est le planning. Rend le texte pose, sinon None."""
+        entries = schedule.parse(params.get("sched_lines", ""))
+        lt = time.localtime() if now is None else now
+        minute = lt.tm_hour * 60 + lt.tm_min
+        cur = schedule.current(entries, minute)
+        nxt = schedule.upcoming(entries, minute)
+        sched_info.configure(text=(f"maintenant : {cur.splitlines()[0]}" if cur else "pas encore de passage")
+                             + (f"  |  {schedule.clock(nxt[0])} : {nxt[1].splitlines()[0]}" if nxt else "") if entries else "aucun passage valide")
+        if float(params.get("sched_on", 0.0)) < 0.5 or cur is None or cur == last_planned["text"]:
+            return None
+        last_planned["text"] = cur
+        source_var.set("text")
+        text_widget.delete("1.0", "end")
+        text_widget.insert("1.0", cur)
+        apply_text()
+        return cur
+
+    ui_every("planning", 5000, sched_tick, 1000)
 
     fonts = ["auto"] + list(gl.available_fonts())
     if params["text_font"] not in fonts:
@@ -228,4 +276,4 @@ def install(c):
     param_slider(zone_aura, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
 
     import types
-    return types.SimpleNamespace(apply_logo_path=apply_logo_path, apply_text=apply_text, apply_video_path=apply_video_path, font_var=font_var, image_box=image_box, key_var=key_var, logo_var=logo_var, source_var=source_var, text_box=text_box, text_widget=text_widget, video_var=video_var, x_var=x_var)
+    return types.SimpleNamespace(apply_logo_path=apply_logo_path, apply_text=apply_text, apply_video_path=apply_video_path, font_var=font_var, image_box=image_box, key_var=key_var, logo_var=logo_var, source_var=source_var, text_box=text_box, text_widget=text_widget, video_var=video_var, x_var=x_var, sched_tick=sched_tick, sched_var=sched_var, sched_text=sched_text, apply_sched=apply_sched)

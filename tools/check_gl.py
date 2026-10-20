@@ -1229,6 +1229,8 @@ def check_gui() -> None:
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
     check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_sched") == (True,) * 6, "planning (GUI): a l'heure dite la source passe en Texte et le texte du passage est pose, une seule fois ; case decochee = rien",
+          str(out.get("x_sched")))
     check(out.get("x_grid_vj") == (True,) * 6,
           "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
@@ -2400,6 +2402,21 @@ def check_latence() -> None:
     print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
 
 
+def check_schedule() -> None:
+    print("Planning du texte (core/schedule.py)")
+    from core import schedule as sch
+    plan = "22:00 DJ Un\n# commentaire\n\n23h30 - DJ Deux\\nB2B\n01:15 DJ Trois\n25:00 invalide\n12:61 invalide\n00:30\n"
+    e = sch.parse(plan)
+    check(e == [(22 * 60, "DJ Un"), (23 * 60 + 30, "DJ Deux\nB2B"), (75, "DJ Trois")],
+          "planning: lignes HH:MM / HHhMM, tiret, \\n, apres minuit a la suite ; invalides, vides et commentaires ignores", str(e))
+    cur = lambda h, m: sch.current(e, h * 60 + m)
+    check(cur(21, 59) is None and cur(22, 0) == "DJ Un" and cur(23, 29) == "DJ Un" and cur(23, 30) == "DJ Deux\nB2B" and cur(0, 59) == "DJ Deux\nB2B"
+          and cur(1, 15) == "DJ Trois" and cur(5, 0) == "DJ Trois" and cur(17, 59) == "DJ Trois" and cur(18, 0) is None,
+          "planning: texte en cours a chaque heure (minuit passe, nouvelle soiree a 18 h)")
+    check(sch.upcoming(e, 22 * 60 + 5) == (23 * 60 + 30, "DJ Deux\nB2B") and sch.upcoming(e, 2 * 60) is None and sch.clock(75) == "01:15",
+          "planning: prochain passage et affichage de l'heure")
+
+
 def check_beat_grid() -> None:
     print("Grille du temps (Temps 1)")
     from core import rhythm as rh
@@ -3354,6 +3371,25 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
     vjc["state"]["running"] = False
+    # planning du texte
+    import types as _ty
+    c["sched_text"].delete("1.0", "end")
+    c["sched_text"].insert("1.0", "22:00 DJ Un\n23:30 DJ Deux")
+    c["apply_sched"]()
+    clock_ = lambda h, m: _ty.SimpleNamespace(tm_hour=h, tm_min=m)
+    params["sched_on"] = 0.0
+    c["source_var"].set("image")
+    off_ = c["sched_tick"](clock_(22, 10))
+    c["sched_var"].set(1)
+    on_ = c["sched_tick"](clock_(22, 10))
+    again_ = c["sched_tick"](clock_(22, 20))
+    params_ok = (params["logo_source"], params["text_content"])
+    next_ = c["sched_tick"](clock_(23, 31))
+    out["x_sched"] = (off_ is None and params["sched_lines"].startswith("22:00"), on_ == "DJ Un" and params_ok == ("text", "DJ Un"), again_ is None,
+                      next_ == "DJ Deux" and params["text_content"] == "DJ Deux", c["text_widget"].get("1.0", "end-1c") == "DJ Deux",
+                      True)
+    c["sched_var"].set(0)
+    params["sched_lines"] = ""
     # « Temps 1 » : la grille s'ancre, le VJ en rythme arme un changement exactement sur un 1
     from core import rhythm as rh_grid
     fake_rhythm.grid = rh_grid.BeatGrid()
@@ -6875,6 +6911,7 @@ def main() -> None:
     check_render()
     check_latence()
     check_beat_grid()
+    check_schedule()
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats
