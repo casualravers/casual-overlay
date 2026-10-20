@@ -314,7 +314,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             renderer.flash_t = time.monotonic()
             if args.gui:
                 s.scene_requests.put("panic")              # la GUI met le VJ en pause et remet les curseurs a jour
-        elif name in ("vj", "vjnext", "lock", "back", "tap", "help"):
+        elif name in ("vj", "vjnext", "lock", "back", "tap", "one", "help"):
             if args.gui:
                 s.scene_requests.put(name)                # Espace / fleche droite : la GUI pilote le VJ
             else:
@@ -371,6 +371,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     key_actions[glfw.KEY_SPACE] = "vj"           # VJ : lecture / pause
     key_actions[glfw.KEY_X] = "panic"            # PANIQUE : coupe effets, strobe, montee... et rend une image propre
     key_actions[glfw.KEY_PERIOD] = "tap"         # tap tempo (la GUI le gere)
+    key_actions[glfw.KEY_COMMA] = "one"          # « Temps 1 » : ancre la grille du temps (la GUI le gere)
     key_actions[glfw.KEY_SLASH] = "help"         # aide des raccourcis (la GUI l'affiche)
     key_actions[glfw.KEY_RIGHT] = "vjnext"       # VJ : scene suivante
     for n in range(9):

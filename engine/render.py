@@ -377,10 +377,16 @@ class Renderer:
             if p["strobe_mode"] == "kick":
                 fire = fire or kicked
             elif p["strobe_mode"] == "light":                             # leger : un kick sur N (le compteur repart a zero a chaque armement)
-                self._strobe_kicks += new_kicks
-                if self._strobe_kicks >= max(int(p.get("strobe_div", 4)), 1):
-                    self._strobe_kicks = 0
-                    fire = True
+                div = max(int(p.get("strobe_div", 4)), 1)
+                idx = state.get("beat_index")
+                if idx is not None:                                       # grille du temps donnee (« 1 ») : l'eclair tombe sur le 1er temps du groupe
+                    if kicked and int(idx) % div == 0:
+                        fire = True
+                else:
+                    self._strobe_kicks += new_kicks
+                    if self._strobe_kicks >= div:
+                        self._strobe_kicks = 0
+                        fire = True
         else:
             self._strobe_kicks = 0
         build = _unit(p.get("build", 0.0))

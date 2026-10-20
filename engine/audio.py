@@ -365,6 +365,7 @@ class AudioAnalyzer:
             state = dict(self.levels)
             t_beat = self.t_beat
             state["beats"] = self.beats
+        state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since
         state["beat"] = math.exp(-since / BEAT_DECAY_TAU_S) if t_beat is not None else 0.0

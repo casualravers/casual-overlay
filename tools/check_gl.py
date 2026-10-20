@@ -1229,6 +1229,8 @@ def check_gui() -> None:
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
     check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_grid_vj") == (True,) * 6,
+          "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
@@ -2398,6 +2400,68 @@ def check_latence() -> None:
     print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
 
 
+def check_beat_grid() -> None:
+    print("Grille du temps (Temps 1)")
+    from core import rhythm as rh
+    g = rh.BeatGrid()
+    check(not g.active and g.beat_index(1.0) is None and g.nearest_downbeat(1.0) is None, "grille: inactive tant qu'aucun 1 n'est donne")
+    g.set_one(10.0, 120.0)
+    check(g.active and abs(g.period - 0.5) < 1e-9 and g.beat_index(10.0) == 0 and g.beat_index(10.5) == 1 and g.beat_index(12.0) == 4
+          and g.bar_index(11.9) == 0 and g.bar_index(12.0) == 1 and g.beat_in_bar(10.1) == 1 and g.beat_in_bar(11.6) == 4
+          and abs(g.nearest_downbeat(13.9) - 14.0) < 1e-9 and abs(g.nearest_downbeat(12.9) - 12.0) < 1e-9,
+          "grille: temps, mesure, temps dans la mesure et « 1 » le plus proche a 120 BPM")
+    g2 = rh.BeatGrid()
+    g2.set_one(10.1, 120.0, last_kick=10.0)
+    g3 = rh.BeatGrid()
+    g3.set_one(10.1, 120.0, last_kick=9.0)
+    check(g2.anchor == 10.0 and g3.anchor == 10.1, "grille: le « 1 » tape juste apres un kick se cale sur ce kick, sinon sur l'appui")
+    # recalage : les kicks reels sont en avance de 40 ms sur la grille, elle les rattrape ; un kick hors temps ne la touche pas
+    g4 = rh.BeatGrid()
+    g4.set_one(0.0, 120.0)
+    for n in range(1, 60):
+        g4.nudge(n * 0.5 - 0.04, 120.0)
+    check(abs(g4.pos(30.0 - 0.04) - round(g4.pos(30.0 - 0.04))) < 0.02, "grille: les kicks recalent la grille (decalage de 40 ms rattrape)",
+          f"{g4.pos(30.0 - 0.04):.3f}")
+    g5 = rh.BeatGrid()
+    g5.set_one(0.0, 120.0)
+    g5.nudge(0.25, None)
+    check(g5.anchor == 0.0, "grille: un kick a contretemps (mi-temps) ne la decale pas")
+    # Rhythm : numero de temps du dernier kick, grille effacee quand les kicks disparaissent
+    r = rh.Rhythm()
+    r.grid.set_one(0.0, 120.0)
+    r.update(1.0, {}, True)
+    check(r.beat_index == 2, "rythme: le dernier kick porte son numero de temps", str(r.beat_index))
+    r.update(7.0, {}, False)
+    check(not r.grid.active and r.beat_index is None, "rythme: sans kick pendant 5 s la grille est effacee")
+    # strobe leger : tombe sur les 1 de la grille (temps multiples de strobe_div)
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL pour le strobe sur la grille", str(exc))
+        return
+    size = (64, 36)
+    target = ctx.texture(size, 4)
+    fbo = ctx.framebuffer(color_attachments=[target])
+    base = dict(gl.DEFAULT_PARAMS, holo_on=0.0, strobe_on=1.0, strobe_mode="light", strobe_div=4, strobe_max_hz=20.0, strobe_max_s=600.0,
+                bg_mode="pattern", bg_master=0.0, fx_on=[0] * 5)
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 10.0}
+    rr = gl.Renderer(ctx, size, None)
+    fired = []
+    for beats, idx in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9], start=1):
+        rr.draw(fbo, size, dict(quiet, beats=beats, beat_index=idx), base, float(beats))
+        fired.append(rr._strobe_last > 0 and time.monotonic() - rr._strobe_last < 0.05)
+        time.sleep(0.08)
+    check(fired == [False, False, False, True, False, False, False, True, False],
+          "strobe leger avec une grille : un eclair sur chaque 1 (temps 4 et 8 d'indice multiple de 4), pas sur les autres", str(fired))
+    rr2 = gl.Renderer(ctx, size, None)
+    fired2 = []
+    for beats in range(1, 9):
+        rr2.draw(fbo, size, dict(quiet, beats=beats, beat_index=None), base, float(beats))
+        fired2.append(rr2._strobe_last > 0 and time.monotonic() - rr2._strobe_last < 0.05)
+        time.sleep(0.08)
+    check(fired2 == [False, False, False, True, False, False, False, True], "strobe leger sans grille: un kick sur 4 comme avant", str(fired2))
+
+
 def check_noise() -> None:
     print("Noise (un seul hasard, prereglé)")
     d = gl.DEFAULT_PARAMS
@@ -3290,6 +3354,23 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
     vjc["state"]["running"] = False
+    # « Temps 1 » : la grille s'ancre, le VJ en rythme arme un changement exactement sur un 1
+    from core import rhythm as rh_grid
+    fake_rhythm.grid = rh_grid.BeatGrid()
+    fake_rhythm.bpm = 120.0
+    s.audio = NS_(analyzer=NS_(rhythm=fake_rhythm, latest=lambda: {"beats": 0}, t_beat=None))
+    book_.set_vj(unit="bars", bars=2)
+    vjc["arm"]()
+    before_grid = vjc["state"].get("grid_due")
+    vjc["one"]()
+    anchored = fake_rhythm.grid.active and abs(fake_rhythm.grid.period - 0.5) < 1e-9
+    vjc["arm"]()
+    due_ = vjc["state"].get("grid_due")
+    on_one = due_ is not None and abs(((due_ - fake_rhythm.grid.anchor) / 2.0) - round((due_ - fake_rhythm.grid.anchor) / 2.0)) < 1e-6
+    out["x_grid_vj"] = (before_grid is None, anchored, on_one, abs((due_ - time.monotonic()) - 4.0) < 1.2, "sur le 1" in vjc["remaining_text"](),
+                        "Temps 1" in c["scenes"]["msg"].get())
+    vjc["state"]["grid_due"] = None
+    book_.set_vj(unit="seconds")
     s.audio = real_audio
     while not s.commands.empty():
         s.commands.get_nowait()
@@ -6793,6 +6874,7 @@ def main() -> None:
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
     check_latence()
+    check_beat_grid()
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats

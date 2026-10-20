@@ -173,6 +173,69 @@ class DropDetector:
         return event
 
 
+class BeatGrid:
+    """Grille du temps : ou tombe le « 1 » de la mesure. L'operateur l'ancre d'un appui (`set_one`) ; ensuite chaque kick detecte la
+    recale doucement (`nudge`) et le BPM detecte regle le pas. Pure : le temps est injecte.
+
+    `beat_index(t)` : numero du temps depuis l'ancre (0 = le « 1 » ancre) ; `bar_index(t)` : numero de la mesure ; `nearest_downbeat(t)` :
+    l'instant du « 1 » le plus proche de `t`. Inactive tant qu'aucun « 1 » n'a ete donne ; effacee quand le BPM est perdu."""
+
+    BEATS_PER_BAR = 4
+    CAPTURE = 0.3          # un kick a moins de 0,3 temps d'une ligne de la grille la recale
+    NUDGE = 0.15           # part de l'ecart corrigee a chaque kick
+    SNAP_S = 0.4           # un « 1 » tape moins de 0,4 s apres un kick se cale sur ce kick (l'oreille entend le kick, le doigt suit)
+
+    def __init__(self) -> None:
+        self.anchor: float | None = None
+        self.period = 0.5
+
+    @property
+    def active(self) -> bool:
+        return self.anchor is not None
+
+    def clear(self) -> None:
+        self.anchor = None
+
+    def set_one(self, now: float, bpm: float, last_kick: float | None = None) -> None:
+        self.period = 60.0 / min(max(float(bpm), 30.0), 300.0)
+        self.anchor = last_kick if last_kick is not None and 0.0 <= now - last_kick <= self.SNAP_S else now
+
+    def pos(self, t: float) -> float:
+        return (t - self.anchor) / self.period
+
+    def beat_index(self, t: float) -> int | None:
+        return None if self.anchor is None else int(round(self.pos(t)))
+
+    def bar_index(self, t: float) -> int | None:
+        return None if self.anchor is None else int(math.floor(self.pos(t) / self.BEATS_PER_BAR))
+
+    def beat_in_bar(self, t: float) -> int | None:
+        """1..4 : le temps de la mesure ou l'on est a l'instant `t`."""
+        return None if self.anchor is None else int(math.floor(self.pos(t))) % self.BEATS_PER_BAR + 1
+
+    def time_of_beat(self, n: int) -> float:
+        return self.anchor + n * self.period
+
+    def nearest_downbeat(self, t: float) -> float | None:
+        if self.anchor is None:
+            return None
+        bar = self.period * self.BEATS_PER_BAR
+        return self.anchor + round((t - self.anchor) / bar) * bar
+
+    def nudge(self, kick_t: float, bpm: float | None = None) -> None:
+        """Un kick vient d'etre detecte : recale l'ancre et regle le pas sur le BPM detecte (sans faire sauter la grille)."""
+        if self.anchor is None:
+            return
+        bar = self.period * self.BEATS_PER_BAR
+        if bpm:
+            self.anchor = self.anchor + round((kick_t - self.anchor) / bar) * bar       # ancre ramenee pres de maintenant avant de changer le pas
+            self.period += (60.0 / min(max(float(bpm), 30.0), 300.0) - self.period) * 0.5
+        p = self.pos(kick_t)
+        off = p - round(p)
+        if abs(off) <= self.CAPTURE:
+            self.anchor += off * self.period * self.NUDGE
+
+
 class Rhythm:
     """BPM et drop d'un morceau, nourris kick par kick et niveau par niveau par le fil d'analyse audio.
 
@@ -191,6 +254,8 @@ class Rhythm:
         self._eval_at = -1e9
         self._last_kick: float | None = None
         self._off = 0
+        self.grid = BeatGrid()
+        self.beat_index: int | None = None      # numero de temps (depuis le « 1 » de la grille) du dernier kick, None sans grille
 
     @property
     def drops(self) -> int:
@@ -203,11 +268,15 @@ class Rhythm:
     def reset(self) -> None:
         self.est.reset()
         self.bpm, self.confidence, self._off, self._last_kick = None, 0.0, 0, None
+        self.grid.clear()
+        self.beat_index = None
 
     def _evaluate(self, now: float) -> None:
         if self._last_kick is not None and now - self._last_kick > BPM_LOST_S:
             self.est.reset()
             self.bpm, self.confidence, self._off = None, 0.0, 0
+            self.grid.clear()                       # plus de kick : la mesure est perdue, il faudra redonner le « 1 »
+            self.beat_index = None
             return
         value, conf = self.est.estimate()
         self.confidence = conf
@@ -228,6 +297,8 @@ class Rhythm:
         if beat:
             self.est.feed(now)
             self._last_kick = now
+            self.grid.nudge(now, self.bpm)
+            self.beat_index = self.grid.beat_index(now)
         if now - self._eval_at >= self.EVAL_EVERY_S:
             self._eval_at = now
             self._evaluate(now)

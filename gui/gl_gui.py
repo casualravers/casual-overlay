@@ -494,6 +494,7 @@ SHORTCUTS_HELP = (
     "K : verrou de scene\n"
     "Retour arriere : scene precedente\n"
     ". (point) : tap tempo\n"
+    ", (virgule) : Temps 1 (le temps qui tombe est le 1 de la mesure)\n"
     "/ ou ? : cette aide"
 )
 
@@ -1736,7 +1737,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         a l'entree (`own`, en secondes) l'emporte et reste en secondes."""
         st = scene_book.vj()
         now = time.monotonic()
-        if st["unit"] == "bars" and not own:
+        vj["grid_due"] = None
+        grid = getattr(rhythm_source(), "grid", None)
+        if st["unit"] == "bars" and not own and grid is not None and grid.active:
+            # grille du temps donnee (« Temps 1 ») : N mesures plus tard, sur le 1 le plus proche (la duree reste ~N x 4 temps)
+            due = grid.nearest_downbeat(now + st["bars"] * grid.BEATS_PER_BAR * grid.period)
+            vj["bar"] = None
+            vj["grid_due"] = due
+            vj["t_next"] = due + 2.0 * grid.BEATS_PER_BAR * grid.period       # garde-fou si la grille se perd en route
+        elif st["unit"] == "bars" and not own:
             rhythm = rhythm_source()
             vj["bar"] = core_controls.BarTimer(st["bars"]).arm(beat_count(), now, float(params.get("tempo", 1.0)),
                                                                getattr(rhythm, "bpm", None))
@@ -1748,6 +1757,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def vj_due() -> bool:
         now = time.monotonic()
         bar = vj.get("bar")
+        due = vj.get("grid_due")
+        if due is not None:
+            return now >= due or now >= vj["t_next"]
         return now >= vj["t_next"] or (bar is not None and bar.due(beat_count(), now))
 
     def vj_period_text() -> str:
@@ -1760,6 +1772,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def vj_remaining_text() -> str:
         """Ce qui reste avant la scene suivante : « 12 s », ou « mesure 3/8 » en rythme."""
         bar = vj.get("bar")
+        if vj.get("grid_due") is not None:
+            return f"sur le 1 dans {max(vj['grid_due'] - time.monotonic(), 0.0):.0f} s"
         return f"mesure {bar.label(beat_count())}" if bar is not None else f"{vj_remaining():.0f} s"
 
     def update_vj_button() -> None:
@@ -1899,6 +1913,16 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         try:
             if vj["running"] and vj_due():
                 vj_advance()
+            elif vj["running"] and vj.get("grid_due") is not None and not vj.get("grid_job"):
+                wait = vj["grid_due"] - time.monotonic()
+                if 0.0 < wait <= 0.3:                      # le minuteur bat toutes les 250 ms : le dernier bout est programme au plus juste
+                    vj["grid_job"] = True
+
+                    def on_downbeat() -> None:
+                        vj["grid_job"] = False
+                        if vj["running"] and vj_due():
+                            vj_advance()
+                    after(max(int(wait * 1000), 1), on_downbeat)
         except Exception:
             traceback.print_exc()
             vj["t_next"] = time.monotonic() + max(float(scene_book.vj()["seconds"]), 5.0)     # pas de boucle d'erreurs a 4 Hz
@@ -2079,6 +2103,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 continue
             if index == "tap":
                 do_tap()
+                continue
+            if index == "one":
+                do_one()
                 continue
             if index == "help":
                 scene_ui["help"]()
@@ -2284,6 +2311,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     do_drop = gui_vj_ctl.do_drop
     do_panic = gui_vj_ctl.do_panic
     do_tap = gui_vj_ctl.do_tap
+    do_one = gui_vj_ctl.do_one
     help_window = gui_vj_ctl.help_window
     master_box = gui_vj_ctl.master_box
     record_history = gui_vj_ctl.record_history
@@ -2735,7 +2763,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,
             "overlay_presets": overlay_presets, "bg_presets": bg_presets, "scene_book": scene_book, "scene_bar": scene_bar,
-            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "rhythm_step": rhythm_step, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "remaining_text": vj_remaining_text, "arm": vj_arm, "panic": do_panic, "tap": do_tap, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
+            "vj": {"master_box": master_box, "back": back_scene, "build": start_build, "drop": do_drop, "memories": master_book, "state": vj, "rhythm_step": rhythm_step, "toggle": vj_toggle, "advance": vj_advance, "lock": toggle_scene_lock, "apply": apply_entry, "tick": vj_tick, "remaining": vj_remaining, "remaining_text": vj_remaining_text, "arm": vj_arm, "panic": do_panic, "tap": do_tap, "one": do_one, "status": status_text, "console": console_window, "help": help_window, "autosave": autosave_tick},
             "random": {"draw": random_draw, "draw_now": random_draw_now, "keep": random_keep, "save": random_save, "check": random_keep_check, "bank": random_bank,
                        "option": set_random_option, "state": rnd},
             "scenes": {"capture": capture_scene_now, "apply": apply_scene, "apply_entry": apply_entry, "delete": delete_scene_now,

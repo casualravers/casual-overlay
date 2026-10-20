@@ -334,6 +334,11 @@ def install(c):
             tap = button(f, "Tap tempo", do_tap, row=3, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             Tooltip(tap, "Tape le rythme (au moins deux appuis, touche point dans la fenetre de rendu) : le master du tempo suit le BPM "
                          "(120 BPM = 100 %). Une pause de 2 s recommence.")
+            one = button(f, "Temps 1", do_one, row=3, column=2, sticky="w", padx=2, pady=(3, 0))
+            vj_ui["one"] = one
+            Tooltip(one, "Appuie sur le premier temps de la mesure (touche virgule dans la fenetre de rendu) : le strobe leger tombe alors sur les 1 "
+                         "et le VJ « en rythme » change de scene exactement sur un 1. La grille se recale seule sur les kicks et s'efface quand ils "
+                         "disparaissent.")
             bpm = vj_ui["bpm"] = tk.Label(f, text="\u2014 BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
             bpm.grid(row=3, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %). "
@@ -574,6 +579,22 @@ def install(c):
         if was_locked:
             refresh_scene_bar()
         scene_msg.set("PANIQUE : effets, strobe et montee coupes, VJ en pause" + (", verrou retire" if was_locked else ""))
+
+    def do_one() -> None:
+        """« Temps 1 » (bouton, touche virgule) : le temps qui vient de tomber est le premier de la mesure. Ancre la grille du temps : le
+        strobe leger tombe sur les 1, et le VJ « en rythme » change de scene pile sur un 1. Il faut un tempo (detecte ou tape) ; la grille
+        s'efface quand les kicks disparaissent. Un second appui reancre."""
+        rhythm = rhythm_source()
+        if rhythm is None:
+            scene_msg.set("Temps 1 : analyse audio indisponible")
+            return
+        bpm = detected_bpm() or tap_state["bpm"] or 120.0 * float(params.get("tempo", 1.0))
+        try:
+            last = s.audio.analyzer.t_beat
+        except Exception:
+            last = None
+        rhythm.grid.set_one(time.monotonic(), bpm, last)
+        scene_msg.set(f"Temps 1 : grille calee sur {bpm:.0f} BPM (strobe leger et VJ en rythme sur le 1)")
 
     def do_tap() -> None:
         """Tap tempo (bouton ou touche point) : BPM moyen des derniers appuis -> master du tempo (120 BPM = 100 %) ; en strobe a cadence
@@ -822,4 +843,4 @@ def install(c):
     ui_every("rhythm", 100, rhythm_tick, first_ms=500)
 
     import types
-    return types.SimpleNamespace(rhythm_step=rhythm_step, autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)
+    return types.SimpleNamespace(rhythm_step=rhythm_step, autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, do_one=do_one, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)
