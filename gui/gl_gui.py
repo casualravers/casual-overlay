@@ -2098,6 +2098,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         move_entry_now=move_entry_now,
         move_entry_to=move_entry_to,
         panel_state=panel_state,
+        refresh_presets=lambda: (overlay_presets["refresh"](), bg_presets["refresh"]()),
         refresh_scene_bar=lambda *a, **k: refresh_scene_bar(*a, **k),
         remove_entry_now=remove_entry_now,
         request_preview=lambda name: panel_ops.request_preview(name),

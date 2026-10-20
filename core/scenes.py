@@ -748,7 +748,23 @@ EXPORT_FORMAT = "casual-overlay-set"
 EXPORT_VERSION = 1
 
 
-def export_set(book: SceneBook, set_name: str | None = None) -> dict:
+PRESET_KINDS = ("overlay", "fond")
+
+
+def clean_export_presets(raw) -> dict:
+    """`{"overlay": {nom: reglages}, "fond": {...}}` valide : noms texte sans `_` initial ni `default`, reglages en dict."""
+    out: dict = {k: {} for k in PRESET_KINDS}
+    if isinstance(raw, dict):
+        for kind in PRESET_KINDS:
+            block = raw.get(kind)
+            for name, values in (block.items() if isinstance(block, dict) else []):
+                if isinstance(name, str) and name.strip() and not name.startswith("_") and name != "default" and isinstance(values, dict):
+                    out[kind][name] = json.loads(json.dumps(values))
+    return out
+
+
+def export_set(book: SceneBook, set_name: str | None = None, overlay_book=None, background_book=None) -> dict:
+    """Le set + les scenes utilisees (+ les presets overlay / fond que ces scenes citent, quand les carnets sont donnes)."""
     data = book._load()
     name = set_name or data["active_set"]
     i = book._find(data["sets"], name)
@@ -760,9 +776,22 @@ def export_set(book: SceneBook, set_name: str | None = None) -> dict:
         if e["scene"] not in used:
             used.append(e["scene"])
     lib = {x["name"]: x for x in data["scenes"]}
-    return {"format": EXPORT_FORMAT, "version": EXPORT_VERSION,
-            "set": {"name": st["name"], "vj": st["vj"], "entries": json.loads(json.dumps(st["entries"]))},
-            "scenes": [json.loads(json.dumps(lib[n])) for n in used]}
+    used_scenes = [json.loads(json.dumps(lib[n])) for n in used]
+    presets: dict = {k: {} for k in PRESET_KINDS}
+    for kind, pbook in (("overlay", overlay_book), ("fond", background_book)):
+        if pbook is None:
+            continue
+        have = pbook.load_user()
+        for scene in used_scenes:
+            name = clean_presets(scene.get("presets")).get(kind)
+            if name and name in have:
+                presets[kind][name] = json.loads(json.dumps(have[name]))
+    out = {"format": EXPORT_FORMAT, "version": EXPORT_VERSION,
+           "set": {"name": st["name"], "vj": st["vj"], "entries": json.loads(json.dumps(st["entries"]))},
+           "scenes": used_scenes}
+    if any(presets.values()):
+        out["presets"] = presets
+    return out
 
 
 def parse_import(raw) -> dict:
@@ -791,7 +820,7 @@ def parse_import(raw) -> dict:
         if isinstance(e, dict) and isinstance(e.get("scene"), str) and e["scene"].lower() in known:
             entries.append(SceneBook._entry(e, e["scene"]))
     return {"set": {"name": st["name"].strip()[:MAX_NAME], "entries": entries, "vj": SceneBook._clean_vj(st.get("vj"))},
-            "scenes": lib}
+            "scenes": lib, "presets": clean_export_presets(raw.get("presets"))}
 
 
 def _same(a: dict, b: dict) -> bool:
@@ -824,10 +853,14 @@ def import_conflicts(book: SceneBook, parsed: dict) -> dict:
     return {"set": book._find(data["sets"], parsed["set"]["name"]) is not None, "scenes": clash}
 
 
-def import_set(book: SceneBook, parsed: dict, set_mode: str = "rename", scene_mode: str = "rename") -> dict:
+def import_set(book: SceneBook, parsed: dict, set_mode: str = "rename", scene_mode: str = "rename",
+               overlay_book=None, background_book=None) -> dict:
     """Ajoute le set importe. `set_mode` / `scene_mode` : "rename" (le nouveau prend un autre nom : `nom (2)`) ou "replace"
     (ecrase l'existant). Une scene identique a celle de la bibliotheque est reutilisee. Ecriture en une seule fois.
-    Renvoie {"set", "renamed": {ancien: nouveau}, "replaced": [scenes], "added": [scenes], "missing": [fichiers de medias]}."""
+    Les presets du fichier sont ajoutes aux carnets donnes quand leur nom est libre ; un nom deja pris (contenu different) garde le
+    preset de la machine (`presets_kept`), un contenu identique est ignore. Les scenes portent leurs reglages : elles marchent dans tous les cas.
+    Renvoie {"set", "renamed": {ancien: nouveau}, "replaced": [scenes], "added": [scenes], "missing": [fichiers de medias],
+    "presets_added": ["overlay:nom"], "presets_kept": ["fond:nom"]}."""
     data = book._load()
     renamed, replaced, added = {}, [], []
     set_renamed = None
@@ -872,6 +905,17 @@ def import_set(book: SceneBook, parsed: dict, set_mode: str = "rename", scene_mo
     else:
         data["sets"].append(st)
     book._save(data)
+    presets_added, presets_kept = [], []
+    for kind, pbook in (("overlay", overlay_book), ("fond", background_book)):
+        if pbook is None:
+            continue
+        mine = pbook.load_user()
+        for name, values in (parsed.get("presets") or {}).get(kind, {}).items():
+            if name not in mine:
+                pbook.save(name, values)
+                presets_added.append(f"{kind}:{name}")
+            elif not _same(mine[name], values):
+                presets_kept.append(f"{kind}:{name}")
     missing = sorted({m for e in entries for m in [media_missing(e["media"]), *a2w_missing(e.get("a2w")), bg_video_missing(e.get("bg_video"))] if m})
     return {"set": st["name"], "set_renamed": set_renamed, "renamed": renamed, "replaced": replaced, "added": added,
-            "missing": missing}
+            "missing": missing, "presets_added": presets_added, "presets_kept": presets_kept}

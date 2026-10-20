@@ -5,6 +5,7 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 """
 from __future__ import annotations
 
+from core import params as core_params
 from core import scenes
 from core import setpack
 from pathlib import Path
@@ -180,7 +181,7 @@ def install(c):
             return False
         pack = str(path).lower().endswith(".zip")
         try:
-            data = scenes.export_set(scene_book, name)
+            data = scenes.export_set(scene_book, name, core_params.OVERLAY_BOOK, core_params.BACKGROUND_BOOK)
             if not pack:
                 Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         except (OSError, ValueError) as exc:
@@ -273,7 +274,9 @@ def install(c):
         if not set_mode or not scene_mode:
             scene_msg.set("Import annule")
             return False
-        result = scenes.import_set(scene_book, parsed, set_mode, scene_mode)
+        result = scenes.import_set(scene_book, parsed, set_mode, scene_mode, core_params.OVERLAY_BOOK, core_params.BACKGROUND_BOOK)
+        if result["presets_added"]:
+            c.refresh_presets()
         switch_set(result["set"])
         note = ""
         if result["set_renamed"]:
@@ -282,6 +285,10 @@ def install(c):
             note += f", {len(result['renamed'])} scene(s) renommee(s)"
         if result["replaced"]:
             note += f", {len(result['replaced'])} scene(s) remplacee(s)"
+        if result["presets_added"]:
+            note += f", {len(result['presets_added'])} preset(s) ajoute(s)"
+        if result["presets_kept"]:
+            note += f" ({len(result['presets_kept'])} preset(s) de meme nom gardes tels quels)"
         if result["missing"]:
             note += f" - media introuvable: {', '.join(Path(m).name for m in result['missing'][:3])}"
         scene_msg.set(f"Set '{result['set']}' importe{note}")

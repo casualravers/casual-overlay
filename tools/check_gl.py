@@ -2719,6 +2719,33 @@ def check_sets_pure(sc, tmp) -> None:
     check(r4["set"] == "Mon set" and r4["replaced"] == ["A"] and dest.get("A")["overlay"]["holo_intensity"] == 0.1
           and len([n for n in dest.set_names() if n.lower() == "mon set"]) == 1,
           "import: remplacer ecrase le set et la scene du meme nom", str(r4))
+    # presets cites par les scenes : exportes avec le set, ajoutes a l'import (un nom deja pris garde celui de la machine)
+    from core import params as _prm
+    src_o = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_over_src.json"))
+    src_b = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_bg_src.json"))
+    src_o.save("club/neon", {"holo_intensity": 1.5})
+    src_o.save("autre", {"holo_intensity": 0.2})
+    src_b.save("fond duo", {"bg_palette": "duo"})
+    pbook = sc.SceneBook(lambda: tmp.with_name("export_presets.json"))
+    pbook.put({"name": "P1", "bg": "live", "overlay": {}, "presets": {"overlay": "club/neon", "fond": "fond duo"}})
+    pbook.put({"name": "P2", "bg": "live", "overlay": {}, "presets": {"overlay": "default", "fond": "inconnu"}})
+    exp_pr = sc.export_set(pbook, None, src_o, src_b)
+    check(exp_pr.get("presets") == {"overlay": {"club/neon": {"holo_intensity": 1.5}}, "fond": {"fond duo": {"bg_palette": "duo"}}}
+          and "presets" not in sc.export_set(pbook), "export: les presets cites par les scenes (existants, hors default) suivent le set",
+          str(exp_pr.get("presets")))
+    dst_o = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_over_dst.json"))
+    dst_b = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_bg_dst.json"))
+    dst_b.save("fond duo", {"bg_palette": "classic"})
+    dpb = sc.SceneBook(lambda: tmp.with_name("import_presets.json"))
+    parsed_pr = sc.parse_import(_json.dumps(exp_pr))
+    r_pr = sc.import_set(dpb, parsed_pr, overlay_book=dst_o, background_book=dst_b)
+    check(r_pr["presets_added"] == ["overlay:club/neon"] and r_pr["presets_kept"] == ["fond:fond duo"]
+          and dst_o.load_user() == {"club/neon": {"holo_intensity": 1.5}} and dst_b.load_user()["fond duo"] == {"bg_palette": "classic"},
+          "import: presets ajoutes si le nom est libre, celui de la machine garde sinon", str(r_pr))
+    r_pr2 = sc.import_set(dpb, parsed_pr, overlay_book=dst_o, background_book=dst_b)
+    check(r_pr2["presets_added"] == [], "import: reimporter ne duplique rien", str(r_pr2))
+    junk = sc.parse_import(_json.dumps({**exp_pr, "presets": {"overlay": {"_x": {}, "default": {}, "ok": {"a": 1}, "bad": 3}, "fond": 5}}))
+    check(junk["presets"] == {"overlay": {"ok": {"a": 1}}, "fond": {}}, "import: presets invalides ecartes", str(junk["presets"]))
     bad = [("pas du json", "illisible"), ('{"format": "autre"}', "pas un set"),
            (_json.dumps({**exp, "version": 99}), "plus recente"), (_json.dumps({**exp, "set": {"entries": []}}), "sans nom")]
     for raw, word in bad:
