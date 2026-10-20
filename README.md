@@ -276,10 +276,9 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
     plutot un fondu enchaine d'image a image).
   - Reglages de transition (type, duree du flash) dans le panneau etendu.
   L'interface doit rester simple et agreable : les options avancees vivent dans le panneau deplie, jamais dans la barre.
-- **Sets plus riches** : la base est faite (bibliotheque de scenes, sets, media par entree, export / import, changement de
-  set qui redemarre le VJ, panneau etendu, glisser-deposer, duree et exclusion par entree). Pistes : medias embarques dans
-  le fichier exporte (archive avec les images et videos plutot que des chemins), raccourci clavier pour changer de set en soiree, et un acces
-  plus rapide aux scenes au-dela de F9 (pages).
+- **Sets plus riches** : la base est faite (bibliotheque de scenes, sets, media par entree, export / import avec medias en archive
+  `.zip`, annuler / retablir, changement de set qui redemarre le VJ, panneau etendu, glisser-deposer). Pistes : raccourci clavier
+  pour changer de set en soiree et un acces plus rapide aux scenes au-dela de F9 (pages).
 - **Halo holographique plus riche** : automations de l'intensite et de la portee, teinte reglable, forme de
   la poussiere (etoiles a branches, comete), trainee directionnelle (vent) plutot que radiale, et mode
   « ombre » (soustractif) pour assombrir aussi le fond.
@@ -288,20 +287,21 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 - **Modes Snap et Ridge en GL** : faits (60 images/s, tous les styles de Snap, Ridge). Reste : `--stereo` / `--split-channels` (le son
   vient du tampon mono de l'analyse), brancher leurs automations de courbes sur le moteur GL et charger leur Mode VJ (enchainement de
   presets) en meme temps qu'un preset overlay.
-- **Doodle dessine a la main depuis un site web** : une page de dessin (PNG transparent) depose le trait sur
-  un serveur ; casual-overlay l'interroge toutes les quelques secondes et l'incruste comme logo (nouvelle
-  source « Doodle (web) »). A trancher : hebergement, validation manuelle avant affichage (moderation), un doodle
-  a la fois ou une file ; l'image est toujours revalidee (taille, dimensions, Pillow) avant chargement.
-  Hebergement prevu : GitHub Pages pour la page de dessin. Attention, c'est un hebergement **statique** : il
-  sert la page mais ne peut pas recevoir un dessin. Il faudra un point de depot a cote (fonction serverless,
-  Firebase/Supabase, ou commit d'un `latest.png` via l'API GitHub) que casual-overlay interrogerait ensuite.
 - **Detourage plus fin du logo video** : similarite et fondu reglables dans la GUI (valeurs fixes),
   et relance du decodage sans a-coup.
 - **Plusieurs logos ou textes a la fois**, chacun avec sa couche d'effets.
-- **Latence audio -> image** : mesuree seulement par estimation (~45-65 ms) ; mesure acoustique de bout
-  en bout et leviers (bloc de capture plus petit, fenetre d'analyse plus courte).
+- **Latence audio -> image** : la chaine logicielle est mesuree (~29 ms mediane, `tools/mesure_latence.py`). Reste l'affichage
+  (balayage de l'ecran, traitement du videoprojecteur : camera rapide ou photodiode) et les leviers (bloc de capture plus petit,
+  fenetre d'analyse plus courte).
 - **Version portable** : essai sur un PC vierge ou une machine virtuelle (prerequis Visual C++ de numpy), build ffmpeg
   « essentials » plus leger par defaut, et un vrai installateur ou un `.exe` si le dossier ne suffit plus.
-- **Sortie Spout/NDI** vers un logiciel de VJing, et entree MIDI pour piloter les reglages.
+- **Sortie Spout/NDI** vers un logiciel de VJing.
+- **Entree MIDI** pour piloter les reglages (masters, scenes, panique, strobe), avec un apprentissage par clic (« learn »).
+- **Phases auto, etape suivante** : memoriser les seuils appris d'un morceau ou d'une soiree, lier des scenes aux phases
+  (« pic » = scene energique, « ambiance » = scene calme, en Mode VJ) et afficher la timeline des phases dans la console.
+- **Changement de scene au drop ou a la montee** (le VJ le fait deja au drop), avec un fondu enchaine d'image a image plutot
+  qu'un flash ; rejoint la « vraie transition » du Mode VJ.
+- **Telecommande sur telephone** : petite page web servie en local (scenes, panique, masters, VJ), pour piloter sans avoir
+  l'ordinateur sous la main. A securiser (reseau local seulement, code d'acces).
 
 Details d'architecture, pieges et mesures : [CLAUDE.md](CLAUDE.md).
