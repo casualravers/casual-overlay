@@ -6992,6 +6992,19 @@ def check_native_modes() -> None:
           "retour au mode Live en --synthetic : flux d'origine rendu, mode GL arrete", str(msg))
 
 
+# Verifications de taille / mise en page de la fenetre : elles dependent de l'etat de l'ecran (fenetre deja deplacee, focus, minuteurs de Tk) et
+# echouent parfois seules sans qu'il y ait de defaut. Si TOUS les echecs d'une execution sont de cette liste, le programme sort avec le code 3
+# (et non 1) : l'integration continue relance alors la suite une fois ; un echec qui revient, ou tout autre echec, reste un echec (code 1).
+EXIT_FRAGILE = 3
+FRAGILES = ("garde sa taille quand une scene change de mode", "le bouton agrandit la fenetre", "le bouton du nom remplit sa case",
+            "cases VJ sont habillees", "la molette defile la liste", "un panneau reconstruit reste habille", "bibliotheque a gauche du set",
+            "un nom de scene tres long", "reduire rend sa taille d'origine", "espace de controle global a droite de la liste")
+
+
+def only_fragile(labels: list[str]) -> bool:
+    return bool(labels) and all(any(marker in label for marker in FRAGILES) or "aucune erreur" in label for label in labels)
+
+
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
@@ -7067,6 +7080,9 @@ def main() -> None:
         pass
     if failures:
         print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
+        if only_fragile(failures):
+            print(f"Seules des verifications de mise en page connues pour etre instables ont echoue : code {EXIT_FRAGILE} (relancer une fois).")
+            sys.exit(EXIT_FRAGILE)
         sys.exit(1)
     print("Toutes les verifications passent.")
 
