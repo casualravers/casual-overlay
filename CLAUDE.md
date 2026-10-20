@@ -43,6 +43,7 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   controls       tempo effectif, strobe (appui), StrobeLimiter, panique, tap tempo, BarTimer
   phase          phases du morceau (silence / ambiance / groove / montee / cassure / pic) et multiplicateurs lisses : « Phases auto » (`PhaseTracker`)
   audio_layers   sources audio par couche (fond / logo : tout, basses, mediums, aigus, kick, frappes, rien) : `layer_levels`, retard et lissage (`LayerFilter`)
+  explain        textes des voyants des fonctions automatiques (sources par couche, effets des phases, raison du dernier eclair du strobe)
   strobe_auto    strobe automatique : `StrobeBrain` decide seul quand eclairer (phase du morceau, kicks, frappes aigues, grille)
   onset          detecteur d'attaques parametrable (`OnsetDetector`) : frappes aigues et kicks par couche
   rhythm         BPM estime a partir des kicks, montee et drop detectes a partir des basses (`Rhythm`, `BpmEstimator`, `DropDetector`)
@@ -835,8 +836,13 @@ Le fond et le logo ne reagissent plus forcement a la meme partie du son. Chaque 
 - **Sensibilite du kick par couche** (`sens_bg` / `sens_logo`, 0,25 a 4, x la sensibilite generale) : `FeatureExtractor.layer_sens` (ecrit par la boucle de rendu a chaque image) fait tourner un `OnsetDetector` de kick par couche ; a 1 la couche prend le kick commun (`edge_bg == beat`), sinon le sien (`state["beat_bg"]` / `["since_bg"]`, `beat_logo`...). Un kick que le kick commun rate (basse continue) est rattrape par une couche a 2,5.
 - **Retard et lissage** (`lag_*` 0 a 0,5 s, `smooth_*` 0 a 1) : `LayerFilter` (une instance par couche dans le `Renderer`, horloge = `t` de `draw`). Le retard garde l'historique des niveaux (silence tant qu'il n'est pas assez long : un retard augmente a chaud laisse un trou de `lag` secondes) ; le lissage adoucit l'attaque
   (jusqu'a 120 ms) et le relachement (jusqu'a 800 ms) de bass / high / beat, `since` reste net pour que l'onde de choc parte pile. Sans retard ni lissage les niveaux passent tels quels.
+- **Source `auto`** (8e valeur des menus, defaut toujours `tout` tant que ce n'est pas valide en soiree) : la source de chaque couche vient du tableau `AUTO_TABLE` (phase x couche) : silence / ambiance = rien + rien, **groove = fond sur les basses, logo sur les aigus** (sur les frappes si on en a vu depuis moins de 4 s),
+  **montee = mediums + frappes**, **cassure = fond rien, logo tout** (seul le logo reste vivant), **pic = kick + kick**. Phase inconnue ou `auto_phase` coupe : `tout` (comportement connu). `SourceMixer` fait un **fondu de 1,5 s** quand Auto change de source (jamais de saut) ; une source choisie a la main passe tout de suite. Liee (`fx_link` = 1), la couche logo suit le fond ;
+  si le fond est en `auto`, le logo prend sa propre colonne du tableau (l'audio est decouple des effets). Une source choisie a la main sort d'Auto (priorite a l'operateur).
+- **Voyants (tout ce qui est automatique doit etre lisible)** : `core/explain.py`, textes mis a jour par `update_master_panel` (250 ms) depuis `s.status` : onglet *Audio* = « phase : groove », « sources : fond <- basses (auto)  |  logo <- aigus (auto) » et « tempo x0,30 | reactivite x0,60 | effets x0,35 | fond 100 % | derive de teinte 3 deg/s »
+  (ce que la phase change aux masters ; « phases auto coupees » sinon) ; onglet *Live* = « strobe auto : dernier eclair = accent groove (le 1 de la mesure), il y a 3 s » (`StrobeBrain.reason`, `Renderer.strobe_info`). Le rendu publie `Renderer.sources_now` et `strobe_info` (`engine/projection.py` : `s.status["sources"]`, `["strobe_info"]`). Pas de journal des decisions (decision de l'utilisateur).
 - Reste commun : le noise (`max(reel, noise)`, ses cases propres), les automations, le strobe, le cycle de teinte spectral (`hue_spectrum`), le HUD. Les reglages de couche sont `look` (presets overlay et scenes), sauf `hit_sensitivity` (`device`).
-`check_gl.py` : `check_audio_layers_pure` (niveaux, retard, lissage, schema), `check_onsets` (frappes, kicks par couche), `check_audio_layers` (pixels : wobble, aberration, lie / delie, retard, reactivite a 0).
+`check_gl.py` : `check_audio_layers_pure` (niveaux, retard, lissage, schema, tableau Auto, fondu, voyants), `check_onsets` (frappes, kicks par couche), `check_audio_layers` (pixels : wobble, aberration, lie / delie, retard, reactivite a 0).
 
 ### Strobe auto (`core/strobe_auto.py`, case « Strobe auto » de l'onglet *Live*, reglage de salle `strobe_auto`)
 
@@ -845,7 +851,7 @@ la phase du morceau (`state["phase"]`), les nouveaux kicks (`beats`), les nouvel
 les parties sombres) sur le « 1 » de la mesure si la grille est connue (au plus toutes les ~4 mesures), sinon sur une frappe aigue espacee de 3 s, sinon un kick sur 16 ; **montee** (phase detectee) : cadence qui accelere de 0,5 a 4 Hz sur 16 s (courbe en carre) ; **drop** : le passage montee / cassure -> pic donne un seul gros
 eclair ; **pic** : un eclair a chaque kick (3 par seconde au plus). Le limiteur de securite (`StrobeLimiter`, 10 eclairs par seconde, rafales de 8 s) s'applique a tous les eclairs. Un eclair auto a son propre seuil de luminosite (`strobe_dark` du reglage sert aux eclairs manuels). La PANIQUE coupe `strobe_auto`.
 Les anciens modes (`strobe_mode` = `kick` / `light`, `strobe_div`, `strobe_dark`) restent dans le moteur et le schema (fichiers et tests existants) mais n'ont plus de commande : la GUI remet `strobe_mode` a `manual`. La **Montee** manuelle garde ses propres eclairs (jusqu'a 16 Hz, plafonnes par le limiteur). `Renderer.strobe_fired` compte les eclairs acceptes.
-`check_gl.py` : `check_strobe_auto` (phases, accents, drop, montee, panique) ; dans le rendu : eclair en pic, rien en silence, accent sur le 1 en groove avec son seuil, eclair manuel ; mode leger (8 kicks = 2 eclairs) et strobe sombre en pixels (moitie noire / moitie claire).
+`check_gl.py` : `check_strobe_auto` (phases, accents, drop, montee, raisons, panique) ; dans le rendu : eclair en pic, rien en silence, accent sur le 1 en groove avec son seuil, eclair manuel ; mode leger (8 kicks = 2 eclairs) et strobe sombre en pixels (moitie noire / moitie claire).
 
 ### Effets par couche (fond / logo decorreles)
 

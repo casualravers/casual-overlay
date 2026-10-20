@@ -5,6 +5,7 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 """
 from __future__ import annotations
 
+from core import explain
 from core import scenes
 from core import sessionlog
 from tkinter import ttk
@@ -72,6 +73,22 @@ def install(c):
             return f"{det:.0f} BPM auto"
         return f"{tap_state['bpm']:.0f} BPM (tap)" if tap_state["bpm"] else "\u2014 BPM"
 
+    def sources_line() -> str:
+        info = s.status.get("phase_info") or {}
+        bg, logo, bg_auto, logo_auto = s.status.get("sources", ("tout", "tout", False, False))
+        on = float(params.get("auto_phase", 1.0)) >= 0.5
+        return explain.sources_text(bg, logo, bg_auto, logo_auto, info.get("name") if (on and info) else None)
+
+    def phase_fx_line() -> str:
+        info = s.status.get("phase_info") or {}
+        on = float(params.get("auto_phase", 1.0)) >= 0.5
+        return explain.phase_effects_text(info.get("mult") if info else None, on)
+
+    def strobe_line() -> str:
+        info = s.status.get("strobe_info")
+        armed = float(params.get("strobe_auto", 0.0)) >= 0.5
+        return explain.strobe_info_text(info[0] if info else None, time.monotonic() - info[1] if info else None, armed)
+
     def update_master_panel() -> None:
         """Libelles des boutons du panneau de controle (les touches S / K peuvent les avoir changes) et voyant du mode silence."""
         sb = vj_ui.get("strobe")
@@ -94,6 +111,15 @@ def install(c):
                 root.title(text)
         except tk.TclError:
             pass
+        for key, make in (("sources", sources_line), ("phase_fx", phase_fx_line), ("strobe_info", strobe_line)):
+            lbl = vj_ui.get(key)
+            if lbl is not None:
+                try:
+                    text = make()
+                    if lbl.cget("text") != text:
+                        lbl.configure(text=text)
+                except tk.TclError:
+                    vj_ui.pop(key, None)
         ph = vj_ui.get("phase")
         if ph is not None:
             try:
@@ -377,6 +403,10 @@ def install(c):
                         "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
             drop = button(f, "Drop", do_drop, row=1, column=3, sticky="w", padx=6, pady=(3, 0))
             Tooltip(drop, "Relache la montee d'un coup : flash blanc, tout retombe aux reglages normaux.")
+            sinfo = tk.Label(f, text="strobe auto : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
+            sinfo.grid(row=3, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
+            vj_ui["strobe_info"] = sinfo
+            Tooltip(sinfo, "Ce que fait le strobe auto : la raison de son dernier eclair (accent de groove, kick au pic, drop, montee...).")
 
         new_tab("Live", fill_1)
 
@@ -399,6 +429,16 @@ def install(c):
             phase = tk.Label(f, text="phase : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w")
             phase.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
             vj_ui["phase"] = phase
+            sources = tk.Label(f, text="sources : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
+            sources.grid(row=2, column=0, columnspan=6, sticky="w", padx=6, pady=(4, 0))
+            vj_ui["sources"] = sources
+            Tooltip(sources, "Partie du son qui pilote le fond et le logo (menus « reagit a » de l'onglet Effets). Sur Auto, elle change avec la phase : "
+                             "groove = fond sur les basses et logo sur les aigus, montee = mediums et frappes, cassure = seul le logo reagit, pic = tout sur le kick.")
+            effects = tk.Label(f, text="phases auto : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
+            effects.grid(row=3, column=0, columnspan=6, sticky="w", padx=6, pady=(2, 0))
+            vj_ui["phase_fx"] = effects
+            Tooltip(effects, "Ce que la phase du morceau change a tes reglages en ce moment (multiplicateurs lisses) : vitesse des animations, reactivite au son, "
+                             "intensite des effets, luminosite du fond et derive de teinte. x1,00 = rien ne change.")
 
         new_tab("Audio", fill_2)
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from core import sessionlog
 from core import doodles
-from core.audio_layers import LayerFilter, has_kick, layer_levels
+from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo, spectral_hue
@@ -241,6 +241,9 @@ class Renderer:
         self._strobe_hits, self._strobe_auto_now, self._strobe_auto_dark = 0, False, 1.0
         self.strobe_fired = 0                                                       # eclairs acceptes (compteur : la mesure de latence le lit)
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
+        self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
+        self.sources_now = ("tout", "tout", False, False)                              # (fond, logo, fond en auto, logo en auto) : affiche dans l'interface
+        self.strobe_info: tuple[str, float] | None = None                            # (raison, instant) du dernier eclair : affiche dans l'interface
         self._layer_filters = (LayerFilter(), LayerFilter())                           # retard et lissage de la reaction au son : fond, logo
         self._hue_spec = 0.0                                                          # teinte tiree du spectre, lissee
         self._prev_ok = False
@@ -413,6 +416,7 @@ class Renderer:
             self.strobe_fired += 1
             self._strobe_auto_now = bool(auto_fire and not manual_fire and float(p.get("strobe_auto", 0.0)) >= 0.5)
             self._strobe_auto_dark = auto_dark
+            self.strobe_info = (self.strobe_brain.reason if self._strobe_auto_now else ("montee manuelle" if (build > 0.0 and not manual_fire) else "manuel"), now)
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
@@ -497,12 +501,23 @@ class Renderer:
         bass, high, beat = state["bass"], state["high"], state["beat"]
         # Sources audio par couche : le fond et le logo peuvent reagir a des parties differentes du son (lie : le logo suit la source du fond).
         linked = float(p["fx_link"]) >= 0.5
-        src_bg = p["src_bg"]
-        src_logo = src_bg if linked else p["src_logo"]
+        # Source « auto » : le tableau phase x couche (core/audio_layers.AUTO_TABLE), sans phase connue (ou phases auto coupees) : comme « tout ».
+        phase_name = (state.get("phase") or {}).get("name") if float(p["auto_phase"]) >= 0.5 else None
+        table_bg, table_logo = auto_sources(phase_name, state.get("since_hit"))
+        bg_auto = p["src_bg"] == "auto"
+        if linked:       # lies, le logo suit le fond ; si le fond est en auto, le logo prend sa propre colonne du tableau
+            logo_auto = bg_auto
+            src_bg = table_bg if bg_auto else p["src_bg"]
+            src_logo = table_logo if bg_auto else src_bg
+        else:
+            logo_auto = p["src_logo"] == "auto"
+            src_bg = table_bg if bg_auto else p["src_bg"]
+            src_logo = table_logo if logo_auto else p["src_logo"]
+        self.sources_now = (src_bg, src_logo, bg_auto, logo_auto)
         # Chaque couche a aussi son kick (sensibilite propre), son retard et son lissage ; liees, le logo reprend ceux du fond.
         lk = "bg" if linked else "logo"
-        bg_au = self._layer_filters[0].step(t, layer_levels(state, src_bg, "bg"), p["lag_bg"], p["smooth_bg"])
-        lg_au = self._layer_filters[1].step(t, layer_levels(state, src_logo, lk), p["lag_" + lk], p["smooth_" + lk])
+        bg_au = self._layer_filters[0].step(t, self._src_mix[0].levels(t, state, src_bg, "bg", bg_auto), p["lag_bg"], p["smooth_bg"])
+        lg_au = self._layer_filters[1].step(t, self._src_mix[1].levels(t, state, src_logo, lk, logo_auto), p["lag_" + lk], p["smooth_" + lk])
         lg_bass, lg_high, lg_beat = lg_au[0], lg_au[1], lg_au[2]
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t

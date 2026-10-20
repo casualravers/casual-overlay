@@ -4501,6 +4501,16 @@ def check_strobe_auto() -> None:
     drop = b.update(100.5, "peak", 100.5, 0, 0, None)
     check(drop == (True, 1.0), "strobe auto: le passage montee -> pic donne un gros eclair (le drop)")
     check(not sa.StrobeBrain().update(100.0, "peak", 0.0, 0, 0, None)[0], "strobe auto: en pic sans kick, pas d'eclair")
+    rb = sa.StrobeBrain()
+    rb.update(100.0, "peak", 0.0, 1, 0, None)
+    reasons = [rb.reason]
+    rb2 = sa.StrobeBrain()
+    rb2.update(100.0, "groove", 0.0, 1, 0, 0)
+    reasons.append(rb2.reason)
+    rb3 = sa.StrobeBrain()
+    rb3.update(100.0, "build", 0.0, 0, 0, None)
+    reasons.append(rb3.reason)
+    check(reasons[0] == "kick au pic" and "le 1 de la mesure" in reasons[1] and reasons[2].startswith("montee"), "strobe auto: chaque eclair a sa raison, affichee dans l'interface", str(reasons))
     build = run("build", 100.0, 320)
     first, second = [f for f, _ in build if f < 8.0], [f for f, _ in build if f >= 8.0]
     check(22 <= len(build) <= 32 and len(second) > len(first) * 1.5 and all(d == sa.DARK_BUILD for _, d in build),
@@ -4523,12 +4533,39 @@ def check_audio_layers_pure() -> None:
     check(al.layer_levels(st, "kick") == (0.0, 0.0, 0.9, 0.2), "sources: kick = seulement ce qui part des kicks")
     check(al.layer_levels(st, "rien") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: rien = la couche ne reagit plus")
     check(al.layer_levels(st, "n'importe quoi") == al.layer_levels(st, "tout") and al.valid(None) == "tout", "sources: valeur inconnue = tout")
-    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False], "sources: has_kick")
+    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False], "sources: has_kick (auto est resolue avant)")
     st2 = dict(st, hit=0.7, since_hit=0.05, beat_bg=0.4, since_bg=0.6)
     check(al.layer_levels(st2, "frappes") == (0.0, 0.0, 0.7, 0.05) and al.layer_levels(st, "frappes") == (0.0, 0.0, 0.0, al.NO_KICK),
           "sources: frappes = les attaques des aigus (rien sans detecteur)")
     check(al.layer_levels(st2, "kick", "bg")[2:] == (0.4, 0.6) and al.layer_levels(st2, "kick", "logo")[2:] == (0.9, 0.2),
           "sources: le kick d'une couche est celui de sa propre sensibilite, sinon le kick commun")
+    # source « auto » : le tableau phase x couche, le fondu, les voyants
+    check([al.auto_sources(ph_) for ph_ in ("silence", "ambient", "groove", "build", "break", "peak")]
+          == [("rien", "rien"), ("rien", "rien"), ("basses", "aigus"), ("mediums", "frappes"), ("rien", "tout"), ("kick", "kick")],
+          "auto: tableau phase x couche (silence / ambiance rien, groove basses + aigus, montee mediums + frappes, cassure logo seul, pic kick)")
+    check(al.auto_sources("groove", 1.0) == ("basses", "frappes") and al.auto_sources("groove", 9.0) == ("basses", "aigus")
+          and al.auto_sources(None) == ("tout", "tout") and al.auto_sources("inconnue") == ("tout", "tout"),
+          "auto: en groove le logo suit les frappes si on en a vu, phase inconnue = comme tout")
+    mx = al.SourceMixer()
+    first = mx.levels(10.0, st, "basses", "bg", True)
+    check(first == al.layer_levels(st, "basses", "bg"), "auto: la premiere source passe tout de suite")
+    mid_ = mx.levels(10.0, st, "kick", "bg", True)
+    half_ = mx.levels(10.75, st, "kick", "bg", True)
+    end_ = mx.levels(12.0, st, "kick", "bg", True)
+    check(mid_ == first and 0.0 < half_[0] < first[0] and end_ == al.layer_levels(st, "kick", "bg"),
+          "auto: changer de source se fait en fondu (jamais de saut), puis la nouvelle source seule", f"{mid_} {half_} {end_}")
+    mx2 = al.SourceMixer()
+    mx2.levels(1.0, st, "basses", "bg", False)
+    check(mx2.levels(1.01, st, "rien", "bg", False) == al.layer_levels(st, "rien", "bg"), "auto: une source choisie a la main passe tout de suite, sans fondu")
+    from core import explain as ex_
+    check(ex_.sources_text("basses", "aigus", True, True, "groove") == "sources : fond <- basses (auto)  |  logo <- aigus (auto)"
+          and "phase inconnue" in ex_.sources_text("tout", "tout", True, False, None) and "(auto)" not in ex_.sources_text("tout", "rien", False, False, "groove"),
+          "voyant: les sources par couche sont dites en clair (auto ou manuel, phase inconnue)")
+    fx_ = ex_.phase_effects_text({"tempo": 0.3, "react": 0.6, "fx": 0.35, "bg": 1.0, "hue": 3.0, "overlay": 1.0, "breath": 0.5})
+    check("tempo x0,30" in fx_ and "reactivite x0,60" in fx_ and "effets x0,35" in fx_ and "3 deg/s" in fx_ and "coupees" in ex_.phase_effects_text(None, False),
+          "voyant: ce que la phase change aux reglages (tempo, reactivite, effets, teinte)", fx_)
+    check(ex_.strobe_info_text("kick au pic", 3.0, True) == "strobe auto : dernier eclair = kick au pic, il y a 3 s" and "coupe" in ex_.strobe_info_text(None, None, False)
+          and "aucun eclair" in ex_.strobe_info_text(None, None, True), "voyant: la raison du dernier eclair du strobe auto")
     # retard et lissage (LayerFilter)
     f = al.LayerFilter()
     lv = (0.3, 0.2, 1.0, 0.1)
@@ -4658,6 +4695,31 @@ def check_audio_layers() -> None:
     check(changed(render(hit, src_bg="aigus", **ab), still) == 0, "sources: fond sur les aigus, un kick seul ne declenche pas l'aberration")
     check(changed(render(hit, src_bg="kick", **ab), still) > 500, "sources: fond sur kick, l'aberration part au kick")
     check(changed(render(bass_only, src_bg="kick", **wob), still) == 0, "sources: fond sur kick, les basses seules ne font pas onduler")
+    # source « auto » : suit la phase du morceau, avec fondu (l'horloge `t` fait foi)
+    from core.audio_layers import SourceMixer
+    wob_auto = dict(src_bg="auto", **wob)
+    r._src_mix = (SourceMixer(), SourceMixer())
+    r._layer_filters = (LayerFilter(), LayerFilter())
+    groove_st = dict(bass_only, phase={"name": "groove"})
+    check(changed(render(groove_st, **wob_auto), still) > 2000 and r.sources_now[:2] == ("basses", "aigus") and r.sources_now[2:] == (True, True),
+          "auto: en groove le fond suit les basses (et le voyant le dit)")
+    r.draw(fbo, size, dict(bass_only, phase={"name": "peak"}), dict(base, **wob_auto), 5.0)
+    mid_img = read_target(ctx, fbo, size).astype(int)
+    r.draw(fbo, size, dict(bass_only, phase={"name": "peak"}), dict(base, **wob_auto), 7.0)
+    end_img = read_target(ctx, fbo, size).astype(int)
+    check(changed(mid_img, still) > 2000 and changed(end_img, still) == 0 and r.sources_now[:2] == ("kick", "kick"),
+          "auto: au pic le fond passe sur le kick (fondu d'abord, puis les basses seules ne font plus onduler)")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    check(changed(render(dict(bass_only, phase={"name": "silence"}), **wob_auto), still) == 0 and r.sources_now[:2] == ("rien", "rien"),
+          "auto: en silence le fond ne reagit a rien")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    check(changed(render(dict(bass_only), **wob_auto), still) > 2000 and r.sources_now[:2] == ("tout", "tout"),
+          "auto: sans phase connue, repli sur tout")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    check(changed(render(dict(bass_only, phase={"name": "silence"}), auto_phase=0.0, **wob_auto), still) > 2000,
+          "auto: phases auto coupees, repli sur tout")
+    r._src_mix = (SourceMixer(), SourceMixer())
+    r._layer_filters = (LayerFilter(), LayerFilter())
     # retard : la reaction arrive apres (un renderer neuf, l'horloge `t` fait foi)
     r._layer_filters = (LayerFilter(), LayerFilter())
     r.draw(fbo, size, bass_only, dict(base, lag_bg=0.3, **wob), 1.0)

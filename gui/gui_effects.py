@@ -40,7 +40,9 @@ def install(c):
     src_tip = ("Partie du son qui pilote cette couche. Tout = comme avant. Basses : wobble et kicks. Mediums : wobble et glitch sur les mediums. "
                "Aigus : wobble et glitch sur les aigus, sans kick. Kick : seulement ce qui part des kicks (onde de choc, aberration, pulsation). "
                "Frappes : seulement les attaques des aigus (charleys, claps), un rythme secondaire. "
-               "Rien : la couche ne reagit plus a la musique (le noise et les automations continuent).")
+               "Rien : la couche ne reagit plus a la musique (le noise et les automations continuent). "
+               "Auto : la source suit la phase du morceau (groove : fond sur les basses, logo sur les aigus ; montee : mediums et frappes ; cassure : seul le logo "
+               "reagit ; pic : tout sur le kick) ; l'onglet Audio du panneau etendu dit ce qui est choisi. Lies, le fond en Auto donne aussi son tableau au logo.")
 
     def source_menu(parent, row, label, key):
         tk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)

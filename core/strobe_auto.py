@@ -33,6 +33,7 @@ class StrobeBrain:
         self.prev: str | None = None
         self.last = -1e9
         self.kicks = 0
+        self.reason = ""                       # pourquoi le dernier eclair est parti (affiche dans l'interface)
 
     def update(self, now: float, phase: str | None, since: float | None, kicks: int, hits: int, beat_index: int | None = None) -> tuple[bool, float]:
         """Un pas (une image). `kicks` / `hits` : nouveaux kicks / frappes aigues depuis le pas precedent ; `since` : instant ou la phase a commence.
@@ -45,16 +46,19 @@ class StrobeBrain:
         fire, dark = False, 1.0
         if phase == "peak":
             if prev in ("build", "break"):                    # le drop : un gros eclair
-                fire = True
+                fire, self.reason = True, "drop (passage en pic)"
             elif kicks and gap >= PEAK_GAP_S:
-                fire = True
+                fire, self.reason = True, "kick au pic"
         elif phase == "groove":
             dark = DARK_GROOVE
             self.kicks += kicks
             if beat_index is not None:
                 fire = bool(kicks) and int(beat_index) % BAR_BEATS == 0 and gap >= ACCENT_GAP_S
+                self.reason = "accent groove (le 1 de la mesure)"
             else:
-                fire = (bool(hits) and gap >= HIT_ACCENT_GAP_S) or self.kicks >= KICKS_FALLBACK
+                by_hit = bool(hits) and gap >= HIT_ACCENT_GAP_S
+                fire = by_hit or self.kicks >= KICKS_FALLBACK
+                self.reason = "accent groove (frappe des aigus)" if by_hit else "accent groove (1 kick sur 16)"
             if fire:
                 self.kicks = 0
         elif phase == "build":
@@ -62,6 +66,7 @@ class StrobeBrain:
             progress = 0.0 if since is None else min(max((now - since) / BUILD_RAMP_S, 0.0), 1.0)
             hz = BUILD_HZ[0] + (BUILD_HZ[1] - BUILD_HZ[0]) * progress * progress
             fire = gap >= 1.0 / hz
+            self.reason = f"montee ({hz:.1f} eclairs/s)".replace(".", ",")
         if fire:
             self.last = now
         return fire, dark

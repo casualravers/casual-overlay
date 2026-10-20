@@ -18,12 +18,34 @@ from __future__ import annotations
 import math
 from collections import deque
 
-SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien")
+SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto")
 DEFAULT = "tout"
 NO_KICK = 1000.0            # « since » d'une couche sans attaque : l'onde de choc est eteinte depuis longtemps
 LAYERS = ("bg", "logo")
 
-LABELS = {"tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick", "frappes": "Frappes", "rien": "Rien"}
+LABELS = {"tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick", "frappes": "Frappes", "rien": "Rien", "auto": "Auto"}
+
+# Source « auto » : chaque couche prend la source que le tableau donne pour la phase du morceau en cours (core/phase.py). (fond, logo)
+AUTO_TABLE = {
+    "silence": ("rien", "rien"),         # les animations tres lentes de la phase suffisent
+    "ambient": ("rien", "rien"),
+    "groove": ("basses", "aigus"),       # deux rythmes qui se repondent ; le logo suit les frappes si on en detecte (voir HIT_RECENT_S)
+    "build": ("mediums", "frappes"),     # la tension monte dans les mediums et les aigus
+    "break": ("rien", "tout"),           # seul le logo reste vivant
+    "peak": ("kick", "kick"),            # tout bat ensemble
+}
+HIT_RECENT_S = 4.0                       # groove : le logo suit les frappes aigues si on en a vu depuis moins de ce temps, sinon les aigus
+FADE_S = 1.5                             # fondu entre deux sources choisies par Auto (jamais de saut a l'image)
+
+
+def auto_sources(phase, since_hit=None) -> tuple[str, str]:
+    """(source du fond, source du logo) que « auto » donne pour une phase. Phase inconnue ou absente : « tout » (comportement connu)."""
+    if phase not in AUTO_TABLE:
+        return "tout", "tout"
+    bg, logo = AUTO_TABLE[phase]
+    if phase == "groove" and since_hit is not None and float(since_hit) < HIT_RECENT_S:
+        logo = "frappes"
+    return bg, logo
 
 
 def valid(source) -> str:
@@ -39,6 +61,8 @@ def layer_levels(state: dict, source, layer: str = "bg") -> tuple[float, float, 
     """(bass, high, beat, since) vus par une couche (`layer` : « bg » ou « logo ») reglee sur `source`, a partir des niveaux de `state`
     (deja mis a l'echelle). Le kick d'une couche est celui de sa propre sensibilite si le moteur d'analyse en donne un."""
     source = valid(source)
+    if source == "auto":                 # non resolue (pas de phase) : comme « tout »
+        source = "tout"
     bass, mid, high = float(state["bass"]), float(state.get("mid", 0.0)), float(state["high"])
     beat = float(state.get("beat_" + layer, state["beat"]))
     since = float(state.get("since_" + layer, state["since_beat"]))
@@ -58,6 +82,33 @@ def layer_levels(state: dict, source, layer: str = "bg") -> tuple[float, float, 
 
 
 SILENT = (0.0, 0.0, 0.0, NO_KICK)
+class SourceMixer:
+    """Fondu entre deux sources quand « auto » en change (la phase change) : les niveaux de l'ancienne glissent vers ceux de la nouvelle en
+    `FADE_S` s. Une source choisie a la main (`fade` faux) passe tout de suite, sans memoire."""
+
+    def __init__(self) -> None:
+        self.cur: str | None = None
+        self.prev: str | None = None
+        self.t0 = 0.0
+
+    def levels(self, now: float, state: dict, source: str, layer: str, fade: bool) -> tuple[float, float, float, float]:
+        if not fade or self.cur is None:
+            self.cur, self.prev = source, None
+            return layer_levels(state, source, layer)
+        if source != self.cur:
+            self.prev, self.cur, self.t0 = self.cur, source, now
+        new = layer_levels(state, self.cur, layer)
+        if self.prev is None:
+            return new
+        w = (now - self.t0) / FADE_S
+        if w >= 1.0:
+            self.prev = None
+            return new
+        old = layer_levels(state, self.prev, layer)
+        w = w * w * (3.0 - 2.0 * w)
+        return (old[0] + (new[0] - old[0]) * w, old[1] + (new[1] - old[1]) * w, old[2] + (new[2] - old[2]) * w, new[3] if w > 0.5 else old[3])
+
+
 ATTACK_MAX_S = 0.12         # lissage a 1 : attaque de 120 ms
 RELEASE_MAX_S = 0.8         # ... relachement de 800 ms
 
