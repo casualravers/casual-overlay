@@ -6999,7 +6999,8 @@ def check_native_modes() -> None:
 EXIT_FRAGILE = 3
 FRAGILES = ("garde sa taille quand une scene change de mode", "le bouton agrandit la fenetre", "le bouton du nom remplit sa case",
             "cases VJ sont habillees", "la molette defile la liste", "un panneau reconstruit reste habille", "bibliotheque a gauche du set",
-            "un nom de scene tres long", "reduire rend sa taille d'origine", "espace de controle global a droite de la liste")
+            "un nom de scene tres long", "reduire rend sa taille d'origine", "espace de controle global a droite de la liste",
+            "lecture = minuteur arme a la duree choisie")          # (minuteurs reels : un serveur charge les depasse parfois)
 
 
 # Verifications qui supposent un grand ecran (mise en page large, hauteur de la fenetre sous 700 px...) : sur un ecran plus petit que SCREEN_MIN
