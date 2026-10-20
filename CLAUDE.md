@@ -1184,6 +1184,11 @@ reelle, latence acoustique bout en bout.
 | Capture sounddevice | latence rapportee ~22 ms (blocs de 512, WASAPI, 48 kHz) |
 | Detection du kick (logicielle) | 25 ms mediane, 29 ms max (hop 10,7 ms + fenetre 2048), sur un vrai kick a attaque instantanee |
 
+**Latence mesuree** (`python tools/mesure_latence.py`, `check_latence` dans `check_gl.py`) : un kick est injecte, la vraie chaine (`AudioAnalyzer` + `Renderer`, strobe en mode kick = image blanche) le montre ; on releve debut du son -> kick detecte -> premiere image blanche lue
+(`fbo.read`, donc rendu termine), rendu simule a 60 images/s. Mode interne (defaut, sans materiel) : kicks ecrits dans le tampon audio par blocs de 512 au rythme reel. Poste de dev, processus seul : **mediane ~29 ms, pire 44 ms** (analyse ~18 ms, rendu ~16 ms) ;
+dans la suite de tests, avec les autres fils qui tournent, ~74 ms (information, non bloquant). `--materiel` joue le kick par la sortie audio et l'ecoute par l'entree reelle (ajoute tampons des cartes son et trajet acoustique ; **a lancer a la main**, il fait du bruit :
+casque contre le micro ou haut-parleur pres de lui). **Reste hors mesure : l'affichage** (balayage de l'ecran, traitement du videoprojecteur) ; seule une camera rapide ou une photodiode le donne. Le chiffre est donc un minimum pour ce que voit le public.
+
 Latence audio -> effet estimee : capture ~22 ms + detection ~25 ms + jusqu'a une frame
 (16,7 ms) = ~45-65 ms, **au-dessus de la cible de 50 ms dans le pire cas**, et non mesuree
 acoustiquement (impulsion sur le micro -> premiere image modifiee). Leviers : bloc de

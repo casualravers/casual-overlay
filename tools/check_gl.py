@@ -2375,6 +2375,29 @@ def check_gates() -> None:
     root.destroy()
 
 
+def check_latence() -> None:
+    print("Mesure de latence audio -> image (tools/mesure_latence.py)")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import mesure_latence as ml
+    s = ml.summarize([10.0, 20.0, 30.0, 40.0, None, float("nan")])
+    check(s == {"n": 4, "min": 10.0, "median": 25.0, "p95": 38.5, "max": 40.0} and ml.summarize([]) == {},
+          "latence: statistiques (mediane, p95, valeurs absentes ecartees)", str(s))
+    rows = ml.match([1.0, 2.0, 3.0], [1.020, 3.030], [1.036, 3.050, 5.0])
+    check(rows[0]["analyse_ms"] is not None and abs(rows[0]["analyse_ms"] - 20.0) < 1e-6 and abs(rows[0]["rendu_ms"] - 16.0) < 1e-6
+          and abs(rows[0]["total_ms"] - 36.0) < 1e-6 and rows[1]["total_ms"] is None and abs(rows[2]["total_ms"] - 50.0) < 1e-6,
+          "latence: chaque debut de son est associe a sa detection puis a sa premiere image blanche (kick manque = None)", str(rows))
+    try:
+        res = ml.measure(kicks=4, log=lambda *_: None)
+    except Exception as exc:
+        check(False, "latence: chaine logicielle mesurable", str(exc))
+        return
+    tot = res["total"]
+    check(tot and res["missed"] <= 1 and 0 < tot["median"] < 250,
+          "latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de 250 ms",
+          f"{tot} manques={res['missed']}")
+    print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
+
+
 def check_noise() -> None:
     print("Noise (un seul hasard, prereglé)")
     d = gl.DEFAULT_PARAMS
@@ -6739,6 +6762,7 @@ def main() -> None:
     check_gui()
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
+    check_latence()
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats
