@@ -447,6 +447,7 @@ def install(c):
         # ---- Auto : cycle de teinte, respiration
         def fill_4(f) -> None:
             slider(f, 0, "hue_cycle", "Cycle teinte", -90, 90, 1, 1.0, "\u00b0/s", 0, "La teinte tourne toute seule, en degres par seconde (0 = fixe, negatif = sens inverse).")
+            slider(f, 4, "hue_spectrum", "Teinte audio", 0, 100, 1, 100.0, "%", 0, "La teinte suit la musique : les graves gardent les couleurs chaudes d'origine, les aigus les tirent vers le froid (0 = aucun effet).")
             slider(f, 1, "breath_overlay", "Resp. overlay", 0, 100, 1, 100.0, "%", 0, "Respiration de l'overlay : sa presence oscille doucement (0 = aucune).")
             slider(f, 2, "breath_bg", "Resp. fond", 0, 100, 1, 100.0, "%", 0, "Respiration du fond, en opposition de phase avec l'overlay (0 = aucune).")
             slider(f, 3, "breath_period", "Periode", 2, 30, 1, 1.0, " s", 8, "Periode de la respiration, en secondes.")

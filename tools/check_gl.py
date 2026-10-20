@@ -4391,6 +4391,24 @@ def check_masters() -> None:
     for i in range(1, 11):
         cr.draw(fbo, size, quiet, cp, 0.1 * i)
     check(abs(cr._hue_phase - 90.0) < 1.0, "cycle de teinte: 90 degres par seconde", f"{cr._hue_phase:.1f}")
+    from core import controls as _ctl
+    check(_ctl.spectral_hue(0.0, 0.0) == 0.0 and _ctl.spectral_hue(1.0, 0.0) == 0.0 and _ctl.spectral_hue(0.0, 1.0) > 170
+          and _ctl.spectral_hue(0.5, 0.5) < _ctl.spectral_hue(0.2, 0.8),
+          "teinte audio: silence et graves = 0, aigus = froid, monotone")
+    def spec_image(bass_, high_, amount):
+        rs = gl.Renderer(ctx, size, None)
+        red_ = np.zeros((size[1], size[0], 3), np.uint8)
+        red_[..., 0] = 200                                    # une teinte qui tourne se voit sur une couleur, pas sur un gris
+        rs.video_tex.write(red_.tobytes())
+        st = dict(quiet, bass=bass_, high=high_)
+        pp = dict(base, hue_spectrum=amount, hue_master=0.0, hue_cycle=0.0)
+        for i in range(40):
+            rs.draw(fbo, size, st, pp, 0.1 * i)
+        return read_target(ctx, fbo, size).astype(int)
+    warm_, cold_, off_ = spec_image(0.9, 0.0, 1.0), spec_image(0.0, 0.9, 1.0), spec_image(0.0, 0.9, 0.0)
+    check(np.abs(cold_ - warm_).mean() > 3.0 and np.abs(warm_ - off_).mean() < 1.0 and np.abs(cold_ - off_).mean() > 3.0,
+          "teinte audio: les aigus tournent les couleurs (froid), les graves non, curseur a 0 = aucun effet",
+          f"{np.abs(cold_ - warm_).mean():.1f} / {np.abs(warm_ - off_).mean():.1f} / {np.abs(cold_ - off_).mean():.1f}")
     cr2 = gl.Renderer(ctx, size, None)
     cr2.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
     bp = dict(base, breath_overlay=1.0, logo_pulse=0.0)

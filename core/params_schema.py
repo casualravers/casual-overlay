@@ -60,6 +60,7 @@ TABLE: tuple[Param, ...] = (
     _p("react_master", 1.0, 0.0, 2.0, scope="room", doc="Master de l'audioreactivite : x tout ce qui vient de l'audio, 0 = aucune reaction."),
     _p("overlay_master", 1.0, 0.0, 1.0, scope="room", doc="Master de la presence de l'overlay : 0 = invisible, 1 = normal."),
     _p("hue_cycle", 0.0, -360.0, 360.0, scope="room", doc="Cycle de teinte : la teinte tourne toute seule, en degres par seconde (0 = fixe)."),
+    _p("hue_spectrum", 0.0, 0.0, 1.0, scope="room", doc="Teinte tiree de la musique : les graves tirent les couleurs vers le chaud, les aigus vers le froid (0 = aucun effet)."),
     _p("breath_overlay", 0.0, 0.0, 1.0, scope="room", doc="Respiration de l'overlay : sa presence oscille entre 1 - valeur et 1."),
     _p("breath_bg", 0.0, 0.0, 1.0, scope="room", doc="Respiration du fond, en opposition de phase avec celle de l'overlay."),
     _p("breath_period", 8.0, 1.0, 60.0, scope="room", doc="Periode de la respiration, en secondes."),
