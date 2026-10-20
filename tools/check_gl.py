@@ -666,6 +666,16 @@ def check_gui() -> None:
             # presets decorreles : overlay (logo + effets) et fond (source + motif), tous deux modifiables
             op, bp = c["overlay_presets"], c["bg_presets"]
             obook, bbook = op["book"], bp["book"]
+            # plus de presets integres hormis `default` : ceux-ci sont des presets d'utilisateur comme les autres
+            out["p_only_default"] = (list(gl.OVERLAY_PRESETS), list(gl.BACKGROUND_PRESETS))
+            obook.save("sobre", {"fx_link": 0.0, "fxl_on": [0, 0, 0, 0], "fx_on": [1, 1, 0, 0, 1], "holo_on": 1.0, "holo_intensity": 0.8})
+            obook.save("neon", {"holo_on": 1.0, "holo_intensity": 1.5, "holo_reach": 1.8, "holo_react": 0.5, "logo_glow": 1.4,
+                                "logo_glow_color": "#ff3df2", "fx_link": 0.0, "fxl_on": [0, 0, 1, 1], "fxl_int": [1.0, 1.0, 0.8, 0.6]})
+            bbook.save("sobre", {"bg_react": 0.4})
+            bbook.save("neon", {"bg_mode": "pattern", "bg_palette": "duo", "bg_color1": "#14003a", "bg_color2": "#00e5ff",
+                                "bg_checker": 0.08, "bg_angle": 35.0})
+            op["refresh"]()
+            bp["refresh"]()
             params["sensitivity"] = 2.2
             c["bg_var"].set("live")
             c["palette_var"].set("classic")
@@ -712,18 +722,43 @@ def check_gui() -> None:
             out["p_reload"] = (params["text_content"], c["text_widget"].get("1.0", "end-1c"), params["bg_hue"])
             bp["load"]("mon fond")
             out["b_reload"] = (params["bg_hue"], c["auto_vars"]["bg_hue"].get(), params["text_content"])
-            # les integres se modifient, se suppriment et se restaurent
+            # un preset se modifie et se supprime
             op["var"].set("neon")
             params["holo_intensity"] = 1.9
             op["update"]()
             op["load"]("default")
             op["load"]("neon")
-            out["p_edit_builtin"] = (params["holo_intensity"], obook.is_modified("neon"))
+            out["p_edit_builtin"] = (params["holo_intensity"], "neon" in obook.load_user())
             out["p_delete_builtin"] = (obook.delete("sobre"), "sobre" in obook.names())
-            obook.restore_builtins()
-            op["refresh"]()
+            # dossiers, favoris, recents, recherche, indicateur « modifie »
+            c["save_name_var"].set(" Club / Neon2 ")
+            op["save"]()
             op["load"]("neon")
-            out["p_restore"] = (params["holo_intensity"], "sobre" in obook.names(), "mon look" in obook.names())
+            op["check"]()
+            clean_mod = op["modified"].get()
+            params["holo_intensity"] = params["holo_intensity"] + 0.4
+            op["check"]()
+            dirty_mod = op["modified"].get()
+            dirty_btn = str(op["revert"].cget("state"))
+            op["revert"].invoke()
+            reverted = (op["modified"].get(), abs(params["holo_intensity"] - 1.9) < 1e-9)
+            op["var"].set("club/neon2")
+            op["fav"]()
+            menu_ = op["menu"]["menu"]
+
+            def labels_():
+                return [(menu_.type(i), menu_.entrycget(i, "label") if menu_.type(i) != "separator" else "")
+                        for i in range(menu_.index("end") + 1)]
+            full = labels_()
+            op["filter"].set("neon")
+            found = [lab for typ, lab in labels_()]
+            op["filter"].set("")
+            out["p_new"] = (obook.favorites(), full[0], any(typ == "cascade" and lab.startswith("club") for typ, lab in full),
+                            sorted(found), (clean_mod, dirty_mod, dirty_btn, reverted), "club/neon2" in obook.names())
+            obook.toggle_favorite("club/neon2")
+            obook.delete("club/neon2")
+            op["refresh"]()
+            out["p_clean"] = (obook.favorites(), "club/neon2" in obook.recents())
             params["holo_intensity"] = 0.5
             op["var"].set("default")
             op["update"]()
@@ -737,12 +772,11 @@ def check_gui() -> None:
             c["save_name_var"].set("aaa")
             op["save"]()
             out["p_menu"] = [c["overlay_menu"]["menu"].entrycget(i, "label")
-                             for i in range(c["overlay_menu"]["menu"].index("end") + 1)]
+                             for i in range(c["overlay_menu"]["menu"].index("end") + 1)
+                             if c["overlay_menu"]["menu"].type(i) != "separator"]
             out["p_delete"] = obook.delete("mon look")
             bbook.delete("sobre")
             out["b_menu"] = bbook.names()
-            bbook.restore_builtins()
-            out["b_restored"] = "sobre" in bbook.names()
             out["b_default_first"] = bbook.names()[0]
             params["holo_intensity"] = 1.0
             # noise: les cases et le curseur ecrivent les reglages, les presets les gardent
@@ -1028,18 +1062,24 @@ def check_gui() -> None:
     r = out.get("b_reload", ())
     check(len(r) == 3 and r[0] == 0.42 and abs(r[1] - 0.42) < 1e-9 and r[2] == "MON TEXTE",
           "rechargement d'un preset de fond: valeur et curseur retrouves, texte non touche", str(r))
-    check(out.get("p_edit_builtin") == (1.9, True), "un preset integre se modifie (version utilisateur qui le remplace)",
-          str(out.get("p_edit_builtin")))
-    check(out.get("p_delete_builtin") == ("deleted", False), "un preset integre se supprime", str(out.get("p_delete_builtin")))
-    check(out.get("p_restore") == (1.5, True, True),
-          "Restaurer: integres d'origine rendus (modifie et supprime), presets utilisateur gardes", str(out.get("p_restore")))
+    check(out.get("p_only_default") == (["default"], ["default"]),
+          "presets: le seul preset integre est 'default' (overlay et fond)", str(out.get("p_only_default")))
+    check(out.get("p_edit_builtin") == (1.9, True), "un preset se modifie (mettre a jour)", str(out.get("p_edit_builtin")))
+    check(out.get("p_delete_builtin") == ("deleted", False), "un preset se supprime", str(out.get("p_delete_builtin")))
+    pn = out.get("p_new", ())
+    check(len(pn) == 6 and pn[0] == ["club/neon2"] and pn[1] == ("command", "\u2605 club/neon2") and pn[2]
+          and pn[3] == ["club/neon2", "neon"] and pn[4] == ("", "\u25cf modifie", "normal", ("", True)) and pn[5],
+          "presets: dossiers (club/nom) en sous-menu, favoris en tete, recherche, indicateur « modifie » et Revenir", str(pn))
+    check(out.get("p_clean") == ([], False), "presets: supprimer un preset le retire des favoris et des recents", str(out.get("p_clean")))
     check("point de depart" in out.get("p_default_msg", "") and out.get("p_default_edit") == 0.5,
           "'default' est modifiable", str(out.get("p_default_msg")))
     dr = out.get("p_default_reset", ())
     check(dr and dr[0] == "reset" and dr[1] == {} and out.get("p_default_back") == 1.0,
           "supprimer 'default' le remet a sa version d'origine (il ne disparait jamais)", str(dr))
-    check(out.get("p_menu", [])[:1] == ["default"] and {"aaa", "sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
-          "menu des presets overlay: default en tete meme avec un preset 'aaa'", str(out.get("p_menu")))
+    lay = gl.menu_layout(["default", "aaa", "club/b", "club/a", "zz"], ["zz", "gone"], ["aaa", "zz", "club/a"])
+    check(lay["root"] == ["default", "aaa", "zz"] and lay["folders"] == {"club": ["club/a", "club/b"]} and lay["favorites"] == ["zz"]
+          and lay["recents"] == ["aaa", "club/a"] and gl.menu_layout(["default", "ab", "b"], [], [], "AB")["found"] == ["ab"],
+          "menu des presets: default en tete de la racine, dossiers, favoris et recents existants, recherche", str(lay))
     names = ["Stereo Mix (Realtek(R) Audio)", "CABLE Output (VB-Audio Virtual Cable)", "Microphone (Realtek(R) Audio)",
              "Microphone Array (Intel Smart S"]
     check(gl.pick_default_device(names, "Microphone Array (Intel Smart Sound Technology)") == names[3],
@@ -1189,6 +1229,15 @@ def check_gui() -> None:
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
     check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
+          str(out.get("x_stage")))
+    check(out.get("x_library_tree") == (True,) * 6, "bibliotheque (GUI): favoris en tete, dossiers (dossier/nom), ranger / sortir d'un dossier, recherche, mise a jour sur place",
+          str(out.get("x_library_tree")))
+    check(out.get("x_palette") == (True,) * 7, "palette (GUI): scenes, sets, presets et commandes listes ; une saisie lance la bonne commande", str(out.get("x_palette")))
+    check(out.get("x_sched") == (True,) * 6, "planning (GUI): a l'heure dite la source passe en Texte et le texte du passage est pose, une seule fois ; case decochee = rien",
+          str(out.get("x_sched")))
+    check(out.get("x_grid_vj") == (True,) * 6,
+          "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
@@ -1333,8 +1382,8 @@ def check_gui() -> None:
     n, bad = out.get("snap", {}).get("tips", (0, [("absent",)]))
     check(n > 10 and not bad, f"info-bulles: toutes dans la fenetre (mode snap, {n} affichees)", str(bad[:2]))
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
-    check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
-          "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
+    check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]),
+          "presets de fond: default en tete, suppression d'un preset", str(out.get("b_menu")))
     lv = {k: out.get(k, {}) for k in ("g_live_radio", "g_live_bar", "g_live_line")}
     off, on = {"disabled"}, {"normal"}
     check(all(lv["g_live_radio"].get(lb) == off for lb in ("Forme", "Lissage", "Echelle frequences", "Espace entre barres"))
@@ -2335,6 +2384,130 @@ def check_gates() -> None:
     root.destroy()
 
 
+def check_latence() -> None:
+    print("Mesure de latence audio -> image (tools/mesure_latence.py)")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import mesure_latence as ml
+    s = ml.summarize([10.0, 20.0, 30.0, 40.0, None, float("nan")])
+    check(s == {"n": 4, "min": 10.0, "median": 25.0, "p95": 38.5, "max": 40.0} and ml.summarize([]) == {},
+          "latence: statistiques (mediane, p95, valeurs absentes ecartees)", str(s))
+    rows = ml.match([1.0, 2.0, 3.0], [1.020, 3.030], [1.036, 3.050, 5.0])
+    check(rows[0]["analyse_ms"] is not None and abs(rows[0]["analyse_ms"] - 20.0) < 1e-6 and abs(rows[0]["rendu_ms"] - 16.0) < 1e-6
+          and abs(rows[0]["total_ms"] - 36.0) < 1e-6 and rows[1]["total_ms"] is None and abs(rows[2]["total_ms"] - 50.0) < 1e-6,
+          "latence: chaque debut de son est associe a sa detection puis a sa premiere image blanche (kick manque = None)", str(rows))
+    try:
+        res = ml.measure(kicks=4, log=lambda *_: None)
+    except Exception as exc:
+        check(False, "latence: chaine logicielle mesurable", str(exc))
+        return
+    tot = res["total"]
+    check(tot and res["missed"] <= 1 and 0 < tot["median"] < 250,
+          "latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de 250 ms",
+          f"{tot} manques={res['missed']}")
+    print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
+
+
+def check_stage_layout() -> None:
+    print("Mode scene (gui/gui_stage.py)")
+    import gui_stage
+    check([gui_stage.grid_columns(n, w) for n, w in ((0, 1000), (1, 1000), (3, 1000), (12, 1000), (12, 500), (12, 3000), (5, 0))] == [1, 1, 3, 4, 2, 4, 4],
+          "mode scene: nombre de colonnes selon le nombre de scenes et la largeur (4 au plus, touches d'au moins ~220 px)")
+
+
+def check_palette() -> None:
+    print("Palette de commandes (core/palette.py)")
+    from core import palette as pal
+    items = [("Scene : Neon Comete", "scene"), ("Scene : Acid", "scene"), ("Set : Club", "set"), ("Preset overlay : club/neon", "preset overlay"),
+             ("Panique", "stop couper effets"), ("Strobe : un eclair", "flash blanc"), ("Scène : Électro", "scene")]
+    names = lambda q: [items[i][0] for i in pal.rank(q, items)]
+    check(pal.fold("Scène Néon") == "scene neon", "palette: accents et casse ignores")
+    check(names("neon")[:2] == ["Scene : Neon Comete", "Preset overlay : club/neon"] or names("neon")[0] == "Scene : Neon Comete",
+          "palette: « neon » trouve la scene et le preset, debut de mot d'abord", str(names("neon")))
+    check(names("club") == ["Set : Club", "Preset overlay : club/neon"] and names("panique") == ["Panique"] and names("flash") == ["Strobe : un eclair"],
+          "palette: debut de libelle avant sous-chaine, mots-cles utilises", str((names("club"), names("flash"))))
+    check(names("scene neon") == ["Scene : Neon Comete"] and names("zzz") == [] and len(names("")) == len(items) and names("electro") == ["Scène : Électro"],
+          "palette: tous les mots doivent correspondre, requete vide = tout, accents des libelles ignores", str(names("scene neon")))
+
+
+def check_schedule() -> None:
+    print("Planning du texte (core/schedule.py)")
+    from core import schedule as sch
+    plan = "22:00 DJ Un\n# commentaire\n\n23h30 - DJ Deux\\nB2B\n01:15 DJ Trois\n25:00 invalide\n12:61 invalide\n00:30\n"
+    e = sch.parse(plan)
+    check(e == [(22 * 60, "DJ Un"), (23 * 60 + 30, "DJ Deux\nB2B"), (75, "DJ Trois")],
+          "planning: lignes HH:MM / HHhMM, tiret, \\n, apres minuit a la suite ; invalides, vides et commentaires ignores", str(e))
+    cur = lambda h, m: sch.current(e, h * 60 + m)
+    check(cur(21, 59) is None and cur(22, 0) == "DJ Un" and cur(23, 29) == "DJ Un" and cur(23, 30) == "DJ Deux\nB2B" and cur(0, 59) == "DJ Deux\nB2B"
+          and cur(1, 15) == "DJ Trois" and cur(5, 0) == "DJ Trois" and cur(17, 59) == "DJ Trois" and cur(18, 0) is None,
+          "planning: texte en cours a chaque heure (minuit passe, nouvelle soiree a 18 h)")
+    check(sch.upcoming(e, 22 * 60 + 5) == (23 * 60 + 30, "DJ Deux\nB2B") and sch.upcoming(e, 2 * 60) is None and sch.clock(75) == "01:15",
+          "planning: prochain passage et affichage de l'heure")
+
+
+def check_beat_grid() -> None:
+    print("Grille du temps (Temps 1)")
+    from core import rhythm as rh
+    g = rh.BeatGrid()
+    check(not g.active and g.beat_index(1.0) is None and g.nearest_downbeat(1.0) is None, "grille: inactive tant qu'aucun 1 n'est donne")
+    g.set_one(10.0, 120.0)
+    check(g.active and abs(g.period - 0.5) < 1e-9 and g.beat_index(10.0) == 0 and g.beat_index(10.5) == 1 and g.beat_index(12.0) == 4
+          and g.bar_index(11.9) == 0 and g.bar_index(12.0) == 1 and g.beat_in_bar(10.1) == 1 and g.beat_in_bar(11.6) == 4
+          and abs(g.nearest_downbeat(13.9) - 14.0) < 1e-9 and abs(g.nearest_downbeat(12.9) - 12.0) < 1e-9,
+          "grille: temps, mesure, temps dans la mesure et « 1 » le plus proche a 120 BPM")
+    g2 = rh.BeatGrid()
+    g2.set_one(10.1, 120.0, last_kick=10.0)
+    g3 = rh.BeatGrid()
+    g3.set_one(10.1, 120.0, last_kick=9.0)
+    check(g2.anchor == 10.0 and g3.anchor == 10.1, "grille: le « 1 » tape juste apres un kick se cale sur ce kick, sinon sur l'appui")
+    # recalage : les kicks reels sont en avance de 40 ms sur la grille, elle les rattrape ; un kick hors temps ne la touche pas
+    g4 = rh.BeatGrid()
+    g4.set_one(0.0, 120.0)
+    for n in range(1, 60):
+        g4.nudge(n * 0.5 - 0.04, 120.0)
+    check(abs(g4.pos(30.0 - 0.04) - round(g4.pos(30.0 - 0.04))) < 0.02, "grille: les kicks recalent la grille (decalage de 40 ms rattrape)",
+          f"{g4.pos(30.0 - 0.04):.3f}")
+    g5 = rh.BeatGrid()
+    g5.set_one(0.0, 120.0)
+    g5.nudge(0.25, None)
+    check(g5.anchor == 0.0, "grille: un kick a contretemps (mi-temps) ne la decale pas")
+    # Rhythm : numero de temps du dernier kick, grille effacee quand les kicks disparaissent
+    r = rh.Rhythm()
+    r.grid.set_one(0.0, 120.0)
+    r.update(1.0, {}, True)
+    check(r.beat_index == 2, "rythme: le dernier kick porte son numero de temps", str(r.beat_index))
+    r.update(7.0, {}, False)
+    check(not r.grid.active and r.beat_index is None, "rythme: sans kick pendant 5 s la grille est effacee")
+    if SANS_GPU:
+        return
+    # strobe leger : tombe sur les 1 de la grille (temps multiples de strobe_div)
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL pour le strobe sur la grille", str(exc))
+        return
+    size = (64, 36)
+    target = ctx.texture(size, 4)
+    fbo = ctx.framebuffer(color_attachments=[target])
+    base = dict(gl.DEFAULT_PARAMS, holo_on=0.0, strobe_on=1.0, strobe_mode="light", strobe_div=4, strobe_max_hz=20.0, strobe_max_s=600.0,
+                bg_mode="pattern", bg_master=0.0, fx_on=[0] * 5)
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 10.0}
+    rr = gl.Renderer(ctx, size, None)
+    fired = []
+    for beats, idx in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9], start=1):
+        rr.draw(fbo, size, dict(quiet, beats=beats, beat_index=idx), base, float(beats))
+        fired.append(rr._strobe_last > 0 and time.monotonic() - rr._strobe_last < 0.05)
+        time.sleep(0.08)
+    check(fired == [False, False, False, True, False, False, False, True, False],
+          "strobe leger avec une grille : un eclair sur chaque 1 (temps 4 et 8 d'indice multiple de 4), pas sur les autres", str(fired))
+    rr2 = gl.Renderer(ctx, size, None)
+    fired2 = []
+    for beats in range(1, 9):
+        rr2.draw(fbo, size, dict(quiet, beats=beats, beat_index=None), base, float(beats))
+        fired2.append(rr2._strobe_last > 0 and time.monotonic() - rr2._strobe_last < 0.05)
+        time.sleep(0.08)
+    check(fired2 == [False, False, False, True, False, False, False, True], "strobe leger sans grille: un kick sur 4 comme avant", str(fired2))
+
+
 def check_noise() -> None:
     print("Noise (un seul hasard, prereglé)")
     d = gl.DEFAULT_PARAMS
@@ -2430,6 +2603,9 @@ def check_scenes() -> None:
     check(sc.strip_live_overrides({"device": "x", "fullscreen": True, "size": "1x1", "gain": 3, "colors": "red"})
           == {"gain": 3, "colors": "red"} and sc.strip_live_overrides(None) is None,
           "scene: entree audio, plein ecran et taille jamais retenus ni appliques")
+    named = sc.capture_scene("P", gl.load_params(), "live", None, presets={"overlay": "neon", "fond": "", "x": "y"})
+    check(named["presets"] == {"overlay": "neon"} and sc.capture_scene("Q", gl.load_params(), "live", None)["presets"] == {},
+          "scene: les noms des presets overlay / fond sont retenus (vides et inconnus ecartes)", str(named["presets"]))
     check(sc.capture_scene("Z", gl.load_params(), "live", {"device": "x", "gain": 3})["live_overrides"] == {"gain": 3},
           "scene: capture sans l'entree audio")
     # VJ : ordre et reglages
@@ -2676,6 +2852,57 @@ def check_sets_pure(sc, tmp) -> None:
     check(r4["set"] == "Mon set" and r4["replaced"] == ["A"] and dest.get("A")["overlay"]["holo_intensity"] == 0.1
           and len([n for n in dest.set_names() if n.lower() == "mon set"]) == 1,
           "import: remplacer ecrase le set et la scene du meme nom", str(r4))
+    # presets cites par les scenes : exportes avec le set, ajoutes a l'import (un nom deja pris garde celui de la machine)
+    from core import params as _prm
+    src_o = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_over_src.json"))
+    src_b = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_bg_src.json"))
+    src_o.save("club/neon", {"holo_intensity": 1.5})
+    src_o.save("autre", {"holo_intensity": 0.2})
+    src_b.save("fond duo", {"bg_palette": "duo"})
+    pbook = sc.SceneBook(lambda: tmp.with_name("export_presets.json"))
+    pbook.put({"name": "P1", "bg": "live", "overlay": {}, "presets": {"overlay": "club/neon", "fond": "fond duo"}})
+    pbook.put({"name": "P2", "bg": "live", "overlay": {}, "presets": {"overlay": "default", "fond": "inconnu"}})
+    exp_pr = sc.export_set(pbook, None, src_o, src_b)
+    check(exp_pr.get("presets") == {"overlay": {"club/neon": {"holo_intensity": 1.5}}, "fond": {"fond duo": {"bg_palette": "duo"}}}
+          and "presets" not in sc.export_set(pbook), "export: les presets cites par les scenes (existants, hors default) suivent le set",
+          str(exp_pr.get("presets")))
+    dst_o = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_over_dst.json"))
+    dst_b = _prm.PresetBook({"default": {}}, lambda: tmp.with_name("exp_bg_dst.json"))
+    dst_b.save("fond duo", {"bg_palette": "classic"})
+    dpb = sc.SceneBook(lambda: tmp.with_name("import_presets.json"))
+    parsed_pr = sc.parse_import(_json.dumps(exp_pr))
+    r_pr = sc.import_set(dpb, parsed_pr, overlay_book=dst_o, background_book=dst_b)
+    check(r_pr["presets_added"] == ["overlay:club/neon"] and r_pr["presets_kept"] == ["fond:fond duo"]
+          and dst_o.load_user() == {"club/neon": {"holo_intensity": 1.5}} and dst_b.load_user()["fond duo"] == {"bg_palette": "classic"},
+          "import: presets ajoutes si le nom est libre, celui de la machine garde sinon", str(r_pr))
+    r_pr2 = sc.import_set(dpb, parsed_pr, overlay_book=dst_o, background_book=dst_b)
+    check(r_pr2["presets_added"] == [], "import: reimporter ne duplique rien", str(r_pr2))
+    junk = sc.parse_import(_json.dumps({**exp_pr, "presets": {"overlay": {"_x": {}, "default": {}, "ok": {"a": 1}, "bad": 3}, "fond": 5}}))
+    check(junk["presets"] == {"overlay": {"ok": {"a": 1}}, "fond": {}}, "import: presets invalides ecartes", str(junk["presets"]))
+    # bibliotheque : dossiers (dossier/nom), favoris, recherche
+    lib_scenes = [{"name": n} for n in ("zeta", "Alpha", "club/neon", "club/Acid", "salle/x")]
+    lib_scenes[2]["star"] = True
+    tr = sc.library_tree(lib_scenes)
+    check(sc.scene_folder("club/neon") == ("club", "neon") and sc.scene_folder("a/") == ("", "a/") and sc.scene_folder("/a") == ("", "/a")
+          and tr["starred"] == ["club/neon"] and tr["root"] == ["Alpha", "zeta"] and tr["folders"] == {"club": ["club/Acid", "club/neon"], "salle": ["salle/x"]}
+          and tr["total"] == 5 and sc.library_tree(lib_scenes, "AC")["shown"] == 1 and sc.library_tree(lib_scenes, "AC")["folders"] == {"club": ["club/Acid"]},
+          "bibliotheque: favoris, dossiers (un niveau), racine, tri sans casse, recherche", str(tr))
+    sbook = sc.SceneBook(lambda: tmp.with_name("stars.json"))
+    sbook.put({"name": "S1", "bg": "live", "overlay": {}})
+    check(sbook.set_star("S1", True) and sbook.get("S1").get("star") is True and sbook.set_star("S1", False) and "star" not in sbook.get("S1")
+          and not sbook.set_star("absente", True), "bibliotheque: etoile d'une scene (mise, retiree, scene inconnue refusee)")
+    # renommer / ranger un preset : favoris, recents et scenes qui le citent suivent
+    src_o.toggle_favorite("autre")
+    src_o.touch("autre")
+    ok_ren = src_o.rename("autre", " Club / Autre ")
+    check(ok_ren and "club/autre" in src_o.load_user() and "autre" not in src_o.load_user() and src_o.favorites() == ["club/autre"]
+          and src_o.recents()[0] == "club/autre" and not src_o.rename("default", "x") and not src_o.rename("club/autre", "club/neon")
+          and not src_o.rename("club/autre", "a/b/c") and not src_o.rename("nexiste/pas", "z") and src_o.rename("club/autre", "club/autre"),
+          "preset renomme / range dans un dossier : favoris et recents suivent ; default, nom pris ou invalide refuses")
+    pbook.put({"name": "P3", "bg": "live", "overlay": {}, "presets": {"overlay": "club/neon", "fond": "club/neon"}})
+    check(pbook.rename_preset("overlay", "club/neon", "salle/neon") == 2 and pbook.get("P1")["presets"]["overlay"] == "salle/neon"
+          and pbook.get("P3")["presets"] == {"overlay": "salle/neon", "fond": "club/neon"} and pbook.rename_preset("overlay", "absent", "x") == 0,
+          "preset renomme : les scenes qui le citent (du bon genre seulement) suivent")
     bad = [("pas du json", "illisible"), ('{"format": "autre"}', "pas un set"),
            (_json.dumps({**exp, "version": 99}), "plus recente"), (_json.dumps({**exp, "set": {"entries": []}}), "sans nom")]
     for raw, word in bad:
@@ -3185,6 +3412,93 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
     vjc["state"]["running"] = False
+    # palette de commandes
+    pc = c["palette"]
+    labels_ = [lab for lab, _kw, _fn in pc.items()]
+    first_scene = book.rows()[0]["name"] if book.rows() else None
+    before_lock = bool(getattr(s, "scene_lock", False))
+    chosen_ = pc.choose("verrou")
+    after_lock = bool(getattr(s, "scene_lock", False))
+    pc.choose("verrou")
+    params["comp_sym"] = 3
+    chosen_p = pc.choose("panique")
+    pc.open()
+    root.update()
+    opened_ = pc.state["win"] is not None
+    pc.close()
+    out["x_palette"] = ("Panique" in labels_ and any(l.startswith("Set : ") for l in labels_) and any(l.startswith("Preset overlay : ") for l in labels_)
+                        and any(l.startswith("Preset fond : ") for l in labels_) and (first_scene is None or f"Scene : {first_scene}" in labels_),
+                        chosen_ is not None and chosen_.startswith("Verrou") and before_lock != after_lock,
+                        chosen_p == "Panique" and params["comp_sym"] == 0, opened_, pc.state["win"] is None, pc.choose("introuvable-xyz") is None,
+                        bool(pc.matches("")))
+    # mode scene
+    st_ = c["stage"]
+    st_.open()
+    root.update()
+    wst = st_.state["widgets"]
+    btns_ = [b for b in wst["scenes"].winfo_children() if b.winfo_class() == "Button"]
+    rows_st = book.rows()
+    params["overlay_master"], params["bg_master"] = 1.0, 1.0
+    wst["overlay_master"].set(40)
+    wst["bg_master"].set(25)
+    root.update()
+    masters_ok = abs(params["overlay_master"] - 0.4) < 1e-6 and abs(params["bg_master"] - 0.25) < 1e-6
+    if len(btns_) > 1:
+        btns_[1].invoke()
+        root.update()
+        st_.tick()
+        root.update()
+    active_i = s.active_entry
+    amber = [b for b in wst["scenes"].winfo_children() if b.winfo_class() == "Button" and str(b.cget("bg")).lower() == "#ffcf6b"]
+    params["comp_sym"] = 3
+    for frame in st_.state["win"].winfo_children():
+        for b in frame.winfo_children() if frame.winfo_class() == "Frame" else []:
+            if b.winfo_class() == "Button" and b.cget("text") == "PANIQUE":
+                b.invoke()
+    root.update()
+    params["overlay_master"], params["bg_master"] = 1.0, 1.0
+    st_.tick()
+    out["x_stage"] = (len(btns_) == len(rows_st) and len(btns_) > 0, masters_ok, len(btns_) < 2 or active_i == 1, len(amber) <= 1,
+                      params["comp_sym"] == 0, abs(wst["overlay_master"].get() - 100.0) < 1.0, wst["title"].cget("text").startswith("SET"),
+                      st_.state["win"] is not None)
+    st_.close()
+    root.update()
+    # planning du texte
+    import types as _ty
+    c["sched_text"].delete("1.0", "end")
+    c["sched_text"].insert("1.0", "22:00 DJ Un\n23:30 DJ Deux")
+    c["apply_sched"]()
+    clock_ = lambda h, m: _ty.SimpleNamespace(tm_hour=h, tm_min=m)
+    params["sched_on"] = 0.0
+    c["source_var"].set("image")
+    off_ = c["sched_tick"](clock_(22, 10))
+    c["sched_var"].set(1)
+    on_ = c["sched_tick"](clock_(22, 10))
+    again_ = c["sched_tick"](clock_(22, 20))
+    params_ok = (params["logo_source"], params["text_content"])
+    next_ = c["sched_tick"](clock_(23, 31))
+    out["x_sched"] = (off_ is None and params["sched_lines"].startswith("22:00"), on_ == "DJ Un" and params_ok == ("text", "DJ Un"), again_ is None,
+                      next_ == "DJ Deux" and params["text_content"] == "DJ Deux", c["text_widget"].get("1.0", "end-1c") == "DJ Deux",
+                      True)
+    c["sched_var"].set(0)
+    params["sched_lines"] = ""
+    # « Temps 1 » : la grille s'ancre, le VJ en rythme arme un changement exactement sur un 1
+    from core import rhythm as rh_grid
+    fake_rhythm.grid = rh_grid.BeatGrid()
+    fake_rhythm.bpm = 120.0
+    s.audio = NS_(analyzer=NS_(rhythm=fake_rhythm, latest=lambda: {"beats": 0}, t_beat=None))
+    book_.set_vj(unit="bars", bars=2)
+    vjc["arm"]()
+    before_grid = vjc["state"].get("grid_due")
+    vjc["one"]()
+    anchored = fake_rhythm.grid.active and abs(fake_rhythm.grid.period - 0.5) < 1e-9
+    vjc["arm"]()
+    due_ = vjc["state"].get("grid_due")
+    on_one = due_ is not None and abs(((due_ - fake_rhythm.grid.anchor) / 2.0) - round((due_ - fake_rhythm.grid.anchor) / 2.0)) < 1e-6
+    out["x_grid_vj"] = (before_grid is None, anchored, on_one, abs((due_ - time.monotonic()) - 4.0) < 1.2, "sur le 1" in vjc["remaining_text"](),
+                        "Temps 1" in c["scenes"]["msg"].get())
+    vjc["state"]["grid_due"] = None
+    book_.set_vj(unit="seconds")
     s.audio = real_audio
     while not s.commands.empty():
         s.commands.get_nowait()
@@ -3402,17 +3716,53 @@ def gui_expand_steps(c, s, out) -> None:
     row1 = sc["panel_state"]["rows"][1]["frame"]
     target_y = row1.winfo_rooty() + 2
     target_x = sc["panel_state"]["cv"].winfo_rootx() + 40
-    lb.event_generate("<ButtonPress-1>", x=5, y=5, rootx=lb.winfo_rootx() + 5, rooty=lb.winfo_rooty() + 5)
-    lb.event_generate("<B1-Motion>", x=5, y=5, rootx=target_x, rooty=target_y, state=0x100)
-    lb.event_generate("<ButtonRelease-1>", x=5, y=5, rootx=target_x, rooty=target_y)
+    first_iid = lib["iids"][lib["names"][0]]
+    root.update()
+    bx, by, bw, bh = lb.bbox(first_iid)
+    lb.event_generate("<ButtonPress-1>", x=bx + 5, y=by + 3, rootx=lb.winfo_rootx() + bx + 5, rooty=lb.winfo_rooty() + by + 3)
+    lb.event_generate("<B1-Motion>", x=bx + 5, y=by + 3, rootx=target_x, rooty=target_y, state=0x100)
+    lb.event_generate("<ButtonRelease-1>", x=bx + 5, y=by + 3, rootx=target_x, rooty=target_y)
     root.update()
     rows_drag = [r["name"] for r in book.rows()]
     if len(rows_drag) == len(rows_before) + 1:
         book.remove_entry(1)
+    # favoris, dossiers et recherche de la bibliotheque (mise a jour sur place)
+    keep_names = list(lib["names"])
+    root.update()
+    lib = sc["panel_state"]["lib"]                       # le panneau a pu etre reconstruit par l'ajout/retrait ci-dessus
+    tv_ = lib["tree"]
+    nm_ = keep_names[0]
+    lib["star"](nm_)
+    root.update()
+    star_kids = [lib["map"][i] for i in tv_.get_children("F:*")] if tv_.exists("F:*") else []
+    lib["star"](nm_)
+    root.update()
+    star_gone = not tv_.exists("F:*")
+    old_ask = sc["ui"]["ask_name"]
+    sc["ui"]["ask_name"] = lambda title, prompt, initial="": "club"
+    lib["move"](nm_)
+    root.update()
+    lib = sc["panel_state"]["lib"]                       # renommer reconstruit le panneau
+    tv_ = lib["tree"]
+    moved_name = [x for x in book.names() if x.startswith("club/")]
+    folder_there = tv_.exists("F:club") and len(tv_.get_children("F:club")) == 1
+    sc["ui"]["ask_name"] = lambda title, prompt, initial="": ""
+    if moved_name:
+        lib["move"](moved_name[0])
+    root.update()
+    lib = sc["panel_state"]["lib"]
+    back_name = nm_ in book.names() and not [x for x in book.names() if x.startswith("club/")]
+    sc["ui"]["ask_name"] = old_ask
+    lib["filter"].set(nm_[:3].lower())
+    root.update()
+    filtered = all(nm_[:3].lower() in n.lower() for n in lib["names"]) and 1 <= len(lib["names"]) <= len(book.names())
+    lib["filter"].set("")
+    root.update()
+    out["x_library_tree"] = (star_kids == [nm_], star_gone, bool(moved_name) and folder_there, back_name, filtered, len(lib["names"]) == len(book.names()))
     ops.toggle_library()
     root.update()
     out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
-                        len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is not None)
+                        len(rows_drag) == len(rows_before) + 1 and rows_drag[1] == lib["names"][0], sc["panel_state"].get("lib") is None)
     sc["refresh_panel"](force=True)
     # annuler / retablir dans la fenetre
     rows_u = [r["name"] for r in book.rows()]
@@ -4286,6 +4636,24 @@ def check_masters() -> None:
     for i in range(1, 11):
         cr.draw(fbo, size, quiet, cp, 0.1 * i)
     check(abs(cr._hue_phase - 90.0) < 1.0, "cycle de teinte: 90 degres par seconde", f"{cr._hue_phase:.1f}")
+    from core import controls as _ctl
+    check(_ctl.spectral_hue(0.0, 0.0) == 0.0 and _ctl.spectral_hue(1.0, 0.0) == 0.0 and _ctl.spectral_hue(0.0, 1.0) > 170
+          and _ctl.spectral_hue(0.5, 0.5) < _ctl.spectral_hue(0.2, 0.8),
+          "teinte audio: silence et graves = 0, aigus = froid, monotone")
+    def spec_image(bass_, high_, amount):
+        rs = gl.Renderer(ctx, size, None)
+        red_ = np.zeros((size[1], size[0], 3), np.uint8)
+        red_[..., 0] = 200                                    # une teinte qui tourne se voit sur une couleur, pas sur un gris
+        rs.video_tex.write(red_.tobytes())
+        st = dict(quiet, bass=bass_, high=high_)
+        pp = dict(base, hue_spectrum=amount, hue_master=0.0, hue_cycle=0.0)
+        for i in range(40):
+            rs.draw(fbo, size, st, pp, 0.1 * i)
+        return read_target(ctx, fbo, size).astype(int)
+    warm_, cold_, off_ = spec_image(0.9, 0.0, 1.0), spec_image(0.0, 0.9, 1.0), spec_image(0.0, 0.9, 0.0)
+    check(np.abs(cold_ - warm_).mean() > 3.0 and np.abs(warm_ - off_).mean() < 1.0 and np.abs(cold_ - off_).mean() > 3.0,
+          "teinte audio: les aigus tournent les couleurs (froid), les graves non, curseur a 0 = aucun effet",
+          f"{np.abs(cold_ - warm_).mean():.1f} / {np.abs(warm_ - off_).mean():.1f} / {np.abs(cold_ - off_).mean():.1f}")
     cr2 = gl.Renderer(ctx, size, None)
     cr2.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
     bp = dict(base, breath_overlay=1.0, logo_pulse=0.0)
@@ -6624,7 +6992,22 @@ def check_native_modes() -> None:
           "retour au mode Live en --synthetic : flux d'origine rendu, mode GL arrete", str(msg))
 
 
+# `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
+SANS_GPU = "--pur" in sys.argv
+PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_schedule", "check_palette",
+         "check_stage_layout")
+
+
 def main() -> None:
+    if SANS_GPU:
+        for name in PURES:
+            globals()[name]()
+        if failures:
+            print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
+            sys.exit(1)
+        print("Toutes les verifications pures passent.")
+        return
     check_reader()
     check_features()
     check_text()
@@ -6669,6 +7052,11 @@ def main() -> None:
     check_gui()
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
+    check_latence()
+    check_beat_grid()
+    check_schedule()
+    check_palette()
+    check_stage_layout()
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats

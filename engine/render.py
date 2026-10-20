@@ -13,7 +13,7 @@ from pathlib import Path
 from core import sessionlog
 from core import doodles
 from core.automation import FX_EFFECTS
-from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo
+from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.video import LogoVideo
@@ -236,6 +236,7 @@ class Renderer:
         self._strobe_kicks = 0                                                      # strobe leger : kicks comptes depuis l'armement
         self.strobe_limiter = StrobeLimiter()
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
+        self._hue_spec = 0.0                                                          # teinte tiree du spectre, lissee
         self._prev_ok = False
         self.fb_tex: list = []                  # trainee : deux images finales hors ecran (on lit l'une, on ecrit l'autre, puis on echange)
         self.fb_fbo: list = []
@@ -376,10 +377,16 @@ class Renderer:
             if p["strobe_mode"] == "kick":
                 fire = fire or kicked
             elif p["strobe_mode"] == "light":                             # leger : un kick sur N (le compteur repart a zero a chaque armement)
-                self._strobe_kicks += new_kicks
-                if self._strobe_kicks >= max(int(p.get("strobe_div", 4)), 1):
-                    self._strobe_kicks = 0
-                    fire = True
+                div = max(int(p.get("strobe_div", 4)), 1)
+                idx = state.get("beat_index")
+                if idx is not None:                                       # grille du temps donnee (« 1 ») : l'eclair tombe sur le 1er temps du groupe
+                    if kicked and int(idx) % div == 0:
+                        fire = True
+                else:
+                    self._strobe_kicks += new_kicks
+                    if self._strobe_kicks >= div:
+                        self._strobe_kicks = 0
+                        fire = True
         else:
             self._strobe_kicks = 0
         build = _unit(p.get("build", 0.0))
@@ -474,6 +481,7 @@ class Renderer:
         bass, high, beat = state["bass"], state["high"], state["beat"]
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
+        raw_dt = dt
         dt *= tempo
         # Respiration (overlay et fond en opposition de phase), cycle de teinte, phases de la composition : integres image par image.
         self._breath_t += dt / max(float(p["breath_period"]), 1.0)
@@ -481,7 +489,10 @@ class Renderer:
         ov = _unit(p["overlay_master"]) * (1.0 - idle) * (1.0 - _unit(p["breath_overlay"]) * wave)      # presence de l'overlay (0 = efface)
         bg_level = _unit(p["bg_master"]) * (1.0 - _unit(p["breath_bg"]) * (1.0 - wave))
         self._hue_phase = (self._hue_phase + dt * float(p["hue_cycle"])) % 360.0
-        hue_deg = (float(p["hue_master"]) + self._hue_phase + build * 120.0) % 360.0
+        spec = _unit(p["hue_spectrum"])
+        if spec > 0.0:                                                  # graves = chaud, aigus = froid, suivi lisse (0,5 s) pour ne pas clignoter
+            self._hue_spec += (spectral_hue(bass, high) - self._hue_spec) * (1.0 - math.exp(-raw_dt / 0.5))
+        hue_deg = (float(p["hue_master"]) + self._hue_phase + build * 120.0 + spec * self._hue_spec) % 360.0
         self._comp_t += dt
         self._comp_rot += dt * math.radians(float(p["comp_rot"]))
         # Noise: houle et coups au hasard (x force) qui s'ajoutent a l'audio reel pour les effets coches.

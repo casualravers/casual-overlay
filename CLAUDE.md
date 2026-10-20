@@ -48,6 +48,8 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   sessionlog     journal de session
   scenes         scenes, sets, memoires de masters (stockage, export / import)
   randomizer     Full Randomizer (banques d'assets, tirages)
+  schedule       planning de la soiree (heure -> texte du logo)
+  palette        classement de la palette de commandes (Ctrl+K)
   doodles        doodles du site : config, liste du bucket, fichiers vus, validation, position, cycle de vie, mur (voir plus bas)
 engine/          moteur sans rendu GL (importe core/ et les dependances facultatives, jamais la GUI ni la facade) :
   deps           numpy / glfw / moderngl / sounddevice / Pillow importes une fois (`None` si absents, `MISSING`)
@@ -71,6 +73,7 @@ audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
 gui_fond / gui_effects / gui_logo / gui_audio   onglets de la partie LIVE et OVERLAY (fond, effets + halo / fonte / cellules / noise, logo, analyse)
 gui_sets / gui_drop / gui_random / gui_panel    sets, medias (glisser-deposer, vignettes), Full Randomizer, panneau etendu
+gui_presets / gui_bar / gui_palette / gui_stage   barre de presets (overlay et fond), barre des scenes, palette Ctrl+K, mode scene plein ecran
 gui_vj            espace de controle global du Mode VJ (masters, historique, montee / drop) + garde-fous (panique, tap tempo, aide, console, auto-sauvegarde)
 skin / theme / gui_colors / gui_gates           habillage, couleurs, grisages```
 
@@ -277,6 +280,8 @@ Le moteur est dans [audio2wave_gl.py](audio2wave_gl.py) (le Python pur est dans 
   chemin ; police introuvable -> repli sur la police integree de Pillow (un texte doit toujours
   s'afficher). Piege : `multiline_textbbox` renvoie des **flottants** pour un texte sur
   plusieurs lignes (et des entiers pour une ligne), d'ou `floor`/`ceil` avant de creer l'image.
+- **Planning du texte** (`core/schedule.py`, pur, heure injectee ; reglages `sched_on` / `sched_lines`, portee `device` : sauves, jamais dans les presets ni les scenes) : dans la source Texte, la case *Suivre le planning* et une zone « une ligne par passage » (`22:30 NOM DU DJ`, `23h30 - NOM`, `\\n` = retour a la ligne).
+  Toutes les 5 s (`gui_logo.sched_tick`) le passage en cours est cherche ; quand il CHANGE, la source passe en Texte et le texte est pose (une fois : taper a la main entre deux passages n'est pas ecrase). Les heures avant 18 h comptent apres minuit (`DAY_START`). Une ligne invalide est ignoree.
 - **Logo anime** (source `video`, `--logo-video`, `--logo-key`, GUI : Source > Video) : un second ffmpeg
   (`LogoVideo`, `logo_video_command`) decode le fichier **en boucle** (`-stream_loop -1`) a sa cadence
   native (`-re`) en rawvideo **rgba** vers un pipe a gros tampon (`spawn_big_pipe`, factorise avec
@@ -679,7 +684,7 @@ visuel d'audio2wave, il ne le complete pas) :
     Tout / Aucune, Retirer du set, VJ off / on, Duree, Dupliquer (juste apres l'original), Copier vers le set (a la fin d'un autre set) ; les operations sur les rangs vident la selection et mettent `s.active_entry` a None.
     (2) **scenes provisoires** : « + » et « +5 » posent `temp: True` dans la scene (scenes.json) ; la ligne montre ✱ a cote du numero et un bouton **Garder** dont le clic transforme le nom en champ (Entree = garder sous ce nom,
     Echap = annuler, nom pris = refus et la scene reste provisoire) ; « Retirer les ✱ » supprime de la bibliotheque (donc de tous les sets, apres confirmation) toutes les scenes encore provisoires. Mettre une scene a jour (clic droit) la rend definitive.
-    (3) **bibliotheque** : bouton « Bibliotheque ▶ » (`s.library_open`) = colonne de 220 px a gauche de la liste avec TOUTES les scenes (✱ provisoire, ×N = nombre d'entrees dans ce set) ; on glisse une scene sur la liste pour l'ajouter AU RANG VISE
+    (3) **bibliotheque** : bouton « Bibliotheque ▶ » (`s.library_open`) = colonne de 250 px a gauche de la liste avec TOUTES les scenes dans un `ttk.Treeview` : **favoris en tete** (★, `SceneBook.set_star`, cle `star` de la scene), **dossiers** (un nom `dossier/scene` range la scene dans un dossier ; un seul niveau, `scenes.scene_folder` / `scenes.library_tree`, purs), scenes de la racine, **vignette** 48 x 27 tiree de l'apercu (dossiers fermes : chargee a l'ouverture), champ de **recherche** (les dossiers s'ouvrent), clic droit = favori / renommer / ranger dans un dossier / garder. Ouvrir ou fermer la colonne ne reconstruit pas le panneau (`toggle_library`), et la colonne se met a jour **sur place** (`refresh_library`, signature de la liste : noms, etoiles, provisoires, apercus, compteurs ×N). (✱ provisoire, ×N = nombre d'entrees dans ce set) ; on glisse une scene sur la liste pour l'ajouter AU RANG VISE
     (`drop_pos` : moitie haute d'une ligne = avant, basse = apres ; la ligne visee est entouree ; une etiquette suit le pointeur), double-clic = a la fin, clic droit = renommer / garder. Le glisser-deposer des lignes (poignee = numero) et celui de la
     bibliotheque partagent `drop_pos` / `mark_target`. `check_gl.py` : `x_temp`, `x_select`, `x_library` (evenements simules), `x_drag`.
   - **Colonne FOND video** (`bg_video` de l'entree, `set_entry_bg_video`, cible de depot `bgvideo`, `bg_clear`) : une video de fond propre a l'entree **remplace le fond de la scene** a l'application (`scenes.scene_with_bg_video` : copie de la scene en fond `video`, cadrage de la scene s'il existe sinon `cover`, aucun motif ni etat audio2wave ; chemin introuvable = message, la scene garde son fond). Le meme fichier d'une entree a l'autre ne relance pas le decodage (`BgVideoManager`) : c'est le moyen d'enchainer des scenes sur une video de fond continue sans recapturer. Zone grisee en sourdine = la video que la scene a capturee elle-meme (`scene_bg_video`) ; touche de la barre : menu « Fond : video ». Export / import la gardent (`missing` la signale).
@@ -769,7 +774,12 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   case **Montee / drop auto** (`drop_auto` : une cassure detectee lance la montee, le drop la relache avec flash et eclair ; montee annulee si la cassure finit sans drop) ; reglage du set `vj["on_drop"]` (menu « reglages VJ ») :
   le VJ en marche change de scene au drop. `bpm_auto` et `drop_auto` sont des reglages de salle coupes par la PANIQUE. Le libelle BPM de l'onglet *Masters* et du titre indique « BPM auto » (detecte) ou « BPM (tap) ».
   `check_gl.py` (`check_safeguards` : kicks a 128 BPM, 64 ramene a 128, gigue, kicks manques, irreguliers, perte, changement de morceau, montee / drop, pause, silence ; `gui_expand_steps` : `x_rhythm*` avec un faux detecteur).
-  **Limites** : pas de phase (on ne sait pas ou tombe le temps), mesure = 4 kicks ; un silence qui precede la musique ressemble a une cassure suivie d'un drop.
+  **Grille du temps / « Temps 1 »** (`core.rhythm.BeatGrid`, `Rhythm.grid`) : l'operateur appuie sur le premier temps de la mesure (bouton *Temps 1* de l'onglet *Masters*, touche **virgule** dans la fenetre de rendu, `do_one`) ; l'ancre se cale sur le kick qui vient de tomber s'il date de moins de 0,4 s,
+  le pas vient du BPM detecte (sinon tape, sinon 120 x tempo). Chaque kick recale ensuite l'ancre de 15 % de son ecart (s'il est a moins de 0,3 temps d'une ligne) et regle le pas sur le BPM detecte ; la grille s'efface quand le BPM est perdu (5 s sans kick).
+  `AudioAnalyzer.latest()["beat_index"]` = numero de temps du dernier kick depuis le « 1 » (None sans grille). Usages : (1) **strobe leger** (`strobe_mode` = `light`) avec une grille : l'eclair part sur les kicks dont le numero est multiple de `strobe_div` (donc sur les 1) au lieu de « un kick sur N depuis l'armement » ;
+  (2) **VJ en rythme** (`vj["grid_due"]`, `vj_arm`) : le changement est arme pour le « 1 » le plus proche de N mesures plus tard (`nearest_downbeat`), le dernier bout (< 0,3 s) est programme par `after` pour tomber pile malgre le tick de 250 ms ; garde-fou `t_next` si la grille se perd. Sans grille : comme avant (N x 4 kicks).
+  `check_gl.py` : `check_beat_grid` (pur + strobe en pixels), `x_grid_vj`.
+  **Limites** : la phase demande un appui (Temps 1), mesure = 4 temps ; un silence qui precede la musique ressemble a une cassure suivie d'un drop.
 - **Reprise automatique de la projection** (`Projection._run`) : une erreur qui tue la fenetre GL (pas `SystemExit`, pas une fermeture voulue :
   `proj_stop` / `stop_event`) relance `gl_main` apres `RESTART_DELAY_S` = 1 s avec les reglages du moment (ils vivent dans `s.params`) ; au plus
   `MAX_RESTARTS` = 3 reprises en `RESTART_WINDOW_S` = 120 s, ensuite le statut dit « trop de reprises : bouton Demarrer pour reessayer ». Verifie
@@ -784,6 +794,10 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   un fichier present au lancement signale un arret brutal : `run_app` charge ces reglages a la place de `gl_params.json`, met l'ancien fichier
   de cote (`autosave.precedent.json`, jamais efface) et le dit dans le statut. Les scenes, sets, presets et masters sont deja ecrits a chaque
   geste : seul l'etat des curseurs du moment en dependait.
+- **Palette de commandes** (**Ctrl+K**, `gui/gui_palette.py`, classement pur dans `core/palette.py`) : on tape quelques lettres (accents et casse ignores, tous les mots doivent correspondre), fleches + Entree. La liste est refaite a chaque ouverture : commandes du VJ (panique, verrou, lecture / pause, suivante, retour, montee, drop,
+  eclair de strobe, tap tempo, Temps 1, panneau etendu, console, aide, projection), **scenes du set actif** (« Scene : Neon »), **sets**, **presets overlay et fond** (charges comme depuis leur menu). `controles["palette"]` : `items()`, `matches(texte)`, `choose(texte)` (lance la premiere), `open()`, `close()`.
+- **Mode scene** (`gui/gui_stage.py`, menu « reglages VJ » ou palette Ctrl+K) : fenetre epuree pour jouer au portable dans la penombre — **une grosse touche par scene du set actif** (la scene active en ambre, 4 colonnes au plus), Retour / VJ / Suivante / Verrou / **PANIQUE** et les masters Overlay / Fond en gros curseurs.
+  Elle se met a jour seule (planificateur, 250 ms : signature scene active / set / verrou / VJ ; les curseurs suivent le reglage sauf pendant qu'on les tient). Echap ferme, F11 plein ecran, Espace = VJ, X = PANIQUE. `controles["stage"]` : `open`, `close`, `tick`, `state`.
 - **Aide et console** : touche **/** ou **?** (hors champ de saisie) ou menu « reglages VJ » -> fenetre des raccourcis (`SHORTCUTS_HELP`, une seule
   fenetre) ; **Console VJ** (menu « reglages VJ », `console_window`, fenetre toujours au premier plan) = grosses commandes (Retour, VJ, Suivante,
   Strobe maintenu, Montee, Drop, Verrou, Tap tempo, aide, PANIQUE) + ligne d'etat + niveaux basses / mediums / aigus et voyant du kick.
@@ -1022,10 +1036,12 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   (`_split_automation` fusionne les automations de chaque cote). Memes gestes dans l'interface (`make_preset_bar`
   dans gl_gui.py, une fois pour la partie OVERLAY, une fois dans le bloc Fond de la partie LIVE) : menu qui applique,
   Mettre a jour, Supprimer avec `live.confirm_dialog`, Sauvegarder sous, Restaurer. **Tout est modifiable** : la classe
-  `PresetBook` (audio2wave_gl.py, remplace `live.PresetStore` qui interdisait de toucher aux integres) enregistre une
-  version utilisateur qui remplace l'integre, masque un integre supprime (cle reservee `_deleted` du meme JSON),
-  `restore_builtins()` rend les integres d'origine ; `default` est toujours present et **toujours en tete**
-  (`all()`/`names()`), le supprimer le remet a sa version d'origine. Charger = valeurs validees par `coerce_params`
+  `PresetBook` (core/params.py) ne connait qu'UN preset integre, `default` (vide), toujours present et **toujours en tete** (le supprimer le remet a sa version d'origine) ;
+  tous les autres sont des presets d'utilisateur traites pareil (mettre a jour, supprimer). Plus de `sobre` / `neon` / `chaos` integres, plus de bouton Restaurer ; ceux deja ecrits dans le fichier restent.
+  **Rangement** (`make_preset_bar`, une fois pour l'overlay, une fois pour le fond) : un nom `dossier/nom` (un seul niveau, minuscules) range le preset dans un sous-menu ; **favoris** (bouton ☆ / ★, cle reservee `_favorites` du fichier)
+  et **derniers charges** (`_recent`) en tete du menu ; champ **Chercher** (liste plate des noms qui contiennent le texte) ; `core.params.menu_layout` est la mise en forme pure. Les cles du fichier qui commencent par `_` ne sont jamais des presets.
+  **Indicateur « modifie »** : `base["snap"]` = la capture que donnerait le preset choisi ; toutes les 600 ms `check_modified` la compare a l'etat courant (`core.params.differs_from` : ignore les reglages que les automations allumees font bouger et le bruit d'arrondi) ;
+  « ● modifie » + bouton **Revenir** (recharge le preset). Une scene retient les noms des presets overlay / fond (`scene["presets"]`) et les reaffiche au chargement (`select`), la comparaison dit alors si l'etat de la scene s'en ecarte. Charger = valeurs validees par `coerce_params`
   puis `sync_widgets()`. Les integres sont partiels et ne touchent pas aux automations sauf si le preset en contient ;
   un preset utilisateur les contient toujours. Les tests utilisent des fichiers temporaires
   (`gl.OVERLAY_PRESETS_PATH` / `gl.BACKGROUND_PRESETS_PATH` remplaces le temps de `run_gui`), jamais ceux de l'utilisateur.
@@ -1162,6 +1178,7 @@ fond motif (non vide, defile, fige a vitesse 0, taille des carreaux, palette duo
 rendu en contexte standalone (image identique a la video quand l'audio est coupe,
 chaque effet visible isolement, image ni noire ni saturee, logo incruste et video intacte
 ailleurs, logo jamais hors cadre, shader invalide refuse sans perdre l'ancien).
+**Integration continue** (`.github/workflows/check.yml`, GitHub Actions, Windows) : sur chaque PR et chaque push sur main, le job `pur` lance `python tools/check_gl.py --pur` (lecteur, features audio, scenes, schema des reglages, purete de `core/`, couches, portable, grille du temps, planning, palette... : ni GPU, ni micro, ni ffmpeg) et DOIT passer ; le job `complet` lance toute la suite mais `continue-on-error` (un serveur sans carte graphique ni peripheriques en echoue une partie). `PURES` dans `check_gl.py` liste le sous-ensemble : y ajouter toute nouvelle verification qui ne demande rien de materiel.
 Controle visuel : `--screenshot fichier.png --max-seconds N` (avec `--hud`).
 
 Non verifie automatiquement (demande le materiel) : touches clavier (F, H, R, P, 1-5, +/-),
@@ -1181,6 +1198,11 @@ reelle, latence acoustique bout en bout.
 | Temps GPU 720 p, tout allume | 11,1 ms avant optimisation |
 | Capture sounddevice | latence rapportee ~22 ms (blocs de 512, WASAPI, 48 kHz) |
 | Detection du kick (logicielle) | 25 ms mediane, 29 ms max (hop 10,7 ms + fenetre 2048), sur un vrai kick a attaque instantanee |
+
+**Latence mesuree** (`python tools/mesure_latence.py`, `check_latence` dans `check_gl.py`) : un kick est injecte, la vraie chaine (`AudioAnalyzer` + `Renderer`, strobe en mode kick = image blanche) le montre ; on releve debut du son -> kick detecte -> premiere image blanche lue
+(`fbo.read`, donc rendu termine), rendu simule a 60 images/s. Mode interne (defaut, sans materiel) : kicks ecrits dans le tampon audio par blocs de 512 au rythme reel. Poste de dev, processus seul : **mediane ~29 ms, pire 44 ms** (analyse ~18 ms, rendu ~16 ms) ;
+dans la suite de tests, avec les autres fils qui tournent, ~74 ms (information, non bloquant). `--materiel` joue le kick par la sortie audio et l'ecoute par l'entree reelle (ajoute tampons des cartes son et trajet acoustique ; **a lancer a la main**, il fait du bruit :
+casque contre le micro ou haut-parleur pres de lui). **Reste hors mesure : l'affichage** (balayage de l'ecran, traitement du videoprojecteur) ; seule une camera rapide ou une photodiode le donne. Le chiffre est donc un minimum pour ce que voit le public.
 
 Latence audio -> effet estimee : capture ~22 ms + detection ~25 ms + jusqu'a une frame
 (16,7 ms) = ~45-65 ms, **au-dessus de la cible de 50 ms dans le pire cas**, et non mesuree

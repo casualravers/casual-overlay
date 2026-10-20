@@ -105,10 +105,20 @@ class StrobeLimiter:
 PANIC_RESET = {
     "build": 0.0, "strobe_on": 0.0, "idle": 0.0, "silence_on": 0.0,
     "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
-    "hue_master": 0.0, "hue_cycle": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
+    "hue_master": 0.0, "hue_cycle": 0.0, "hue_spectrum": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
     "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
     "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0, "bpm_auto": 0.0, "drop_auto": 0.0,
 }
+
+
+SPECTRUM_HUE_COLD = 200.0           # rotation de teinte quand tout est dans les aigus (0 = tout dans les graves)
+
+
+def spectral_hue(bass: float, high: float) -> float:
+    """Rotation de teinte (degres) pour un contenu spectral : 0 quand les graves dominent (couleurs d'origine, chaudes), jusqu'a
+    `SPECTRUM_HUE_COLD` quand les aigus dominent (froides). Un silence (les deux ~0) donne 0 : la teinte ne saute pas sur le bruit."""
+    bass, high = max(float(bass), 0.0), max(float(high), 0.0)
+    return SPECTRUM_HUE_COLD * high / (high + bass + 0.08)
 
 
 def panic(params: dict) -> list[str]:

@@ -1,0 +1,37 @@
+name: Verifications
+
+# `pur` : les verifications qui n'ont besoin ni de GPU, ni de micro, ni de ffmpeg (python tools/check_gl.py --pur) ; elles doivent passer.
+# `complet` : toute la suite ; sur un serveur sans carte graphique ni peripheriques une partie echoue, on la lit sans bloquer la PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pur:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-gl.txt
+      - run: python -m pip install -r requirements-gl.txt
+      - run: python tools/check_gl.py --pur
+
+  complet:
+    needs: pur
+    runs-on: windows-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-gl.txt
+      - run: python -m pip install -r requirements-gl.txt
+      - run: python tools/check_gl.py
