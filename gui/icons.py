@@ -161,7 +161,7 @@ TEXT_ICONS = {
     "supprimer": "trash", "restaurer": "undo", "annuler": "close", "aucun": "close", "aucune": "close", "fermer": "close",
     "centrer": "crosshair", "ambiance par defaut": "sparkle", "diagnostic": "check", "plein ecran": "fullscreen", "barres debug": "bars",
     "demarrer la projection": "monitor", "arreter la projection": "monitor", "panique": "alert", "dupliquer la derniere": "copy",
-    "tirer maintenant": "dice", "+ dossier": "folder", "tap tempo": "tap", "strobe": "bolt", "drop": "down", "montee": "up", "renommer": "edit", "retirer": "minus", "mode silence": "mute", "charger": "download",
+    "tirer maintenant": "dice", "+ dossier": "folder", "tap tempo": "tap", "strobe": "bolt", "drop": "down", "montee": "up", "renommer": "edit", "retirer": "minus", "phases auto": "wave", "charger": "download",
     "verrou": "lock", "retour": "prev", "snap": "image", "ridge": "wave",
     # onglets, titres de partie et de section
     "fond": "layers", "effets": "sparkle", "logo": "image", "aura du logo": "sun", "fonte du logo": "drop", "cellules": "grid", "noise": "zigzag",

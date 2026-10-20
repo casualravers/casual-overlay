@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 
+from core.phase import PhaseTracker
 from core.rhythm import Rhythm
 from engine.deps import np, sd
 
@@ -89,6 +90,7 @@ class FeatureExtractor:
 
         beat = self._detect_kick(raw["bass"], dt, now)
         levels["raw_bass"] = raw["bass"]
+        levels["raw_mid"], levels["raw_high"], levels["raw_rms"] = raw["mid"], raw["high"], raw["rms"]       # bruts (hors auto-gain) pour les phases du morceau
         return levels, beat
 
     def _detect_kick(self, b: float, dt: float, now: float) -> bool:
@@ -324,6 +326,7 @@ class AudioAnalyzer:
         self.t_beat: float | None = None
         self.beats = 0
         self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
+        self.phase = PhaseTracker()             # phases du morceau (silence, ambiance, groove, montee, cassure, pic), nourries ici elles aussi
         self._last_total = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -357,7 +360,8 @@ class AudioAnalyzer:
                     self.beats += 1
             try:
                 self.rhythm.update(now, levels, beat)
-            except Exception:               # le rythme est un confort : jamais d'arret de l'analyse pour lui
+                self.phase.update(now, levels, beat, self.rhythm.state, self.rhythm.bpm)
+            except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
                 pass
 
     def latest(self) -> dict:
@@ -365,6 +369,7 @@ class AudioAnalyzer:
             state = dict(self.levels)
             t_beat = self.t_beat
             state["beats"] = self.beats
+        state["phase"] = self.phase.snapshot()                  # phase du morceau et multiplicateurs lisses (voir core/phase.py)
         state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since

@@ -42,6 +42,7 @@ def install(c):
     register_tree = c.register_tree
     remove_entry_now = c.remove_entry_now
     rename_scene_dialog = c.rename_scene_dialog
+    ask_delete_scene = c.ask_delete_scene
     rnd = c.rnd
     root = c.root
     s = c.s
@@ -490,7 +491,8 @@ def install(c):
 
         def move_dialog(name: str) -> None:
             folder, leaf = scenes.scene_folder(name)
-            asked = scene_ui["ask_name"]("Ranger la scene", "Dossier (vide = a la racine) :", folder)
+            existing = sorted({scenes.scene_folder(x["name"])[0] for x in scene_book.list()} - {""}, key=str.lower)
+            asked = scene_ui["ask_folder"](folder, existing)
             if asked is None:
                 return
             asked = asked.strip().strip("/").strip()
@@ -519,6 +521,7 @@ def install(c):
             m.add_command(label="Retirer des favoris" if starred else "Mettre en favori", command=lambda: star_now(name))
             m.add_command(label="Renommer...", command=lambda: rename_scene_dialog(name))
             m.add_command(label="Ranger dans un dossier...", command=lambda: move_dialog(name))
+            m.add_command(label="Supprimer la scene...", command=lambda: ask_delete_scene(name))
             if any(x["name"] == name and x.get("temp") for x in scene_book.list()):
                 m.add_command(label="Garder (n'est plus provisoire)", command=lambda: keep_now(name))
             m.tk_popup(e.x_root, e.y_root)
@@ -528,7 +531,17 @@ def install(c):
         tv.bind("<ButtonRelease-1>", release)
         tv.bind("<Double-Button-1>", double, add="+")
         tv.bind("<Button-3>", menu_at)
-        lib["star"], lib["move"] = star_now, move_dialog
+
+        def delete_selected(_e=None) -> str:
+            """Touche Suppr : supprime la scene selectionnee de la bibliotheque (apres confirmation)."""
+            sel = tv.selection()
+            name = lib["map"].get(sel[0]) if sel else None
+            if name is not None:
+                ask_delete_scene(name)
+            return "break"
+
+        tv.bind("<Delete>", delete_selected)
+        lib["star"], lib["move"], lib["delete"] = star_now, move_dialog, delete_selected
 
     def build_selbar(parent) -> tk.Frame:
         """Barre des actions sur les lignes cochees (retirer, VJ off / on, duree, dupliquer, copier vers un autre set) et de la bibliotheque."""

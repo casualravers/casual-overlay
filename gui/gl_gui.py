@@ -2026,6 +2026,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         register_tree=register_tree,
         remove_entry_now=remove_entry_now,
         rename_scene_dialog=rename_scene_dialog,
+        ask_delete_scene=ask_delete_scene,
         rnd=rnd,
         root=root,
         s=s,

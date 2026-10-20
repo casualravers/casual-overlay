@@ -16,7 +16,7 @@ PORTEES (`scope`) :
 - `bg`     : le fond (source, motif) : capture par les presets de fond et les scenes ;
 - `room`   : reglage de salle (masters, composition, strobe...) : jamais capture par un preset ni une scene, sauve avec P, enregistre
              par les memoires de masters ;
-- `state`  : etat du moment (montee, idle, strobe arme) : comme `room` mais ni sauve ni recharge ni memorise ;
+- `state`  : etat du moment (montee, phase en cours, strobe arme) : comme `room` mais ni sauve ni recharge ni memorise ;
 - `device` : depend du micro et de la salle (sensibilite du kick) : sauve, mais hors presets et scenes.
 
 Ajouter un reglage = UNE ligne ici. `check_gl.py` (`check_params_schema`) verifie la coherence de la table avec le moteur, la GUI,
@@ -64,11 +64,14 @@ TABLE: tuple[Param, ...] = (
     _p("breath_overlay", 0.0, 0.0, 1.0, scope="room", doc="Respiration de l'overlay : sa presence oscille entre 1 - valeur et 1."),
     _p("breath_bg", 0.0, 0.0, 1.0, scope="room", doc="Respiration du fond, en opposition de phase avec celle de l'overlay."),
     _p("breath_period", 8.0, 1.0, 60.0, scope="room", doc="Periode de la respiration, en secondes."),
-    _p("silence_on", 0.0, 0.0, 1.0, scope="room", doc="Mode silence : quand le son tombe, le visuel passe en idle."),
-    _p("silence_level", 0.03, 0.0, 1.0, scope="room", doc="Niveau (rms normalise) sous lequel on parle de silence."),
-    _p("silence_delay", 4.0, 0.5, 120.0, scope="room", doc="Secondes de silence avant de passer en idle."),
-    _p("silence_tempo", 0.3, 0.0, 1.0, scope="room", doc="Tempo relatif en idle (1 = inchange)."),
-    _p("idle", 0.0, 0.0, 1.0, scope="state", doc="Etat courant du mode silence (0..1), ecrit par SilenceGuard."),
+    _p("auto_phase", 1.0, 0.0, 1.0, scope="room", doc="Phases auto : le visuel suit les phases du morceau (ambiance, groove, montee, cassure, pic) tout seul."),
+    _p("phase_tempo", 1.0, 0.0, 2.0, scope="state", doc="Multiplicateur de tempo de la phase en cours (ecrit par la boucle de rendu)."),
+    _p("phase_react", 1.0, 0.0, 3.0, scope="state", doc="Multiplicateur de reactivite de la phase en cours."),
+    _p("phase_fx", 1.0, 0.0, 3.0, scope="state", doc="Multiplicateur d'intensite des effets de la phase en cours."),
+    _p("phase_overlay", 1.0, 0.0, 1.0, scope="state", doc="Presence de l'overlay dans la phase en cours."),
+    _p("phase_bg", 1.0, 0.0, 1.0, scope="state", doc="Luminosite du fond dans la phase en cours."),
+    _p("phase_hue", 0.0, 0.0, 60.0, scope="state", doc="Derive de teinte de la phase en cours (degres par seconde)."),
+    _p("phase_breath", 0.0, 0.0, 1.0, scope="state", doc="Respiration de la phase en cours (0..1)."),
     _p("comp_sym", 0, 0, 4, scope="room", doc="Symetrie : 0 aucune, 1 miroir gauche, 2 miroir haut, 3 quatre quadrants, 4 kaleidoscope."),
     _p("comp_seg", 6, 2, 16, scope="room", doc="Segments du kaleidoscope."),
     _p("comp_rot", 0.0, -360.0, 360.0, scope="room", doc="Rotation du kaleidoscope, en degres par seconde."),

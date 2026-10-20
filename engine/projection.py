@@ -10,7 +10,8 @@ import threading
 import time
 from core import params as core_params, params_schema, sessionlog
 from core.automation import AutomationEngine, set_fx_link
-from core.controls import SilenceGuard, panic, strobe_press, strobe_release
+from core import phase as core_phase
+from core.controls import panic, strobe_press, strobe_release
 from core.params import FX_NAMES, load_params, save_params
 from engine.preview import write_preview
 from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_text
@@ -240,7 +241,6 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     handle = window.handle
     quit_flag = {"v": False}
     automation = AutomationEngine()
-    silence = SilenceGuard()
 
     def status_line() -> str:
         on = "".join(str(int(v)) for v in params["fx_on"])
@@ -479,7 +479,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             warned = True
 
         state = analyzer.latest()
-        silence.update(params, state, now)
+        s.status["phase"] = core_phase.apply_to_params(params, state.get("phase"))          # multiplicateurs de la phase du morceau (lus par le rendu)
+        s.status["phase_info"] = state.get("phase")
         size = window.framebuffer_size()
         sample = args.stats or frame_i % 8 == 0
         frame_i += 1

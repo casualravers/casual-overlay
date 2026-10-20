@@ -68,8 +68,7 @@ from core.automation import (  # noqa: E402,F401
     set_param, set_fx_link, AutomationEngine
 )
 from core.controls import (  # noqa: E402,F401
-    strobe_press, strobe_release, STROBE_COOLDOWN_S, StrobeLimiter, PANIC_RESET, panic, tap_bpm, _unit, effective_tempo,
-    SilenceGuard
+    strobe_press, strobe_release, STROBE_COOLDOWN_S, StrobeLimiter, PANIC_RESET, panic, tap_bpm, _unit, effective_tempo
 )
 from core.autosave import (  # noqa: E402,F401
     AUTOSAVE_PATH, AUTOSAVE_EVERY_S, write_autosave, read_autosave, clear_autosave, recover_autosave

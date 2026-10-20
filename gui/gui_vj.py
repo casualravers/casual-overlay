@@ -96,12 +96,13 @@ def install(c):
                 root.title(text)
         except tk.TclError:
             pass
-        idle = vj_ui.get("idle")
-        if idle is not None:
+        ph = vj_ui.get("phase")
+        if ph is not None:
             try:
-                idle.configure(text=f"idle {round(float(params['idle']) * 100)} %")
+                info = s.status.get("phase_info") or {}
+                ph.configure(text=("phase : " + info["label"]) if info and float(params.get("auto_phase", 1.0)) >= 0.5 else "phase : -")
             except tk.TclError:
-                vj_ui.pop("idle", None)
+                vj_ui.pop("phase", None)
 
     def sync_master_panel() -> None:
         """Curseurs et boutons radio relus depuis `params` (apres le rappel d'une memoire de masters)."""
@@ -422,19 +423,18 @@ def install(c):
             led = vj_ui["led"] = tk.Label(f, text=" \u25cf kick ", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG, font=("Segoe UI", 9, "bold"))
             led.grid(row=0, column=3, columnspan=2, sticky="w", padx=6)
             Tooltip(led, "Voyant : s'allume a chaque kick detecte.")
-            sil = tk.IntVar(value=int(float(params["silence_on"]) >= 0.5))
-            cb = tk.Checkbutton(f, text="Mode silence", variable=sil, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, selectcolor=a2w.GUI_BG,
-                                activebackground=a2w.GUI_PANEL_BG, command=lambda: params.__setitem__("silence_on", float(sil.get())))
+            sil = tk.IntVar(value=int(float(params["auto_phase"]) >= 0.5))
+            cb = tk.Checkbutton(f, text="Phases auto", variable=sil, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, selectcolor=a2w.GUI_BG,
+                                activebackground=a2w.GUI_PANEL_BG, command=lambda: params.__setitem__("auto_phase", float(sil.get())))
             cb.grid(row=1, column=0, columnspan=2, sticky="w", padx=6)
-            vars_["silence_on"] = sil
-            Tooltip(cb, "Quand le son tombe sous le seuil pendant le delai, le visuel passe en idle : tempo reduit et overlay efface (fond seul). "
-                        "Il revient des que le son revient.")
-            idle = tk.Label(f, text="idle 0 %", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
-            idle.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
-            vj_ui["idle"] = idle
-            slider(f, (2, 0), "silence_level", "Seuil", 0, 20, 0.5, 100.0, " %", 3, "Niveau sonore (0 a 20 %) sous lequel on parle de silence.", dec=1)
-            slider(f, (2, 3), "silence_delay", "Delai", 1, 30, 1, 1.0, " s", 4, "Secondes de silence avant de passer en idle.")
-            slider(f, (3, 0), "silence_tempo", "Tempo idle", 0, 100, 5, 100.0, "%", 30, "Tempo relatif en idle (100 % = inchange).")
+            vars_["auto_phase"] = sil
+            Tooltip(cb, "Le visuel suit les phases du morceau tout seul, sans reglage : le silence et les passages calmes ralentissent tres doucement les "
+                        "animations (le visuel ne s'eteint jamais), la montee et le pic donnent plus de reactivite et d'effets, la cassure ralentit. "
+                        "Les phases sont reconnues a l'energie, aux kicks et a la repartition des frequences ; les seuils s'adaptent au morceau et au micro. "
+                        "Jamais de strobe automatique.")
+            phase = tk.Label(f, text="phase : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w")
+            phase.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
+            vj_ui["phase"] = phase
 
         new_tab("Audio", fill_2)
 
@@ -488,7 +488,7 @@ def install(c):
                     scene_msg.set(f"Memoire {i + 1} vide : clique Sauver puis une memoire (ou clic droit)")
                     return
                 params.update(slot["values"])
-                for key in ("idle", "build"):
+                for key in ("build",):
                     params[key] = 0.0
                 sync_master_panel()
                 scene_msg.set(f"Memoire {i + 1} '{slot['name']}' rappelee")
