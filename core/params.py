@@ -83,6 +83,15 @@ def split_folder(name: str) -> tuple[str, str]:
     return (folder.strip(), leaf.strip()) if sep and folder.strip() and leaf.strip() else ("", name)
 
 
+def normalize_preset_name(raw: str) -> str | None:
+    """Nom de preset valide (minuscules, au plus un dossier `dossier/nom`, espaces autour du `/` retires), ou None s'il est vide / invalide."""
+    raw = (raw or "").strip().lower()
+    parts = [x.strip() for x in raw.split(FOLDER_SEP)]
+    if not raw or raw.startswith("_") or len(parts) > 2 or not all(parts):
+        return None
+    return FOLDER_SEP.join(parts)
+
+
 def menu_layout(names: list[str], favorites: list[str], recents: list[str], needle: str = "") -> dict:
     """Organisation d'un menu de presets : `favorites`, `recents` (existants seulement), `folders` (dossier -> noms, tries) et `root`
     (noms sans dossier). `default` est toujours le premier de la racine. Avec `needle`, une liste plate `found` des noms qui le contiennent."""
@@ -206,6 +215,21 @@ class PresetBook:
         data = self._read()
         data[name] = overrides
         self._write(data)
+
+    def rename(self, old: str, new: str) -> bool:
+        """Renomme (ou range dans un dossier : `club/neon`) un preset d'utilisateur ; les favoris et les recents suivent.
+        False si `old` n'est pas un preset d'utilisateur (`default` ne bouge pas), si `new` est invalide ou deja pris."""
+        new = normalize_preset_name(new)
+        data = self._read()
+        if new is None or old == "default" or new == "default" or old not in self.load_user() or (new != old and new in self.all()):
+            return False
+        if new != old:
+            data[new] = data.pop(old)
+            for key in (self.FAVORITES, self.RECENT):
+                if key in data:
+                    data[key] = [new if n == old else n for n in self._list(key)]
+            self._write(data)
+        return True
 
     def delete(self, name: str) -> str | None:
         """'reset' (default : retour a l'original), 'deleted', ou None si le nom n'existe pas."""

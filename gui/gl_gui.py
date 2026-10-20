@@ -1169,7 +1169,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     # ---- PRESETS : deux jeux decorreles (overlay = logo + effets, fond = source + motif), meme interface.
     # Tout est modifiable, y compris les integres ; `default` reste le premier de la liste (voir gl.PresetBook).
-    def make_preset_bar(parent, title: str, book, capture, values_of, hint: str) -> dict:
+    def make_preset_bar(parent, title: str, book, capture, values_of, hint: str, kind: str = "overlay") -> dict:
         z = Zone(parent)
         add_section_title(z, title)
         name_var = tk.StringVar(value="default")
@@ -1328,6 +1328,31 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         tk.Button(load_row, text="Mettre a jour", command=update_preset).pack(side="left", padx=(8, 0))
         tk.Button(load_row, text="Supprimer", command=delete_preset).pack(side="left", padx=(6, 0))
 
+        def rename_preset() -> None:
+            old = name_var.get()
+            if old == "default":
+                msg.set("'default' ne se renomme pas")
+                return
+            asked = scene_ui["ask_name"]("Renommer le preset", "Nouveau nom (dossier/nom pour le ranger dans un dossier) :", old)
+            if asked is None:
+                return
+            new = gl.normalize_preset_name(asked)
+            if new is None or not book.rename(old, new):
+                msg.set("renommage impossible (nom invalide ou deja pris)")
+                return
+            if new != old:
+                changed = scene_book.rename_preset(kind, old, new)
+                refresh_scene_bar()
+                msg.set(f"'{old}' devient '{new}'" + (f" ({changed} scene(s) mise(s) a jour)" if changed else ""))
+            name_var.set(new)
+            base["snap"] = baseline(new)
+            refresh_menu(select=new)
+            check_modified()
+
+        ren_btn = tk.Button(load_row, text="Renommer", command=rename_preset)
+        ren_btn.pack(side="left", padx=(6, 0))
+        Tooltip(ren_btn, "Change le nom du preset, ou le range dans un dossier (dossier/nom). Les scenes qui le citent suivent.")
+
         find_row = tk.Frame(parent)
         find_row.grid(row=z.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         tk.Label(find_row, text="Chercher").pack(side="left", padx=(0, 10))
@@ -1345,10 +1370,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         Tooltip(save_entry, "Un nom `dossier/preset` range le preset dans un dossier (un seul niveau).")
 
         def save_preset(_evt=None) -> None:
-            raw = save_name_var.get().strip().lower()
-            parts = [x.strip() for x in raw.split(gl.FOLDER_SEP)]
-            name = gl.FOLDER_SEP.join(parts)
-            if not raw or raw.startswith("_") or len(parts) > 2 or not all(parts):
+            name = gl.normalize_preset_name(save_name_var.get())
+            if name is None:
                 msg.set("nom de preset vide ou invalide (un seul dossier : dossier/nom)")
                 return
             existed = name in book.all()
@@ -1371,7 +1394,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return {"var": name_var, "msg": msg, "menu": menu_widget, "book": book, "load": load_preset,
                 "update": update_preset, "delete": delete_preset, "save": save_preset, "save_var": save_name_var,
                 "refresh": refresh_menu, "select": select_preset, "fav": toggle_fav, "fav_btn": fav_btn, "filter": filter_var,
-                "modified": mod_var, "revert": revert_btn, "check": check_modified}
+                "modified": mod_var, "revert": revert_btn, "check": check_modified, "rename": rename_preset}
 
     overlay_presets = make_preset_bar(preset_bar, "Presets overlay", gl.OVERLAY_BOOK, gl.capture_overlay,
                                       gl.overlay_preset_values,

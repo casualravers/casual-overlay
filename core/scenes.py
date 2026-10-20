@@ -578,6 +578,19 @@ class SceneBook:
         self._save(data)
         return True
 
+    def rename_preset(self, kind: str, old: str, new: str) -> int:
+        """Les scenes qui citent le preset `old` (`kind` : "overlay" ou "fond") citent desormais `new`. Rend le nombre de scenes changees."""
+        data = self._load()
+        n = 0
+        for scene in data["scenes"]:
+            cited = scene.get("presets")
+            if isinstance(cited, dict) and cited.get(kind) == old:
+                cited[kind] = new
+                n += 1
+        if n:
+            self._save(data)
+        return n
+
     # ---- reglages du VJ : propres a chaque set
     def vj(self) -> dict:
         """Reglages du mode VJ du set actif (duree par scene en secondes, ordre), valides, completes par les valeurs par defaut."""

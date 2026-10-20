@@ -61,7 +61,7 @@ from core.params import (  # noqa: E402,F401
     coerce_params, OVERLAY_PRESETS_PATH, BACKGROUND_PRESETS_PATH, OVERLAY_PRESET_EXCLUDED, BG_KEYS, BG_AUTOMATION_KEYS,
     OVERLAY_PRESETS, BACKGROUND_PRESETS, PresetBook, OVERLAY_BOOK, BACKGROUND_BOOK, _split_automation, capture_overlay,
     capture_background, overlay_preset_values, background_preset_values, load_params, save_params,
-    menu_layout, split_folder, differs_from, FOLDER_SEP
+    menu_layout, split_folder, differs_from, FOLDER_SEP, normalize_preset_name
 )
 from core.automation import (  # noqa: E402,F401
     AUTOMATION_POINTS, AUTOMATION_SPECS, FX_EFFECTS, curve_points, default_automation, merge_automation, _list_key, get_param,

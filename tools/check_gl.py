@@ -2769,6 +2769,18 @@ def check_sets_pure(sc, tmp) -> None:
     check(r_pr2["presets_added"] == [], "import: reimporter ne duplique rien", str(r_pr2))
     junk = sc.parse_import(_json.dumps({**exp_pr, "presets": {"overlay": {"_x": {}, "default": {}, "ok": {"a": 1}, "bad": 3}, "fond": 5}}))
     check(junk["presets"] == {"overlay": {"ok": {"a": 1}}, "fond": {}}, "import: presets invalides ecartes", str(junk["presets"]))
+    # renommer / ranger un preset : favoris, recents et scenes qui le citent suivent
+    src_o.toggle_favorite("autre")
+    src_o.touch("autre")
+    ok_ren = src_o.rename("autre", " Club / Autre ")
+    check(ok_ren and "club/autre" in src_o.load_user() and "autre" not in src_o.load_user() and src_o.favorites() == ["club/autre"]
+          and src_o.recents()[0] == "club/autre" and not src_o.rename("default", "x") and not src_o.rename("club/autre", "club/neon")
+          and not src_o.rename("club/autre", "a/b/c") and not src_o.rename("nexiste/pas", "z") and src_o.rename("club/autre", "club/autre"),
+          "preset renomme / range dans un dossier : favoris et recents suivent ; default, nom pris ou invalide refuses")
+    pbook.put({"name": "P3", "bg": "live", "overlay": {}, "presets": {"overlay": "club/neon", "fond": "club/neon"}})
+    check(pbook.rename_preset("overlay", "club/neon", "salle/neon") == 2 and pbook.get("P1")["presets"]["overlay"] == "salle/neon"
+          and pbook.get("P3")["presets"] == {"overlay": "salle/neon", "fond": "club/neon"} and pbook.rename_preset("overlay", "absent", "x") == 0,
+          "preset renomme : les scenes qui le citent (du bon genre seulement) suivent")
     bad = [("pas du json", "illisible"), ('{"format": "autre"}', "pas un set"),
            (_json.dumps({**exp, "version": 99}), "plus recente"), (_json.dumps({**exp, "set": {"entries": []}}), "sans nom")]
     for raw, word in bad:

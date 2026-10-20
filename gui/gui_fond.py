@@ -60,7 +60,7 @@ def install(c):
     bg_preset_bar.pack(fill="x")
     bg_presets = make_preset_bar(bg_preset_bar, "Presets fond", gl.BACKGROUND_BOOK, gl.capture_background,
                                  gl.background_preset_values,
-                                 "Un preset de fond = la source et le fond genere (ni le logo, ni les effets).")
+                                 "Un preset de fond = la source et le fond genere (ni le logo, ni les effets).", kind="fond")
 
     pattern_box = tk.Frame(pattern_holder)
     pattern_box.pack(fill="x")
