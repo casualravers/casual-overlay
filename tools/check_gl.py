@@ -4660,8 +4660,8 @@ def check_audio_layers_pure() -> None:
     check(dec[5] > 0.5 and dec[-1] < 0.5 and f.step(5.0, (0.0, 0.0, 0.0, 0.5), 0.0, 1.0)[3] == 0.5,
           "couche: lissage = relachement lent (800 ms), 'since' reste net", str(dec[:6]))
     from core import params_schema as ps
-    check(ps.defaults(None)["src_bg"] == "tout" and ps.defaults(None)["src_logo"] == "tout"
-          and ps.validate("src_bg", "aigus") == (True, "aigus") and ps.validate("src_logo", "bof")[0] is False, "sources: reglages du schema (defaut tout, enum valide)")
+    check(ps.defaults(None)["src_bg"] == "auto" and ps.defaults(None)["src_logo"] == "auto"
+          and ps.validate("src_bg", "aigus") == (True, "aigus") and ps.validate("src_logo", "bof")[0] is False, "sources: reglages du schema (defaut auto, enum valide)")
 
 
 def check_onsets() -> None:
