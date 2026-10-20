@@ -1,0 +1,25 @@
+name: OpenGL logiciel (Mesa llvmpipe)
+description: >
+  Installe un pilote OpenGL logiciel dans le dossier de Python (le serveur n'a pas de carte graphique) et regle les variables d'environnement.
+  A lancer apres actions/setup-python. Les tests de rendu et la verification de la version portable en ont besoin.
+inputs:
+  version:
+    description: Version de mesa-dist-win (https://github.com/pal1000/mesa-dist-win/releases)
+    default: "26.2.4"
+runs:
+  using: composite
+  steps:
+    - name: Telechargement et copie des DLL
+      shell: pwsh
+      run: |
+        $v = "${{ inputs.version }}"
+        Invoke-WebRequest "https://github.com/pal1000/mesa-dist-win/releases/download/$v/mesa3d-$v-release-msvc.7z" -OutFile mesa.7z
+        7z x mesa.7z -omesa -y | Out-Null
+        $py = Split-Path (python -c "import sys; print(sys.executable)")
+        # opengl32.dll (le chargeur) et libgallium_wgl.dll (le pilote llvmpipe) suffisent ; libglapi.dll n'existe plus dans les Mesa recents
+        foreach ($name in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll") {
+          if (Test-Path "mesa\x64\$name") { Copy-Item "mesa\x64\$name" $py -Force } elseif ($name -ne "libglapi.dll") { throw "$name absent de l'archive Mesa" }
+        }
+        "GALLIUM_DRIVER=llvmpipe" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        "MESA_GL_VERSION_OVERRIDE=4.6" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        "MESA_GLSL_VERSION_OVERRIDE=460" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
