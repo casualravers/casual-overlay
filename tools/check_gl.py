@@ -5266,6 +5266,53 @@ def check_portable_modules() -> None:
     check(all((here / n).is_file() for n in bp.APP_FILES), "portable: tous les fichiers de la liste existent",
           str([n for n in bp.APP_FILES if not (here / n).is_file()]))
 
+def check_uistats() -> None:
+    """Mesure de la fluidite de l'interface (core/uistats.py) : horloge injectee, aucune attente reelle."""
+    from core import uistats as ui
+    now = [0.0]
+    said = []
+    st = ui.Stats(clock=lambda: now[0], log=said.append)
+
+    def op(ms):
+        with st.timed("refresh_scene_bar"):
+            now[0] += ms / 1000.0
+    op(10)
+    op(200)
+    op(10)
+    row = st.ops["refresh_scene_bar"]
+    check(row[0] == 3 and abs(row[1] - 220) < 1e-6 and abs(row[2] - 200) < 1e-6, "uistats: appels, total et pire temps d'une operation", str(row))
+    check(len(said) == 1 and "refresh_scene_bar" in said[0] and "200" in said[0], "uistats: une operation lente est signalee une fois (pas de rafale dans le journal)", str(said))
+    now[0] += 2.0
+    op(300)
+    check(len(said) == 2, "uistats: le signalement revient apres une seconde", str(said))
+
+    @st.watched("deco")
+    def f(x):
+        now[0] += 0.001
+        return x * 2
+    check(f(4) == 8 and st.ops["deco"][0] == 1, "uistats: le decorateur chronometre et garde la valeur rendue")
+    w = ui.StallWatch(period_ms=50.0)
+    seq = [0.0, 0.05, 0.10, 0.55, 0.60]
+    out = [w.beat(v) for v in seq]
+    check(out[:3] == [0.0, 0.0, 0.0] and abs(out[3] - 400.0) < 1e-6 and out[4] == 0.0, "uistats: un retard de minuterie de 400 ms est vu comme un gel, pas les petits retards", str(out))
+    st.stalls.clear()
+    st.stall(400.0)
+    check(st.stalls and st.stalls[-1][1] == "refresh_scene_bar", "uistats: le gel est attribue a l'operation lente de la fenetre", str(st.stalls))
+    check(any("refresh_scene_bar" in line for line in st.report()) and "Derniers gels" in "\n".join(st.report()), "uistats: rapport lisible")
+    ran = []
+    sch = ui.Scheduler(stats=None, on_error=lambda n, e: ran.append(("err", n)))
+    sch.add("a", 100, lambda: ran.append("a"))
+    sch.add("b", 250, lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    sch.add("c", 50, lambda: ran.append("c"))
+    first = sch.run_due(0.0)
+    sch.run_due(0.04)
+    second = sch.run_due(0.06)
+    third = sch.run_due(5.0)
+    check(first == ["a", "b", "c"] and second == ["c"] and sorted(third) == ["a", "b", "c"], "uistats: ordonnanceur, chaque tache a sa periode, pas de rattrapage apres un gel", str((first, second, third)))
+    check(("err", "b") in ran and ran.count("a") == 2, "uistats: l'erreur d'une tache n'arrete ni les autres ni la boucle")
+    check(10.0 <= sch.next_delay_ms(5.0) <= 100.0 and ui.Scheduler().next_delay_ms(0.0) == 100.0, "uistats: delai avant la prochaine echeance borne")
+
+
 def check_core_purity() -> None:
     """core/ est du Python pur : stdlib seulement, jamais le moteur (audio2wave_gl) ni la GUI (gl_gui). Verifie par l'analyse des imports
     ET en important tout core/ dans un interpreteur ou ces modules sont interdits."""
@@ -6524,6 +6571,7 @@ def main() -> None:
     check_engine_layer()
     check_params_schema()
     check_safeguards()
+    check_uistats()
     check_scenes()
     check_bg_video()
     check_fond_saveable()

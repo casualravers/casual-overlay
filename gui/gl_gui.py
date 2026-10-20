@@ -59,8 +59,9 @@ import gui_colors
 import gui_gates
 from core import controls as core_controls
 from core import params as core_params
-from core import safety, scenes, sessionlog
+from core import safety, scenes, sessionlog, uistats
 
+STATS = uistats.Stats(log=sessionlog.event)           # duree des operations de l'interface et gels du fil Tk (rapport : menu « reglages VJ »)
 REFRESH_MS = 500
 METER_MS = 60
 BRIDGE_MS = 100
@@ -591,6 +592,15 @@ def run_gui(s, live, on_ready=None) -> None:
 
     root.report_callback_exception = report
     build_window(s, live, root, s.mode, on_ready)
+    watch = uistats.StallWatch(period_ms=50.0)
+
+    def stall_watch() -> None:
+        late = watch.beat(time.perf_counter())
+        if late:
+            STATS.stall(late)
+        root.after(50, stall_watch)
+
+    root.after(50, stall_watch)
     root.mainloop()
 
 
@@ -611,8 +621,29 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         """root.after() qui s'arrete tout seul quand la fenetre est reconstruite (changement de mode)."""
         def guarded() -> None:
             if alive["ok"]:
-                fn()
+                with STATS.timed(getattr(fn, "__name__", "after")):
+                    fn()
         root.after(ms, guarded)
+
+    # Un seul ordonnanceur pour tous les rafraichissements periodiques (voyants, mesures, statut...) : une minuterie Tk au lieu
+    # d'une par rafraichissement, chaque tache a sa periode, une erreur dans l'une ne tue pas les autres.
+    sched = uistats.Scheduler(STATS, on_error=lambda name, exc: sessionlog.error(f"Erreur dans la tache d'interface {name}", exc))
+
+    def ui_every(name: str, period_ms: float, fn, first_ms: float = 0.0) -> None:
+        sched.add(name, period_ms, fn, first_ms=first_ms, now=time.perf_counter())
+
+    def ui_remove(name: str) -> None:
+        sched.remove(name)
+
+    def ui_pump() -> None:
+        sched.run_due(time.perf_counter())
+        if alive["ok"]:
+            try:
+                after(int(sched.next_delay_ms(time.perf_counter())), ui_pump)
+            except tk.TclError:
+                pass
+
+    after(10, ui_pump)
 
     # Le VJ enchaine des scenes de modes differents (panneaux de largeurs differentes) : la fenetre garde la taille qu'elle a.
     keep_size = None
@@ -1963,7 +1994,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         set_vj_option=set_vj_option,
         thumb_photo=thumb_photo))
     panel_update_in_place = gui_panel_ctl.panel_update_in_place
-    refresh_scene_panel = gui_panel_ctl.refresh_scene_panel
+    refresh_scene_panel = STATS.watched("refresh_scene_panel")(gui_panel_ctl.refresh_scene_panel)
     set_expanded = gui_panel_ctl.set_expanded
     panel_ops = gui_panel_ctl.ops
 
@@ -2000,6 +2031,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         Tooltip=Tooltip,
         a2w=a2w,
         after=after,
+        ui_every=ui_every,
+        ui_remove=ui_remove,
         apply_scene_dict=apply_scene_dict,
         history_ui=history_ui,
         master_book=master_book,
@@ -2052,6 +2085,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             bool(scene_state["adding"]), bool(getattr(s, "scenes_expanded", False)), bool(getattr(s, "scene_lock", False)),
             projection is not None, str(root.cget("bg")))
 
+    @STATS.watched("refresh_scene_bar")
     def refresh_scene_bar() -> None:
         sig = bar_signature()
         if proj_ui.get("bar_sig") == sig and proj_ui.get("bar_btns") and proj_ui.get("strip") is not None \
@@ -2127,6 +2161,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         menu.add_separator()
         menu.add_command(label="Console VJ (grosses commandes)...", command=console_window)
         menu.add_command(label="Raccourcis clavier (?)...", command=help_window)
+        menu.add_command(label="Rapport de fluidite de l'interface...", command=lambda: choice_dialog(
+            root, "Fluidite de l'interface", "\n".join(STATS.report(12)), ["Fermer"]))
         opts["menu"] = menu
         Tooltip(opts, "Ordre et duree du VJ (propres a chaque set), console VJ et aide des raccourcis.")
         nxt = tk.Button(scene_bar, text="\u25b6\u25b6", command=vj_advance, relief="flat", bd=0, padx=8, pady=3,
@@ -2351,7 +2387,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         st = s.status
         parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("perf", "logo", "doodles", "msg") if st.get(k)]
         status_label.config(text="  |  ".join(parts))
-        after(REFRESH_MS, refresh)
 
     def update_meter() -> None:
         follow_automation()
@@ -2365,7 +2400,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             item = noise_bars[name]
             noise_meter.coords(item, 52, noise_meter.coords(item)[1], 52 + 200 * min(max(level, 0.0), 1.0),
                                noise_meter.coords(item)[3])
-        after(METER_MS, update_meter)
 
     def on_close() -> None:
         s.stop_event.set()                # le fil GL (s'il est ouvert) sort ; finished_event : leur refresh() ferme leurs panneaux
@@ -2452,8 +2486,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     after(300, watch_page)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
-    refresh()
-    update_meter()
+    ui_every("refresh", REFRESH_MS, refresh)
+    ui_every("meter", METER_MS, update_meter)
     if mode == "live":
         poll_bridge()
     sync_automation_state()
@@ -2492,6 +2526,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
             "image_box": image_box, "text_box": text_box, "font_var": font_var}))
+
+
+build_window = STATS.watched("build_window")(build_window)
 
 
 def _safe(var: tk.Variable, default: float) -> float:
