@@ -82,7 +82,6 @@ TABLE: tuple[Param, ...] = (
     _p("strobe_mode", "manual", choices=("manual", "kick", "light"), scope="room", doc="Mode du strobe (light = leger : un kick sur N)."),
     _p("strobe_div", 4, 2, 16, scope="room", doc="Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre, soit un par mesure)."),
     _p("strobe_dark", 1.0, 0.05, 1.0, scope="room", doc="Seuil de luminosite du strobe : il ne blanchit que les parties de l'image plus sombres que ce seuil (1 = toute l'image)."),
-    _p("strobe_rate", 8.0, 1.0, 20.0, scope="room", doc="Cadence du strobe en Hz (rafale du strobe manuel maintenu)."),
     _p("doodle_on", 0.0, 0.0, 1.0, scope="state", doc="Recuperation des doodles du site (case de l'onglet Affichage) : jamais sauvee, jamais dans un preset ni une scene."),
     _p("strobe_hits", 0, 0, 10 ** 9, scope="state", doc="Compteur d'appuis : un appui plus court qu'une image declenche quand meme un eclair."),
     _p("tempo", 1.0, 0.0, 2.0, scope="room", doc="Master du tempo : vitesse des animations et des automations (1 = normal)."),

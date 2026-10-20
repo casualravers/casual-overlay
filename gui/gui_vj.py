@@ -359,7 +359,7 @@ def install(c):
             vj_ui["strobe"] = sb
             sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
             sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
-            Tooltip(sb, "Strobe : eclair blanc court a la demande. Maintiens le bouton (ou la touche S dans la fenetre de rendu) pour une rafale. "
+            Tooltip(sb, "Strobe : eclair blanc court a la demande. Touche S dans la fenetre de rendu. "
                         "Au kick / en leger, un clic arme, un autre desarme.")
 
             def set_strobe(**kw) -> None:
@@ -368,10 +368,9 @@ def install(c):
                 sb.configure(text=strobe_text())
 
             radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Leger", "light")), row=1, span=4,
-                   tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Leger : un clic arme, un autre desarme. "
+                   tip="Manuel : un eclair par appui. Kick / Leger : un clic arme, un autre desarme. "
                        "Leger : un seul kick sur N (reglage « 1 kick sur », 4 par defaut = un eclair par mesure).",
                    on_change=lambda: set_strobe())
-            slider(f, (2, 0), "strobe_rate", "Rafale", 1, 20, 1, 1.0, " Hz", 8, "Cadence du strobe maintenu en mode Manuel (1 a 20 eclairs par seconde).")
             slider(f, (3, 0), "strobe_max_hz", "Limite", 1, 20, 1, 1.0, " Hz", 10, "Limiteur de securite : jamais plus de ce nombre d'eclairs par seconde, "
                                                                                     "quelle que soit la cadence demandee (photosensibilite du public).")
             slider(f, (3, 3), "strobe_max_s", "Duree max", 1, 60, 1, 1.0, " s", 8, "Limiteur de securite : une rafale continue de strobe est coupee apres cette duree, "

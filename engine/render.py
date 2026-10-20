@@ -380,8 +380,6 @@ class Renderer:
                 if self._strobe_kicks >= max(int(p.get("strobe_div", 4)), 1):
                     self._strobe_kicks = 0
                     fire = True
-            else:
-                fire = fire or now - self._strobe_last >= 1.0 / min(max(float(p["strobe_rate"]), 1.0), 20.0)
         else:
             self._strobe_kicks = 0
         build = _unit(p.get("build", 0.0))

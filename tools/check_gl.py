@@ -4077,9 +4077,9 @@ def check_masters() -> None:
           "fond 0 %: le fond est noir, le logo reste ; 50 % : fond attenue",
           f"coin {dark[:20, :20].max()}, logo {dark[cy, cx].tolist()}")
     check("bg_master" in gl.OVERLAY_PRESET_EXCLUDED and d["bg_master"] == 1.0, "fond: 100 % par defaut, hors presets et scenes")
-    # strobe : eclair blanc court (appui, rafale en cadence, kick), rien sans appui
+    # strobe : eclair blanc court (appui, kick, leger), rien sans appui
     sr = gl.Renderer(ctx, size, None)
-    sp = dict(d, strobe_mode="manual", strobe_rate=10.0)
+    sp = dict(d, strobe_mode="manual")
     check(sr._strobe(sp, quiet) == 0.0, "strobe: rien sans appui")
     gl.strobe_press(sp)
     first = sr._strobe(sp, quiet)
@@ -4094,7 +4094,7 @@ def check_masters() -> None:
         time.sleep(0.03)
         flashes += sr._strobe(sp, quiet) > 0.9
     gl.strobe_release(sp)
-    check(2 <= flashes <= 5, "strobe maintenu: rafale a la cadence reglee (10 Hz ~ 3 eclairs en 0,36 s)", str(flashes))
+    check(flashes == 0, "strobe maintenu: un seul eclair par appui, pas de rafale", str(flashes))
     kp = dict(d, strobe_mode="kick")
     kr = gl.Renderer(ctx, size, None)
     gl.strobe_press(kp)
@@ -5974,13 +5974,14 @@ def check_safeguards() -> None:
     size = (320, 180)
     fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
     r = gl.Renderer(ctx, size, None)
-    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="manual", strobe_rate=20.0, strobe_max_hz=2.0, strobe_max_s=60.0)
-    seen, t_end = set(), time.monotonic() + 1.3
+    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="kick", strobe_max_hz=2.0, strobe_max_s=60.0)
+    seen, t_end, nb = set(), time.monotonic() + 1.3, 0
     while time.monotonic() < t_end:
-        r._strobe(pst, {"beats": 0})
+        nb += 1                                                        # un kick a chaque tour (100 Hz demandes)
+        r._strobe(pst, {"beats": nb})
         seen.add(r._strobe_last)
         time.sleep(0.01)
-    check(1 <= len(seen) - 1 <= 3, "strobe: la cadence demandee (20 Hz) est plafonnee par le limiteur (2 Hz) dans le rendu", f"{len(seen) - 1} eclairs en 1,3 s")
+    check(1 <= len(seen) - 1 <= 3, "strobe: la cadence demandee (100 kicks/s) est plafonnee par le limiteur (2 Hz) dans le rendu", f"{len(seen) - 1} eclairs en 1,3 s")
     # --- master des effets
     r.video_tex.write(np.full((size[1], size[0], 3), 60, np.uint8).tobytes())
     r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
