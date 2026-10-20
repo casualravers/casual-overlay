@@ -286,80 +286,168 @@ def install(c):
             except tk.TclError:
                 pass
 
-    def library_state(rows: list[dict], needle: str = "") -> tuple[list, list]:
-        """Lignes de la bibliotheque (triees, filtrees par `needle`) et noms correspondants."""
+    LIB_THUMB = (48, 27)
+
+    def lib_photo(scene: dict):
+        """Vignette de la bibliotheque (48 x 27) tiree de l'apercu de la scene, gardee en cache ; None sans apercu."""
+        name = scene.get("preview")
+        if not name:
+            return None
+        path = scenes.PREVIEW_DIR / Path(name).name
+        try:
+            key = (str(path), path.stat().st_mtime_ns, "lib")
+        except OSError:
+            return None
+        cache = s.__dict__.setdefault("preview_photos", {})
+        if key not in cache:
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(path)
+                img.load()
+                img.thumbnail(LIB_THUMB)
+                cache[key] = ImageTk.PhotoImage(img)
+            except Exception:
+                return None
+        return cache[key]
+
+    def library_signature(rows: list[dict], needle: str) -> tuple:
         used: dict[str, int] = {}
         for r in rows:
             used[r["name"].lower()] = used.get(r["name"].lower(), 0) + 1
-        needle = needle.strip().lower()
-        library = sorted(scene_book.list(), key=lambda x: x["name"].lower())
-        total = len(library)
-        if needle:
-            library = [x for x in library if needle in x["name"].lower()]
-        labels = [("\u2736 " if x.get("temp") else "") + x["name"] + (f"   \u00d7{used[x['name'].lower()]}" if used.get(x["name"].lower()) else "")
-                  for x in library]
-        return labels, [x["name"] for x in library], total
+        lib = scene_book.list()
+        return (tuple((x["name"], bool(x.get("star")), bool(x.get("temp")), x.get("preview") or "") for x in lib),
+                tuple(sorted(used.items())), needle.strip().lower())
 
-    def refresh_library(rows: list[dict]) -> None:
-        """Met la colonne a jour sur place (liste de scenes, compteurs \u00d7N) ; rien si rien n'a change."""
-        lib = panel_state.get("lib")
-        if not lib:
-            return
-        labels, found, total = library_state(rows, lib["filter"].get())
-        sig = (tuple(labels), total)
+    def fill_library(lib: dict, rows: list[dict]) -> None:
+        """(Re)remplit l'arbre : favoris, dossiers (un niveau), scenes de la racine ; les dossiers ouverts le restent, la position est gardee."""
+        tv = lib["tree"]
+        needle = lib["filter"].get()
+        sig = library_signature(rows, needle)
         if sig == lib.get("sig"):
             return
         lib["sig"] = sig
-        lb = lib["lb"]
+        used = dict(sig[1])
+        tree = scenes.library_tree(scene_book.list(), needle)
+        by_name = {x["name"]: x for x in scene_book.list()}
+        top = tv.yview()[0]
+        tv.delete(*tv.get_children())
+        lib["map"], lib["iids"], names = {}, {}, []
+        searching = bool(needle.strip())
+
+        def add(parent: str, iid: str, name: str, shown: str, photo: bool) -> None:
+            sc_ = by_name[name]
+            label = ("\u2605 " if sc_.get("star") else "") + ("\u2736 " if sc_.get("temp") else "") + shown
+            n = used.get(name.lower(), 0)
+            if n:
+                label += f"   \u00d7{n}"
+            tv.insert(parent, "end", iid=iid, text=" " + label, tags=("scene",))
+            lib["map"][iid] = name
+            lib["iids"].setdefault(name, iid)
+            if photo:
+                img = lib_photo(sc_)
+                if img is not None:
+                    tv.item(iid, image=img)
+
+        if tree["starred"]:
+            tv.insert("", "end", iid="F:*", text=f" \u2605 Favoris  ({len(tree['starred'])})", open=True, tags=("folder",))
+            for name in tree["starred"]:
+                add("F:*", "S:*:" + name, name, name, True)
+        for folder, members in tree["folders"].items():
+            is_open = searching or folder in lib["open"]
+            tv.insert("", "end", iid="F:" + folder, text=f" {folder}  ({len(members)})", open=is_open, tags=("folder",))
+            for name in members:
+                add("F:" + folder, "S:" + name, name, scenes.scene_folder(name)[1], is_open)
+        for name in tree["root"]:
+            add("", "S:" + name, name, name, True)
+        names.extend(n for g in tree["folders"].values() for n in g)
+        names.extend(tree["root"])
+        names.sort(key=str.lower)
+        lib["names"][:] = names
+        shown_n, total = tree["shown"], tree["total"]
+        lib["title"].configure(text=f"BIBLIOTHEQUE  ({shown_n}" + (f" / {total})" if shown_n != total else ")"))
         try:
-            top = lb.yview()[0]
-            lb.delete(0, "end")
-            lb.insert("end", *labels)
-            lib["names"][:] = found
-            lib["title"].configure(text=f"BIBLIOTHEQUE  ({len(found)}" + (f" / {total})" if len(found) != total else ")"))
-            lb.yview_moveto(top)
+            tv.yview_moveto(top)
         except tk.TclError:
             pass
 
+    def refresh_library(rows: list[dict]) -> None:
+        """Met la colonne a jour sur place ; rien si rien n'a change."""
+        lib = panel_state.get("lib")
+        if lib:
+            try:
+                fill_library(lib, rows)
+            except tk.TclError:
+                pass
+
     def build_library(parent, rows: list[dict], before=None) -> None:
-        """Colonne « bibliotheque » a gauche de la liste : toutes les scenes ; glisser-deposer vers la liste = ajouter au set a cet endroit.
-        Un champ de recherche filtre par nom ; la colonne se met a jour sur place (`refresh_library`)."""
-        box = tk.Frame(parent, bg=a2w.GUI_PANEL_BG, width=220)
+        """Colonne « bibliotheque » a gauche de la liste : favoris, dossiers (`dossier/nom`), scenes, avec une vignette quand la scene a un apercu.
+        Glisser-deposer vers la liste = ajouter au set a cet endroit. Un champ de recherche filtre par nom ; mise a jour sur place (`refresh_library`)."""
+        from tkinter import ttk
+        box = tk.Frame(parent, bg=a2w.GUI_PANEL_BG, width=250)
         if before is not None:
             box.pack(side="left", fill="y", padx=(0, 2), before=before)
         else:
             box.pack(side="left", fill="y", padx=(0, 2))
         box.pack_propagate(False)
-        labels, found, total = library_state(rows)
-        title = tk.Label(box, text=f"BIBLIOTHEQUE  ({total})", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=("Segoe UI", 8, "bold"),
-                         anchor="w")
+        title = tk.Label(box, text="BIBLIOTHEQUE", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR, font=("Segoe UI", 8, "bold"), anchor="w")
         title.pack(fill="x", padx=6, pady=(3, 0))
         filter_var = tk.StringVar(value="")
         search = tk.Entry(box, textvariable=filter_var)
         search.pack(fill="x", padx=6, pady=(2, 0))
-        Tooltip(search, "Tape une partie du nom pour filtrer la bibliotheque.")
+        Tooltip(search, "Tape une partie du nom pour filtrer la bibliotheque (les dossiers s'ouvrent).")
+        style = ttk.Style(root)
+        style.configure("Lib.Treeview", background=a2w.GUI_BG, fieldbackground=a2w.GUI_BG, foreground=a2w.GUI_FG, rowheight=LIB_THUMB[1] + 4, borderwidth=0)
+        style.map("Lib.Treeview", background=[("selected", SCENE_COLOR)], foreground=[("selected", BANNER_FG)])
+        style.layout("Lib.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
         lbar = skin.scrollbar(box)
-        lb = tk.Listbox(box, activestyle="none", exportselection=False, bg=a2w.GUI_BG, fg=a2w.GUI_FG, bd=0, highlightthickness=0,
-                        selectbackground=SCENE_COLOR, selectforeground=BANNER_FG, yscrollcommand=lbar.set)
-        lbar.config(command=lb.yview)
+        tv = ttk.Treeview(box, style="Lib.Treeview", show="tree", selectmode="browse", yscrollcommand=lbar.set)
+        tv.tag_configure("folder", foreground=SCENE_COLOR)
+        lbar.config(command=tv.yview)
         lbar.pack(side="right", fill="y")
-        lb.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=2)
-        names: list[str] = list(found)
-        if labels:
-            lb.insert("end", *labels)
-        panel_state["lib"] = {"lb": lb, "names": names, "box": box, "title": title, "filter": filter_var, "sig": (tuple(labels), total)}
+        tv.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=2)
+        lib = {"tree": tv, "lb": tv, "names": [], "box": box, "title": title, "filter": filter_var, "sig": None,
+               "map": {}, "iids": {}, "open": set()}
+        panel_state["lib"] = lib
+        fill_library(lib, rows)
         filter_var.trace_add("write", lambda *_: refresh_library(scene_book.rows()))
-        Tooltip(lb, "Toutes les scenes enregistrees. Glisse une scene sur la liste du set pour l'y ajouter a cet endroit (autant de fois que tu "
-                    "veux), double-clic = a la fin, clic droit = renommer / garder / supprimer. \u00d7N = nombre d'entrees dans ce set.")
+        Tooltip(tv, "Toutes les scenes enregistrees, rangees par dossier (nom `dossier/scene`) avec les favoris en tete. Glisse une scene sur la liste du set "
+                    "pour l'y ajouter a cet endroit (autant de fois que tu veux), double-clic = a la fin, clic droit = favori / renommer / ranger / garder. "
+                    "\u00d7N = nombre d'entrees dans ce set.")
+
+        def folder_of(iid: str) -> str:
+            return iid[2:]
+
+        def on_open(_e=None) -> None:
+            iid = tv.focus()
+            if iid.startswith("F:") and iid != "F:*":
+                lib["open"].add(folder_of(iid))
+                for child in tv.get_children(iid):                      # les vignettes des dossiers fermes ne sont chargees qu'a l'ouverture
+                    name = lib["map"].get(child)
+                    scene = next((x for x in scene_book.list() if x["name"] == name), None)
+                    if scene is not None and not tv.item(child, "image"):
+                        img = lib_photo(scene)
+                        if img is not None:
+                            tv.item(child, image=img)
+
+        def on_close(_e=None) -> None:
+            iid = tv.focus()
+            if iid.startswith("F:"):
+                lib["open"].discard(folder_of(iid))
+
+        tv.bind("<<TreeviewOpen>>", on_open)
+        tv.bind("<<TreeviewClose>>", on_close)
         d: dict = {}
 
+        def scene_at(y: int) -> str | None:
+            iid = tv.identify_row(y)
+            return lib["map"].get(iid) if iid else None
+
         def press(e) -> None:
-            i = lb.nearest(e.y)
-            if 0 <= i < len(names) and lb.bbox(i):
+            name = scene_at(e.y)
+            if name is not None:
                 d.clear()
-                d.update(name=names[i], x=e.x_root, y=e.y_root, moved=False, ghost=None)
-                lb.selection_clear(0, "end")
-                lb.selection_set(i)
+                d.update(name=name, x=e.x_root, y=e.y_root, moved=False, ghost=None)
+                tv.selection_set(tv.identify_row(e.y))
             else:
                 d.clear()
 
@@ -389,28 +477,58 @@ def install(c):
                     add_at(name, pos)
 
         def double(e) -> None:
-            i = lb.nearest(e.y)
-            if 0 <= i < len(names):
+            name = scene_at(e.y)
+            if name is not None:
                 d.clear()
-                add_at(names[i], None)
+                add_at(name, None)
+
+        def star_now(name: str) -> None:
+            on = not any(x["name"] == name and x.get("star") for x in scene_book.list())
+            scene_book.set_star(name, on)
+            scene_msg.set(f"'{name}' " + ("ajoutee aux favoris" if on else "retiree des favoris"))
+            refresh_library(scene_book.rows())
+
+        def move_dialog(name: str) -> None:
+            folder, leaf = scenes.scene_folder(name)
+            asked = scene_ui["ask_name"]("Ranger la scene", "Dossier (vide = a la racine) :", folder)
+            if asked is None:
+                return
+            asked = asked.strip().strip("/").strip()
+            if scenes.FOLDER_SEP in asked:
+                scene_msg.set("Un seul niveau de dossier")
+                return
+            new = f"{asked}{scenes.FOLDER_SEP}{leaf}" if asked else leaf
+            if new == name:
+                return
+            if not scene_book.rename_scene(name, new):
+                scene_msg.set("Nom de scene deja pris")
+                return
+            if getattr(s, "active_scene", None) == name:
+                s.active_scene = new
+            scene_msg.set(f"'{name}' rangee : '{new}'")
+            refresh_scene_bar()
 
         def menu_at(e) -> None:
-            i = lb.nearest(e.y)
-            if not 0 <= i < len(names):
+            name = scene_at(e.y)
+            if name is None:
                 return
-            name = names[i]
-            m = tk.Menu(lb, tearoff=0)
+            tv.selection_set(tv.identify_row(e.y))
+            starred = any(x["name"] == name and x.get("star") for x in scene_book.list())
+            m = tk.Menu(tv, tearoff=0)
             m.add_command(label="Ajouter a la fin du set", command=lambda: add_at(name, None))
+            m.add_command(label="Retirer des favoris" if starred else "Mettre en favori", command=lambda: star_now(name))
             m.add_command(label="Renommer...", command=lambda: rename_scene_dialog(name))
+            m.add_command(label="Ranger dans un dossier...", command=lambda: move_dialog(name))
             if any(x["name"] == name and x.get("temp") for x in scene_book.list()):
                 m.add_command(label="Garder (n'est plus provisoire)", command=lambda: keep_now(name))
             m.tk_popup(e.x_root, e.y_root)
 
-        lb.bind("<ButtonPress-1>", press)
-        lb.bind("<B1-Motion>", motion)
-        lb.bind("<ButtonRelease-1>", release)
-        lb.bind("<Double-Button-1>", double)
-        lb.bind("<Button-3>", menu_at)
+        tv.bind("<ButtonPress-1>", press, add="+")
+        tv.bind("<B1-Motion>", motion)
+        tv.bind("<ButtonRelease-1>", release)
+        tv.bind("<Double-Button-1>", double, add="+")
+        tv.bind("<Button-3>", menu_at)
+        lib["star"], lib["move"] = star_now, move_dialog
 
     def build_selbar(parent) -> tk.Frame:
         """Barre des actions sur les lignes cochees (retirer, VJ off / on, duree, dupliquer, copier vers un autre set) et de la bibliotheque."""

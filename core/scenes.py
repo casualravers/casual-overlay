@@ -107,7 +107,7 @@ class SceneBook:
               "set_entry_a2w": "Media d'une ligne", "set_entry_bg_video": "Video de fond d'une ligne", "set_entry_vj": "Duree / VJ d'une ligne",
               "set_entries_vj": "Duree / VJ des lignes", "duplicate_entries": "Dupliquer des lignes", "copy_entries_to_set": "Copier vers un set",
               "rename_scene": "Renommer la scene", "set_vj": "Reglages du VJ", "keep_scene": "Garder la scene", "import_set": "Importer un set",
-              "set_preview": "Apercu de la scene"}
+              "set_preview": "Apercu de la scene", "set_star": "Etoile d'une scene"}
     _HISTORY: dict = {}                            # chemin du fichier -> {"undo": [...], "redo": [...], "depth": 0, "pushed": False, "label": None}
 
     def __init__(self, path_getter) -> None:
@@ -450,6 +450,19 @@ class SceneBook:
             self._save(data)
         return len(idx)
 
+    def set_star(self, name: str, on: bool) -> bool:
+        """Marque (ou non) la scene comme favorite : elle passe en tete de la bibliotheque. False si elle n'existe pas."""
+        data = self._load()
+        i = self._find(data["scenes"], name)
+        if i is None:
+            return False
+        if on:
+            data["scenes"][i]["star"] = True
+        else:
+            data["scenes"][i].pop("star", None)
+        self._save(data)
+        return True
+
     def set_preview(self, name: str, filename: str | None) -> bool:
         """Associe a la scene le fichier d'apercu `filename` (dans PREVIEW_DIR) ; l'ancien fichier est supprime. Pas un pas d'annulation."""
         data = self._load()
@@ -636,6 +649,30 @@ def strip_live_overrides(overrides: dict | None) -> dict | None:
     if not isinstance(overrides, dict):
         return overrides
     return {k: v for k, v in overrides.items() if k not in SCENE_EXCLUDED}
+
+
+FOLDER_SEP = "/"
+
+
+def scene_folder(name: str) -> tuple[str, str]:
+    """`club/neon` -> (`club`, `neon`) ; un nom sans `/` est a la racine (dossier vide). Un seul niveau."""
+    folder, sep, leaf = name.partition(FOLDER_SEP)
+    return (folder.strip(), leaf.strip()) if sep and folder.strip() and leaf.strip() else ("", name)
+
+
+def library_tree(library: list[dict], needle: str = "") -> dict:
+    """Bibliotheque rangee : `starred` (noms des scenes favorites), `folders` (dossier -> noms, tries) et `root` (noms sans dossier), triees
+    sans tenir compte de la casse ; avec `needle`, seules les scenes dont le nom le contient. `total` = nombre de scenes avant filtre."""
+    low = needle.strip().lower()
+    shown = [x for x in library if not low or low in x["name"].lower()]
+    shown.sort(key=lambda x: x["name"].lower())
+    folders: dict[str, list[str]] = {}
+    root: list[str] = []
+    for x in shown:
+        folder, _leaf = scene_folder(x["name"])
+        (folders.setdefault(folder, []) if folder else root).append(x["name"])
+    return {"starred": [x["name"] for x in shown if x.get("star")], "folders": dict(sorted(folders.items(), key=lambda kv: kv[0].lower())),
+            "root": root, "total": len(library), "shown": len(shown)}
 
 
 def clean_presets(presets: dict | None) -> dict:

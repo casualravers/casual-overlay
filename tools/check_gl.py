@@ -1231,6 +1231,8 @@ def check_gui() -> None:
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
           str(out.get("x_stage")))
+    check(out.get("x_library_tree") == (True,) * 6, "bibliotheque (GUI): favoris en tete, dossiers (dossier/nom), ranger / sortir d'un dossier, recherche, mise a jour sur place",
+          str(out.get("x_library_tree")))
     check(out.get("x_palette") == (True,) * 7, "palette (GUI): scenes, sets, presets et commandes listes ; une saisie lance la bonne commande", str(out.get("x_palette")))
     check(out.get("x_sched") == (True,) * 6, "planning (GUI): a l'heure dite la source passe en Texte et le texte du passage est pose, une seule fois ; case decochee = rien",
           str(out.get("x_sched")))
@@ -2875,6 +2877,18 @@ def check_sets_pure(sc, tmp) -> None:
     check(r_pr2["presets_added"] == [], "import: reimporter ne duplique rien", str(r_pr2))
     junk = sc.parse_import(_json.dumps({**exp_pr, "presets": {"overlay": {"_x": {}, "default": {}, "ok": {"a": 1}, "bad": 3}, "fond": 5}}))
     check(junk["presets"] == {"overlay": {"ok": {"a": 1}}, "fond": {}}, "import: presets invalides ecartes", str(junk["presets"]))
+    # bibliotheque : dossiers (dossier/nom), favoris, recherche
+    lib_scenes = [{"name": n} for n in ("zeta", "Alpha", "club/neon", "club/Acid", "salle/x")]
+    lib_scenes[2]["star"] = True
+    tr = sc.library_tree(lib_scenes)
+    check(sc.scene_folder("club/neon") == ("club", "neon") and sc.scene_folder("a/") == ("", "a/") and sc.scene_folder("/a") == ("", "/a")
+          and tr["starred"] == ["club/neon"] and tr["root"] == ["Alpha", "zeta"] and tr["folders"] == {"club": ["club/Acid", "club/neon"], "salle": ["salle/x"]}
+          and tr["total"] == 5 and sc.library_tree(lib_scenes, "AC")["shown"] == 1 and sc.library_tree(lib_scenes, "AC")["folders"] == {"club": ["club/Acid"]},
+          "bibliotheque: favoris, dossiers (un niveau), racine, tri sans casse, recherche", str(tr))
+    sbook = sc.SceneBook(lambda: tmp.with_name("stars.json"))
+    sbook.put({"name": "S1", "bg": "live", "overlay": {}})
+    check(sbook.set_star("S1", True) and sbook.get("S1").get("star") is True and sbook.set_star("S1", False) and "star" not in sbook.get("S1")
+          and not sbook.set_star("absente", True), "bibliotheque: etoile d'une scene (mise, retiree, scene inconnue refusee)")
     # renommer / ranger un preset : favoris, recents et scenes qui le citent suivent
     src_o.toggle_favorite("autre")
     src_o.touch("autre")
@@ -3700,13 +3714,49 @@ def gui_expand_steps(c, s, out) -> None:
     row1 = sc["panel_state"]["rows"][1]["frame"]
     target_y = row1.winfo_rooty() + 2
     target_x = sc["panel_state"]["cv"].winfo_rootx() + 40
-    lb.event_generate("<ButtonPress-1>", x=5, y=5, rootx=lb.winfo_rootx() + 5, rooty=lb.winfo_rooty() + 5)
-    lb.event_generate("<B1-Motion>", x=5, y=5, rootx=target_x, rooty=target_y, state=0x100)
-    lb.event_generate("<ButtonRelease-1>", x=5, y=5, rootx=target_x, rooty=target_y)
+    first_iid = lib["iids"][lib["names"][0]]
+    root.update()
+    bx, by, bw, bh = lb.bbox(first_iid)
+    lb.event_generate("<ButtonPress-1>", x=bx + 5, y=by + 3, rootx=lb.winfo_rootx() + bx + 5, rooty=lb.winfo_rooty() + by + 3)
+    lb.event_generate("<B1-Motion>", x=bx + 5, y=by + 3, rootx=target_x, rooty=target_y, state=0x100)
+    lb.event_generate("<ButtonRelease-1>", x=bx + 5, y=by + 3, rootx=target_x, rooty=target_y)
     root.update()
     rows_drag = [r["name"] for r in book.rows()]
     if len(rows_drag) == len(rows_before) + 1:
         book.remove_entry(1)
+    # favoris, dossiers et recherche de la bibliotheque (mise a jour sur place)
+    keep_names = list(lib["names"])
+    root.update()
+    lib = sc["panel_state"]["lib"]                       # le panneau a pu etre reconstruit par l'ajout/retrait ci-dessus
+    tv_ = lib["tree"]
+    nm_ = keep_names[0]
+    lib["star"](nm_)
+    root.update()
+    star_kids = [lib["map"][i] for i in tv_.get_children("F:*")] if tv_.exists("F:*") else []
+    lib["star"](nm_)
+    root.update()
+    star_gone = not tv_.exists("F:*")
+    old_ask = sc["ui"]["ask_name"]
+    sc["ui"]["ask_name"] = lambda title, prompt, initial="": "club"
+    lib["move"](nm_)
+    root.update()
+    lib = sc["panel_state"]["lib"]                       # renommer reconstruit le panneau
+    tv_ = lib["tree"]
+    moved_name = [x for x in book.names() if x.startswith("club/")]
+    folder_there = tv_.exists("F:club") and len(tv_.get_children("F:club")) == 1
+    sc["ui"]["ask_name"] = lambda title, prompt, initial="": ""
+    if moved_name:
+        lib["move"](moved_name[0])
+    root.update()
+    lib = sc["panel_state"]["lib"]
+    back_name = nm_ in book.names() and not [x for x in book.names() if x.startswith("club/")]
+    sc["ui"]["ask_name"] = old_ask
+    lib["filter"].set(nm_[:3].lower())
+    root.update()
+    filtered = all(nm_[:3].lower() in n.lower() for n in lib["names"]) and 1 <= len(lib["names"]) <= len(book.names())
+    lib["filter"].set("")
+    root.update()
+    out["x_library_tree"] = (star_kids == [nm_], star_gone, bool(moved_name) and folder_there, back_name, filtered, len(lib["names"]) == len(book.names()))
     ops.toggle_library()
     root.update()
     out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
