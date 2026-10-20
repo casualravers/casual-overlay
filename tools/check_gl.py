@@ -2477,6 +2477,8 @@ def check_beat_grid() -> None:
     check(r.beat_index == 2, "rythme: le dernier kick porte son numero de temps", str(r.beat_index))
     r.update(7.0, {}, False)
     check(not r.grid.active and r.beat_index is None, "rythme: sans kick pendant 5 s la grille est effacee")
+    if SANS_GPU:
+        return
     # strobe leger : tombe sur les 1 de la grille (temps multiples de strobe_div)
     try:
         ctx = gl.moderngl.create_standalone_context()
@@ -6990,7 +6992,22 @@ def check_native_modes() -> None:
           "retour au mode Live en --synthetic : flux d'origine rendu, mode GL arrete", str(msg))
 
 
+# `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
+SANS_GPU = "--pur" in sys.argv
+PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_schedule", "check_palette",
+         "check_stage_layout")
+
+
 def main() -> None:
+    if SANS_GPU:
+        for name in PURES:
+            globals()[name]()
+        if failures:
+            print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
+            sys.exit(1)
+        print("Toutes les verifications pures passent.")
+        return
     check_reader()
     check_features()
     check_text()

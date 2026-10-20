@@ -1175,6 +1175,7 @@ fond motif (non vide, defile, fige a vitesse 0, taille des carreaux, palette duo
 rendu en contexte standalone (image identique a la video quand l'audio est coupe,
 chaque effet visible isolement, image ni noire ni saturee, logo incruste et video intacte
 ailleurs, logo jamais hors cadre, shader invalide refuse sans perdre l'ancien).
+**Integration continue** (`.github/workflows/check.yml`, GitHub Actions, Windows) : sur chaque PR et chaque push sur main, le job `pur` lance `python tools/check_gl.py --pur` (lecteur, features audio, scenes, schema des reglages, purete de `core/`, couches, portable, grille du temps, planning, palette... : ni GPU, ni micro, ni ffmpeg) et DOIT passer ; le job `complet` lance toute la suite mais `continue-on-error` (un serveur sans carte graphique ni peripheriques en echoue une partie). `PURES` dans `check_gl.py` liste le sous-ensemble : y ajouter toute nouvelle verification qui ne demande rien de materiel.
 Controle visuel : `--screenshot fichier.png --max-seconds N` (avec `--hud`).
 
 Non verifie automatiquement (demande le materiel) : touches clavier (F, H, R, P, 1-5, +/-),
