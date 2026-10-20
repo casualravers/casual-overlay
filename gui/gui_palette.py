@@ -43,6 +43,7 @@ def install(c):
             ("Temps 1 : le temps qui tombe est le premier", "grille mesure phase", c.do_one),
             ("Panneau etendu : ouvrir / fermer", "vj liste scenes etendre reduire", lambda: c.set_expanded(not getattr(c.s, "scenes_expanded", False))),
             ("Console VJ", "grosses commandes", c.console_window),
+            ("Mode scene : scenes en grosses touches, plein ecran", "stage portable penombre", c.open_stage),
             ("Aide : raccourcis clavier", "help ?", c.help_window),
             ("Projection : demarrer / fermer", "ecran fenetre gl", c.toggle_projection),
         ]

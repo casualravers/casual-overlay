@@ -1229,6 +1229,8 @@ def check_gui() -> None:
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
     check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
+          str(out.get("x_stage")))
     check(out.get("x_palette") == (True,) * 7, "palette (GUI): scenes, sets, presets et commandes listes ; une saisie lance la bonne commande", str(out.get("x_palette")))
     check(out.get("x_sched") == (True,) * 6, "planning (GUI): a l'heure dite la source passe en Texte et le texte du passage est pose, une seule fois ; case decochee = rien",
           str(out.get("x_sched")))
@@ -2403,6 +2405,13 @@ def check_latence() -> None:
     print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
 
 
+def check_stage_layout() -> None:
+    print("Mode scene (gui/gui_stage.py)")
+    import gui_stage
+    check([gui_stage.grid_columns(n, w) for n, w in ((0, 1000), (1, 1000), (3, 1000), (12, 1000), (12, 500), (12, 3000), (5, 0))] == [1, 1, 3, 4, 2, 4, 4],
+          "mode scene: nombre de colonnes selon le nombre de scenes et la largeur (4 au plus, touches d'au moins ~220 px)")
+
+
 def check_palette() -> None:
     print("Palette de commandes (core/palette.py)")
     from core import palette as pal
@@ -3406,6 +3415,38 @@ def gui_expand_steps(c, s, out) -> None:
                         chosen_ is not None and chosen_.startswith("Verrou") and before_lock != after_lock,
                         chosen_p == "Panique" and params["comp_sym"] == 0, opened_, pc.state["win"] is None, pc.choose("introuvable-xyz") is None,
                         bool(pc.matches("")))
+    # mode scene
+    st_ = c["stage"]
+    st_.open()
+    root.update()
+    wst = st_.state["widgets"]
+    btns_ = [b for b in wst["scenes"].winfo_children() if b.winfo_class() == "Button"]
+    rows_st = book.rows()
+    params["overlay_master"], params["bg_master"] = 1.0, 1.0
+    wst["overlay_master"].set(40)
+    wst["bg_master"].set(25)
+    root.update()
+    masters_ok = abs(params["overlay_master"] - 0.4) < 1e-6 and abs(params["bg_master"] - 0.25) < 1e-6
+    if len(btns_) > 1:
+        btns_[1].invoke()
+        root.update()
+        st_.tick()
+        root.update()
+    active_i = s.active_entry
+    amber = [b for b in wst["scenes"].winfo_children() if b.winfo_class() == "Button" and str(b.cget("bg")).lower() == "#ffcf6b"]
+    params["comp_sym"] = 3
+    for frame in st_.state["win"].winfo_children():
+        for b in frame.winfo_children() if frame.winfo_class() == "Frame" else []:
+            if b.winfo_class() == "Button" and b.cget("text") == "PANIQUE":
+                b.invoke()
+    root.update()
+    params["overlay_master"], params["bg_master"] = 1.0, 1.0
+    st_.tick()
+    out["x_stage"] = (len(btns_) == len(rows_st) and len(btns_) > 0, masters_ok, len(btns_) < 2 or active_i == 1, len(amber) <= 1,
+                      params["comp_sym"] == 0, abs(wst["overlay_master"].get() - 100.0) < 1.0, wst["title"].cget("text").startswith("SET"),
+                      st_.state["win"] is not None)
+    st_.close()
+    root.update()
     # planning du texte
     import types as _ty
     c["sched_text"].delete("1.0", "end")
@@ -6948,6 +6989,7 @@ def main() -> None:
     check_beat_grid()
     check_schedule()
     check_palette()
+    check_stage_layout()
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats

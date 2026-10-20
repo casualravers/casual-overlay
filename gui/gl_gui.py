@@ -50,6 +50,7 @@ import gui_fond
 import gui_effects
 import gui_logo
 import gui_palette
+import gui_stage
 import gui_audio
 import gui_panel
 import gui_random
@@ -716,6 +717,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def on_switch(new_mode: str) -> None:
         root.after(30, lambda: request_mode(new_mode))     # hors du callback du bouton qu'on va detruire
 
+    stage_ref = {"open": lambda: None}          # ouvre le mode scene (rempli en fin de construction, le menu est fait avant)
     controls_ref = {"f": None}          # fabrique du dictionnaire de controles donne a `on_ready` (rempli en fin de construction)
 
     def request_mode(new_mode: str) -> None:
@@ -2410,6 +2412,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                              command=lambda: set_vj_option(on_drop=bool(drop_var.get())))
         menu.add_separator()
         menu.add_command(label="Console VJ (grosses commandes)...", command=console_window)
+        menu.add_command(label="Mode scene (scenes en grosses touches, plein ecran)...", command=lambda: stage_ref["open"]())
         menu.add_command(label="Raccourcis clavier (?)...", command=help_window)
         menu.add_command(label="Rapport de fluidite de l'interface...", command=lambda: choice_dialog(
             root, "Fluidite de l'interface", "\n".join(STATS.report(12)), ["Fermer"]))
@@ -2741,7 +2744,26 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     after(300, watch_page)
 
+    stage_ctl = gui_stage.install(types.SimpleNamespace(
+        a2w=a2w,
+        apply_entry=apply_entry,
+        back_scene=back_scene,
+        current_index=current_index,
+        do_panic=do_panic,
+        params=params,
+        root=root,
+        s=s,
+        scene_book=scene_book,
+        status_text=status_text,
+        toggle_scene_lock=toggle_scene_lock,
+        ui_every=ui_every,
+        ui_remove=ui_remove,
+        vj=vj,
+        vj_advance=vj_advance,
+        vj_toggle=vj_toggle))
+    stage_ref["open"] = stage_ctl.open
     palette_ctl = gui_palette.install(types.SimpleNamespace(
+        open_stage=stage_ctl.open,
         a2w=a2w,
         apply_entry=apply_entry,
         back_scene=back_scene,
@@ -2804,7 +2826,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
-            "palette": palette_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
+            "palette": palette_ctl, "stage": stage_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
             "image_box": image_box, "text_box": text_box, "font_var": font_var})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))
