@@ -28,7 +28,7 @@ def install(c):
     fit = c.fit
     host_item = c.host_item
     make_preset_bar = c.make_preset_bar
-    mode = c.mode
+    mode_ref = c.mode_ref
     overlay_presets = c.overlay_presets
     param_radio = c.param_radio
     param_slider = c.param_slider
@@ -143,7 +143,7 @@ def install(c):
             bgvid_box.pack(fill="x", after=bg_preset_bar)
         canvas.yview_moveto(0)
         banner_live.config(text={"pattern": "LIVE  -  fond genere (casual-overlay)",
-                                 "video": "LIVE  -  fond video (casual-overlay)"}.get(bg_state["mode"], MODE_BANNERS[mode]))
+                                 "video": "LIVE  -  fond video (casual-overlay)"}.get(bg_state["mode"], MODE_BANNERS[mode_ref["v"]]))
         fit()
 
     bg_var.trace_add("write", show_bg)

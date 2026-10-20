@@ -456,6 +456,9 @@ def check_gui() -> None:
     def on_ready(c):
         root = c["root"]
         out["builds"] = out.get("builds", 0) + 1
+        first_ = out.setdefault("first_widgets", (c["notebook"], c["scene_bar"], c["right_cv"], c["live_host"]))
+        out["swap_keeps_overlay"] = out.get("swap_keeps_overlay", True) and (c["notebook"], c["scene_bar"], c["right_cv"]) == first_[:3]
+        out["swap_new_panel"] = out.get("swap_new_panel", False) or (out["builds"] > 1 and c["live_host"] is not first_[3])
         if out["builds"] > 1:
             mode_stage(c)
             return
@@ -1136,6 +1139,9 @@ def check_gui() -> None:
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
     check(out.get("x_chunks") == (True, True), "panneau etendu (GUI): un gros set est construit par lots (premieres lignes tout de suite, toutes ensuite), sans geler la fenetre", str(out.get("x_chunks")))
+    check(out.get("swap_keeps_overlay") is True and out.get("swap_new_panel") is True and out.get("builds", 0) >= 4,
+          "changement de mode (Live / Snap / Ridge): seul le panneau d'audio2wave est reconstruit, la barre des scenes et la partie OVERLAY gardent les memes widgets",
+          str((out.get("swap_keeps_overlay"), out.get("swap_new_panel"), out.get("builds"))))
     check(out.get("set_async") == (True, True, True, True, True, True),
           "sets (GUI): export et import d'archive depuis le menu se font dans un fil (la fenetre reste utilisable), meme resultat", str(out.get("set_async")))
     check(out.get("set_pack") == (True, True, True, True),

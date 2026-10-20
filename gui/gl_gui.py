@@ -653,7 +653,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     # Un seul ordonnanceur pour tous les rafraichissements periodiques (voyants, mesures, statut...) : une minuterie Tk au lieu
     # d'une par rafraichissement, chaque tache a sa periode, une erreur dans l'une ne tue pas les autres.
-    sched = uistats.Scheduler(STATS, on_error=lambda name, exc: sessionlog.error(f"Erreur dans la tache d'interface {name}", exc))
+    sched = uistats.Scheduler(STATS, on_error=lambda name, exc: None if isinstance(exc, tk.TclError) else sessionlog.error(f"Erreur dans la tache d'interface {name}", exc))   # (TclError : fenetre en cours de fermeture)
 
     def ui_every(name: str, period_ms: float, fn, first_ms: float = 0.0) -> None:
         sched.add(name, period_ms, fn, first_ms=first_ms, now=time.perf_counter())
@@ -714,13 +714,16 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def on_switch(new_mode: str) -> None:
         root.after(30, lambda: request_mode(new_mode))     # hors du callback du bouton qu'on va detruire
 
+    controls_ref = {"f": None}          # fabrique du dictionnaire de controles donne a `on_ready` (rempli en fin de construction)
+
     def request_mode(new_mode: str) -> None:
+        """Changement de source (Live / Snap / Ridge) : seul le panneau d'audio2wave (a gauche) est reconstruit ; la barre des scenes,
+        la partie OVERLAY, le panneau etendu et l'espace de controle restent en place (plus de reconstruction de toute la fenetre)."""
         sync_automation_now()
         message = activate_mode(s, live, new_mode)
-        alive["ok"] = False
         if message:
             s.status["msg"] = message
-        build_window(s, live, root, s.mode, on_ready)
+        swap_live_panel()
 
     t_build = time.perf_counter()
     migrate_scene_presets(live)          # presets `scene-<nom>` des premieres versions -> scenes.json
@@ -745,24 +748,37 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     restart_event = threading.Event()
     live_status = {"text": ""}
     panel = {"ctrl": None}              # `common.GuiController` du panneau d'audio2wave : capture_state / apply_state / commit_pending / widgets
-    if mode == "live":
-        panel["ctrl"] = live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
-                                       s.finished_event, on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
-    else:
-        src = s.pysrc
-        never = threading.Event()     # leur refresh() ferme la fenetre quand cet evenement est positionne: jamais ici
-        if mode == "snap":
-            panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.capture_state, src.stop_event, never,
-                                                 on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
+    mode_ref = {"v": mode}              # mode du panneau affiche (change quand on bascule Live / Snap / Ridge)
+
+    def build_live_panel(m: str) -> None:
+        """Construit (ou reconstruit) le panneau d'audio2wave du mode `m` dans `host`."""
+        for child in list(host.winfo_children()):
+            child.destroy()
+        # Un cadre neuf par panneau : ses minuteries (`after` d'audio2wave, liees a ce cadre) sont supprimees avec lui quand on le detruit,
+        # sinon la boucle d'un ancien panneau continuerait sur des widgets disparus.
+        pf = tk.Frame(host)
+        pf.pack(fill="both", expand=True)
+        panel["frame"] = pf
+        if m == "live":
+            panel["ctrl"] = live.build_gui(s.live_args, render_w, render_h, live_status, restart_event, s.stop_event,
+                                           s.finished_event, on_switch_mode=on_switch, **PANEL_OPTIONS, parent=pf)
         else:
-            panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.stop_event, never,
-                                                 on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
+            src = s.pysrc
+            never = threading.Event()     # leur refresh() ferme la fenetre quand cet evenement est positionne: jamais ici
+            if m == "snap":
+                panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.capture_state, src.stop_event, never,
+                                                     on_switch_mode=on_switch, **PANEL_OPTIONS, parent=pf)
+            else:
+                panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.stop_event, never,
+                                                     on_switch_mode=on_switch, **PANEL_OPTIONS, parent=pf)
+        widgets = panel["ctrl"].widgets
+        tidy_mode_gui(pf, m, widgets)
+        gui_colors.add_color_helpers(pf, a2w.GUI_ACCENT, a2w.GUI_ACCENT_FG, widgets, m)      # pastilles + selecteur sur les champs couleur
+        gui_gates.install_mode_gates(pf, m, a2w.GUI_MUTED_FG, widgets)     # grise ce qui n'a pas de sens dans ce mode
+
+    build_live_panel(mode)
     root.title("casual-overlay GL - reglages")
     STATS.record("build.panneau_audio2wave", (time.perf_counter() - t_build) * 1000.0)
-    widgets = panel["ctrl"].widgets
-    tidy_mode_gui(host, mode, widgets)
-    gui_colors.add_color_helpers(host, a2w.GUI_ACCENT, a2w.GUI_ACCENT_FG, widgets, mode)      # pastilles + selecteur sur les champs couleur
-    gui_gates.install_mode_gates(host, mode, a2w.GUI_MUTED_FG, widgets)     # grise ce qui n'a pas de sens dans ce mode
     cap = max(420, min(LIVE_MAX_HEIGHT, root.winfo_screenheight() - 200))
 
     def cap_now() -> int:
@@ -791,6 +807,43 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         h = active_panel().winfo_reqheight()
         canvas.configure(width=w, height=min(host.winfo_reqheight(), cap_now()), scrollregion=(0, 0, w, h))
         update_scrollbar()
+
+    def swap_live_panel() -> None:
+        """Reconstruit seulement le panneau d'audio2wave pour `s.mode` (ce que faisait `build_window` en entier : ~1,5 s de plus)."""
+        t0 = time.perf_counter()
+        new_mode = s.mode
+        old_w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth())
+        keep = None
+        if (getattr(s, "vj_state", None) or {}).get("running") and root.winfo_ismapped():
+            keep = (root.winfo_width(), root.winfo_height())            # le VJ enchaine des modes : la fenetre garde sa taille
+        migrate_scene_presets(live)                                     # scenes d'anciennes versions : leur preset passe dans scenes.json (avant leur panneau)
+        mode_ref["v"] = new_mode
+        canvas.itemconfigure(host_item, state="hidden")                 # le panneau neuf se construit sans etre peint a moitie
+        DEVICE_CACHE["on"] = True
+        try:
+            build_live_panel(new_mode)
+            skin.apply(host)
+        finally:
+            DEVICE_CACHE["on"] = False
+        host.update_idletasks()
+        canvas.itemconfigure(host_item, state="hidden" if bg_state["mode"] != "live" else "normal")
+        canvas.yview_moveto(0)
+        if bg_state["mode"] == "live":
+            banner_live.config(text=MODE_BANNERS[new_mode])
+        fit()
+        new_w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth())
+        layout["wide_need"] = max(layout["wide_need"] + new_w - old_w, 0)       # largeur cote a cote : les panneaux n'ont pas la meme largeur
+        on_page_config()
+        if keep is not None:
+            root.update_idletasks()
+            root.geometry(f"{keep[0]}x{keep[1]}")
+        pending = getattr(s, "pending_live_overrides", None)
+        if pending:                                  # scene qui a change de mode : on charge son etat dans le panneau neuf
+            s.pending_live_overrides = None
+            after(150, lambda: apply_live_overrides(pending) or scene_msg.set("panneau audio2wave de la scene introuvable"))
+        STATS.record("mode.panneau", (time.perf_counter() - t0) * 1000.0)
+        if on_ready is not None and controls_ref["f"] is not None:
+            root.after(50, lambda: on_ready(controls_ref["f"]()))
 
     def under(widget, container) -> bool:
         if container is None:
@@ -827,7 +880,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     fit()
 
     # Deux grandes parties, bien distinctes : bandeaux de couleur en haut et gros trait vertical entre les deux.
-    banner_live = tk.Label(page, text=MODE_BANNERS[mode])
+    banner_live = tk.Label(page, text=MODE_BANNERS[mode_ref["v"]])
     skin.title(banner_live, LIVE_COLOR, kicker=False)
     banner_overlay = tk.Label(page, text="OVERLAY  -  logo, effets (casual-overlay)")
     skin.title(banner_overlay, OVERLAY_COLOR, kicker=False)
@@ -884,6 +937,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     seen_live = {"text": None}
 
     def poll_bridge() -> None:
+        if mode_ref["v"] != "live":
+            return
         if restart_event.is_set():
             restart_event.clear()
             push_live()
@@ -892,7 +947,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             if msg and msg != seen_live["text"]:
                 seen_live["text"] = msg
                 live_status["text"] = msg            # affiche dans la ligne de statut d'audio2wave
-        after(BRIDGE_MS, poll_bridge)
 
     # ------------------------------------------------------ 3. nos panneaux, a droite
     separator = tk.Frame(page, bg=OVERLAY_COLOR, width=3)       # frontiere LIVE | OVERLAY (mise en page cote a cote)
@@ -1239,7 +1293,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         fit=fit,
         host_item=host_item,
         make_preset_bar=make_preset_bar,
-        mode=mode,
+        mode_ref=mode_ref,
         overlay_presets=overlay_presets,
         param_radio=param_radio,
         param_slider=param_slider,
@@ -2525,8 +2579,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     root.protocol("WM_DELETE_WINDOW", on_close)
     ui_every("refresh", REFRESH_MS, refresh)
     ui_every("meter", METER_MS, update_meter)
-    if mode == "live":
-        poll_bridge()
+    ui_every("bridge", BRIDGE_MS, poll_bridge)
     sync_automation_state()
     if keep_size is not None:
         root.update_idletasks()
@@ -2537,9 +2590,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     if pending:                                  # scene qui a change de mode : on charge son etat dans le panneau neuf
         s.pending_live_overrides = None
         after(150, lambda: apply_live_overrides(pending) or scene_msg.set("panneau audio2wave de la scene introuvable"))
-    if on_ready is not None:
-        root.after(50, lambda: on_ready({
-            "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
+    controls_ref["f"] = lambda: ({
+            "root": root, "live_host": panel["frame"], "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
             "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": tab_aff, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
@@ -2563,7 +2615,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
-            "image_box": image_box, "text_box": text_box, "font_var": font_var}))
+            "image_box": image_box, "text_box": text_box, "font_var": font_var})
+    if on_ready is not None:
+        root.after(50, lambda: on_ready(controls_ref["f"]()))
 
 
 build_window = STATS.watched("build_window")(build_window)
