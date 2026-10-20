@@ -215,6 +215,10 @@ def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple
 HOLO_DOWNSCALE = 4      # le champ du halo holographique est calcule a 1/4 de la resolution de l'ecran
 
 
+STROBE_TARGETS = {"all": 0, "bg": 1, "logo": 2}
+STROBE_ZONES = {"full": 0, "left": 1, "right": 2, "top": 3, "bottom": 4, "center": 5, "edges": 6, "alt": 7}
+
+
 class Renderer:
     """Deux passes : scene (video + logo) dans un FBO, puis post-traitement vers `target`."""
 
@@ -233,6 +237,7 @@ class Renderer:
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
+        self._strobe_kicks, self._strobe_side = 0, 0                                # strobe leger : kicks comptes depuis l'armement ; cote de la zone alternee
         self.strobe_limiter = StrobeLimiter()
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
         self._prev_ok = False
@@ -366,15 +371,23 @@ class Renderer:
         a chaque kick selon `strobe_mode`. Hors ecran noir : il blanchit l'image comme le flash du VJ, sans bandes de glitch."""
         now = time.monotonic()
         beats = int(state.get("beats", 0))
-        kicked, self._strobe_beats = beats != self._strobe_beats, beats
+        new_kicks, self._strobe_beats = max(beats - self._strobe_beats, 0), beats
+        kicked = new_kicks > 0
         hits = int(p["strobe_hits"])
         fire = hits != self._strobe_seen
         self._strobe_seen = hits
         if float(p["strobe_on"]) >= 0.5:
             if p["strobe_mode"] == "kick":
                 fire = fire or kicked
+            elif p["strobe_mode"] == "light":                             # leger : un kick sur N (le compteur repart a zero a chaque armement)
+                self._strobe_kicks += new_kicks
+                if self._strobe_kicks >= max(int(p.get("strobe_div", 4)), 1):
+                    self._strobe_kicks = 0
+                    fire = True
             else:
                 fire = fire or now - self._strobe_last >= 1.0 / min(max(float(p["strobe_rate"]), 1.0), 20.0)
+        else:
+            self._strobe_kicks = 0
         build = _unit(p.get("build", 0.0))
         timed = True
         if build > 0.0 and not fire:                                  # montee : eclairs automatiques de 0,5 a 16 Hz (lents au debut), le premier tout de suite
@@ -382,6 +395,7 @@ class Renderer:
             timed = not fire                                          # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
         if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"]), timed):
             self._strobe_last = now
+            self._strobe_side ^= 1                                        # zone « alt » : un eclair a gauche, le suivant a droite
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
@@ -632,6 +646,9 @@ class Renderer:
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", self._strobe(p, state))
+        self._set(pp, "u_strobe_target", float(STROBE_TARGETS.get(p.get("strobe_target", "all"), 0)))
+        self._set(pp, "u_strobe_zone", float(STROBE_ZONES.get(p.get("strobe_zone", "full"), 0)))
+        self._set(pp, "u_strobe_side", float(self._strobe_side))
         self._set(pp, "u_hue", math.radians(hue_deg))
         self._set(pp, "u_bg_level", bg_level)
         # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)

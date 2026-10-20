@@ -52,7 +52,7 @@ def install(c):
 
     def strobe_text() -> str:
         mode = params.get("strobe_mode", "manual")
-        suffix = {"kick": " kick", "rate": f" {float(params.get('strobe_rate', 8.0)):g}Hz"}.get(mode, "")
+        suffix = {"kick": " kick", "light": f" 1/{int(params.get('strobe_div', 4))}", "rate": f" {float(params.get('strobe_rate', 8.0)):g}Hz"}.get(mode, "")
         return "Strobe" + suffix + (" \u25cf" if mode != "manual" and float(params.get("strobe_on", 0.0)) >= 0.5 else "")
 
     def build_text() -> str:
@@ -359,14 +359,21 @@ def install(c):
                 params["strobe_on"] = 0.0                              # un changement de mode desarme
                 sb.configure(text=strobe_text())
 
-            radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Cadence", "rate")), row=1, span=3,
-                   tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Cadence : un clic arme, un autre desarme.",
+            radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Leger", "light"), ("Cadence", "rate")), row=1, span=4,
+                   tip="Manuel : un eclair par appui, en rafale tant que c'est maintenu. Kick / Cadence : un clic arme, un autre desarme. "
+                       "Leger : un seul kick sur N (reglage « 1 kick sur », 4 par defaut = un eclair par mesure).",
                    on_change=lambda: set_strobe())
             slider(f, (2, 0), "strobe_rate", "Cadence", 1, 20, 1, 1.0, " Hz", 8, "Cadence du strobe (1 a 20 eclairs par seconde) en rafale manuelle et en cadence fixe.")
             slider(f, (3, 0), "strobe_max_hz", "Limite", 1, 20, 1, 1.0, " Hz", 10, "Limiteur de securite : jamais plus de ce nombre d'eclairs par seconde, "
                                                                                     "quelle que soit la cadence demandee (photosensibilite du public).")
             slider(f, (3, 3), "strobe_max_s", "Duree max", 1, 60, 1, 1.0, " s", 8, "Limiteur de securite : une rafale continue de strobe est coupee apres cette duree, "
                                                                                   "puis pause forcee de 3 s.")
+            radios(f, "strobe_target", (("Tout", "all"), ("Fond", "bg"), ("Logo", "logo")), row=4, span=3,
+                   tip="Ce que le strobe blanchit : toute l'image, le fond seul ou le logo seul.")
+            radios(f, "strobe_zone", (("Plein", "full"), ("G", "left"), ("D", "right"), ("Haut", "top"), ("Bas", "bottom"), ("Centre", "center"),
+                                      ("Bords", "edges"), ("G/D", "alt")), row=5, span=6,
+                   tip="Partie de l'image touchee par le strobe : tout, gauche, droite, haut, bas, centre, bords, ou gauche puis droite a tour de role.")
+            slider(f, (4, 3), "strobe_div", "1 kick sur", 2, 16, 1, 1.0, "", 4, "Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre).")
             lock = button(f, "Verrou", toggle_scene_lock, row=0, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["lock"] = lock
             update_lock_button()

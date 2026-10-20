@@ -788,6 +788,14 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
 - `check_gl.py` (`check_safeguards`, etapes `x_panic`, `x_panic_key`, `x_tap`, `x_help`, `x_console`, `x_title`, `x_autosave`, projection : reprise
   et arret voulu) ; le harnais redirige `gl.AUTOSAVE_PATH` vers un dossier temporaire. `core/sessionlog.py` est dans `APP_FILES` du portable
   (sinon la version portable ne demarrerait pas).
+### Strobe : zone, couche et mode leger (`strobe_zone`, `strobe_target`, `strobe_div`)
+
+Reglages de salle (onglet *Live* de l'espace de controle) :
+- **Couche** `strobe_target` : `all` (toute l'image, comme avant), `bg` (le fond seul, le logo reste) ou `logo` (le logo seul : blanc premultiplie, il suit sa forme). Fait dans `post.frag` (`u_strobe_target`).
+- **Zone** `strobe_zone` : `full`, `left`, `right`, `top`, `bottom`, `center`, `edges`, `alt` (gauche puis droite a tour de role : `Renderer._strobe_side` change a chaque eclair). Masque `strobe_zone(v_uv)` du shader, en coordonnees ecran (la composition ne le deplace pas). Le flash du VJ / du Drop n'est jamais partiel.
+- **Mode `light` (Leger)** : arme comme Kick, mais un eclair seulement tous les `strobe_div` kicks (4 par defaut = un par mesure) ; le compteur repart a zero a chaque armement. Les limiteurs (cadence max, duree max) s'appliquent a tous les modes.
+- `check_gl.py` : mode leger (8 kicks = 2 eclairs, remise a zero), chaque zone en pixels, fond seul / logo seul / tout, alternance.
+
 ### Effets par couche (fond / logo decorreles)
 
 Le rendu a 3 passes : `scene.frag` tourne **deux fois** (`u_pass` 0 = fond opaque dans `scene_fbo`,
@@ -1060,7 +1068,7 @@ absolu de silence** (sans lui, l'auto-gain amplifierait le bruit du micro : sile
 a 0). Lissage attaque 20 ms / relachement 250 ms.
 
 Kick : energie des bins basses > ligne de base glissante x `1 + 1,2/sensibilite` ET ecart a
-la base > `3/sensibilite` ecarts-types (statistique hors kicks), montee en cours, energie
+la base > `2/sensibilite` ecarts-types (`3,5` pendant les 1,5 premieres secondes, le temps que l'ecart-type se stabilise ; l'ancien `3` ne voyait qu'un kick sur trois sur un morceau realiste : le test `check_features` a un corpus de morceaux synthetiques avec basse sur les contretemps, charleston et kick a balayage de frequence, F1 0,49 -> 0,98) (statistique hors kicks), montee en cours, energie
 minimale, periode refractaire 150 ms, chauffe 0,5 s. Sortie : enveloppe `u_beat`
 (`exp(-t/0,2 s)`) et `u_since_beat`. **Constantes reglees par balayage sur signaux
 synthetiques**, pas a l'oreille : a sensibilite 1,0, zero faux positif sur 60 s de bruit

@@ -4095,6 +4095,52 @@ def check_masters() -> None:
     gl.strobe_press(kp)
     check(still_dark == 0.0 and kicked > 0.9 and kp["strobe_on"] == 0.0,
           "strobe au kick : arme, eclair a chaque kick seulement ; un 2e appui desarme")
+    # strobe leger : un kick sur N seulement ; le compteur repart a zero a l'armement
+    lp = dict(d, strobe_mode="light", strobe_div=4)
+    lr = gl.Renderer(ctx, size, None)
+    gl.strobe_press(lp)
+    lr._strobe(lp, quiet)                                                  # l'appui lui-meme fait un eclair
+    fired = []
+    for i in range(1, 9):
+        time.sleep(0.12)
+        fired.append(lr._strobe(lp, dict(quiet, beats=i)) > 0.9)
+    check(sum(fired) == 2 and fired[3] and fired[7] and lp["strobe_on"] == 1.0, "strobe leger: un kick sur quatre (8 kicks = 2 eclairs, les 4e et 8e)", str(fired))
+    gl.strobe_press(lp)
+    gl.strobe_press(lp)                                                    # desarme puis rearme : le compteur repart a zero
+    lr._strobe(lp, dict(quiet, beats=8))
+    early = []
+    for i in range(9, 12):
+        time.sleep(0.12)
+        early.append(lr._strobe(lp, dict(quiet, beats=i)) > 0.9)
+    check(not any(early), "strobe leger: le compteur de kicks repart a zero a l'armement", str(early))
+    # strobe sur une partie de l'image : zone (gauche, droite...) et couche (fond / logo)
+    def strobed(**kw):
+        zr = gl.Renderer(ctx, size, None)                                  # un rendu neuf par image : le limiteur ne retient pas l'eclair
+        zr.video_tex.write(np.full((size[1], size[0], 3), 40, np.uint8).tobytes())
+        zr.set_logo(np.concatenate([np.zeros((64, 64, 3), np.uint8), np.full((64, 64, 1), 255, np.uint8)], axis=2), "x")
+        zp = dict(base, logo_pulse=0.0, holo_on=0.0, strobe_mode="manual", strobe_max_hz=30.0, **kw)
+        gl.strobe_press(zp)
+        zr.draw(fbo, size, quiet, zp, 0.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    w_, h_ = size
+    for zone, inside, outside in (("left", (h_ // 2, 8), (h_ // 2, w_ - 8)), ("right", (h_ // 2, w_ - 8), (h_ // 2, 8)),
+                                  ("top", (8, w_ // 4), (h_ - 8, w_ // 4)), ("bottom", (h_ - 8, w_ // 4), (8, w_ // 4)),
+                                  ("center", (h_ // 2 + h_ // 8, w_ // 2 + w_ // 8), (8, 8)), ("edges", (8, 8), (h_ // 2 + h_ // 8, w_ // 2 + w_ // 8))):
+        img = strobed(strobe_zone=zone, overlay_master=0.0)
+        check(img[inside].min() > 220 and img[outside].max() < 90, f"strobe en zone {zone}: seule cette partie blanchit",
+              f"dedans {img[inside].tolist()} dehors {img[outside].tolist()}")
+    img = strobed(strobe_zone="full", strobe_target="bg")
+    check(img[8, 8].min() > 220 and img[h_ // 2, w_ // 2].max() < 120, "strobe sur le fond seul: le fond blanchit, le logo reste", f"{img[8, 8].tolist()} {img[h_ // 2, w_ // 2].tolist()}")
+    img = strobed(strobe_zone="full", strobe_target="logo")
+    check(img[h_ // 2, w_ // 2].min() > 220 and img[8, 8].max() < 90, "strobe sur le logo seul: le logo blanchit, le fond reste", f"{img[h_ // 2, w_ // 2].tolist()} {img[8, 8].tolist()}")
+    img = strobed(strobe_zone="full", strobe_target="all")
+    check(img[8, 8].min() > 220 and img[h_ // 2, w_ // 2].min() > 220, "strobe sur tout (defaut): toute l'image blanchit")
+    flat = dict(base, strobe_mode="manual")
+    zr2 = gl.Renderer(ctx, size, None)
+    gl.strobe_press(flat)
+    left_ = (zr2._strobe(dict(flat, strobe_zone="alt"), quiet), zr2._strobe_side)
+    check(left_[1] == 1, "strobe en zone alternee: le cote change a chaque eclair", str(left_))
     # teinte globale : rotation de couleur de toute l'image (fond et logo), les gris restent gris
     hr = gl.Renderer(ctx, size, None)
     hr.video_tex.write(np.tile(np.array([200, 30, 30], np.uint8), (size[1], size[0], 1)).tobytes())
