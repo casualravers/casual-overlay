@@ -2401,8 +2401,9 @@ def check_latence() -> None:
         check(False, "latence: chaine logicielle mesurable", str(exc))
         return
     tot = res["total"]
-    check(tot and res["missed"] <= 1 and 0 < tot["median"] < 250,
-          "latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de 250 ms",
+    bound = 3000 if os.environ.get("CI") else 250          # serveur d'integration continue : OpenGL logiciel sur une machine partagee, on ne verifie que « ca marche »
+    check(tot and res["missed"] <= 1 and 0 < tot["median"] < bound,
+          f"latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de {bound} ms",
           f"{tot} manques={res['missed']}")
     print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
 
