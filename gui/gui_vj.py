@@ -113,6 +113,8 @@ def install(c):
                 var.set(params[key] if isinstance(params[key], str) else int(round(float(params[key]))))
             except (tk.TclError, KeyError, ValueError):
                 pass
+        if vj_ui.get("div_sync"):
+            vj_ui["div_sync"]()
         update_master_panel()
 
     # ---- historique des scenes jouees et retour a la precedente
@@ -376,8 +378,28 @@ def install(c):
                                                                                   "puis pause forcee de 3 s.")
             slider(f, (4, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100, "Le strobe ne blanchit que les parties SOMBRES de l'image : seuil de luminosite, "
                                                                                     "plus il est bas, plus le strobe est limite aux zones les plus noires. 100 % = toute l'image.")
-            slider(f, (4, 3), "strobe_div", "1 kick sur", 2, 16, 1, 1.0, "", 4, "Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre).")
-            slider(f, (2, 3), "build_time", "Duree", 5, 180, 5, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
+            div_box = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
+            div_box.grid(row=4, column=3, columnspan=3, sticky="w", padx=6)
+            tk.Label(div_box, text="1 kick sur", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).grid(row=0, column=0, padx=(0, 4))
+            div_shown = tk.StringVar()
+
+            def div_sync() -> None:
+                div_shown.set(str(int(params.get("strobe_div", 4))))
+
+            def div_step(more: bool) -> None:
+                v = int(params.get("strobe_div", 4))
+                params["strobe_div"] = min(16, v * 2) if more else max(2, v // 2)
+                div_sync()
+                sb.configure(text=strobe_text())
+
+            div_less = button(div_box, "\u25c0", lambda: div_step(False), row=0, column=1)
+            tk.Label(div_box, textvariable=div_shown, width=3, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).grid(row=0, column=2)
+            div_more = button(div_box, "\u25b6", lambda: div_step(True), row=0, column=3)
+            Tooltip(div_less, "Strobe leger : un eclair tous les N kicks. Divise N par deux (plus d'eclairs). N vaut 2, 4, 8 ou 16.")
+            Tooltip(div_more, "Strobe leger : un eclair tous les N kicks. Double N (moins d'eclairs). N vaut 2, 4, 8 ou 16.")
+            vj_ui["div_sync"] = div_sync
+            div_sync()
+            slider(f, (2, 3), "build_time", "Duree", 2, 60, 1, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
             bb = button(f, build_text(), start_build, row=1, column=3, sticky="w", padx=6)
             vj_ui["build"] = bb
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "

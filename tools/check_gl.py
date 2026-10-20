@@ -941,6 +941,14 @@ def check_gui() -> None:
             out["lay_big"] = geo("1900x1000")
             out["lay_mid"] = geo("1250x800")
             out["lay_small"] = geo("1000x420")
+            geo("1900x470")                                   # large mais basse : l'ascenseur de droite ne defile que l'OVERLAY
+            c["right_cv"].yview_moveto(0)
+            root.update()
+            y0 = lw.winfo_y()
+            c["right_cv"].yview_scroll(3, "units")
+            root.update()
+            out["lay_right_scroll"] = (c["layout"]["name"], c["right_bar"].winfo_ismapped(), not pb.winfo_ismapped(),
+                                       c["right_cv"].yview()[0] > 0, lw.winfo_y() == y0)
             out["lay_back"] = geo("1800x900")
             texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
             out["live_msg"] = "message du gestionnaire" in texts       # dans la ligne de statut d'audio2wave
@@ -1323,6 +1331,8 @@ def check_gui() -> None:
           and big[9] > 700 and big[8] > 800, "fenetre large: LIVE et OVERLAY cote a cote, l'overlay prend la place en plus", str(big))
     check(len(mid) == 12 and mid[0] == "stack" and mid[7] >= mid[3] + mid[5] - 5 and mid[8] > 1100,
           "fenetre moyenne: OVERLAY sous LIVE, a toute la largeur", str(mid))
+    check(out.get("lay_right_scroll") == ("wide", True, True, True, True),
+          "fenetre large mais basse: l'ascenseur de droite defile la seule partie OVERLAY (LIVE et la page ne bougent pas)", str(out.get("lay_right_scroll")))
     check(len(small) == 12 and small[0] == "stack" and small[1] and small[8] <= small[10],
           "fenetre basse: ascenseur de page, rien ne depasse en largeur", str(small))
     check(len(back) == 12 and back[0] == "wide" and not back[1] and back[5] <= back[11],

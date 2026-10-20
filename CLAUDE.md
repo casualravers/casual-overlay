@@ -792,7 +792,7 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
 
 Modes `manual` (appui, rafale maintenue a `strobe_rate`), `kick` et `light` (arme comme Kick, mais un eclair tous les `strobe_div` kicks, 4 par defaut = un par mesure ; le compteur repart a zero a chaque armement). Le mode Cadence n'existe plus (le tap tempo et « Tempo auto » ne touchent plus au strobe).
 - **Filtre de parties sombres** `strobe_dark` (0,05..1, curseur « Sombre » de l'onglet *Live*, reglage de salle) : dans `post.frag`, l'eclair ne blanchit que les pixels dont la luminance de l'image finale est SOUS le seuil (bord adouci de 0,1) ; 1 = toute l'image (defaut, comme avant). Le flash du VJ / du Drop n'est jamais filtre. Remplace les anciens choix couche / zone.
-- Le bouton **Verrou** est dans l'onglet *Masters*.
+- Le bouton **Verrou** est dans l'onglet *Masters*. « 1 kick sur » = deux fleches ◀ ▶ (N divise / multiplie par 2 : 2, 4, 8, 16). Curseur « Duree » de la montee : 2 a 60 s (defaut 45).
 - `check_gl.py` : mode leger (8 kicks = 2 eclairs, remise a zero) et strobe sombre en pixels (moitie noire / moitie claire, seuil 50 %, bas, 100 %).
 
 ### Effets par couche (fond / logo decorreles)
@@ -903,7 +903,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    (2) **moyenne** : bandeau LIVE, panneau d'audio2wave a sa hauteur naturelle, bandeau OVERLAY, partie OVERLAY a toute
    la largeur ; (3) **basse** : meme chose, avec l'ascenseur de la page. En mode large le panneau d'audio2wave garde
    son propre ascenseur (`cap_now`, 600 px au depart) ; empile il n'a plus de plafond et c'est la page qui defile.
-   La molette defile d'abord le panneau d'audio2wave s'il est sous la souris, sinon la page.
+   **Cote a cote la page ne defile pas** : LIVE (canvas d'audio2wave) et OVERLAY (`right_cv` / `right_bar`, la colonne `right` est dans un canvas defilant, `right_wrap` est ce qui est place dans la grille) ont chacun leur ascenseur et se partagent la hauteur de la fenetre ; empilee, c'est la page qui defile. La molette defile ce qui est sous la souris (`under(widget, conteneur)`, test exact du chemin Tk), **Maj + molette = defilement horizontal** (bande des scenes, liste du panneau etendu).
    Pieges : la taille **voulue** du canvas de page suit celle du contenu (sinon `root.winfo_reqheight()` ne bouge plus et la
    fenetre ne s'ouvre pas a la bonne taille) ; changer de mise en page change les tailles voulues, d'ou un deuxieme
    passage de `on_page_config` (`after_idle`), sans quoi la page garde la hauteur de l'etat precedent (vu : 1250 px de
