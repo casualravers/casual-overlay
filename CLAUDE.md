@@ -816,7 +816,7 @@ Le visuel comprend OU en est le morceau et se regle tout seul. `PhaseTracker` (p
 niveaux **bruts** (`raw_rms` / `raw_bass` / `raw_mid` / `raw_high`, hors auto-gain), les kicks et l'etat de `Rhythm` (cassure / montee vues sur les basses). Six phases : **silence** (energie < 0,004 pendant 2,5 s),
 **ambiance** (peu d'energie, sans kicks), **groove** (kicks reguliers), **pic** (kicks et energie 1,2 x au-dessus de la moyenne des passages a kicks, basses >= 30 % du spectre), **montee** (pente du log de l'energie > 0,04/s sans kicks,
 ou montee de `Rhythm`; dure tant que l'energie ne retombe pas, 40 s au plus) et **cassure** (les kicks s'arretent apres un groove, ou cassure de `Rhythm`). **Aucun seuil a regler** : la reference de « pic » est la moyenne de l'energie
-pendant les passages a kicks (constante de temps 40 s), les planchers absolus ne servent qu'au silence et a l'ambiance. Hysteresis : une phase doit etre vue 1,5 a 2,5 s avant d'etre adoptee et dure 4 s au moins.
+pendant les passages a kicks (constante de temps 40 s) ; les planchers absolus (silence 0,002, calme 0,012, ambiance 0,04, montee 0,03) sont ABAISSES en proportion quand cette moyenne est faible (`phase.thresholds` : 0,15 / 0,10 / 0,30 / 0,25 x la moyenne, avec des minimums) et la part de basses exigee pour le pic suit la part habituelle du morceau (un telephone n'a presque pas de basses). Les memes phases sont reconnues jusqu'a une musique 7 fois plus faible (`check_phase`). Hysteresis : une phase doit etre vue 1,5 a 2,5 s avant d'etre adoptee et dure 4 s au moins.
 Chaque phase a un profil de multiplicateurs (`PROFILES` : tempo, reactivite, effets, presence de l'overlay, luminosite du fond, derive de teinte en deg/s, respiration) qui **glissent** vers lui (constante de temps 2,5 s ; la montee
 gagne en intensite sur 16 s). Le silence et l'ambiance ne font qu'ajouter des animations **tres lentes** (tempo x 0,15 a 0,3, teinte qui derive de 2 a 3 deg/s, respiration) : le visuel ne s'eteint jamais. Jamais de strobe automatique.
 `apply_to_params` (appele par la boucle de rendu, `engine/projection.py`) ecrit les reglages d'etat `phase_tempo` / `phase_react` / `phase_fx` / `phase_overlay` / `phase_bg` / `phase_hue` / `phase_breath` (portee `state` : ni sauves, ni
@@ -1127,12 +1127,16 @@ a 0). Lissage attaque 20 ms / relachement 250 ms.
 
 Kick : energie des bins basses > ligne de base glissante x `1 + 1,2/sensibilite` ET ecart a
 la base > `2/sensibilite` ecarts-types (`3,5` pendant les 1,5 premieres secondes, le temps que l'ecart-type se stabilise ; l'ancien `3` ne voyait qu'un kick sur trois sur un morceau realiste : le test `check_features` a un corpus de morceaux synthetiques avec basse sur les contretemps, charleston et kick a balayage de frequence, F1 0,49 -> 0,98) (statistique hors kicks), montee en cours, energie
-minimale, periode refractaire 150 ms, chauffe 0,5 s. Sortie : enveloppe `u_beat`
+minimale (**0,0002** : 0,002 avant, un niveau qu'un telephone ou un micro eloigne n'atteignait pas), periode refractaire 150 ms, chauffe 0,5 s. Sortie : enveloppe `u_beat`
 (`exp(-t/0,2 s)`) et `u_since_beat`. **Constantes reglees par balayage sur signaux
 synthetiques**, pas a l'oreille : a sensibilite 1,0, zero faux positif sur 60 s de bruit
 blanc (amplitude 0,05) et kicks detectes a -30 dB de niveau micro. Une ligne de base qui
 redescend plus vite qu'elle ne monte (premier essai 1,5 s / 0,3 s) donnait ~2 faux positifs
 par seconde sur bruit ; les seuils du premier jet (0,8 / 2,5) aussi (28 / 60 s).
+**Musique d'un telephone / micro eloigne, kicks satures** (`core.onset.WideRise`, utilise par `FeatureExtractor` et par les detecteurs de kick par couche) : en plus du critere ci-dessus, un kick est declare quand l'energie de la bande **large 20-400 Hz**
+(`KICK_WIDE`) devient plus de **3 fois** son creux des 120 dernieres ms (`RISE`) ET depasse sa ligne de base de 1,5 ecart-type (`K`), avec la meme periode refractaire. Le haut-parleur d'un telephone ne rend rien sous 250-350 Hz (le kick ne subsiste que dans les mediums graves, que cette bande contient) ;
+un kick sature a longue queue fait monter la ligne de base lente (le pic ne la depasse plus assez) mais laisse un creux profond juste avant l'attaque. Mesure sur signaux synthetiques (`check_features_phone`) : haut-parleur coupe a 250 et 350 Hz, -30 et -40 dB : 97 % des kicks, 0 faux ; kick sature a longue queue : 26 % -> 77-92 % ;
+souffle de micro de 0,003 : 1-2 faux declenchements par minute (bruit blanc de 0,05 : 0). Le corpus d'origine (kick, basse, charleston) reste a 179/183, 0 faux.
 **Limite connue** : un kick pose sur une basse continue a peu pres au meme niveau est
 manque a sensibilite 1,0 (battement entre les deux frequences) ; la touche haut (~2,5) le
 rattrape (39/40 en test). Valider en soiree avec le vrai son : c'est le composant le plus

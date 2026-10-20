@@ -7,10 +7,50 @@ propre a chaque couche. `sensitivity` > 1 abaisse les seuils ; il est donne a ch
 from __future__ import annotations
 
 import math
+from collections import deque
 
 
 def _coef(dt: float, tau: float) -> float:
     return 1.0 - math.exp(-dt / tau)
+
+
+class WideRise:
+    """Critere de MONTEE RAPIDE sur une bande large (20-400 Hz) : l'energie vient de plus que tripler depuis son creux des 120 dernieres ms.
+
+    Rattrape deux cas que le critere principal (energie des basses au-dessus d'une ligne de base lente) rate :
+      * un haut-parleur qui ne rend pas les basses (telephone, petite enceinte) : le kick ne reste que dans les mediums graves, que cette bande contient ;
+      * un kick sature a longue queue : la ligne de base lente monte et le pic ne la depasse plus assez, mais le creux juste avant l'attaque est profond.
+    Les faux declenchements sur du bruit sont evites par la bande large (plus de cases FFT, donc moins de fluctuations), le rapport minimal et l'ecart-type."""
+
+    RISE = 3.0               # l'energie doit depasser (1 + RISE / sensibilite) fois son creux recent
+    K = 1.5                  # ... et la ligne de base de plus de K / sensibilite ecarts-types
+    LOOK_S = 0.12
+    MIN_ENERGY = 0.0002
+
+    def __init__(self) -> None:
+        self.hist: deque[tuple[float, float]] = deque()
+        self.baseline: float | None = None
+        self.dev2 = 0.0
+        self.prev = 0.0
+
+    def check(self, e: float, dt: float, now: float, sensitivity: float, last_hit: float, ready: bool, refractory: float) -> bool:
+        s = max(sensitivity, 0.05)
+        while self.hist and now - self.hist[0][0] > self.LOOK_S:
+            self.hist.popleft()
+        lo = min((v for _, v in self.hist), default=None)
+        self.hist.append((now, e))
+        if self.baseline is None:
+            self.baseline = e
+        base = self.baseline
+        std = math.sqrt(self.dev2)
+        hit = (ready and lo is not None and now - last_hit > refractory and e > self.MIN_ENERGY and e > self.prev
+               and e > lo * (1.0 + self.RISE / s) and e > base and (e - base) > self.K / s * std)
+        if now - last_hit > 0.3 and dt > 0:
+            self.dev2 += ((e - base) ** 2 - self.dev2) * _coef(dt, 1.0)
+        if dt > 0:
+            self.baseline = base + (e - base) * _coef(dt, 0.8)
+        self.prev = e
+        return hit
 
 
 class OnsetDetector:
@@ -25,9 +65,10 @@ class OnsetDetector:
         self.prev = 0.0
         self.last = -1e9
         self.elapsed = 0.0
+        self.wide = WideRise()
 
-    def update(self, b: float, dt: float, now: float, sensitivity: float = 1.0) -> bool:
-        """Energie `b` de la bande sur `dt` secondes ; vrai si une attaque vient de partir."""
+    def update(self, b: float, dt: float, now: float, sensitivity: float = 1.0, wide: float | None = None) -> bool:
+        """Energie `b` de la bande sur `dt` secondes ; vrai si une attaque vient de partir. `wide` : energie 20-400 Hz (critere de montee rapide en plus)."""
         self.elapsed += dt
         s = max(sensitivity, 0.05)
         ratio = 1.0 + self.ratio_extra / s
@@ -46,4 +87,8 @@ class OnsetDetector:
         if dt > 0:
             self.baseline = base + (b - base) * _coef(dt, self.rise_tau if b > base else self.fall_tau)
         self.prev = b
+        if wide is not None:                                  # montee rapide sur la bande large (telephone, kick sature) ; met toujours ses statistiques a jour
+            rise = self.wide.check(wide, dt, now, sensitivity, self.last, self.elapsed > self.warmup_s, self.refractory)
+            if rise and not hit:
+                hit, self.last = True, now
         return hit

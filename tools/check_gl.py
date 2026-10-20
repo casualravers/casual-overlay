@@ -1520,6 +1520,75 @@ def kick_bursts(rate: int, seconds: float, amp: float = 0.5, noise: float = 0.00
     return (amp * env * np.sin(2 * np.pi * 60 * t) + noise * rng.standard_normal(n)).astype(np.float32)
 
 
+def check_features_phone() -> None:
+    """Kicks d'une musique jouee par un TELEPHONE devant le micro : pas de basses (haut-parleur coupe sous 250-350 Hz), niveau faible, souffle du micro.
+    Le plancher absolu d'avant (0,002) ne voyait rien sous -35 dB ; la bande large 20-400 Hz (`WideRise`) rattrape aussi les kicks satures a longue queue."""
+    print("-- kicks d'une musique de telephone")
+    rate = 48000
+
+    def corpus(bpm, seconds, seed):
+        rg = np.random.default_rng(seed)
+        out = np.zeros(int(rate * seconds))
+        beat = 60.0 / bpm
+        truth = []
+
+        def put(sig, at):
+            i = int(at * rate)
+            m = min(len(sig), len(out) - i)
+            if m > 0:
+                out[i:i + m] += sig[:m]
+        kk = np.arange(int(0.35 * rate)) / rate
+        base = np.exp(-kk / 0.16) * (1 - np.exp(-kk / 0.002)) * np.sin(2 * np.pi * np.cumsum(45 + 110 * np.exp(-kk / 0.03)) / rate)
+        kick = 0.7 * np.tanh(2.5 * base) / np.tanh(2.5)                      # sature : des harmoniques, une longue queue (kick d'une musique de club)
+        click = 0.25 * rg.standard_normal(int(0.004 * rate)) * np.exp(-np.arange(int(0.004 * rate)) / rate / 0.001)
+        kick[:len(click)] += click
+        hk = np.arange(int(0.05 * rate)) / rate
+        bk = np.arange(int(beat * 0.4 * rate)) / rate
+        for bar in range(int(seconds / (beat * 4)) + 1):
+            for st in range(16):
+                at = bar * beat * 4 + st * beat / 4
+                if st % 4 == 0 and at < seconds - 0.4:
+                    put(kick, at)
+                    truth.append(at)
+                if st % 2 == 0:
+                    put(0.12 * np.diff(rg.standard_normal(len(hk)), prepend=0) * np.exp(-hk / 0.012), at)
+                if st % 4 == 2:
+                    put(0.35 * np.minimum(bk / 0.01, 1.0) * np.exp(-bk / 0.1) * np.sin(2 * np.pi * 55 * bk), at)
+        return out, truth
+
+    def phone(x, fc, gain_db, noise, seed=1):
+        spec = np.fft.rfft(x)
+        f = np.fft.rfftfreq(len(x), 1 / rate)
+        f[0] = 1e-9
+        y = np.fft.irfft(spec * (1.0 / np.sqrt(1.0 + (fc / f) ** 4)), len(x)) * 10 ** (gain_db / 20)          # passe-haut du 2e ordre
+        return (y + noise * np.random.default_rng(seed).standard_normal(len(y))).astype(np.float32)
+
+    def score(got, truth):
+        used, tp = set(), 0
+        for tb in got:
+            for j, tr in enumerate(truth):
+                if j not in used and tr - 0.03 <= tb <= tr + 0.09:
+                    used.add(j)
+                    tp += 1
+                    break
+        return tp, len(got) - tp, len(truth) - tp
+
+    for name, cfg, min_recall in (("haut-parleur coupe sous 250 Hz, -30 dB", (250.0, -30.0, 0.0008), 0.9),
+                                  ("haut-parleur coupe sous 250 Hz, -40 dB (micro eloigne)", (250.0, -40.0, 0.0004), 0.9),
+                                  ("haut-parleur coupe sous 350 Hz, -30 dB", (350.0, -30.0, 0.0008), 0.9),
+                                  ("kick sature a longue queue, plein niveau", (1.0, 0.0, 0.002), 0.7)):
+        tp = fp = fn = 0
+        for bpm, seed in ((126, 1), (100, 3)):
+            sig, truth = corpus(bpm, 20.0, seed)
+            a, b, c = score(run_signal(phone(sig, *cfg), rate)[0], truth)
+            tp, fp, fn = tp + a, fp + b, fn + c
+        check(tp / max(tp + fn, 1) >= min_recall and tp / max(tp + fp, 1) >= 0.9, f"kicks: {name}",
+              f"TP{tp} FP{fp} FN{fn}")
+    rgn = np.random.default_rng(11)
+    hiss = run_signal((0.003 * rgn.standard_normal(rate * 60)).astype(np.float32), rate)[0]
+    check(len(hiss) <= 3, "kicks: souffle de micro seul (0,003) sur 60 s, au plus 3 faux declenchements", f"{len(hiss)}")
+
+
 def check_features() -> None:
     print("Features audio")
     for rate in (48000, 44100):
@@ -2510,6 +2579,11 @@ def check_phase() -> None:
     check("build" in names[:8] and "peak" in names and "break" in names, "phases: montee, pic et cassure detectes", str(names))
     check(all(b - a >= ph.MIN_DWELL_S - 0.1 for (a, _), (b, _) in zip(seq[1:], seq[2:])), "phases: chaque phase dure au moins 4 s (hysteresis)", str(seq))
     check(seq[-1][1] == "silence", "phases: le silence final est reconnu", str(seq[-3:]))
+    # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau
+    soft = [(d, (lambda f, r=r: r(f) * 0.2) if callable(r) else r * 0.2, per, sh, st) for d, r, per, sh, st in segs]
+    soft_seq, _ = run(soft)
+    soft_names = [n for _, n in soft_seq]
+    check(soft_names == names, "phases: musique faible (niveau / 5) = les memes phases dans le meme ordre", f"{soft_names} / {names}")
     # adaptation : un morceau entier tres faible (micro lointain) reste un groove, pas une ambiance
     low, _ = run([(40, 0.02, k, 0.5, "idle")])
     check(low[-1][1] in ("groove", "peak"), "phases: seuils adaptes a un micro faible (kicks = groove)", str(low))
@@ -7435,7 +7509,7 @@ def only_fragile(labels: list[str]) -> bool:
 
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
-PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
+PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
@@ -7451,6 +7525,7 @@ def main() -> None:
         return
     check_reader()
     check_features()
+    check_features_phone()
     check_text()
     check_logo_video()
     check_holo()
