@@ -53,9 +53,7 @@ def install(c):
     SYM_MODES = (("Aucune", 0), ("Miroir G", 1), ("Miroir H", 2), ("Quadrants", 3), ("Kaleido", 4))
 
     def strobe_text() -> str:
-        mode = params.get("strobe_mode", "manual")
-        suffix = {"kick": " kick", "light": f" 1/{int(params.get('strobe_div', 4))}"}.get(mode, "")
-        return "Strobe" + suffix + (" \u25cf" if mode != "manual" and float(params.get("strobe_on", 0.0)) >= 0.5 else "")
+        return "Strobe" + (" auto \u25cf" if float(params.get("strobe_auto", 0.0)) >= 0.5 else "")
 
     def build_text() -> str:
         if build_ui["t0"] is None:
@@ -116,8 +114,6 @@ def install(c):
                 var.set(params[key] if isinstance(params[key], str) else int(round(float(params[key]))))
             except (tk.TclError, KeyError, ValueError):
                 pass
-        if vj_ui.get("div_sync"):
-            vj_ui["div_sync"]()
         update_master_panel()
 
     # ---- historique des scenes jouees et retour a la precedente
@@ -337,7 +333,7 @@ def install(c):
                          "(120 BPM = 100 %). Une pause de 2 s recommence.")
             one = button(f, "Temps 1", do_one, row=3, column=2, sticky="w", padx=2, pady=(3, 0))
             vj_ui["one"] = one
-            Tooltip(one, "Appuie sur le premier temps de la mesure (touche virgule dans la fenetre de rendu) : le strobe leger tombe alors sur les 1 "
+            Tooltip(one, "Appuie sur le premier temps de la mesure (touche virgule dans la fenetre de rendu) : le strobe auto tombe alors sur les 1 "
                          "et le VJ « en rythme » change de scene exactement sur un 1. La grille se recale seule sur les kicks et s'efface quand ils "
                          "disparaissent.")
             bpm = vj_ui["bpm"] = tk.Label(f, text="\u2014 BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
@@ -363,55 +359,23 @@ def install(c):
 
         # ---- Live : strobe, verrou, montee / drop
         def fill_1(f) -> None:
+            params["strobe_mode"] = "manual"              # plus de choix de mode : le bouton fait un eclair, « Strobe auto » decide seul
             sb = button(f, strobe_text(), row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["strobe"] = sb
             sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
             sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
-            Tooltip(sb, "Strobe : eclair blanc court a la demande. Touche S dans la fenetre de rendu. "
-                        "Au kick / en leger, un clic arme, un autre desarme.")
-
-            def set_strobe(**kw) -> None:
-                params.update(kw)
-                params["strobe_on"] = 0.0                              # un changement de mode desarme
-                sb.configure(text=strobe_text())
-
-            radios(f, "strobe_mode", (("Manuel", "manual"), ("Kick", "kick"), ("Leger", "light")), row=1, span=4,
-                   tip="Manuel : un eclair par appui. Kick / Leger : un clic arme, un autre desarme. "
-                       "Leger : un seul kick sur N (reglage « 1 kick sur », 4 par defaut = un eclair par mesure).",
-                   on_change=lambda: set_strobe())
-            slider(f, (3, 0), "strobe_max_hz", "Limite", 1, 20, 1, 1.0, " Hz", 10, "Limiteur de securite : jamais plus de ce nombre d'eclairs par seconde, "
-                                                                                    "quelle que soit la cadence demandee (photosensibilite du public).")
-            slider(f, (3, 3), "strobe_max_s", "Duree max", 1, 60, 1, 1.0, " s", 8, "Limiteur de securite : une rafale continue de strobe est coupee apres cette duree, "
-                                                                                  "puis pause forcee de 3 s.")
-            slider(f, (4, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100, "Le strobe ne blanchit que les parties SOMBRES de l'image : seuil de luminosite, "
-                                                                                    "plus il est bas, plus le strobe est limite aux zones les plus noires. 100 % = toute l'image.")
-            div_box = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
-            div_box.grid(row=4, column=3, columnspan=3, sticky="w", padx=6)
-            tk.Label(div_box, text="1 kick sur", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).grid(row=0, column=0, padx=(0, 4))
-            div_shown = tk.StringVar()
-
-            def div_sync() -> None:
-                div_shown.set(str(int(params.get("strobe_div", 4))))
-
-            def div_step(more: bool) -> None:
-                v = int(params.get("strobe_div", 4))
-                params["strobe_div"] = min(16, v * 2) if more else max(2, v // 2)
-                div_sync()
-                sb.configure(text=strobe_text())
-
-            div_less = button(div_box, "\u25c0", lambda: div_step(False), row=0, column=1)
-            tk.Label(div_box, textvariable=div_shown, width=3, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).grid(row=0, column=2)
-            div_more = button(div_box, "\u25b6", lambda: div_step(True), row=0, column=3)
-            Tooltip(div_less, "Strobe leger : un eclair tous les N kicks. Divise N par deux (plus d'eclairs). N vaut 2, 4, 8 ou 16.")
-            Tooltip(div_more, "Strobe leger : un eclair tous les N kicks. Double N (moins d'eclairs). N vaut 2, 4, 8 ou 16.")
-            vj_ui["div_sync"] = div_sync
-            div_sync()
-            slider(f, (2, 3), "build_time", "Duree", 2, 60, 1, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
-            bb = button(f, build_text(), start_build, row=1, column=3, sticky="w", padx=6)
+            Tooltip(sb, "Strobe : eclair blanc court a la demande, tant que c'est maintenu. Touche S dans la fenetre de rendu.")
+            toggle(f, "strobe_auto", "Strobe auto", "Le strobe decide seul quand eclairer, sans aucun reglage : jamais en silence, en ambiance ni en cassure ; "
+                                                    "un accent discret de temps en temps en groove (sur le « 1 » si la grille est connue, sinon sur une frappe des "
+                                                    "aigus) ; une cadence qui accelere pendant une montee ; un gros eclair au drop ; un eclair a chaque kick au pic. "
+                                                    "Le limiteur de securite (10 eclairs par seconde, rafales de 8 s) reste applique.",
+                   row=0, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
+            bb = button(f, build_text(), start_build, row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["build"] = bb
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
                         "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
-            drop = button(f, "Drop", do_drop, row=1, column=4, sticky="w")
+            drop = button(f, "Drop", do_drop, row=1, column=3, sticky="w", padx=6, pady=(3, 0))
             Tooltip(drop, "Relache la montee d'un coup : flash blanc, tout retombe aux reglages normaux.")
 
         new_tab("Live", fill_1)
@@ -582,7 +546,7 @@ def install(c):
 
     def do_one() -> None:
         """« Temps 1 » (bouton, touche virgule) : le temps qui vient de tomber est le premier de la mesure. Ancre la grille du temps : le
-        strobe leger tombe sur les 1, et le VJ « en rythme » change de scene pile sur un 1. Il faut un tempo (detecte ou tape) ; la grille
+        strobe auto tombe sur les 1, et le VJ « en rythme » change de scene pile sur un 1. Il faut un tempo (detecte ou tape) ; la grille
         s'efface quand les kicks disparaissent. Un second appui reancre."""
         rhythm = rhythm_source()
         if rhythm is None:
@@ -594,7 +558,7 @@ def install(c):
         except Exception:
             last = None
         rhythm.grid.set_one(time.monotonic(), bpm, last)
-        scene_msg.set(f"Temps 1 : grille calee sur {bpm:.0f} BPM (strobe leger et VJ en rythme sur le 1)")
+        scene_msg.set(f"Temps 1 : grille calee sur {bpm:.0f} BPM (strobe auto et VJ en rythme sur le 1)")
 
     def do_tap() -> None:
         """Tap tempo (bouton ou touche point) : BPM moyen des derniers appuis -> master du tempo (120 BPM = 100 %) ; en strobe a cadence

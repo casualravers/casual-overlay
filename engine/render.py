@@ -13,6 +13,7 @@ from pathlib import Path
 from core import sessionlog
 from core import doodles
 from core.audio_layers import LayerFilter, has_kick, layer_levels
+from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
@@ -236,6 +237,9 @@ class Renderer:
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
         self._strobe_kicks = 0                                                      # strobe leger : kicks comptes depuis l'armement
         self.strobe_limiter = StrobeLimiter()
+        self.strobe_brain = StrobeBrain()                                           # strobe auto : decide seul quand eclairer
+        self._strobe_hits, self._strobe_auto_now, self._strobe_auto_dark = 0, False, 1.0
+        self.strobe_fired = 0                                                       # eclairs acceptes (compteur : la mesure de latence le lit)
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
         self._layer_filters = (LayerFilter(), LayerFilter())                           # retard et lissage de la reaction au son : fond, logo
         self._hue_spec = 0.0                                                          # teinte tiree du spectre, lissee
@@ -391,6 +395,14 @@ class Renderer:
                         fire = True
         else:
             self._strobe_kicks = 0
+        manual_fire = fire
+        # Strobe auto : le cerveau decide (phase du morceau, kicks, frappes aigues, grille du temps), voir core/strobe_auto.py.
+        hit_total = int(state.get("hits", 0))
+        new_hits, self._strobe_hits = max(hit_total - self._strobe_hits, 0), hit_total
+        ph = state.get("phase") or {}
+        auto_fire, auto_dark = self.strobe_brain.update(now, ph.get("name"), ph.get("since"), new_kicks, new_hits, state.get("beat_index"))
+        if float(p.get("strobe_auto", 0.0)) >= 0.5:
+            fire = fire or auto_fire
         build = _unit(p.get("build", 0.0))
         timed = True
         if build > 0.0 and not fire:                                  # montee : eclairs automatiques de 0,5 a 16 Hz (lents au debut), le premier tout de suite
@@ -398,6 +410,9 @@ class Renderer:
             timed = not fire                                          # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
         if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"]), timed):
             self._strobe_last = now
+            self.strobe_fired += 1
+            self._strobe_auto_now = bool(auto_fire and not manual_fire and float(p.get("strobe_auto", 0.0)) >= 0.5)
+            self._strobe_auto_dark = auto_dark
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
@@ -662,7 +677,7 @@ class Renderer:
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", self._strobe(p, state))
-        self._set(pp, "u_strobe_dark", float(p.get("strobe_dark", 1.0)))
+        self._set(pp, "u_strobe_dark", self._strobe_auto_dark if self._strobe_auto_now else float(p.get("strobe_dark", 1.0)))     # un eclair du strobe auto a son propre seuil
         self._set(pp, "u_hue", math.radians(hue_deg))
         self._set(pp, "u_bg_level", bg_level)
         # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)

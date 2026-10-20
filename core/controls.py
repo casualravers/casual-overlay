@@ -74,7 +74,7 @@ class StrobeLimiter:
 # Panique (bouton / touche X) : coupe d'un geste tout ce qui peut partir en vrille et rend une image propre (fond + logo tels que la
 # scene les a poses). Les reglages du logo, du fond et des medias ne sont pas touches.
 PANIC_RESET = {
-    "build": 0.0, "strobe_on": 0.0, "auto_phase": 0.0,
+    "build": 0.0, "strobe_on": 0.0, "strobe_auto": 0.0, "auto_phase": 0.0,
     "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
     "hue_master": 0.0, "hue_cycle": 0.0, "hue_spectrum": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
     "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,

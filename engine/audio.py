@@ -340,6 +340,7 @@ class AudioAnalyzer:
         self.levels = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "raw_bass": 0.0}
         self.t_beat: float | None = None
         self.t_edge: dict[str, float | None] = {name: None for name in EDGES}
+        self.hits = 0                           # frappes aigues comptees (le strobe auto compte les nouvelles)
         self.beats = 0
         self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
         self.phase = PhaseTracker()             # phases du morceau (silence, ambiance, groove, montee, cassure, pic), nourries ici elles aussi
@@ -375,6 +376,8 @@ class AudioAnalyzer:
                 for name, hit in edges.items():
                     if hit:
                         self.t_edge[name] = now
+                        if name == "hit":
+                            self.hits += 1
                 if beat:
                     self.t_beat = now
                     self.beats += 1
@@ -390,6 +393,7 @@ class AudioAnalyzer:
             t_beat = self.t_beat
             t_edge = dict(self.t_edge)
             state["beats"] = self.beats
+            state["hits"] = self.hits
         state["phase"] = self.phase.snapshot()                  # phase du morceau et multiplicateurs lisses (voir core/phase.py)
         state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
