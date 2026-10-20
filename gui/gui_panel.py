@@ -953,18 +953,19 @@ def install(c):
             if want == drag["want"] or (want == drag["h"] and drag["want"] is None):
                 return
             drag["want"] = want
-            if drag["job"] is None:
-                drag["job"] = root.after_idle(grip_apply)
+            # pas de redimensionnement en direct (la fenetre laissait des traces a chaque pas) : la poignee montre seulement la
+            # hauteur visee, la liste et la fenetre changent d'un coup au relachement
+            diff = want - drag["h"]
+            grip.configure(text=f"\u22ef  {diff:+d} px" if diff else "\u22ef", fg=a2w.GUI_ACCENT)
 
         def grip_release(e) -> None:
             if drag:
-                if drag.get("job") is not None:
-                    try:
-                        root.after_cancel(drag["job"])
-                    except Exception:
-                        pass
                 grip_apply()
                 drag.clear()
+                try:
+                    grip.configure(text="\u22ef", fg=a2w.GUI_MUTED_FG)
+                except tk.TclError:
+                    pass          # le panneau a ete reconstruit par le redimensionnement
 
         grip.bind("<ButtonPress-1>", grip_press)
         grip.bind("<B1-Motion>", grip_move)
