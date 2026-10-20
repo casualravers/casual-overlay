@@ -5310,6 +5310,27 @@ def check_portable_modules() -> None:
     check(all((here / n).is_file() for n in bp.APP_FILES), "portable: tous les fichiers de la liste existent",
           str([n for n in bp.APP_FILES if not (here / n).is_file()]))
 
+def check_device_cache() -> None:
+    """Liste des entrees audio : relue a chaque fois hors reconstruction de la fenetre, gardee 60 s pendant une reconstruction."""
+    import types as types_
+    import gl_gui as gg
+    calls = []
+    fake = types_.ModuleType("fake_mode")
+    fake.list_audio_devices = lambda: calls.append(1) or ["Micro A"]
+    gg.install_device_cache([fake])
+    gg.install_device_cache([fake])                       # idempotent : ne s'enveloppe pas deux fois
+    fake.list_audio_devices()
+    fake.list_audio_devices()
+    off = len(calls)
+    gg.DEVICE_CACHE["on"] = True
+    fake.list_audio_devices()
+    fake.list_audio_devices()
+    on = len(calls)
+    gg.DEVICE_CACHE["on"] = False
+    fake.list_audio_devices()
+    check(off == 2 and on == 2 and len(calls) == 3, "entrees audio: relues hors reconstruction, la derniere lecture est reutilisee pendant une reconstruction (un ffmpeg de moins)", str(calls))
+
+
 def check_uistats() -> None:
     """Mesure de la fluidite de l'interface (core/uistats.py) : horloge injectee, aucune attente reelle."""
     from core import uistats as ui
@@ -6616,6 +6637,7 @@ def main() -> None:
     check_params_schema()
     check_safeguards()
     check_uistats()
+    check_device_cache()
     check_scenes()
     check_bg_video()
     check_fond_saveable()

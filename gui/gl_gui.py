@@ -529,6 +529,33 @@ class Late:
     def __bool__(self):
         return bool(self._get())
 
+DEVICE_CACHE = {"on": False, "t": 0.0, "value": None}
+DEVICE_CACHE_S = 60.0
+
+
+def _cached_devices(orig):
+    def inner():
+        now = time.monotonic()
+        if DEVICE_CACHE["on"] and DEVICE_CACHE["value"] is not None and now - DEVICE_CACHE["t"] < DEVICE_CACHE_S:
+            return list(DEVICE_CACHE["value"])
+        value = orig()
+        DEVICE_CACHE.update(t=now, value=list(value))
+        return value
+    inner._cached = True
+    return inner
+
+
+def install_device_cache(modules=None) -> None:
+    """La liste des entrees audio (un ffmpeg lance a chaque construction du panneau Snap / Ridge / Live, ~300 ms) est gardee 60 s pendant
+    la reconstruction de la fenetre ; hors reconstruction (bouton « actualiser » des panneaux) elle est toujours relue."""
+    if modules is None:
+        modules = [sys.modules.get(n) for n in ("common", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge")]
+    for mod in modules:
+        fn = getattr(mod, "list_audio_devices", None) if mod is not None else None
+        if fn is not None and not getattr(fn, "_cached", False):
+            setattr(mod, "list_audio_devices", _cached_devices(fn))
+
+
 def grab_window(root):
     """Image de la fenetre de reglages telle qu'elle est (None si impossible ou desactive : CASUAL_NO_COVER=1)."""
     try:
@@ -560,7 +587,6 @@ def show_cover(root, image):
         label.image = photo
         label.pack()
         top.update_idletasks()
-        top.update()
         return top
     except Exception:
         return None
@@ -649,9 +675,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     keep_size = None
     if (getattr(s, "vj_state", None) or {}).get("running") and root.winfo_ismapped():
         keep_size = (root.winfo_width(), root.winfo_height())
+    install_device_cache()
+    DEVICE_CACHE["on"] = True
     snapshot = grab_window(root)
-    for child in list(root.winfo_children()):
-        child.destroy()
+    with STATS.timed("build.destruction"):
+        for child in list(root.winfo_children()):
+            child.destroy()
     cover = show_cover(root, snapshot)
     apply_a2w_palette()
     install_curve_skin(live)
@@ -693,6 +722,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             s.status["msg"] = message
         build_window(s, live, root, s.mode, on_ready)
 
+    t_build = time.perf_counter()
     migrate_scene_presets(live)          # presets `scene-<nom>` des premieres versions -> scenes.json
     # ---------------------------------------------------- 1. la GUI du mode d'audio2wave, telle quelle
     live_wrap = tk.Frame(page)
@@ -728,6 +758,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             panel["ctrl"] = src.module.build_gui(src.args, s.render_size, src.status, src.stop_event, never,
                                                  on_switch_mode=on_switch, **PANEL_OPTIONS, parent=host)
     root.title("casual-overlay GL - reglages")
+    STATS.record("build.panneau_audio2wave", (time.perf_counter() - t_build) * 1000.0)
     widgets = panel["ctrl"].widgets
     tidy_mode_gui(host, mode, widgets)
     gui_colors.add_color_helpers(host, a2w.GUI_ACCENT, a2w.GUI_ACCENT_FG, widgets, mode)      # pastilles + selecteur sur les champs couleur
@@ -2464,7 +2495,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             page_canvas.yview_moveto(0)
 
     skin.zone(right, OVERLAY_COLOR)
+    t_skin = time.perf_counter()
     skin.apply(root)                   # avant de mesurer la largeur naturelle : les images changent la taille des widgets
+    STATS.record("build.habillage_global", (time.perf_counter() - t_skin) * 1000.0)
     set_layout("wide")
     page.update_idletasks()
     right_fit()
@@ -2498,6 +2531,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     if keep_size is not None:
         root.update_idletasks()
         root.geometry(f"{keep_size[0]}x{keep_size[1]}")        # fixe la taille : plus de redimensionnement automatique
+    DEVICE_CACHE["on"] = False
     drop_cover(root, cover)
     pending = getattr(s, "pending_live_overrides", None)
     if pending:                                  # scene qui a change de mode : on charge son etat dans le panneau neuf
