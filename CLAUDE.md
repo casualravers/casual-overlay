@@ -791,6 +791,8 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   un fichier present au lancement signale un arret brutal : `run_app` charge ces reglages a la place de `gl_params.json`, met l'ancien fichier
   de cote (`autosave.precedent.json`, jamais efface) et le dit dans le statut. Les scenes, sets, presets et masters sont deja ecrits a chaque
   geste : seul l'etat des curseurs du moment en dependait.
+- **Palette de commandes** (**Ctrl+K**, `gui/gui_palette.py`, classement pur dans `core/palette.py`) : on tape quelques lettres (accents et casse ignores, tous les mots doivent correspondre), fleches + Entree. La liste est refaite a chaque ouverture : commandes du VJ (panique, verrou, lecture / pause, suivante, retour, montee, drop,
+  eclair de strobe, tap tempo, Temps 1, panneau etendu, console, aide, projection), **scenes du set actif** (« Scene : Neon »), **sets**, **presets overlay et fond** (charges comme depuis leur menu). `controles["palette"]` : `items()`, `matches(texte)`, `choose(texte)` (lance la premiere), `open()`, `close()`.
 - **Aide et console** : touche **/** ou **?** (hors champ de saisie) ou menu « reglages VJ » -> fenetre des raccourcis (`SHORTCUTS_HELP`, une seule
   fenetre) ; **Console VJ** (menu « reglages VJ », `console_window`, fenetre toujours au premier plan) = grosses commandes (Retour, VJ, Suivante,
   Strobe maintenu, Montee, Drop, Verrou, Tap tempo, aide, PANIQUE) + ligne d'etat + niveaux basses / mediums / aigus et voyant du kick.

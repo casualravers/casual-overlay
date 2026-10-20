@@ -49,6 +49,7 @@ import theme
 import gui_fond
 import gui_effects
 import gui_logo
+import gui_palette
 import gui_audio
 import gui_panel
 import gui_random
@@ -2740,6 +2741,30 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     after(300, watch_page)
 
+    palette_ctl = gui_palette.install(types.SimpleNamespace(
+        a2w=a2w,
+        apply_entry=apply_entry,
+        back_scene=back_scene,
+        bg_presets=bg_presets,
+        console_window=console_window,
+        do_drop=do_drop,
+        do_one=do_one,
+        do_panic=do_panic,
+        do_tap=do_tap,
+        help_window=help_window,
+        overlay_presets=overlay_presets,
+        params=params,
+        root=root,
+        s=s,
+        scene_book=scene_book,
+        scene_msg=scene_msg,
+        set_expanded=set_expanded,
+        start_build=start_build,
+        switch_set=switch_set,
+        toggle_projection=toggle_projection,
+        toggle_scene_lock=toggle_scene_lock,
+        vj_advance=vj_advance,
+        vj_toggle=vj_toggle))
     root.protocol("WM_DELETE_WINDOW", on_close)
     ui_every("refresh", REFRESH_MS, refresh)
     ui_every("meter", METER_MS, update_meter)
@@ -2779,7 +2804,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
-            "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
+            "palette": palette_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
             "image_box": image_box, "text_box": text_box, "font_var": font_var})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))

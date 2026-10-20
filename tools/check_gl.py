@@ -1229,6 +1229,7 @@ def check_gui() -> None:
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
     check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
+    check(out.get("x_palette") == (True,) * 7, "palette (GUI): scenes, sets, presets et commandes listes ; une saisie lance la bonne commande", str(out.get("x_palette")))
     check(out.get("x_sched") == (True,) * 6, "planning (GUI): a l'heure dite la source passe en Texte et le texte du passage est pose, une seule fois ; case decochee = rien",
           str(out.get("x_sched")))
     check(out.get("x_grid_vj") == (True,) * 6,
@@ -2402,6 +2403,21 @@ def check_latence() -> None:
     print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
 
 
+def check_palette() -> None:
+    print("Palette de commandes (core/palette.py)")
+    from core import palette as pal
+    items = [("Scene : Neon Comete", "scene"), ("Scene : Acid", "scene"), ("Set : Club", "set"), ("Preset overlay : club/neon", "preset overlay"),
+             ("Panique", "stop couper effets"), ("Strobe : un eclair", "flash blanc"), ("Scène : Électro", "scene")]
+    names = lambda q: [items[i][0] for i in pal.rank(q, items)]
+    check(pal.fold("Scène Néon") == "scene neon", "palette: accents et casse ignores")
+    check(names("neon")[:2] == ["Scene : Neon Comete", "Preset overlay : club/neon"] or names("neon")[0] == "Scene : Neon Comete",
+          "palette: « neon » trouve la scene et le preset, debut de mot d'abord", str(names("neon")))
+    check(names("club") == ["Set : Club", "Preset overlay : club/neon"] and names("panique") == ["Panique"] and names("flash") == ["Strobe : un eclair"],
+          "palette: debut de libelle avant sous-chaine, mots-cles utilises", str((names("club"), names("flash"))))
+    check(names("scene neon") == ["Scene : Neon Comete"] and names("zzz") == [] and len(names("")) == len(items) and names("electro") == ["Scène : Électro"],
+          "palette: tous les mots doivent correspondre, requete vide = tout, accents des libelles ignores", str(names("scene neon")))
+
+
 def check_schedule() -> None:
     print("Planning du texte (core/schedule.py)")
     from core import schedule as sch
@@ -3371,6 +3387,25 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
     vjc["state"]["running"] = False
+    # palette de commandes
+    pc = c["palette"]
+    labels_ = [lab for lab, _kw, _fn in pc.items()]
+    first_scene = book.rows()[0]["name"] if book.rows() else None
+    before_lock = bool(getattr(s, "scene_lock", False))
+    chosen_ = pc.choose("verrou")
+    after_lock = bool(getattr(s, "scene_lock", False))
+    pc.choose("verrou")
+    params["comp_sym"] = 3
+    chosen_p = pc.choose("panique")
+    pc.open()
+    root.update()
+    opened_ = pc.state["win"] is not None
+    pc.close()
+    out["x_palette"] = ("Panique" in labels_ and any(l.startswith("Set : ") for l in labels_) and any(l.startswith("Preset overlay : ") for l in labels_)
+                        and any(l.startswith("Preset fond : ") for l in labels_) and (first_scene is None or f"Scene : {first_scene}" in labels_),
+                        chosen_ is not None and chosen_.startswith("Verrou") and before_lock != after_lock,
+                        chosen_p == "Panique" and params["comp_sym"] == 0, opened_, pc.state["win"] is None, pc.choose("introuvable-xyz") is None,
+                        bool(pc.matches("")))
     # planning du texte
     import types as _ty
     c["sched_text"].delete("1.0", "end")
@@ -6912,6 +6947,7 @@ def main() -> None:
     check_latence()
     check_beat_grid()
     check_schedule()
+    check_palette()
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats
