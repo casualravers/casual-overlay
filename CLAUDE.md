@@ -1022,10 +1022,12 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   (`_split_automation` fusionne les automations de chaque cote). Memes gestes dans l'interface (`make_preset_bar`
   dans gl_gui.py, une fois pour la partie OVERLAY, une fois dans le bloc Fond de la partie LIVE) : menu qui applique,
   Mettre a jour, Supprimer avec `live.confirm_dialog`, Sauvegarder sous, Restaurer. **Tout est modifiable** : la classe
-  `PresetBook` (audio2wave_gl.py, remplace `live.PresetStore` qui interdisait de toucher aux integres) enregistre une
-  version utilisateur qui remplace l'integre, masque un integre supprime (cle reservee `_deleted` du meme JSON),
-  `restore_builtins()` rend les integres d'origine ; `default` est toujours present et **toujours en tete**
-  (`all()`/`names()`), le supprimer le remet a sa version d'origine. Charger = valeurs validees par `coerce_params`
+  `PresetBook` (core/params.py) ne connait qu'UN preset integre, `default` (vide), toujours present et **toujours en tete** (le supprimer le remet a sa version d'origine) ;
+  tous les autres sont des presets d'utilisateur traites pareil (mettre a jour, supprimer). Plus de `sobre` / `neon` / `chaos` integres, plus de bouton Restaurer ; ceux deja ecrits dans le fichier restent.
+  **Rangement** (`make_preset_bar`, une fois pour l'overlay, une fois pour le fond) : un nom `dossier/nom` (un seul niveau, minuscules) range le preset dans un sous-menu ; **favoris** (bouton ☆ / ★, cle reservee `_favorites` du fichier)
+  et **derniers charges** (`_recent`) en tete du menu ; champ **Chercher** (liste plate des noms qui contiennent le texte) ; `core.params.menu_layout` est la mise en forme pure. Les cles du fichier qui commencent par `_` ne sont jamais des presets.
+  **Indicateur « modifie »** : `base["snap"]` = la capture que donnerait le preset choisi ; toutes les 600 ms `check_modified` la compare a l'etat courant (`core.params.differs_from` : ignore les reglages que les automations allumees font bouger et le bruit d'arrondi) ;
+  « ● modifie » + bouton **Revenir** (recharge le preset). Une scene retient les noms des presets overlay / fond (`scene["presets"]`) et les reaffiche au chargement (`select`), la comparaison dit alors si l'etat de la scene s'en ecarte. Charger = valeurs validees par `coerce_params`
   puis `sync_widgets()`. Les integres sont partiels et ne touchent pas aux automations sauf si le preset en contient ;
   un preset utilisateur les contient toujours. Les tests utilisent des fichiers temporaires
   (`gl.OVERLAY_PRESETS_PATH` / `gl.BACKGROUND_PRESETS_PATH` remplaces le temps de `run_gui`), jamais ceux de l'utilisateur.

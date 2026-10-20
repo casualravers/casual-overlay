@@ -666,6 +666,16 @@ def check_gui() -> None:
             # presets decorreles : overlay (logo + effets) et fond (source + motif), tous deux modifiables
             op, bp = c["overlay_presets"], c["bg_presets"]
             obook, bbook = op["book"], bp["book"]
+            # plus de presets integres hormis `default` : ceux-ci sont des presets d'utilisateur comme les autres
+            out["p_only_default"] = (list(gl.OVERLAY_PRESETS), list(gl.BACKGROUND_PRESETS))
+            obook.save("sobre", {"fx_link": 0.0, "fxl_on": [0, 0, 0, 0], "fx_on": [1, 1, 0, 0, 1], "holo_on": 1.0, "holo_intensity": 0.8})
+            obook.save("neon", {"holo_on": 1.0, "holo_intensity": 1.5, "holo_reach": 1.8, "holo_react": 0.5, "logo_glow": 1.4,
+                                "logo_glow_color": "#ff3df2", "fx_link": 0.0, "fxl_on": [0, 0, 1, 1], "fxl_int": [1.0, 1.0, 0.8, 0.6]})
+            bbook.save("sobre", {"bg_react": 0.4})
+            bbook.save("neon", {"bg_mode": "pattern", "bg_palette": "duo", "bg_color1": "#14003a", "bg_color2": "#00e5ff",
+                                "bg_checker": 0.08, "bg_angle": 35.0})
+            op["refresh"]()
+            bp["refresh"]()
             params["sensitivity"] = 2.2
             c["bg_var"].set("live")
             c["palette_var"].set("classic")
@@ -712,18 +722,43 @@ def check_gui() -> None:
             out["p_reload"] = (params["text_content"], c["text_widget"].get("1.0", "end-1c"), params["bg_hue"])
             bp["load"]("mon fond")
             out["b_reload"] = (params["bg_hue"], c["auto_vars"]["bg_hue"].get(), params["text_content"])
-            # les integres se modifient, se suppriment et se restaurent
+            # un preset se modifie et se supprime
             op["var"].set("neon")
             params["holo_intensity"] = 1.9
             op["update"]()
             op["load"]("default")
             op["load"]("neon")
-            out["p_edit_builtin"] = (params["holo_intensity"], obook.is_modified("neon"))
+            out["p_edit_builtin"] = (params["holo_intensity"], "neon" in obook.load_user())
             out["p_delete_builtin"] = (obook.delete("sobre"), "sobre" in obook.names())
-            obook.restore_builtins()
-            op["refresh"]()
+            # dossiers, favoris, recents, recherche, indicateur « modifie »
+            c["save_name_var"].set(" Club / Neon2 ")
+            op["save"]()
             op["load"]("neon")
-            out["p_restore"] = (params["holo_intensity"], "sobre" in obook.names(), "mon look" in obook.names())
+            op["check"]()
+            clean_mod = op["modified"].get()
+            params["holo_intensity"] = params["holo_intensity"] + 0.4
+            op["check"]()
+            dirty_mod = op["modified"].get()
+            dirty_btn = str(op["revert"].cget("state"))
+            op["revert"].invoke()
+            reverted = (op["modified"].get(), abs(params["holo_intensity"] - 1.9) < 1e-9)
+            op["var"].set("club/neon2")
+            op["fav"]()
+            menu_ = op["menu"]["menu"]
+
+            def labels_():
+                return [(menu_.type(i), menu_.entrycget(i, "label") if menu_.type(i) != "separator" else "")
+                        for i in range(menu_.index("end") + 1)]
+            full = labels_()
+            op["filter"].set("neon")
+            found = [lab for typ, lab in labels_()]
+            op["filter"].set("")
+            out["p_new"] = (obook.favorites(), full[0], any(typ == "cascade" and lab.startswith("club") for typ, lab in full),
+                            sorted(found), (clean_mod, dirty_mod, dirty_btn, reverted), "club/neon2" in obook.names())
+            obook.toggle_favorite("club/neon2")
+            obook.delete("club/neon2")
+            op["refresh"]()
+            out["p_clean"] = (obook.favorites(), "club/neon2" in obook.recents())
             params["holo_intensity"] = 0.5
             op["var"].set("default")
             op["update"]()
@@ -737,12 +772,11 @@ def check_gui() -> None:
             c["save_name_var"].set("aaa")
             op["save"]()
             out["p_menu"] = [c["overlay_menu"]["menu"].entrycget(i, "label")
-                             for i in range(c["overlay_menu"]["menu"].index("end") + 1)]
+                             for i in range(c["overlay_menu"]["menu"].index("end") + 1)
+                             if c["overlay_menu"]["menu"].type(i) != "separator"]
             out["p_delete"] = obook.delete("mon look")
             bbook.delete("sobre")
             out["b_menu"] = bbook.names()
-            bbook.restore_builtins()
-            out["b_restored"] = "sobre" in bbook.names()
             out["b_default_first"] = bbook.names()[0]
             params["holo_intensity"] = 1.0
             # noise: les cases et le curseur ecrivent les reglages, les presets les gardent
@@ -1028,18 +1062,24 @@ def check_gui() -> None:
     r = out.get("b_reload", ())
     check(len(r) == 3 and r[0] == 0.42 and abs(r[1] - 0.42) < 1e-9 and r[2] == "MON TEXTE",
           "rechargement d'un preset de fond: valeur et curseur retrouves, texte non touche", str(r))
-    check(out.get("p_edit_builtin") == (1.9, True), "un preset integre se modifie (version utilisateur qui le remplace)",
-          str(out.get("p_edit_builtin")))
-    check(out.get("p_delete_builtin") == ("deleted", False), "un preset integre se supprime", str(out.get("p_delete_builtin")))
-    check(out.get("p_restore") == (1.5, True, True),
-          "Restaurer: integres d'origine rendus (modifie et supprime), presets utilisateur gardes", str(out.get("p_restore")))
+    check(out.get("p_only_default") == (["default"], ["default"]),
+          "presets: le seul preset integre est 'default' (overlay et fond)", str(out.get("p_only_default")))
+    check(out.get("p_edit_builtin") == (1.9, True), "un preset se modifie (mettre a jour)", str(out.get("p_edit_builtin")))
+    check(out.get("p_delete_builtin") == ("deleted", False), "un preset se supprime", str(out.get("p_delete_builtin")))
+    pn = out.get("p_new", ())
+    check(len(pn) == 6 and pn[0] == ["club/neon2"] and pn[1] == ("command", "\u2605 club/neon2") and pn[2]
+          and pn[3] == ["club/neon2", "neon"] and pn[4] == ("", "\u25cf modifie", "normal", ("", True)) and pn[5],
+          "presets: dossiers (club/nom) en sous-menu, favoris en tete, recherche, indicateur « modifie » et Revenir", str(pn))
+    check(out.get("p_clean") == ([], False), "presets: supprimer un preset le retire des favoris et des recents", str(out.get("p_clean")))
     check("point de depart" in out.get("p_default_msg", "") and out.get("p_default_edit") == 0.5,
           "'default' est modifiable", str(out.get("p_default_msg")))
     dr = out.get("p_default_reset", ())
     check(dr and dr[0] == "reset" and dr[1] == {} and out.get("p_default_back") == 1.0,
           "supprimer 'default' le remet a sa version d'origine (il ne disparait jamais)", str(dr))
-    check(out.get("p_menu", [])[:1] == ["default"] and {"aaa", "sobre", "neon", "chaos", "mon look"} <= set(out.get("p_menu", [])),
-          "menu des presets overlay: default en tete meme avec un preset 'aaa'", str(out.get("p_menu")))
+    lay = gl.menu_layout(["default", "aaa", "club/b", "club/a", "zz"], ["zz", "gone"], ["aaa", "zz", "club/a"])
+    check(lay["root"] == ["default", "aaa", "zz"] and lay["folders"] == {"club": ["club/a", "club/b"]} and lay["favorites"] == ["zz"]
+          and lay["recents"] == ["aaa", "club/a"] and gl.menu_layout(["default", "ab", "b"], [], [], "AB")["found"] == ["ab"],
+          "menu des presets: default en tete de la racine, dossiers, favoris et recents existants, recherche", str(lay))
     names = ["Stereo Mix (Realtek(R) Audio)", "CABLE Output (VB-Audio Virtual Cable)", "Microphone (Realtek(R) Audio)",
              "Microphone Array (Intel Smart S"]
     check(gl.pick_default_device(names, "Microphone Array (Intel Smart Sound Technology)") == names[3],
@@ -1333,8 +1373,8 @@ def check_gui() -> None:
     n, bad = out.get("snap", {}).get("tips", (0, [("absent",)]))
     check(n > 10 and not bad, f"info-bulles: toutes dans la fenetre (mode snap, {n} affichees)", str(bad[:2]))
     check(out.get("p_delete") == "deleted", "suppression d'un preset utilisateur")
-    check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]) and out.get("b_restored"),
-          "presets de fond: default en tete, suppression et restauration d'un integre", str(out.get("b_menu")))
+    check(out.get("b_default_first") == "default" and "sobre" not in out.get("b_menu", ["sobre"]),
+          "presets de fond: default en tete, suppression d'un preset", str(out.get("b_menu")))
     lv = {k: out.get(k, {}) for k in ("g_live_radio", "g_live_bar", "g_live_line")}
     off, on = {"disabled"}, {"normal"}
     check(all(lv["g_live_radio"].get(lb) == off for lb in ("Forme", "Lissage", "Echelle frequences", "Espace entre barres"))

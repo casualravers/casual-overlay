@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from core import params_schema
-from core.automation import AUTOMATION_SPECS, merge_automation
+from core.automation import AUTOMATION_SPECS, merge_automation, set_param
 
 ROOT_DIR = Path(__file__).resolve().parent.parent       # dossier du programme (asset/, gl_shaders/...)
 DEFAULT_LOGO_NAME = "Casual Ravers - Kit_Sigle - Blanc.png"
@@ -69,36 +69,77 @@ BACKGROUND_PRESETS_PATH = Path.home() / ".audio2wave" / "background_presets.json
 OVERLAY_PRESET_EXCLUDED = params_schema.OVERLAY_PRESET_EXCLUDED     # sensibilite + reglages de salle : ni presets ni scenes n'y touchent
 BG_KEYS = params_schema.BG_KEYS                                     # portee « fond » (bg_master est un reglage de SALLE, pas du fond)
 BG_AUTOMATION_KEYS = tuple(k for k in AUTOMATION_SPECS if params_schema.is_bg(k))
-OVERLAY_PRESETS: dict[str, dict] = {
-    "default": {},
-    # logo net, effets doux : le decorrele fond/logo dans son usage le plus simple
-    "sobre": {"fx_link": 0.0, "fxl_on": [0, 0, 0, 0], "fx_on": [1, 1, 0, 0, 1], "fx_int": [0.7, 0.7, 1.0, 1.0, 1.0],
-              "master": 0.8, "logo_pulse": 0.06, "logo_jitter": 0.0, "logo_glow": 0.5,
-              "holo_on": 1.0, "holo_intensity": 0.8, "holo_warp": 0.7},
-    # halo holographique ample et contour magenta
-    "neon": {"holo_on": 1.0, "holo_intensity": 1.5, "holo_reach": 1.8, "holo_react": 0.5, "logo_glow": 1.4,
-             "logo_glow_color": "#ff3df2", "fx_link": 0.0, "fxl_on": [0, 0, 1, 1], "fxl_int": [1.0, 1.0, 0.8, 0.6]},
-    # tout a fond, tout reagit
-    "chaos": {"master": 1.3, "fx_int": [1.6, 1.4, 1.5, 1.3, 1.4], "logo_pulse": 0.25, "logo_jitter": 0.012,
-              "holo_react": 1.0, "fx_link": 0.0, "fxl_on": [1, 1, 1, 1], "fxl_int": [1.4, 1.2, 1.4, 1.2]},
-}
-BACKGROUND_PRESETS: dict[str, dict] = {
-    "default": {},
-    "sobre": {"bg_react": 0.4},
-    # fond sombre duo
-    "neon": {"bg_mode": "pattern", "bg_palette": "duo", "bg_color1": "#14003a", "bg_color2": "#00e5ff",
-             "bg_checker": 0.08, "bg_angle": 35.0},
-    "chaos": {"bg_react": 1.6, "bg_speed": 2.2, "bg_flip": 4.0},
-}
+# Un seul preset integre : `default` (le point de depart). Les autres sont ceux de l'utilisateur, tous traites pareil.
+OVERLAY_PRESETS: dict[str, dict] = {"default": {}}
+BACKGROUND_PRESETS: dict[str, dict] = {"default": {}}
+
+FOLDER_SEP = "/"
+RECENT_MAX = 8
+
+
+def split_folder(name: str) -> tuple[str, str]:
+    """`club/neon` -> (`club`, `neon`) ; un nom sans `/` est a la racine (dossier vide)."""
+    folder, sep, leaf = name.partition(FOLDER_SEP)
+    return (folder.strip(), leaf.strip()) if sep and folder.strip() and leaf.strip() else ("", name)
+
+
+def menu_layout(names: list[str], favorites: list[str], recents: list[str], needle: str = "") -> dict:
+    """Organisation d'un menu de presets : `favorites`, `recents` (existants seulement), `folders` (dossier -> noms, tries) et `root`
+    (noms sans dossier). `default` est toujours le premier de la racine. Avec `needle`, une liste plate `found` des noms qui le contiennent."""
+    have = set(names)
+    needle = needle.strip().lower()
+    if needle:
+        return {"found": [n for n in names if needle in n.lower()], "favorites": [], "recents": [], "folders": {}, "root": []}
+    folders: dict[str, list[str]] = {}
+    root: list[str] = []
+    for n in names:
+        folder, _leaf = split_folder(n)
+        (folders.setdefault(folder, []) if folder else root).append(n)
+    root.sort(key=lambda n: (n != "default", n.lower()))
+    return {"found": None, "favorites": [n for n in favorites if n in have],
+            "recents": [n for n in recents if n in have and n not in favorites][:RECENT_MAX],
+            "folders": {f: sorted(v, key=str.lower) for f, v in sorted(folders.items(), key=lambda kv: kv[0].lower())}, "root": root}
+
+
+def _close(a, b, tol: float = 1e-3) -> bool:
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(a - b) <= tol * max(1.0, abs(a), abs(b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], tol) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_close(x, y, tol) for x, y in zip(a, b))
+    return a == b
+
+
+def _undriven(snap: dict, automation) -> dict:
+    """Copie de `snap` ou les reglages pilotes par une courbe d'automation allumee sont neutralises (ils bougent tout seuls)."""
+    out = json.loads(json.dumps(snap))
+    if isinstance(automation, dict) and float(out.get("auto_master", 1.0)) >= 0.5:
+        for key, entry in automation.items():
+            if key in AUTOMATION_SPECS and isinstance(entry, dict) and entry.get("enabled"):
+                try:
+                    set_param(out, key, 0.0)
+                except (KeyError, IndexError, TypeError):
+                    pass
+    return out
+
+
+def differs_from(snap: dict, baseline: dict, automation=None) -> bool:
+    """Vrai si l'etat `snap` (capture courante) s'ecarte de `baseline` (capture faite juste apres le chargement d'un preset),
+    en ignorant les reglages que les automations font bouger et le bruit d'arrondi des curseurs."""
+    return not _close(_undriven(snap, automation), _undriven(baseline, automation))
 
 
 class PresetBook:
-    """Presets integres (`builtin`, dans le code) + presets utilisateur (JSON `path`), comme PresetStore d'audio2wave_live
-    mais **tout est modifiable** : mettre a jour un integre en enregistre une version utilisateur qui le remplace, le
-    supprimer le masque (liste reservee `_deleted` du meme fichier), `restore_builtins()` rend les integres d'origine.
-    `default` reste toujours present et toujours **en tete** : le supprimer revient a sa version d'origine."""
+    """Presets (integre `default` + ceux de l'utilisateur, JSON `path`), comme PresetStore d'audio2wave_live mais **tout est modifiable**.
+    `default` reste toujours present et toujours **en tete** : le supprimer revient a sa version d'origine (vide).
+    Un nom peut contenir `/` pour ranger un preset dans un dossier (`club/neon`). Les cles reservees du fichier (commencant par `_`)
+    gardent les favoris (`_favorites`) et les derniers charges (`_recent`)."""
 
-    DELETED = "_deleted"
+    FAVORITES = "_favorites"
+    RECENT = "_recent"
 
     def __init__(self, builtin: dict[str, dict], path_getter):
         self.builtin = builtin
@@ -120,28 +161,50 @@ class PresetBook:
         self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
     def load_user(self) -> dict[str, dict]:
-        return {k: v for k, v in self._read().items() if k != self.DELETED and isinstance(v, dict)}
-
-    def deleted(self) -> list[str]:
-        value = self._read().get(self.DELETED)
-        return [n for n in value if isinstance(n, str)] if isinstance(value, list) else []
+        return {k: v for k, v in self._read().items() if not k.startswith("_") and isinstance(v, dict)}
 
     def all(self) -> dict[str, dict]:
         """Tous les presets, `default` en tete puis ordre alphabetique."""
-        hidden = set(self.deleted())
-        merged = {n: v for n, v in self.builtin.items() if n not in hidden}
+        merged = dict(self.builtin)
         merged.update(self.load_user())
-        merged.setdefault("default", self.builtin.get("default", {}))
-        names = ["default"] + sorted(n for n in merged if n != "default")
+        merged.setdefault("default", {})
+        names = ["default"] + sorted((n for n in merged if n != "default"), key=str.lower)
         return {n: merged[n] for n in names}
 
     def names(self) -> list[str]:
         return list(self.all())
 
+    def _list(self, key: str) -> list[str]:
+        value = self._read().get(key)
+        return [n for n in value if isinstance(n, str)] if isinstance(value, list) else []
+
+    def favorites(self) -> list[str]:
+        return [n for n in self._list(self.FAVORITES) if n in self.all()]
+
+    def recents(self) -> list[str]:
+        return [n for n in self._list(self.RECENT) if n in self.all()]
+
+    def toggle_favorite(self, name: str) -> bool:
+        """Ajoute / retire `name` des favoris ; rend vrai s'il en est un maintenant."""
+        data = self._read()
+        favs = self._list(self.FAVORITES)
+        on = name not in favs
+        favs = [n for n in favs if n != name] + ([name] if on else [])
+        data[self.FAVORITES] = favs
+        self._write(data)
+        return on
+
+    def touch(self, name: str) -> None:
+        """Note `name` comme le dernier preset charge (en tete des recents)."""
+        if name not in self.all():
+            return
+        data = self._read()
+        data[self.RECENT] = ([name] + [n for n in self._list(self.RECENT) if n != name])[:RECENT_MAX * 2]
+        self._write(data)
+
     def save(self, name: str, overrides: dict) -> None:
         data = self._read()
         data[name] = overrides
-        data[self.DELETED] = [n for n in self.deleted() if n != name]
         self._write(data)
 
     def delete(self, name: str) -> str | None:
@@ -156,17 +219,11 @@ class PresetBook:
         if name not in self.all():
             return None
         data.pop(name, None)
-        if name in self.builtin:
-            data[self.DELETED] = sorted(set(self.deleted()) | {name})
+        for key in (self.FAVORITES, self.RECENT):
+            if key in data:
+                data[key] = [n for n in self._list(key) if n != name]
         self._write(data)
         return "deleted"
-
-    def is_modified(self, name: str) -> bool:
-        return name in self.builtin and name in self.load_user()
-
-    def restore_builtins(self) -> None:
-        data = {k: v for k, v in self._read().items() if k != self.DELETED and k not in self.builtin}
-        self._write(data)
 
 
 OVERLAY_BOOK = PresetBook(OVERLAY_PRESETS, lambda: OVERLAY_PRESETS_PATH)
