@@ -101,6 +101,11 @@ jobs:
       - uses: ./.github/actions/mesa
         with:
           version: ${{ env.MESA_VERSION }}
+      - name: ffmpeg (sur le PATH pour la verification ; non embarque dans le dossier)
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress | Out-Null
+          ffmpeg -version | Select-Object -First 1
       - name: Environnement virtuel (le script de fabrication y prend les modules)
         run: |
           python -m venv .venv
