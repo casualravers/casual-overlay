@@ -6148,6 +6148,7 @@ def check_doodles() -> None:
     # le fondu : au tout debut le doodle est invisible, il apparait ensuite
     r3 = gl.Renderer(ctx, size, None)
     r3.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
+    r3.draw(fbo, size, st, params, 0.0)                # premier rendu a blanc : compile les shaders (en OpenGL logiciel cela prend plus que le fondu)
     r3.add_doodle(top_red_bottom_green, time.monotonic() + 0.0)
     r3.draw(fbo, size, st, params, 0.0)
     near_zero = int(read_target(ctx, fbo, size).max())
@@ -7001,6 +7002,34 @@ FRAGILES = ("garde sa taille quand une scene change de mode", "le bouton agrandi
             "un nom de scene tres long", "reduire rend sa taille d'origine", "espace de controle global a droite de la liste")
 
 
+# Verifications qui supposent un grand ecran (mise en page large, hauteur de la fenetre sous 700 px...) : sur un ecran plus petit que SCREEN_MIN
+# (serveur d'integration continue en 1024 x 768) elles ne veulent rien dire, on les ecarte en le disant.
+SCREEN_MIN = (1500, 900)
+SCREEN_DEPENDENT = ("fenetre large", "fenetre moyenne", "retour a une grande fenetre", "fenetre sous 700 px", "le bouton agrandit la fenetre",
+                    "reduire rend sa taille d'origine", "bibliotheque a gauche du set")
+
+
+def drop_screen_dependent() -> None:
+    """Retire de `failures` les echecs de mise en page qui tiennent a un ecran trop petit (et dit lesquels)."""
+    if not any(any(m in label for m in SCREEN_DEPENDENT) for label in failures):
+        return
+    try:
+        import tkinter
+        probe = tkinter.Tk()
+        probe.withdraw()
+        size = (probe.winfo_screenwidth(), probe.winfo_screenheight())
+        probe.destroy()
+    except Exception:
+        return
+    if size[0] >= SCREEN_MIN[0] and size[1] >= SCREEN_MIN[1]:
+        return
+    ignored = [label for label in failures if any(m in label for m in SCREEN_DEPENDENT)]
+    failures[:] = [label for label in failures if label not in ignored]
+    print(f"Ecran {size[0]} x {size[1]} (< {SCREEN_MIN[0]} x {SCREEN_MIN[1]}) : {len(ignored)} verification(s) de mise en page ecartee(s) :")
+    for label in ignored:
+        print("  - " + label)
+
+
 def only_fragile(labels: list[str]) -> bool:
     return bool(labels) and all(any(marker in label for marker in FRAGILES) or "aucune erreur" in label for label in labels)
 
@@ -7078,6 +7107,7 @@ def main() -> None:
             print("  " + line)
     except Exception:
         pass
+    drop_screen_dependent()
     if failures:
         print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
         if only_fragile(failures):
