@@ -10,6 +10,7 @@ from core import scenes
 from core import setpack
 from pathlib import Path
 import threading
+import tkinter as tk
 import time
 from tkinter import filedialog
 from tkinter import simpledialog
@@ -38,7 +39,42 @@ def install(c):
     vj = c.vj
     vj_advance = c.vj_advance
 
+    def folder_dialog(current: str, folders: list[str]) -> str | None:
+        """Modale « Ranger dans un dossier » : choisir un dossier existant dans la liste, ou taper le nom d'un nouveau. Rend le dossier
+        ("" = racine) ou None si on annule."""
+        import audio2wave as a2w                       # (pas un nom de gl_gui : une modale de niveau module doit l'importer elle-meme)
+        from tkinter import ttk
+        win = tk.Toplevel(root)
+        win.title("Ranger la scene")
+        win.configure(bg=a2w.GUI_PANEL_BG)
+        win.transient(root)
+        win.resizable(False, False)
+        tk.Label(win, text="Dossier : choisis-en un ou tape un nouveau nom", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).pack(padx=14, pady=(14, 6))
+        var = tk.StringVar(value=current)
+        box = ttk.Combobox(win, textvariable=var, values=list(folders), width=34)
+        box.pack(padx=14)
+        tk.Label(win, text="(vide = a la racine)", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(padx=14, pady=(2, 8))
+        result: dict = {"value": None}
+
+        def ok(_e=None) -> None:
+            result["value"] = var.get()
+            win.destroy()
+
+        row = tk.Frame(win, bg=a2w.GUI_PANEL_BG)
+        row.pack(pady=(0, 12))
+        tk.Button(row, text="Ranger", command=ok, padx=12).pack(side="left", padx=4)
+        tk.Button(row, text="Annuler", command=win.destroy, padx=12).pack(side="left", padx=4)
+        win.bind("<Return>", ok)
+        win.bind("<Escape>", lambda e: win.destroy())
+        box.focus_set()
+        win.update_idletasks()
+        win.geometry(f"+{root.winfo_rootx() + 120}+{root.winfo_rooty() + 120}")
+        win.grab_set()
+        root.wait_window(win)
+        return result["value"]
+
     scene_ui = {
+        "ask_folder": folder_dialog,
         "chooser": lambda title, text, buttons: choice_dialog(root, title, text, buttons),
         "ask_name": lambda title, prompt, initial="": simpledialog.askstring(title, prompt, parent=root, initialvalue=initial),
         "ask_save": lambda initial: filedialog.asksaveasfilename(

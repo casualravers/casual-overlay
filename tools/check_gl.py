@@ -1231,8 +1231,10 @@ def check_gui() -> None:
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
           str(out.get("x_stage")))
-    check(out.get("x_library_tree") == (True,) * 6, "bibliotheque (GUI): favoris en tete, dossiers (dossier/nom), ranger / sortir d'un dossier, recherche, mise a jour sur place",
+    check(out.get("x_library_tree") == (True,) * 7, "bibliotheque (GUI): favoris en tete, dossiers (dossier/nom), ranger / sortir d'un dossier, recherche, mise a jour sur place",
           str(out.get("x_library_tree")))
+    check(out.get("x_library_del") == (True,) * 3, "bibliotheque (GUI): Suppr ouvre la modale de confirmation, la scene n'est supprimee qu'apres validation",
+          str(out.get("x_library_del")))
     check(out.get("x_palette") == (True,) * 7, "palette (GUI): scenes, sets, presets et commandes listes ; une saisie lance la bonne commande", str(out.get("x_palette")))
     check(out.get("x_sched") == (True,) * 6, "planning (GUI): a l'heure dite la source passe en Texte et le texte du passage est pose, une seule fois ; case decochee = rien",
           str(out.get("x_sched")))
@@ -3739,27 +3741,52 @@ def gui_expand_steps(c, s, out) -> None:
     lib["star"](nm_)
     root.update()
     star_gone = not tv_.exists("F:*")
-    old_ask = sc["ui"]["ask_name"]
-    sc["ui"]["ask_name"] = lambda title, prompt, initial="": "club"
+    old_ask = sc["ui"]["ask_folder"]
+    offered = []
+    sc["ui"]["ask_folder"] = lambda current, folders: (offered.append(list(folders)), "club")[1]
     lib["move"](nm_)
     root.update()
     lib = sc["panel_state"]["lib"]                       # renommer reconstruit le panneau
     tv_ = lib["tree"]
     moved_name = [x for x in book.names() if x.startswith("club/")]
     folder_there = tv_.exists("F:club") and len(tv_.get_children("F:club")) == 1
-    sc["ui"]["ask_name"] = lambda title, prompt, initial="": ""
+    sc["ui"]["ask_folder"] = lambda current, folders: (offered.append(list(folders)), "")[1]
     if moved_name:
         lib["move"](moved_name[0])
     root.update()
     lib = sc["panel_state"]["lib"]
     back_name = nm_ in book.names() and not [x for x in book.names() if x.startswith("club/")]
-    sc["ui"]["ask_name"] = old_ask
+    sc["ui"]["ask_folder"] = old_ask
+    folders_offered = len(offered) == 2 and offered[0] == [] and offered[1] == ["club"]       # la 2e fois, le dossier cree est propose
     lib["filter"].set(nm_[:3].lower())
     root.update()
     filtered = all(nm_[:3].lower() in n.lower() for n in lib["names"]) and 1 <= len(lib["names"]) <= len(book.names())
     lib["filter"].set("")
     root.update()
-    out["x_library_tree"] = (star_kids == [nm_], star_gone, bool(moved_name) and folder_there, back_name, filtered, len(lib["names"]) == len(book.names()))
+    live_mod = sys.modules["audio2wave_live"]
+    asked_del = []
+    real_confirm = live_mod.confirm_dialog
+    live_mod.confirm_dialog = lambda parent, title, text, action: asked_del.append((title, text, action))
+    victim = "Suppr test"
+    book.put({"name": victim, "bg": "live", "overlay": {}})
+    sc["refresh_panel"](force=True)
+    root.update()
+    lib = sc["panel_state"]["lib"]
+    tv_ = lib["tree"]
+    tv_.selection_set(lib["iids"][victim])
+    tv_.focus_force()
+    lib["delete"]()
+    root.update()
+    still_there = victim in book.names()
+    modal_ok = len(asked_del) == 1 and victim in asked_del[0][1] and asked_del[0][0] == "Supprimer la scene"
+    if asked_del:
+        asked_del[0][2]()
+    root.update()
+    live_mod.confirm_dialog = real_confirm
+    lib = sc["panel_state"]["lib"]                        # la suppression reconstruit le panneau
+    suppr = (modal_ok, still_there, victim not in book.names())
+    out["x_library_del"] = suppr
+    out["x_library_tree"] = (star_kids == [nm_], star_gone, bool(moved_name) and folder_there, back_name, filtered, len(lib["names"]) == len(book.names()), folders_offered)
     ops.toggle_library()
     root.update()
     out["x_library"] = (listed, ok_api and len(rows_api) == len(rows_before) + 1 and rows_api[1] == lib["names"][0],
