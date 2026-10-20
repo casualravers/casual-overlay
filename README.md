@@ -263,9 +263,9 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 
 Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 
-- **Sources audio par couche, suite** : le niveau 1 est fait (menu « reagit a » par couche : tout, basses, mediums, aigus, kick, rien).
-  Reste : un second detecteur de transitoires (snare / charleys) comme rythme secondaire du logo, retard et lissage par couche,
-  sources liees aux phases du morceau, et un autre micro pour une couche.
+- **Sources audio par couche, suite** : les niveaux 1 a 3 sont faits (source par couche, frappes aigues comme rythme secondaire, sensibilite
+  du kick, retard et lissage par couche). Reste : sources liees aux phases du morceau, inversion (le fond s'eclaire quand le logo se calme),
+  et un autre micro pour une couche.
 - **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre, au hasard ou Full Randomizer, flash a
   chaque changement, Espace et fleche droite, panneau « Etendre » avec duree propre et exclusion par scene, ordre libre,
   medias lies aux scenes par glisser-deposer). Reste a faire :

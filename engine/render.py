@@ -12,7 +12,7 @@ from pathlib import Path
 
 from core import sessionlog
 from core import doodles
-from core.audio_layers import has_kick, layer_levels
+from core.audio_layers import LayerFilter, has_kick, layer_levels
 from core.automation import FX_EFFECTS
 from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
@@ -237,6 +237,7 @@ class Renderer:
         self._strobe_kicks = 0                                                      # strobe leger : kicks comptes depuis l'armement
         self.strobe_limiter = StrobeLimiter()
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
+        self._layer_filters = (LayerFilter(), LayerFilter())                           # retard et lissage de la reaction au son : fond, logo
         self._hue_spec = 0.0                                                          # teinte tiree du spectre, lissee
         self._prev_ok = False
         self.fb_tex: list = []                  # trainee : deux images finales hors ecran (on lit l'une, on ecrit l'autre, puis on echange)
@@ -477,14 +478,16 @@ class Renderer:
         react_m = _unit(float(p["react_master"]) * float(p["phase_react"]) * (1.0 + build), 0.0, 3.0)
         tempo = effective_tempo(p)                                      # master x phase du morceau (tres lent en ambiance)
         if react_m != 1.0:
-            state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat") if k in state}}
+            state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat", "hit", "beat_bg", "beat_logo") if k in state}}
         bass, high, beat = state["bass"], state["high"], state["beat"]
         # Sources audio par couche : le fond et le logo peuvent reagir a des parties differentes du son (lie : le logo suit la source du fond).
         linked = float(p["fx_link"]) >= 0.5
         src_bg = p["src_bg"]
         src_logo = src_bg if linked else p["src_logo"]
-        bg_au = layer_levels(state, src_bg)
-        lg_au = layer_levels(state, src_logo)
+        # Chaque couche a aussi son kick (sensibilite propre), son retard et son lissage ; liees, le logo reprend ceux du fond.
+        lk = "bg" if linked else "logo"
+        bg_au = self._layer_filters[0].step(t, layer_levels(state, src_bg, "bg"), p["lag_bg"], p["smooth_bg"])
+        lg_au = self._layer_filters[1].step(t, layer_levels(state, src_logo, lk), p["lag_" + lk], p["smooth_" + lk])
         lg_bass, lg_high, lg_beat = lg_au[0], lg_au[1], lg_au[2]
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t

@@ -4454,15 +4454,93 @@ def check_audio_layers_pure() -> None:
     check(al.layer_levels(st, "kick") == (0.0, 0.0, 0.9, 0.2), "sources: kick = seulement ce qui part des kicks")
     check(al.layer_levels(st, "rien") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: rien = la couche ne reagit plus")
     check(al.layer_levels(st, "n'importe quoi") == al.layer_levels(st, "tout") and al.valid(None) == "tout", "sources: valeur inconnue = tout")
-    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False], "sources: has_kick")
+    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False], "sources: has_kick")
+    st2 = dict(st, hit=0.7, since_hit=0.05, beat_bg=0.4, since_bg=0.6)
+    check(al.layer_levels(st2, "frappes") == (0.0, 0.0, 0.7, 0.05) and al.layer_levels(st, "frappes") == (0.0, 0.0, 0.0, al.NO_KICK),
+          "sources: frappes = les attaques des aigus (rien sans detecteur)")
+    check(al.layer_levels(st2, "kick", "bg")[2:] == (0.4, 0.6) and al.layer_levels(st2, "kick", "logo")[2:] == (0.9, 0.2),
+          "sources: le kick d'une couche est celui de sa propre sensibilite, sinon le kick commun")
+    # retard et lissage (LayerFilter)
+    f = al.LayerFilter()
+    lv = (0.3, 0.2, 1.0, 0.1)
+    check(f.step(1.0, lv) is lv and f.step(1.1, lv, 0.0, 0.0) is lv, "couche: sans retard ni lissage, les niveaux passent tels quels")
+    f = al.LayerFilter()
+    seen = {}
+    for i in range(0, 100):
+        tt = round(i * 0.02, 3)
+        seen[tt] = f.step(tt, (0.0, 0.0, 1.0 if abs(tt - 1.0) < 1e-6 else 0.0, 5.0), 0.2, 0.0)
+    check(seen[1.0][2] == 0.0 and seen[1.1][2] == 0.0 and seen[1.3][2] == 0.0 and any(seen[round(x * 0.02, 3)][2] == 1.0 for x in range(60, 66)),
+          "couche: retard de 200 ms (la reaction arrive apres, pas avant)")
+    check(seen[0.0][2] == 0.0 and seen[0.1][3] == al.NO_KICK, "couche: avant d'avoir assez d'historique, la couche est silencieuse")
+    f = al.LayerFilter()
+    f.step(-0.02, (0.0, 0.0, 0.0, 0.5), 0.0, 1.0)
+    vals = [f.step(round(i * 0.02, 3), (1.0, 1.0, 1.0, 0.5), 0.0, 1.0)[2] for i in range(100)]
+    check(0.0 < vals[0] < 0.3 and vals[3] < 0.9 and vals[-1] > 0.99, "couche: lissage = attaque adoucie (monte en ~120 ms)", str(vals[:5]))
+    dec = [f.step(round((100 + i) * 0.02, 3), (0.0, 0.0, 0.0, 0.5), 0.0, 1.0)[2] for i in range(40)]
+    check(dec[5] > 0.5 and dec[-1] < 0.5 and f.step(5.0, (0.0, 0.0, 0.0, 0.5), 0.0, 1.0)[3] == 0.5,
+          "couche: lissage = relachement lent (800 ms), 'since' reste net", str(dec[:6]))
     from core import params_schema as ps
     check(ps.defaults(None)["src_bg"] == "tout" and ps.defaults(None)["src_logo"] == "tout"
           and ps.validate("src_bg", "aigus") == (True, "aigus") and ps.validate("src_logo", "bof")[0] is False, "sources: reglages du schema (defaut tout, enum valide)")
 
 
+def check_onsets() -> None:
+    """Frappes des aigus (charleys, claps) et kicks par couche, sur signaux synthetiques."""
+    print("-- frappes aigues et kicks par couche")
+    rate, secs = 48000, 20
+    rg = np.random.default_rng(7)
+    n = rate * secs
+    tt = np.arange(n) / rate
+    kicks = 0.5 * np.where(tt % 0.5 < 0.1, np.sin(np.pi * (tt % 0.5) / 0.1), 0.0) * np.sin(2 * np.pi * 60 * tt)
+    hats = np.zeros(n)
+    hat_times = [k * 0.5 + 0.25 for k in range(secs * 2)]
+    for at in hat_times:
+        i = int(at * rate)
+        m = int(0.03 * rate)
+        hats[i:i + m] += 0.15 * rg.standard_normal(m) * np.exp(-np.arange(m) / rate / 0.01)
+    sig = (kicks + hats + 0.002 * rg.standard_normal(n)).astype(np.float32)
+
+    def run(signal, hop=512, **cfg):
+        ex = gl.FeatureExtractor(rate)
+        for k, v in cfg.items():
+            setattr(ex, k, v)
+        ring = gl.RingBuffer()
+        edges = {"hit": [], "bg": [], "logo": []}
+        beats = []
+        for i in range(0, len(signal) - hop, hop):
+            ring.write(signal[i:i + hop])
+            tm = (i + hop) / rate
+            lv, beat = ex.process(ring.latest(ex.win_size), hop / rate, tm)
+            if beat:
+                beats.append(tm)
+            for k in edges:
+                if lv["edge_" + k]:
+                    edges[k].append(tm)
+        return edges, beats
+
+    edges, beats = run(sig)
+    near = lambda times, targets, tol=0.06: sum(1 for x in targets if any(abs(x - y) < tol for y in times))
+    check(near(edges["hit"], hat_times[2:]) >= 0.8 * len(hat_times[2:]), "frappes: les charleys sur les contretemps sont detectes",
+          f"{near(edges['hit'], hat_times[2:])}/{len(hat_times[2:])}")
+    kick_times = [k * 0.5 for k in range(2, secs * 2)]
+    check(near(edges["hit"], kick_times) <= 0.25 * len(kick_times), "frappes: les kicks ne sont (presque) pas pris pour des frappes",
+          f"{near(edges['hit'], kick_times)}/{len(kick_times)}")
+    only_kicks, _ = run((kicks + 0.002 * rg.standard_normal(n)).astype(np.float32))
+    check(len(only_kicks["hit"]) <= 3, "frappes: un kick sans charleys ne declenche presque rien", f"{len(only_kicks['hit'])}")
+    check(edges["bg"] == beats and edges["logo"] == beats, "kick par couche: sensibilite 1 = le kick commun")
+    # kick sur basse continue : un kick commun a sensibilite 1 en rate, la couche a sensibilite haute le rattrape
+    r2 = np.random.default_rng(4)
+    env = np.where((tt % 0.5) < 0.1, np.sin(np.pi * (tt % 0.5) / 0.1), 0.0)
+    onbass = (0.15 * np.sin(2 * np.pi * 55 * tt) + 0.3 * env * np.sin(2 * np.pi * 60 * tt) + 0.002 * r2.standard_normal(n)).astype(np.float32)
+    e2, b2 = run(onbass, layer_sens={"bg": 2.5, "logo": 1.0})
+    check(len(e2["bg"]) >= 30 and len(e2["bg"]) > len(b2) and e2["logo"] == b2,
+          "kick par couche: la couche a sensibilite haute rattrape des kicks que le kick commun rate", f"bg {len(e2['bg'])} commun {len(b2)}")
+
+
 def check_audio_layers() -> None:
     """Sources audio par couche en pixels : chaque couche ne reagit qu'a la partie du son choisie."""
     print("Sources audio par couche")
+    from core.audio_layers import LayerFilter
     try:
         ctx = gl.moderngl.create_standalone_context()
     except Exception as exc:
@@ -4511,6 +4589,14 @@ def check_audio_layers() -> None:
     check(changed(render(hit, src_bg="aigus", **ab), still) == 0, "sources: fond sur les aigus, un kick seul ne declenche pas l'aberration")
     check(changed(render(hit, src_bg="kick", **ab), still) > 500, "sources: fond sur kick, l'aberration part au kick")
     check(changed(render(bass_only, src_bg="kick", **wob), still) == 0, "sources: fond sur kick, les basses seules ne font pas onduler")
+    # retard : la reaction arrive apres (un renderer neuf, l'horloge `t` fait foi)
+    r._layer_filters = (LayerFilter(), LayerFilter())
+    r.draw(fbo, size, bass_only, dict(base, lag_bg=0.3, **wob), 1.0)
+    first = read_target(ctx, fbo, size).astype(int)
+    r.draw(fbo, size, bass_only, dict(base, lag_bg=0.3, **wob), 1.5)
+    later = read_target(ctx, fbo, size).astype(int)
+    check(changed(first, still) == 0 and changed(later, still) > 2000, "sources: retard du fond, silencieux d'abord puis la reaction arrive")
+    r._layer_filters = (LayerFilter(), LayerFilter())
     # le master de reactivite s'applique avant : 0 = plus aucune reaction, quelle que soit la source
     check(changed(render(react_master=0.0, **wob), still) == 0, "sources: reactivite a 0 = aucune reaction")
 
@@ -7195,7 +7281,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_onsets", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7245,6 +7331,7 @@ def main() -> None:
     check_gates()
     check_layers()
     check_audio_layers_pure()
+    check_onsets()
     check_audio_layers()
     check_automation()
     check_params()

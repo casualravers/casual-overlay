@@ -42,7 +42,8 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   automation     courbes, AutomationEngine, liaison fond / logo (get_param, set_param, set_fx_link)
   controls       tempo effectif, strobe (appui), StrobeLimiter, panique, tap tempo, BarTimer
   phase          phases du morceau (silence / ambiance / groove / montee / cassure / pic) et multiplicateurs lisses : « Phases auto » (`PhaseTracker`)
-  audio_layers   sources audio par couche (fond / logo : tout, basses, mediums, aigus, kick, rien) : `layer_levels`
+  audio_layers   sources audio par couche (fond / logo : tout, basses, mediums, aigus, kick, frappes, rien) : `layer_levels`, retard et lissage (`LayerFilter`)
+  onset          detecteur d'attaques parametrable (`OnsetDetector`) : frappes aigues et kicks par couche
   rhythm         BPM estime a partir des kicks, montee et drop detectes a partir des basses (`Rhythm`, `BpmEstimator`, `DropDetector`)
   setpack        archive .zip d'un set avec ses medias (ecriture, lecture, extraction sure)
   safety         securite GPU du VJ : alleger la scene suivante selon ses effets couteux et la charge mesuree
@@ -822,15 +823,20 @@ presets, ni scenes) ; ils sont lus par `effective_tempo` (donc l'automation), `R
 PANIQUE coupe `auto_phase`. `check_gl.py` : `check_phase` (timeline synthetique : silence, ambiance, groove, montee, pic, cassure, silence ; hysteresis ; micro faible ; multiplicateurs lisses ; application) + rendu
 (`phase_overlay` / `phase_bg` a 0 = master a 0).
 
-### Sources audio par couche (`core/audio_layers.py`, reglages `src_bg` / `src_logo`, menus « Le fond / Le logo reagit a » de l'onglet Effets)
+### Sources audio par couche (`core/audio_layers.py`, `core/onset.py`, reglages `src_*`, `sens_*`, `lag_*`, `smooth_*`, onglet Effets)
 
-Le fond et le logo ne reagissent plus forcement a la meme partie du son. Chaque couche choisit une **source** : `tout` (defaut : comportement d'avant, pixel pour pixel), `basses` (wobble + kick, pas de glitch aux aigus), `mediums` (wobble et glitch sur les mediums, sans kick),
-`aigus` (wobble et glitch sur les aigus, sans kick), `kick` (seulement ce qui part des kicks : onde de choc, aberration, pulsation), `rien` (la couche ne reagit plus a la musique). `layer_levels(state, source)` rend `(bass, high, beat, since)` ; `Renderer.draw` l'appelle APRES les masters de reactivite et les phases
-(la panique et les phases agissent donc sur toutes les sources), une fois pour le fond (`bg_au`) et une fois pour le logo (`lg_au`).
+Le fond et le logo ne reagissent plus forcement a la meme partie du son. Chaque couche choisit une **source** (menus « Le fond / Le logo reagit a ») : `tout` (defaut : comportement d'avant, pixel pour pixel), `basses` (wobble + kick, pas de glitch aux aigus), `mediums`,
+`aigus` (wobble et glitch sur les mediums / aigus, sans kick), `kick` (seulement ce qui part des kicks : onde de choc, aberration, pulsation), **`frappes`** (les attaques des aigus : charleys, claps = un rythme secondaire) et `rien` (la couche ne reagit plus a la musique).
+`layer_levels(state, source, layer)` rend `(bass, high, beat, since)` ; `Renderer.draw` l'appelle APRES les masters de reactivite et les phases (la panique et les phases agissent donc sur toutes les sources), une fois pour le fond (`bg_au`) et une fois pour le logo (`lg_au`).
 - **Fond** : `u_au_bg` (post.frag, `layer_fx(..., au)` : wobble = `au.x`, glitch = `au.z` / `au.y`, onde de choc et aberration = `au.w` / `au.z`), flash du motif au kick (`u_beat` de scene.frag), defilement du motif (basses), bascule du damier au kick (seulement si la source a des kicks, `has_kick`).
-- **Logo** : `u_au_logo` (effets de la couche logo), reactions CPU (pulsation, tremblement, rayon du glow : `beat_l` / `high_l` / `bass_l`), halo holographique, fonte et cellules reactives. **Lies** (`fx_link` = 1) le logo suit la source du fond (`src_logo` ignore et menu masque avec les effets du logo) ; delies, il a la sienne.
-- Reste commun : le noise (`max(reel, noise)`, ses cases propres), les automations, le strobe, le cycle de teinte spectral (`hue_spectrum`), le HUD. `src_bg` / `src_logo` sont des reglages `look` (presets overlay et scenes).
-`check_gl.py` : `check_audio_layers_pure` (niveaux de chaque source, schema) et `check_audio_layers` (pixels : wobble, aberration, lie / delie, reactivite a 0).
+- **Logo** : `u_au_logo` (effets de la couche logo), reactions CPU (pulsation, tremblement, rayon du glow : `beat_l` / `high_l` / `bass_l`), halo holographique, fonte et cellules reactives. **Lies** (`fx_link` = 1) le logo suit la source, la sensibilite, le retard et le lissage du fond (les reglages du logo sont ignores et masques avec les effets du logo) ; delies, il a les siens.
+- **Frappes aigues** (`OnsetDetector` sur la bande 2-10 kHz, `HIT_MIN` 0,0003, refractaire 90 ms ; `state["hit"]` = enveloppe de 120 ms, `["since_hit"]`) : meme logique que le kick (ligne de base glissante + ecart-type), sensibilite `hit_sensitivity` (reglage `device`). Sur un corpus synthetique (kick + charleys sur les contretemps) : 38/38 charleys, 0 kick pris pour une frappe.
+  Limite : un kick tres sec avec beaucoup de claquement aigu peut declencher une frappe ; le detecteur ne s'excuse pas d'un kick (un charleston sur le temps du kick serait perdu).
+- **Sensibilite du kick par couche** (`sens_bg` / `sens_logo`, 0,25 a 4, x la sensibilite generale) : `FeatureExtractor.layer_sens` (ecrit par la boucle de rendu a chaque image) fait tourner un `OnsetDetector` de kick par couche ; a 1 la couche prend le kick commun (`edge_bg == beat`), sinon le sien (`state["beat_bg"]` / `["since_bg"]`, `beat_logo`...). Un kick que le kick commun rate (basse continue) est rattrape par une couche a 2,5.
+- **Retard et lissage** (`lag_*` 0 a 0,5 s, `smooth_*` 0 a 1) : `LayerFilter` (une instance par couche dans le `Renderer`, horloge = `t` de `draw`). Le retard garde l'historique des niveaux (silence tant qu'il n'est pas assez long : un retard augmente a chaud laisse un trou de `lag` secondes) ; le lissage adoucit l'attaque
+  (jusqu'a 120 ms) et le relachement (jusqu'a 800 ms) de bass / high / beat, `since` reste net pour que l'onde de choc parte pile. Sans retard ni lissage les niveaux passent tels quels.
+- Reste commun : le noise (`max(reel, noise)`, ses cases propres), les automations, le strobe, le cycle de teinte spectral (`hue_spectrum`), le HUD. Les reglages de couche sont `look` (presets overlay et scenes), sauf `hit_sensitivity` (`device`).
+`check_gl.py` : `check_audio_layers_pure` (niveaux, retard, lissage, schema), `check_onsets` (frappes, kicks par couche), `check_audio_layers` (pixels : wobble, aberration, lie / delie, retard, reactivite a 0).
 
 ### Strobe : parties sombres et mode leger (`strobe_dark`, `strobe_div`)
 
