@@ -456,6 +456,9 @@ def check_gui() -> None:
     def on_ready(c):
         root = c["root"]
         out["builds"] = out.get("builds", 0) + 1
+        first_ = out.setdefault("first_widgets", (c["notebook"], c["scene_bar"], c["right_cv"], c["live_host"]))
+        out["swap_keeps_overlay"] = out.get("swap_keeps_overlay", True) and (c["notebook"], c["scene_bar"], c["right_cv"]) == first_[:3]
+        out["swap_new_panel"] = out.get("swap_new_panel", False) or (out["builds"] > 1 and c["live_host"] is not first_[3])
         if out["builds"] > 1:
             mode_stage(c)
             return
@@ -907,6 +910,26 @@ def check_gui() -> None:
                 sbook.put({"name": "Scene C", "bg": "live", "mode": "live", "live_preset": None, "fond": None, "overlay": {}})
                 vst["running"] = False
                 try:
+                    import gl_gui as gg_
+                    hist_ = list(s.scene_history)
+                    vjc["apply"](0)
+                    root.update()
+                    bar_kids = list(c["scene_bar"].winfo_children())
+                    vjc["apply"](1)
+                    root.update()
+                    kids_after = list(c["scene_bar"].winfo_children())
+                    out["bar_inplace"] = kids_after == bar_kids
+                    out["bar_dbg"] = (len(bar_kids), len(kids_after), [str(k) for k in bar_kids][:3], [str(k) for k in kids_after][:3])
+                    s.scene_history[:] = hist_
+                    img_ = gg_.grab_window(root)
+                    cov_ = gg_.show_cover(root, img_)
+                    out["cover"] = (img_ is not None, cov_ is not None)
+                    if cov_ is not None:
+                        cov_.destroy()
+                except Exception:
+                    import traceback
+                    out["sets_error"] = traceback.format_exc()
+                try:
                     gui_sets_steps(c, s, out)
                     gui_expand_steps(c, s, out)
                     gui_random_steps(c, s, out)
@@ -1115,6 +1138,12 @@ def check_gui() -> None:
           "sets (GUI): plus de 9 scenes : une touche par scene dans la bande defilante (plus de menu '+N')", str(sm))
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
+    check(out.get("x_chunks") == (True, True), "panneau etendu (GUI): un gros set est construit par lots (premieres lignes tout de suite, toutes ensuite), sans geler la fenetre", str(out.get("x_chunks")))
+    check(out.get("swap_keeps_overlay") is True and out.get("swap_new_panel") is True and out.get("builds", 0) >= 4,
+          "changement de mode (Live / Snap / Ridge): seul le panneau d'audio2wave est reconstruit, la barre des scenes et la partie OVERLAY gardent les memes widgets",
+          str((out.get("swap_keeps_overlay"), out.get("swap_new_panel"), out.get("builds"))))
+    check(out.get("set_async") == (True, True, True, True, True, True),
+          "sets (GUI): export et import d'archive depuis le menu se font dans un fil (la fenetre reste utilisable), meme resultat", str(out.get("set_async")))
     check(out.get("set_pack") == (True, True, True, True),
           "sets (GUI): export .zip avec les medias, reimport apres avoir perdu le fichier d'origine = media extrait et chemin refait", str(out.get("set_pack")))
     ir = out.get("set_import_rename", ())
@@ -1326,6 +1355,8 @@ def check_gui() -> None:
           and gp.get("duo", {}).get("Angle du degrade") == on and gp.get("test", {}).get("Teinte") == off
           and gp.get("test", {}).get("Vitesse") == off and gp.get("test", {}).get("Couleurs 1 / 2") == off,
           "palette du fond: couleurs et angle seulement en Duo ; en Banc de test tous les reglages du motif sont grises", str(gp))
+    check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
+    check(out.get("cover") in ((True, True), (False, False)), "reconstruction de la fenetre: l'ancienne image est posee dessus pendant la construction (ou desactivee si la capture est impossible)", str(out.get("cover")))
     big, mid, small, back = (out.get(k, ()) for k in ("lay_big", "lay_mid", "lay_small", "lay_back"))
     check(len(big) == 12 and big[0] == "wide" and not big[1] and big[6] > big[2] + big[4] - 5 and big[7] == big[3]
           and big[9] > 700 and big[8] > 800, "fenetre large: LIVE et OVERLAY cote a cote, l'overlay prend la place en plus", str(big))
@@ -2830,6 +2861,27 @@ def gui_sets_steps(c, s, out) -> None:
     sc_mod.IMPORT_DIR = old_import_dir
     out["set_pack"] = (exported_zip and zpath.exists(), imported_zip, "media(s) embarque(s)" in export_msg,
                        bool(media0) and Path(media0).is_file() and str(tmpd / "imported") in media0 and Path(media0).read_bytes() == b"\x89PNG-test-bytes")
+    # export / import d'archive depuis le menu (sans chemin donne) : dans un fil, la fenetre reste utilisable
+    zasync = tmpd / "async.casual-set.zip"
+    ui["ask_save"] = lambda name: str(zasync)
+    ui["ask_open"] = lambda: str(zasync)
+    started_exp = sc["export"]()
+    ticks = 0
+    t_end = time.monotonic() + 15
+    while "exporte" not in sc["msg"].get() and time.monotonic() < t_end:
+        c["root"].update()
+        ticks += 1
+        time.sleep(0.02)
+    out["set_async"] = (started_exp, zasync.exists(), "exporte" in sc["msg"].get(), sc["export"] is not None)
+    ui["chooser"] = stub(["Renommer (garder les deux)"] * 3)
+    old_import_dir2, sc_mod.IMPORT_DIR = sc_mod.IMPORT_DIR, tmpd / "imported-async"
+    started_imp = sc["import"]()
+    t_end = time.monotonic() + 15
+    while "importe" not in sc["msg"].get() and "annule" not in sc["msg"].get() and time.monotonic() < t_end:
+        c["root"].update()
+        time.sleep(0.02)
+    out["set_async"] += (started_imp, "importe" in sc["msg"].get())
+    sc_mod.IMPORT_DIR = old_import_dir2
     book.set_entry_media(0, None)
     calls.clear()
     ui["chooser"] = stub(["Annuler"])
@@ -2950,6 +3002,26 @@ def gui_expand_steps(c, s, out) -> None:
         for ch in w.winfo_children():
             yield from walk_(ch)
     h1 = root.winfo_height()
+    # gros set : les premieres lignes tout de suite, les autres par petits lots (la fenetre ne gele pas)
+    sc["create_set"]("Gros")
+    for _ in range(26):
+        sc["add_entry"]("Scene A")
+    sc["refresh_panel"](force=True)
+    n_now = len(sc["panel_state"]["rows"])
+    t_end = time.monotonic() + 10
+    while len(sc["panel_state"]["rows"]) < 26 and time.monotonic() < t_end:
+        root.update()
+        time.sleep(0.01)
+    out["x_chunks"] = (n_now < 26, len(sc["panel_state"]["rows"]) == 26)
+    sc["switch_set"]("Etendu")
+    sc["delete_set"]() if book.active_set_name() == "Gros" else None
+    sc["switch_set"]("Etendu")
+    sc["refresh_panel"](force=True)
+    root.update()
+    for nm in list(book.set_names()):
+        if nm == "Gros":
+            book.delete_set(nm)
+    panel = sc["panel"]
     out["x_open"] = (h1 > h0 + 150, panel.winfo_ismapped(),
                      sum(1 for w in walk_(panel) if w.winfo_class() == "Button" and w.cget("text") == "Retirer"),
                      any(w.winfo_class() == "Button" and w.cget("text") == "\u25b4 Reduire" for w in walk_(c["scene_bar"])))
@@ -5244,6 +5316,74 @@ def check_portable_modules() -> None:
     check(all((here / n).is_file() for n in bp.APP_FILES), "portable: tous les fichiers de la liste existent",
           str([n for n in bp.APP_FILES if not (here / n).is_file()]))
 
+def check_device_cache() -> None:
+    """Liste des entrees audio : relue a chaque fois hors reconstruction de la fenetre, gardee 60 s pendant une reconstruction."""
+    import types as types_
+    import gl_gui as gg
+    calls = []
+    fake = types_.ModuleType("fake_mode")
+    fake.list_audio_devices = lambda: calls.append(1) or ["Micro A"]
+    gg.install_device_cache([fake])
+    gg.install_device_cache([fake])                       # idempotent : ne s'enveloppe pas deux fois
+    fake.list_audio_devices()
+    fake.list_audio_devices()
+    off = len(calls)
+    gg.DEVICE_CACHE["on"] = True
+    fake.list_audio_devices()
+    fake.list_audio_devices()
+    on = len(calls)
+    gg.DEVICE_CACHE["on"] = False
+    fake.list_audio_devices()
+    check(off == 2 and on == 2 and len(calls) == 3, "entrees audio: relues hors reconstruction, la derniere lecture est reutilisee pendant une reconstruction (un ffmpeg de moins)", str(calls))
+
+
+def check_uistats() -> None:
+    """Mesure de la fluidite de l'interface (core/uistats.py) : horloge injectee, aucune attente reelle."""
+    from core import uistats as ui
+    now = [0.0]
+    said = []
+    st = ui.Stats(clock=lambda: now[0], log=said.append)
+
+    def op(ms):
+        with st.timed("refresh_scene_bar"):
+            now[0] += ms / 1000.0
+    op(10)
+    op(200)
+    op(10)
+    row = st.ops["refresh_scene_bar"]
+    check(row[0] == 3 and abs(row[1] - 220) < 1e-6 and abs(row[2] - 200) < 1e-6, "uistats: appels, total et pire temps d'une operation", str(row))
+    check(len(said) == 1 and "refresh_scene_bar" in said[0] and "200" in said[0], "uistats: une operation lente est signalee une fois (pas de rafale dans le journal)", str(said))
+    now[0] += 2.0
+    op(300)
+    check(len(said) == 2, "uistats: le signalement revient apres une seconde", str(said))
+
+    @st.watched("deco")
+    def f(x):
+        now[0] += 0.001
+        return x * 2
+    check(f(4) == 8 and st.ops["deco"][0] == 1, "uistats: le decorateur chronometre et garde la valeur rendue")
+    w = ui.StallWatch(period_ms=50.0)
+    seq = [0.0, 0.05, 0.10, 0.55, 0.60]
+    out = [w.beat(v) for v in seq]
+    check(out[:3] == [0.0, 0.0, 0.0] and abs(out[3] - 400.0) < 1e-6 and out[4] == 0.0, "uistats: un retard de minuterie de 400 ms est vu comme un gel, pas les petits retards", str(out))
+    st.stalls.clear()
+    st.stall(400.0)
+    check(st.stalls and st.stalls[-1][1] == "refresh_scene_bar", "uistats: le gel est attribue a l'operation lente de la fenetre", str(st.stalls))
+    check(any("refresh_scene_bar" in line for line in st.report()) and "Derniers gels" in "\n".join(st.report()), "uistats: rapport lisible")
+    ran = []
+    sch = ui.Scheduler(stats=None, on_error=lambda n, e: ran.append(("err", n)))
+    sch.add("a", 100, lambda: ran.append("a"))
+    sch.add("b", 250, lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    sch.add("c", 50, lambda: ran.append("c"))
+    first = sch.run_due(0.0)
+    sch.run_due(0.04)
+    second = sch.run_due(0.06)
+    third = sch.run_due(5.0)
+    check(first == ["a", "b", "c"] and second == ["c"] and sorted(third) == ["a", "b", "c"], "uistats: ordonnanceur, chaque tache a sa periode, pas de rattrapage apres un gel", str((first, second, third)))
+    check(("err", "b") in ran and ran.count("a") == 2, "uistats: l'erreur d'une tache n'arrete ni les autres ni la boucle")
+    check(10.0 <= sch.next_delay_ms(5.0) <= 100.0 and ui.Scheduler().next_delay_ms(0.0) == 100.0, "uistats: delai avant la prochaine echeance borne")
+
+
 def check_core_purity() -> None:
     """core/ est du Python pur : stdlib seulement, jamais le moteur (audio2wave_gl) ni la GUI (gl_gui). Verifie par l'analyse des imports
     ET en important tout core/ dans un interpreteur ou ces modules sont interdits."""
@@ -6502,6 +6642,8 @@ def main() -> None:
     check_engine_layer()
     check_params_schema()
     check_safeguards()
+    check_uistats()
+    check_device_cache()
     check_scenes()
     check_bg_video()
     check_fond_saveable()
@@ -6528,6 +6670,13 @@ def main() -> None:
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
     print()
+    try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
+        import gl_gui as gg_stats
+        print("Fluidite de l'interface pendant les tests (pire temps) :")
+        for line in gg_stats.STATS.report(16):
+            print("  " + line)
+    except Exception:
+        pass
     if failures:
         print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
         sys.exit(1)

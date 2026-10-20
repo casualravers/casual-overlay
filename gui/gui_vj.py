@@ -22,6 +22,8 @@ def install(c):
     Tooltip = c.Tooltip
     a2w = c.a2w
     after = c.after
+    ui_every = c.ui_every
+    ui_remove = c.ui_remove
     apply_scene_dict = c.apply_scene_dict
     history_ui = c.history_ui
     master_book = c.master_book
@@ -539,10 +541,10 @@ def install(c):
                 vj_ui.pop("led", None)
             except Exception:
                 pass
-            if box.winfo_exists():
-                after(60, led_tick)
+            if not box.winfo_exists():
+                ui_remove("led")
 
-        led_tick()
+        ui_every("led", 60, led_tick)
         return box
 
     # ---- garde-fous d'exploitation : panique, tap tempo, aide, console, auto-sauvegarde
@@ -806,10 +808,8 @@ def install(c):
             vj_ui.pop("kick", None)
         except Exception:
             pass
-        finally:
-            after(50, kick_tick)
 
-    after(300, kick_tick)
+    ui_every("kick", 50, kick_tick, first_ms=300)
 
     def rhythm_tick() -> None:
         try:
@@ -817,10 +817,8 @@ def install(c):
         except Exception:
             import traceback
             traceback.print_exc()
-        finally:
-            after(100, rhythm_tick)
 
-    after(500, rhythm_tick)
+    ui_every("rhythm", 100, rhythm_tick, first_ms=500)
 
     import types
     return types.SimpleNamespace(rhythm_step=rhythm_step, autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)
