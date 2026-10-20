@@ -26,9 +26,11 @@ KICK_MIN = 0.002             # energie basses minimale pour declarer un kick
 # Regles par balayage sur signaux synthetiques (voir CLAUDE.md): a sensibilite 1.0, zero
 # faux positif sur bruit blanc constant, kicks francs detectes meme a -30 dB de micro.
 KICK_RATIO_EXTRA = 1.2       # seuil: energie basses > base * (1 + extra / sensibilite)
-KICK_K = 3.0                 # ... ET ecart a la base > k / sensibilite ecarts-types
+KICK_K = 2.0                 # ... ET ecart a la base > k / sensibilite ecarts-types
 KICK_REFRACTORY_S = 0.15
 KICK_WARMUP_S = 0.5
+KICK_SETTLE_S = 1.5          # le temps que l'ecart-type se stabilise, le seuil est plus strict (evite les faux departs sur bruit)
+KICK_K_SETTLE = 3.5
 BASELINE_RISE_TAU_S = 0.8    # ligne de base glissante (symetrique: une base qui redescend
 BASELINE_FALL_TAU_S = 0.8    # plus vite qu'elle ne monte donne des faux positifs sur bruit)
 DEV_TAU_S = 1.0              # fenetre de l'ecart-type de l'energie basses
@@ -97,7 +99,7 @@ class FeatureExtractor:
         self.elapsed += dt
         s = max(self.sensitivity, 0.05)
         ratio = 1.0 + KICK_RATIO_EXTRA / s
-        k = KICK_K / s
+        k = (KICK_K if self.elapsed > KICK_SETTLE_S else KICK_K_SETTLE) / s
         if self.baseline is None:
             self.baseline = b
         base = self.baseline

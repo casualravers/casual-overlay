@@ -1456,6 +1456,55 @@ def check_features() -> None:
     beats_hi, _ = run_signal(onbass, 48000, sensitivity=2.5)
     check(len(beats_hi) >= 30, "kick sur basse continue: detecte avec sensibilite 2.5", f"{len(beats_hi)}/40")
 
+    # Morceau un peu realiste (kick a balayage de frequence, basse sur les contretemps, charleston, clap), sensibilite PAR DEFAUT :
+    # avant, 1 kick sur 3 seulement etait vu (seuils trop hauts), a regler avec un corpus et non a l'oreille.
+    def realistic(bpm, seconds, seed):
+        rg = np.random.default_rng(seed)
+        sr_ = 48000
+        out_ = np.zeros(int(sr_ * seconds))
+        beat_ = 60.0 / bpm
+        truth_ = []
+
+        def put(sig, at):
+            i = int(at * sr_)
+            m = min(len(sig), len(out_) - i)
+            if m > 0:
+                out_[i:i + m] += sig[:m]
+        kk = np.arange(int(0.35 * sr_)) / sr_
+        kick_ = 0.7 * np.exp(-kk / 0.16) * (1 - np.exp(-kk / 0.002)) * np.sin(2 * np.pi * np.cumsum(45 + 110 * np.exp(-kk / 0.03)) / sr_)
+        hk = np.arange(int(0.05 * sr_)) / sr_
+        bk = np.arange(int(beat_ * 0.4 * sr_)) / sr_
+        for bar in range(int(seconds / (beat_ * 4)) + 1):
+            for st in range(16):
+                at = bar * beat_ * 4 + st * beat_ / 4
+                if st % 4 == 0 and at < seconds - 0.4:
+                    put(kick_, at)
+                    truth_.append(at)
+                if st % 2 == 0:
+                    put(0.12 * np.diff(rg.standard_normal(len(hk)), prepend=0) * np.exp(-hk / 0.012), at)
+                if st % 4 == 2:
+                    put(0.35 * np.minimum(bk / 0.01, 1.0) * np.exp(-bk / 0.1) * np.sin(2 * np.pi * 55 * bk), at)
+        out_ += 0.002 * rg.standard_normal(len(out_))
+        return out_.astype(np.float32), truth_
+    tp_ = fp_ = fn_ = 0
+    for bpm_, seed_ in ((126, 1), (140, 2), (100, 3)):
+        sig_, truth_ = realistic(bpm_, 30.0, seed_)
+        got_, _ = run_signal(sig_, 48000)
+        used_ = set()
+        hit_ = 0
+        for tb_ in got_:
+            for j_, tr_ in enumerate(truth_):
+                if j_ not in used_ and tr_ - 0.03 <= tb_ <= tr_ + 0.09:
+                    used_.add(j_)
+                    hit_ += 1
+                    break
+        tp_ += hit_
+        fp_ += len(got_) - hit_
+        fn_ += len(truth_) - hit_
+    check(tp_ / max(tp_ + fn_, 1) >= 0.9 and tp_ / max(tp_ + fp_, 1) >= 0.9,
+          "kick sur un morceau realiste (kick, basse, charleston) a sensibilite 1.0: au moins 90 % vus, au moins 90 % justes",
+          f"TP{tp_} FP{fp_} FN{fn_}")
+
     # Faux positifs.
     rng = np.random.default_rng(9)
     for amp in (0.05, 0.3):
