@@ -42,6 +42,7 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   automation     courbes, AutomationEngine, liaison fond / logo (get_param, set_param, set_fx_link)
   controls       tempo effectif, strobe (appui), StrobeLimiter, panique, tap tempo, BarTimer
   phase          phases du morceau (silence / ambiance / groove / montee / cassure / pic) et multiplicateurs lisses : « Phases auto » (`PhaseTracker`)
+  audio_layers   sources audio par couche (fond / logo : tout, basses, mediums, aigus, kick, rien) : `layer_levels`
   rhythm         BPM estime a partir des kicks, montee et drop detectes a partir des basses (`Rhythm`, `BpmEstimator`, `DropDetector`)
   setpack        archive .zip d'un set avec ses medias (ecriture, lecture, extraction sure)
   safety         securite GPU du VJ : alleger la scene suivante selon ses effets couteux et la charge mesuree
@@ -820,6 +821,16 @@ gagne en intensite sur 16 s). Le silence et l'ambiance ne font qu'ajouter des an
 presets, ni scenes) ; ils sont lus par `effective_tempo` (donc l'automation), `Renderer.draw` (reactivite, master des effets, overlay, fond, cycle de teinte, respiration = max(reglage, phase)). Neutres si `auto_phase` est a 0 ou sans mesure.
 PANIQUE coupe `auto_phase`. `check_gl.py` : `check_phase` (timeline synthetique : silence, ambiance, groove, montee, pic, cassure, silence ; hysteresis ; micro faible ; multiplicateurs lisses ; application) + rendu
 (`phase_overlay` / `phase_bg` a 0 = master a 0).
+
+### Sources audio par couche (`core/audio_layers.py`, reglages `src_bg` / `src_logo`, menus « Le fond / Le logo reagit a » de l'onglet Effets)
+
+Le fond et le logo ne reagissent plus forcement a la meme partie du son. Chaque couche choisit une **source** : `tout` (defaut : comportement d'avant, pixel pour pixel), `basses` (wobble + kick, pas de glitch aux aigus), `mediums` (wobble et glitch sur les mediums, sans kick),
+`aigus` (wobble et glitch sur les aigus, sans kick), `kick` (seulement ce qui part des kicks : onde de choc, aberration, pulsation), `rien` (la couche ne reagit plus a la musique). `layer_levels(state, source)` rend `(bass, high, beat, since)` ; `Renderer.draw` l'appelle APRES les masters de reactivite et les phases
+(la panique et les phases agissent donc sur toutes les sources), une fois pour le fond (`bg_au`) et une fois pour le logo (`lg_au`).
+- **Fond** : `u_au_bg` (post.frag, `layer_fx(..., au)` : wobble = `au.x`, glitch = `au.z` / `au.y`, onde de choc et aberration = `au.w` / `au.z`), flash du motif au kick (`u_beat` de scene.frag), defilement du motif (basses), bascule du damier au kick (seulement si la source a des kicks, `has_kick`).
+- **Logo** : `u_au_logo` (effets de la couche logo), reactions CPU (pulsation, tremblement, rayon du glow : `beat_l` / `high_l` / `bass_l`), halo holographique, fonte et cellules reactives. **Lies** (`fx_link` = 1) le logo suit la source du fond (`src_logo` ignore et menu masque avec les effets du logo) ; delies, il a la sienne.
+- Reste commun : le noise (`max(reel, noise)`, ses cases propres), les automations, le strobe, le cycle de teinte spectral (`hue_spectrum`), le HUD. `src_bg` / `src_logo` sont des reglages `look` (presets overlay et scenes).
+`check_gl.py` : `check_audio_layers_pure` (niveaux de chaque source, schema) et `check_audio_layers` (pixels : wobble, aberration, lie / delie, reactivite a 0).
 
 ### Strobe : parties sombres et mode leger (`strobe_dark`, `strobe_div`)
 

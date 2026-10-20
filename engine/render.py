@@ -12,6 +12,7 @@ from pathlib import Path
 
 from core import sessionlog
 from core import doodles
+from core.audio_layers import has_kick, layer_levels
 from core.automation import FX_EFFECTS
 from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
@@ -478,6 +479,13 @@ class Renderer:
         if react_m != 1.0:
             state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat") if k in state}}
         bass, high, beat = state["bass"], state["high"], state["beat"]
+        # Sources audio par couche : le fond et le logo peuvent reagir a des parties differentes du son (lie : le logo suit la source du fond).
+        linked = float(p["fx_link"]) >= 0.5
+        src_bg = p["src_bg"]
+        src_logo = src_bg if linked else p["src_logo"]
+        bg_au = layer_levels(state, src_bg)
+        lg_au = layer_levels(state, src_logo)
+        lg_bass, lg_high, lg_beat = lg_au[0], lg_au[1], lg_au[2]
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt
@@ -503,9 +511,9 @@ class Renderer:
         self.noise_out = (nz, nzb)
         eff = [float(fx_on[i]) * float(fx_int[i]) * master for i in range(5)]
         if int(n_fx[4]):                                   # reaction du logo (pulsation, tremblement, contour)
-            beat_l, high_l, bass_l = max(beat, nzb), max(high, nz), max(bass, nz)
+            beat_l, high_l, bass_l = max(lg_beat, nzb), max(lg_high, nz), max(lg_bass, nz)
         else:
-            beat_l, high_l, bass_l = beat, high, bass
+            beat_l, high_l, bass_l = lg_beat, lg_high, lg_bass
 
         self._ensure_scene(size)
 
@@ -533,19 +541,19 @@ class Renderer:
         self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0) * ov)
         self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
         self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
-        self._set(sp, "u_beat", float(beat))
+        self._set(sp, "u_beat", float(bg_au[2]))
 
         # Fond: video ffmpeg ou motif genere. Les phases avancent meme quand le motif est cache,
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
         # Halo holographique: phase integree (changer la vitesse ne fait pas sauter les reflets). Sans
         # holo_react (defaut), ni l'intensite ni la vitesse ne dependent de l'audio.
         h_react = max(float(p["holo_react"]), 0.0)
-        self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(bass) * 3.0)
+        self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(lg_bass) * 3.0)
         holo_on = float(p["holo_on"]) >= 0.5 and self.has_logo
         # Fonte acide: phase integree (changer la periode ne fait pas sauter l'animation). Triangle 0 -> 1 -> 0 avec
         # un palier intact et un palier dissous, adouci: le logo reste lisible un moment, puis fond, puis se reforme.
         m_react = max(float(p["melt_react"]), 0.0)
-        self._melt_t += dt / max(float(p["melt_period"]), 1.0) * (1.0 + m_react * float(bass) * 3.0)
+        self._melt_t += dt / max(float(p["melt_period"]), 1.0) * (1.0 + m_react * float(lg_bass) * 3.0)
         self._melt_clock += dt
         tri = 1.0 - abs(2.0 * (self._melt_t % 1.0) - 1.0)
         s_ = min(max((tri - 0.15) / 0.7, 0.0), 1.0)
@@ -559,18 +567,18 @@ class Renderer:
         self._set(sp, "u_melt_t", self._melt_clock)
         # Cellules du logo: derive integree (changer la vitesse ne fait pas sauter les gouttes).
         c_react = max(float(p["cell_react"]), 0.0)
-        self._cell_t += dt * float(p["cell_speed"]) * (1.0 + c_react * float(bass) * 3.0)
+        self._cell_t += dt * float(p["cell_speed"]) * (1.0 + c_react * float(lg_bass) * 3.0)
         cell_on = float(p["cell_on"]) >= 0.5
         self._set(sp, "u_cell", min(max(float(p["cell_amount"]), 0.0), 1.0) if cell_on else 0.0)
         self._set(sp, "u_cell_scale", max(float(p["cell_scale"]), 0.1))
-        self._set(sp, "u_cell_fusion", max(float(p["cell_fusion"]), 0.05) * (1.0 + c_react * float(beat) * 0.6))
+        self._set(sp, "u_cell_fusion", max(float(p["cell_fusion"]), 0.05) * (1.0 + c_react * float(lg_beat) * 0.6))
         self._set(sp, "u_cell_flat", min(max(float(p["cell_flat"]), 0.0), 1.0))
         self._set(sp, "u_cell_ink", hex_to_rgb(p["cell_ink"], DEFAULT_PARAMS["cell_ink"]))
         self._set(sp, "u_cell_t", self._cell_t)
         react = max(float(p["bg_react"]), 0.0)
-        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bass) * 1.5)
+        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_au[0]) * 1.5)
         self._bg_flip_t += dt * float(p["bg_flip"])
-        flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 else 0.0)
+        flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0)
         self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
         self._bg_clock += dt                       # horloge reelle: la palette "test" tourne a 30 images/s fixes
         self._set(sp, "u_bg_palette", {"duo": 1.0, "test": 2.0}.get(p["bg_palette"], 0.0))
@@ -629,7 +637,6 @@ class Renderer:
 
         # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.
         fx_bg, fx_logo = layer_effects(p)
-        linked = float(p["fx_link"]) >= 0.5
         # Decorreles, les ondes du logo partent de son centre (origine GL = bas gauche) et son glitch
         # tire d'autres bandes; lies, tout est identique au fond (comme un seul post-traitement).
         center = (0.5, 0.5) if linked else (rect[0], 1.0 - rect[1])
@@ -647,6 +654,8 @@ class Renderer:
         for name in ("bass", "mid", "high", "rms"):
             self._set(pp, f"u_{name}", float(state[name]))
         self._set(pp, "u_beat", float(beat))
+        self._set(pp, "u_au_bg", tuple(float(v) for v in bg_au))
+        self._set(pp, "u_au_logo", tuple(float(v) for v in lg_au))
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", self._strobe(p, state))
@@ -669,7 +678,7 @@ class Renderer:
         self._set(pp, "u_nz_amount", float(n_amount))
         self._set(pp, "u_nz_fx", tuple(float(int(n_fx[i])) for i in range(4)))
         self._set(pp, "u_since_beat", float(state["since_beat"]))
-        self._set(pp, "u_holo", (1.0 + h_react * float(beat) * 1.5) * ov if holo_on else 0.0)
+        self._set(pp, "u_holo", (1.0 + h_react * float(lg_beat) * 1.5) * ov if holo_on else 0.0)
         self._set(pp, "u_holo_light", float(p["holo_intensity"]) * ov)
         self._set(pp, "u_holo_reach", max(float(p["holo_reach"]), 0.05))
         self._set(pp, "u_holo_warp", float(p["holo_warp"]))

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import audio2wave_gl as gl
 import tkinter as tk
+from core import audio_layers
 
 
 def install(c):
@@ -36,7 +37,21 @@ def install(c):
     zone_melt = c.zone_melt
     zone_noise = c.zone_noise
 
+    src_tip = ("Partie du son qui pilote cette couche. Tout = comme avant. Basses : wobble et kicks. Mediums : wobble et glitch sur les mediums. "
+               "Aigus : wobble et glitch sur les aigus, sans kick. Kick : seulement ce qui part des kicks (onde de choc, aberration, pulsation). "
+               "Rien : la couche ne reagit plus a la musique (le noise et les automations continuent).")
+
+    def source_menu(parent, row, label, key):
+        tk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        var = tk.StringVar(value=params[key])
+        c.bind_param(key, var, str)
+        menu = tk.OptionMenu(parent, var, *audio_layers.SOURCES)
+        menu.grid(row=row, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        Tooltip(menu, src_tip)
+        return var
+
     add_separator(zone_fx, "Effets")
+    source_menu(tab_fx, zone_fx.next_row(), "Le fond reagit a", "src_bg")
     fx_on_vars: list[tk.IntVar] = []
     fx_int_vars: list[tk.DoubleVar] = []
     fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
@@ -78,6 +93,7 @@ def install(c):
     logo_fx_box = tk.Frame(tab_fx)
     logo_fx_box.grid(row=zone_fx.next_row(), column=0, columnspan=3, sticky="nw")
     lz = Zone(logo_fx_box)
+    source_menu(logo_fx_box, lz.next_row(), "Le logo reagit a", "src_logo")
     fxl_on_vars: list[tk.IntVar] = []
     fxl_int_vars: list[tk.DoubleVar] = []
     for i, name in enumerate(fx_labels[:gl.FX_EFFECTS]):

@@ -53,6 +53,8 @@ TABLE: tuple[Param, ...] = (
     _p("fx_link", 1.0, 0.0, 1.0, doc="1 = le logo subit les memes effets que le fond ; 0 = effets propres (fxl_*)."),
     _p("fxl_on", [1, 1, 1, 1], 0, 1, doc="Interrupteurs des 4 effets de la couche logo (fx_link = 0)."),
     _p("fxl_int", [1.0, 1.0, 1.0, 1.0], 0.0, 2.0, doc="Intensites des 4 effets de la couche logo."),
+    _p("src_bg", "tout", choices=("tout", "basses", "mediums", "aigus", "kick", "rien"), doc="Partie du son qui pilote le fond (effets, animations)."),
+    _p("src_logo", "tout", choices=("tout", "basses", "mediums", "aigus", "kick", "rien"), doc="Partie du son qui pilote le logo (effets, reactions, halo, fonte, cellules) ; ignore tant que fx_link = 1 (le logo suit alors la source du fond)."),
     _p("noise_amount", 0.6, 0.0, 1.0, doc="Noise : force du hasard (0 = aucun effet)."),
     _p("noise_fx", [0, 0, 0, 0, 0], 0, 1, doc="Noise : effets sur lesquels il agit (wobble, onde, aberration, glitch, reaction du logo)."),
     _p("master", 1.0, 0.0, 2.0, doc="Intensite globale des effets de deformation."),
