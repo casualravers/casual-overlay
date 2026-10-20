@@ -1221,7 +1221,7 @@ def check_gui() -> None:
     check(out.get("x_history") == (True,) * 4 and out.get("x_history_lock") == (True, True, True) and out.get("x_lock_bar_off") is True,
           "historique (GUI): chaque scene jouee est notee, Retour rejoue la precedente, le verrou l'interdit", str((out.get("x_history"), out.get("x_history_lock"))))
     check(out.get("x_build") == (True,) * 4, "montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc", str(out.get("x_build")))
-    check(out.get("x_silence") == (True,) * 3, "mode silence (GUI): la case ecrit silence_on", str(out.get("x_silence")))
+    check(out.get("x_silence") == (True,) * 3, "phases auto (GUI): la case ecrit auto_phase", str(out.get("x_silence")))
     check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
@@ -2447,6 +2447,71 @@ def check_schedule() -> None:
           "planning: prochain passage et affichage de l'heure")
 
 
+def check_phase() -> None:
+    """Phases du morceau (core/phase.py) : timelines synthetiques, hysteresis, adaptation, application aux reglages."""
+    print("-- phases du morceau")
+    from core import phase as ph
+
+    def run(segments, hz=20, bpm=128.0):
+        pt, t, nxt, seq = ph.PhaseTracker(), 0.0, 0.0, []
+        for dur, rms, period, share, state in segments:
+            n = int(dur * hz)
+            for i in range(n):
+                f = i / max(n - 1, 1)
+                lvl = rms(f) if callable(rms) else rms
+                beat = False
+                if period:
+                    if t >= nxt:
+                        beat, nxt = True, t + period
+                else:
+                    nxt = t + 0.3
+                rest = lvl * (1 - share)
+                name = pt.update(t, {"raw_rms": lvl, "raw_bass": lvl * share, "raw_mid": rest * 0.6, "raw_high": rest * 0.4}, beat,
+                                 state, bpm if period else None)
+                if not seq or seq[-1][1] != name:
+                    seq.append((t, name))
+                t += 1.0 / hz
+        return seq, pt
+
+    k = 60 / 128
+    segs = [(6, 0.0008, 0, 0.3, "idle"), (20, 0.015, 0, 0.3, "idle"), (30, 0.10, k, 0.5, "idle"), (15, lambda f: 0.05 + 0.09 * f, 0, 0.2, "idle"),
+            (30, 0.20, k, 0.55, "idle"), (12, 0.06, 0, 0.3, "idle"), (30, 0.10, k, 0.5, "idle"), (15, lambda f: 0.1 * (1 - f) + 0.01, 0, 0.3, "idle"),
+            (10, 0.0008, 0, 0.3, "idle")]
+    seq, pt = run(segs)
+    names = [n for _, n in seq]
+    def at(sec):
+        cur = None
+        for tt, n in seq:
+            if tt <= sec:
+                cur = n
+        return cur
+    check(at(8) == "silence" and at(20) == "ambient", "phases: silence puis ambiance reconnus", str(seq[:4]))
+    check(at(50) == "groove", "phases: kicks reguliers = groove", str(at(50)))
+    check("build" in names[:8] and "peak" in names and "break" in names, "phases: montee, pic et cassure detectes", str(names))
+    check(all(b - a >= ph.MIN_DWELL_S - 0.1 for (a, _), (b, _) in zip(seq[1:], seq[2:])), "phases: chaque phase dure au moins 4 s (hysteresis)", str(seq))
+    check(seq[-1][1] == "silence", "phases: le silence final est reconnu", str(seq[-3:]))
+    # adaptation : un morceau entier tres faible (micro lointain) reste un groove, pas une ambiance
+    low, _ = run([(40, 0.02, k, 0.5, "idle")])
+    check(low[-1][1] in ("groove", "peak"), "phases: seuils adaptes a un micro faible (kicks = groove)", str(low))
+    # multiplicateurs lisses : jamais de saut brutal, ambiance tres lente, strobe jamais
+    pt2, t = ph.PhaseTracker(), 0.0
+    prev, jump = dict(ph.NEUTRAL), 0.0
+    for i in range(1200):
+        pt2.update(t, {"raw_rms": 0.1 if i < 600 else 0.0005, "raw_bass": 0.05, "raw_mid": 0.03, "raw_high": 0.02}, i % 10 == 0 and i < 600, "idle", 120.0)
+        mult = pt2.snapshot()["mult"]
+        jump = max(jump, max(abs(mult[x] - prev[x]) for x in ph.KEYS if x != "hue"))
+        prev, t = dict(mult), t + 0.05
+    check(jump < 0.05 and prev["tempo"] < 0.3 and prev["fx"] < 0.4 and prev["overlay"] >= 0.85, "phases: multiplicateurs lisses, silence tres lent mais l'overlay reste",
+          f"{jump:.3f} {prev}")
+    check("strobe" not in ph.KEYS, "phases: jamais de strobe automatique")
+    p = {"auto_phase": 1.0}
+    name = ph.apply_to_params(p, pt2.snapshot())
+    off = {"auto_phase": 0.0}
+    ph.apply_to_params(off, pt2.snapshot())
+    check(name == "silence" and p["phase_tempo"] < 0.3 and all(off["phase_" + x] == ph.NEUTRAL[x] for x in ph.KEYS) and ph.apply_to_params({}, None) == "neutre",
+          "phases: application aux reglages (neutre si desactive ou sans mesure)", name)
+
+
 def check_beat_grid() -> None:
     print("Grille du temps (Temps 1)")
     from core import rhythm as rh
@@ -3303,7 +3368,7 @@ def gui_expand_steps(c, s, out) -> None:
         slot_btn.invoke()
     root.update()
     out["x_memory"] = (slot_btn is not None, params["hue_master"], params["comp_sym"], mem.get(1) is None,
-                       "build" not in mem.get(0)["values"] and "idle" not in mem.get(0)["values"])
+                       "build" not in mem.get(0)["values"] and "phase_tempo" not in mem.get(0)["values"])
     params["hue_master"], params["comp_sym"] = 0.0, 0.0
     vjc["state"]["running"] = False
     n0 = len(getattr(s, "scene_history", []))
@@ -3332,13 +3397,14 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty())
     while not s.commands.empty():
         s.commands.get_nowait()
-    sil = next((w for w in walk_(mpanel) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Mode silence"), None)
+    sil = next((w for w in walk_(mpanel) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Phases auto"), None)
+    start_ = params["auto_phase"]
     sil.invoke() if sil is not None else None
-    on = params["silence_on"]
+    flipped = params["auto_phase"] == 1.0 - start_
     sil.invoke() if sil is not None else None
-    out["x_silence"] = (sil is not None, on == 1.0, params["silence_on"] == 0.0)
+    out["x_silence"] = (sil is not None, flipped, params["auto_phase"] == start_)
     # garde-fous d'exploitation : panique (bouton et touche X), tap tempo, aide, console, titre d'etat, auto-sauvegarde
-    for k_, v_ in (("comp_sym", 3), ("hue_master", 90.0), ("build", 0.6), ("strobe_on", 1.0), ("silence_on", 1.0), ("holo_on", 1.0)):
+    for k_, v_ in (("comp_sym", 3), ("hue_master", 90.0), ("build", 0.6), ("strobe_on", 1.0), ("auto_phase", 1.0), ("holo_on", 1.0)):
         params[k_] = v_
     params["fx_on"] = [1, 1, 1, 1, 1]
     vjc["state"]["running"] = True
@@ -3349,7 +3415,7 @@ def gui_expand_steps(c, s, out) -> None:
     root.update()
     out["x_panic"] = (panic_btn is not None,
                       params["comp_sym"] == 0 and params["hue_master"] == 0.0 and params["build"] == 0.0 and params["strobe_on"] == 0.0
-                      and params["silence_on"] == 0.0 and params["holo_on"] == 0.0 and params["fx_on"] == [0] * 5,
+                      and params["auto_phase"] == 0.0 and params["holo_on"] == 0.0 and params["fx_on"] == [0] * 5,
                       vjc["state"]["running"] is False and not s.scene_lock, "PANIQUE" in c["scenes"]["msg"].get())
     params["comp_sym"], params["fx_on"] = 2, [1, 1, 1, 1, 1]
     s.scene_requests.put("panic")                       # la touche X de la fenetre de rendu : le fil GL a coupe, la GUI suit
@@ -4606,25 +4672,15 @@ def check_masters() -> None:
           "teinte globale: 120 deg fait virer le rouge au vert, 360 deg = couleurs d'origine, 180 deg = opposees",
           f"{red.tolist()} -> {green.tolist()} / {opposite.tolist()}")
     check("hue_master" in gl.OVERLAY_PRESET_EXCLUDED and d["hue_master"] == 0.0, "teinte: 0 par defaut, hors presets et scenes")
-    # --- mode silence
-    guard, sp = gl.SilenceGuard(), {"silence_on": 1.0, "silence_level": 0.03, "silence_delay": 2.0, "silence_tempo": 0.3}
-    idle_at = {}
-    for step in range(0, 81):                                            # 8 s, 10 Hz : 0..3 s de son, puis 5 s de silence, puis du son
-        now = step * 0.1
-        state_ = loud if step < 30 else quiet
-        idle_at[step] = guard.update(sp, state_, now)
-    resumed = [guard.update(sp, loud, 8.0 + i * 0.1) for i in range(1, 20)]
-    check(idle_at[30] == 0.0 and idle_at[49] == 0.0 and idle_at[60] > 0.3 and idle_at[80] == 1.0 and resumed[-1] == 0.0 and resumed[0] > 0.0,
-          "mode silence: idle apres le delai (monte en 1,5 s), retombe des que le son revient",
-          f"{idle_at[49]:.2f} {idle_at[60]:.2f} {idle_at[80]:.2f} {resumed[-1]:.2f}")
-    off = gl.SilenceGuard()
-    check(all(off.update(dict(sp, silence_on=0.0), quiet, i * 0.5) == 0.0 for i in range(20)), "mode silence desactive: jamais idle")
-    check(abs(gl.effective_tempo({"tempo": 1.0, "idle": 1.0, "silence_tempo": 0.3}) - 0.3) < 1e-9
-          and gl.effective_tempo({"tempo": 1.0, "idle": 0.0}) == 1.0 and abs(gl.effective_tempo({"tempo": 2.0, "idle": 0.5, "silence_tempo": 0.0}) - 1.0) < 1e-9,
-          "mode silence: tempo effectif = master x (1 - idle x (1 - tempo idle))")
-    idle_img = render(quiet, idle=1.0)
-    check(np.array_equal(idle_img, render(quiet, overlay_master=0.0)) and not np.array_equal(idle_img, still),
-          "mode silence: en idle l'overlay s'efface (fond seul)")
+    # --- phases auto : tempo effectif et rendu
+    check(abs(gl.effective_tempo({"tempo": 1.0, "phase_tempo": 0.3}) - 0.3) < 1e-9 and gl.effective_tempo({"tempo": 1.0}) == 1.0
+          and abs(gl.effective_tempo({"tempo": 2.0, "phase_tempo": 0.5}) - 1.0) < 1e-9,
+          "phases auto: tempo effectif = master x tempo de la phase")
+    gone = render(quiet, phase_overlay=0.0)
+    check(np.array_equal(gone, render(quiet, overlay_master=0.0)) and not np.array_equal(gone, still),
+          "phases auto: presence de l'overlay a 0 = fond seul (comme le master)")
+    dim = render(quiet, phase_bg=0.0)
+    check(np.array_equal(dim, render(quiet, bg_master=0.0)), "phases auto: luminosite du fond a 0 = fond noir (comme le master)")
     # --- composition : symetries, kaleidoscope, pixelisation, deformation, trainee
     grad = np.zeros((size[1], size[0], 3), np.uint8)
     grad[..., 0] = np.linspace(0, 255, size[0]).astype(np.uint8)[None, :]
@@ -4711,19 +4767,19 @@ def check_masters() -> None:
     built = render(loud, build=1.0)
     time.sleep(0.15)                                                    # l'eclair du strobe de la montee doit etre retombe
     check(not np.array_equal(built, render(loud)), "montee: l'image change (reactivite et eclairs)")
-    check(all(k in gl.OVERLAY_PRESET_EXCLUDED for k in ("hue_cycle", "breath_overlay", "breath_bg", "silence_on", "comp_sym", "comp_trail", "comp_warp", "build_time"))
+    check(all(k in gl.OVERLAY_PRESET_EXCLUDED for k in ("hue_cycle", "breath_overlay", "breath_bg", "auto_phase", "comp_sym", "comp_trail", "comp_warp", "build_time"))
           and set(gl.TRANSIENT_KEYS) <= set(gl.ROOM_KEYS) and not set(gl.TRANSIENT_KEYS) & set(gl.MEMORY_KEYS),
-          "reglages de salle: hors presets et scenes ; etats du moment (idle, montee, strobe arme) hors memoires")
+          "reglages de salle: hors presets et scenes ; etats du moment (phase, montee, strobe arme) hors memoires")
     import json
     saved_path = core_params.PARAMS_PATH
     try:
         import tempfile as _t
         core_params.PARAMS_PATH = Path(_t.mkdtemp(prefix="casual_overlay_params_")) / "gl_params.json"
-        gl.save_params(dict(d, idle=0.7, build=0.5, strobe_on=1.0, comp_sym=3.0))
+        gl.save_params(dict(d, phase_tempo=0.3, build=0.5, strobe_on=1.0, comp_sym=3.0))
         reloaded = gl.load_params()
-        check(reloaded["comp_sym"] == 3.0 and reloaded["idle"] == 0.0 and reloaded["build"] == 0.0 and reloaded["strobe_on"] == 0.0
-              and "idle" not in json.loads(core_params.PARAMS_PATH.read_text(encoding="utf-8")),
-              "sauvegarde (P): les etats du moment (idle, montee, strobe arme) ne sont ni ecrits ni recharges")
+        check(reloaded["comp_sym"] == 3.0 and reloaded["phase_tempo"] == 1.0 and reloaded["build"] == 0.0 and reloaded["strobe_on"] == 0.0
+              and "phase_tempo" not in json.loads(core_params.PARAMS_PATH.read_text(encoding="utf-8")),
+              "sauvegarde (P): les etats du moment (phase, montee, strobe arme) ne sont ni ecrits ni recharges")
     finally:
         core_params.PARAMS_PATH = saved_path
     # --- memoires de masters (fichier)
@@ -4732,10 +4788,10 @@ def check_masters() -> None:
     mpath = Path(_tf2.mkdtemp(prefix="casual_overlay_masters_")) / "masters.json"
     mb = _sc.MasterBook(lambda: mpath)
     check(mb.slots() == [None] * 4 and mb.get(2) is None, "memoires de masters: quatre emplacements vides au depart")
-    mb.save(1, "calme", dict(d, hue_master=120.0, comp_sym=4.0, build=0.9, idle=0.5))
+    mb.save(1, "calme", dict(d, hue_master=120.0, comp_sym=4.0, build=0.9, phase_tempo=0.5))
     got_slot = mb.get(1)
     check(got_slot["name"] == "calme" and got_slot["values"]["hue_master"] == 120.0 and got_slot["values"]["comp_sym"] == 4.0
-          and "build" not in got_slot["values"] and "idle" not in got_slot["values"] and mb.get(0) is None and not mb.save(9, "x", d),
+          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(9, "x", d),
           "memoires de masters: enregistrement, rappel, sans etats du moment, emplacement hors plage refuse")
     mpath.write_text("{ pas du json", encoding="utf-8")
     check(mb.slots() == [None] * 4, "memoires de masters: fichier illisible = emplacements vides")
@@ -6541,7 +6597,7 @@ def check_safeguards() -> None:
     # --- panique
     dirty = json.loads(json.dumps(gl.DEFAULT_PARAMS))
     dirty.update(comp_sym=4, comp_pix=0.5, comp_trail=0.9, comp_warp=0.7, hue_master=120.0, hue_cycle=30.0, build=0.8, strobe_on=1.0,
-                 bg_master=0.0, overlay_master=0.0, tempo=0.2, silence_on=1.0, idle=1.0, fx_master=0.0, holo_on=1.0, melt_on=1.0, cell_on=1.0,
+                 bg_master=0.0, overlay_master=0.0, tempo=0.2, auto_phase=1.0, fx_master=0.0, holo_on=1.0, melt_on=1.0, cell_on=1.0,
                  bg_mode="video", bg_video="C:/introuvable/fond.mp4")
     dirty["fx_on"], dirty["fxl_on"], dirty["noise_fx"] = [1] * 5, [1] * 4, [1] * 5
     dirty.update(logo_x=0.3, logo_path="C:/logo.png", text_content="GARDE")
@@ -6549,7 +6605,7 @@ def check_safeguards() -> None:
     clean_ok = (dirty["comp_sym"] == 0 and dirty["comp_pix"] == 0 and dirty["comp_trail"] == 0 and dirty["comp_warp"] == 0
                 and dirty["hue_master"] == 0 and dirty["hue_cycle"] == 0 and dirty["build"] == 0 and dirty["strobe_on"] == 0
                 and dirty["bg_master"] == 1 and dirty["overlay_master"] == 1 and dirty["tempo"] == 1 and dirty["fx_master"] == 1
-                and dirty["silence_on"] == 0 and dirty["idle"] == 0 and not any(dirty["fx_on"]) and not any(dirty["fxl_on"])
+                and dirty["auto_phase"] == 0 and not any(dirty["fx_on"]) and not any(dirty["fxl_on"])
                 and not any(dirty["noise_fx"]) and dirty["holo_on"] == dirty["melt_on"] == dirty["cell_on"] == 0)
     check(clean_ok and len(changed) > 15, "panique: effets, strobe, montee, composition, teinte, silence coupes, masters a 100 %", str(changed[:6]))
     check(dirty["bg_mode"] == "live" and dirty["logo_x"] == 0.3 and dirty["logo_path"] == "C:/logo.png" and dirty["text_content"] == "GARDE",
@@ -7066,7 +7122,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7125,6 +7181,7 @@ def main() -> None:
     check_render()
     check_latence()
     check_beat_grid()
+    check_phase()
     check_schedule()
     check_palette()
     check_stage_layout()

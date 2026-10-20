@@ -1,4 +1,4 @@
-"""Commandes de salle du Mode VJ : tempo effectif, mode silence, strobe (appui, limiteur), panique, tap tempo.
+"""Commandes de salle du Mode VJ : tempo effectif, strobe (appui, limiteur), panique, tap tempo.
 
 Fonctions et classes pures (aucune fenetre, aucun GL, stdlib seulement) : le temps est injecte, tout se teste sans materiel.
 """
@@ -11,37 +11,8 @@ def _unit(value, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 def effective_tempo(p: dict) -> float:
-    """Tempo reel : le master, ralenti par le mode silence (`idle` 0..1 vers `silence_tempo`)."""
-    return _unit(p.get("tempo", 1.0), 0.0, 2.0) * (1.0 - _unit(p.get("idle", 0.0)) * (1.0 - _unit(p.get("silence_tempo", 0.3))))
-
-
-class SilenceGuard:
-    """Mode silence : si le niveau (rms/basses/mediums/aigus normalises, 0 en silence) reste sous `silence_level` pendant
-    `silence_delay` secondes, `params["idle"]` monte vers 1 en 1,5 s (tempo reduit, overlay efface : fond seul) ; il redescend des
-    que le son revient. Desactive (`silence_on` 0) : toujours 0."""
-
-    FADE_S = 1.5
-
-    def __init__(self):
-        self._since: float | None = None
-        self._idle = 0.0
-        self._last: float | None = None
-
-    def update(self, params: dict, state: dict, now: float) -> float:
-        dt = 0.0 if self._last is None else min(max(now - self._last, 0.0), 0.5)
-        self._last = now
-        level = max(float(state.get(k, 0.0)) for k in ("rms", "bass", "mid", "high"))
-        silent = float(params.get("silence_on", 0.0)) >= 0.5 and level < float(params.get("silence_level", 0.03))
-        if silent:
-            if self._since is None:
-                self._since = now
-            target = 1.0 if now - self._since >= max(float(params.get("silence_delay", 4.0)), 0.0) else 0.0
-        else:
-            self._since, target = None, 0.0
-        step = dt / self.FADE_S
-        self._idle = min(self._idle + step, target) if target > self._idle else max(self._idle - step, target)
-        params["idle"] = self._idle
-        return self._idle
+    """Tempo reel : le master, multiplie par celui de la phase du morceau (`phase_tempo`, tres lent en ambiance ; 1 sans « phases auto »)."""
+    return _unit(p.get("tempo", 1.0), 0.0, 2.0) * _unit(p.get("phase_tempo", 1.0), 0.0, 2.0)
 
 
 def strobe_press(params: dict) -> None:
@@ -103,7 +74,7 @@ class StrobeLimiter:
 # Panique (bouton / touche X) : coupe d'un geste tout ce qui peut partir en vrille et rend une image propre (fond + logo tels que la
 # scene les a poses). Les reglages du logo, du fond et des medias ne sont pas touches.
 PANIC_RESET = {
-    "build": 0.0, "strobe_on": 0.0, "idle": 0.0, "silence_on": 0.0,
+    "build": 0.0, "strobe_on": 0.0, "auto_phase": 0.0,
     "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
     "hue_master": 0.0, "hue_cycle": 0.0, "hue_spectrum": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
     "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,

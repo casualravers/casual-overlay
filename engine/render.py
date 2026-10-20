@@ -465,7 +465,7 @@ class Renderer:
     def draw(self, target, size: tuple[int, int], state: dict, params: dict, t: float) -> None:
         width, height = size
         p = {**DEFAULT_PARAMS, **params}       # un dict partiel (tests) reste valide
-        fm = _unit(p["fx_master"], 0.0, 2.0)   # master des effets : x l'intensite de tous les effets (copie : `params` n'est pas touche)
+        fm = _unit(float(p["fx_master"]) * float(p["phase_fx"]), 0.0, 2.0)   # master des effets : x l'intensite de tous les effets (copie : `params` n'est pas touche)
         if fm != 1.0:
             for key in ("master", "melt_depth", "cell_amount", "noise_amount", "holo_intensity", "holo_warp", "holo_dust"):
                 p[key] = float(p[key]) * fm
@@ -473,9 +473,8 @@ class Renderer:
         # Masters du Mode VJ : reactivite = tout ce qui vient de l'audio est multiplie (0 = le visuel ne reagit plus au son) ;
         # tempo = les animations (halo, fonte, cellules, fond, noise) avancent plus ou moins vite.
         build = _unit(p["build"])                                      # montee en cours : plus de reactivite, strobe, teinte qui derive
-        react_m = _unit(float(p["react_master"]) * (1.0 + build), 0.0, 3.0)
-        tempo = effective_tempo(p)                                      # master, ralenti par le mode silence
-        idle = _unit(p["idle"])
+        react_m = _unit(float(p["react_master"]) * float(p["phase_react"]) * (1.0 + build), 0.0, 3.0)
+        tempo = effective_tempo(p)                                      # master x phase du morceau (tres lent en ambiance)
         if react_m != 1.0:
             state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat") if k in state}}
         bass, high, beat = state["bass"], state["high"], state["beat"]
@@ -486,9 +485,10 @@ class Renderer:
         # Respiration (overlay et fond en opposition de phase), cycle de teinte, phases de la composition : integres image par image.
         self._breath_t += dt / max(float(p["breath_period"]), 1.0)
         wave = 0.5 + 0.5 * math.sin(2.0 * math.pi * self._breath_t)
-        ov = _unit(p["overlay_master"]) * (1.0 - idle) * (1.0 - _unit(p["breath_overlay"]) * wave)      # presence de l'overlay (0 = efface)
-        bg_level = _unit(p["bg_master"]) * (1.0 - _unit(p["breath_bg"]) * (1.0 - wave))
-        self._hue_phase = (self._hue_phase + dt * float(p["hue_cycle"])) % 360.0
+        breath = 0.5 * _unit(p["phase_breath"])                         # respiration de la phase (ambiance / cassure), en plus de celle des reglages
+        ov = _unit(p["overlay_master"]) * _unit(p["phase_overlay"]) * (1.0 - max(_unit(p["breath_overlay"]), breath) * wave)      # presence de l'overlay (0 = efface)
+        bg_level = _unit(p["bg_master"]) * _unit(p["phase_bg"]) * (1.0 - max(_unit(p["breath_bg"]), breath) * (1.0 - wave))
+        self._hue_phase = (self._hue_phase + dt * (float(p["hue_cycle"]) + float(p["phase_hue"]))) % 360.0
         spec = _unit(p["hue_spectrum"])
         if spec > 0.0:                                                  # graves = chaud, aigus = froid, suivi lisse (0,5 s) pour ne pas clignoter
             self._hue_spec += (spectral_hue(bass, high) - self._hue_spec) * (1.0 - math.exp(-raw_dt / 0.5))

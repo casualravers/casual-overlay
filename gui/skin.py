@@ -34,7 +34,7 @@ ICON_PX = 14                             # taille des icones des boutons, des ti
 ICON_ONLY = {"supprimer", "mettre a jour", "restaurer", "actualiser", "sauvegarder", "dupliquer la derniere", "tirer maintenant",
              "rescanner", "centrer", "aucun", "aucune", "plein ecran", "renommer", "retirer"}
 ICON_TOGGLES = {"image", "texte", "video", "audio2wave", "fond genere", "halo holographique", "fonte acide", "cellules",
-                "recuperer les medias", "automations actives", "mode silence"}      # cases et radios qui recoivent une icone
+                "recuperer les medias", "automations actives", "phases auto"}      # cases et radios qui recoivent une icone
 _pil_cache: dict = {}
 _installed = False
 
