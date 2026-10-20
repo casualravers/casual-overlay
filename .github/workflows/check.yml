@@ -58,7 +58,11 @@ jobs:
           Invoke-WebRequest $url -OutFile mesa.7z
           7z x mesa.7z -omesa -y | Out-Null
           $py = Split-Path (python -c "import sys; print(sys.executable)")
-          Copy-Item mesa\x64\opengl32.dll, mesa\x64\libgallium_wgl.dll, mesa\x64\libglapi.dll $py -Force
+          Get-ChildItem mesa\x64 | Select-Object -ExpandProperty Name | Out-String | Write-Host
+          # opengl32.dll (le chargeur) et libgallium_wgl.dll (le pilote llvmpipe) suffisent ; libglapi.dll n'existe plus dans les Mesa recents
+          foreach ($name in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll") {
+            if (Test-Path "mesa\x64\$name") { Copy-Item "mesa\x64\$name" $py -Force } elseif ($name -ne "libglapi.dll") { throw "$name absent de l'archive Mesa" }
+          }
           Get-ChildItem $py -Filter *.dll | Where-Object { $_.Name -in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll" } | Select-Object Name, Length
       - name: ffmpeg
         shell: pwsh
