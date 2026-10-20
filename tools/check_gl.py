@@ -907,6 +907,26 @@ def check_gui() -> None:
                 sbook.put({"name": "Scene C", "bg": "live", "mode": "live", "live_preset": None, "fond": None, "overlay": {}})
                 vst["running"] = False
                 try:
+                    import gl_gui as gg_
+                    hist_ = list(s.scene_history)
+                    vjc["apply"](0)
+                    root.update()
+                    bar_kids = list(c["scene_bar"].winfo_children())
+                    vjc["apply"](1)
+                    root.update()
+                    kids_after = list(c["scene_bar"].winfo_children())
+                    out["bar_inplace"] = kids_after == bar_kids
+                    out["bar_dbg"] = (len(bar_kids), len(kids_after), [str(k) for k in bar_kids][:3], [str(k) for k in kids_after][:3])
+                    s.scene_history[:] = hist_
+                    img_ = gg_.grab_window(root)
+                    cov_ = gg_.show_cover(root, img_)
+                    out["cover"] = (img_ is not None, cov_ is not None)
+                    if cov_ is not None:
+                        cov_.destroy()
+                except Exception:
+                    import traceback
+                    out["sets_error"] = traceback.format_exc()
+                try:
                     gui_sets_steps(c, s, out)
                     gui_expand_steps(c, s, out)
                     gui_random_steps(c, s, out)
@@ -1326,6 +1346,8 @@ def check_gui() -> None:
           and gp.get("duo", {}).get("Angle du degrade") == on and gp.get("test", {}).get("Teinte") == off
           and gp.get("test", {}).get("Vitesse") == off and gp.get("test", {}).get("Couleurs 1 / 2") == off,
           "palette du fond: couleurs et angle seulement en Duo ; en Banc de test tous les reglages du motif sont grises", str(gp))
+    check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
+    check(out.get("cover") in ((True, True), (False, False)), "reconstruction de la fenetre: l'ancienne image est posee dessus pendant la construction (ou desactivee si la capture est impossible)", str(out.get("cover")))
     big, mid, small, back = (out.get(k, ()) for k in ("lay_big", "lay_mid", "lay_small", "lay_back"))
     check(len(big) == 12 and big[0] == "wide" and not big[1] and big[6] > big[2] + big[4] - 5 and big[7] == big[3]
           and big[9] > 700 and big[8] > 800, "fenetre large: LIVE et OVERLAY cote a cote, l'overlay prend la place en plus", str(big))

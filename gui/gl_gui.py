@@ -528,6 +528,56 @@ class Late:
     def __bool__(self):
         return bool(self._get())
 
+def grab_window(root):
+    """Image de la fenetre de reglages telle qu'elle est (None si impossible ou desactive : CASUAL_NO_COVER=1)."""
+    try:
+        if os.environ.get("CASUAL_NO_COVER") or not root.winfo_ismapped():
+            return None
+        from PIL import ImageGrab
+        x, y, w, h = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
+        if w < 50 or h < 50:
+            return None
+        return ImageGrab.grab(bbox=(x, y, x + w, y + h))
+    except Exception:
+        return None
+
+
+def show_cover(root, image):
+    """Pose l'ancienne image par-dessus la fenetre pendant qu'elle est reconstruite : l'utilisateur ne voit plus les widgets se
+    detruire et se recreer (clignotement), puis `drop_cover` la retire une fois la nouvelle fenetre prete."""
+    if image is None:
+        return None
+    try:
+        from PIL import ImageTk
+        top = tk.Toplevel(root)
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        w, h = image.size
+        top.geometry(f"{w}x{h}+{root.winfo_rootx()}+{root.winfo_rooty()}")
+        photo = ImageTk.PhotoImage(image)
+        label = tk.Label(top, image=photo, bd=0, highlightthickness=0)
+        label.image = photo
+        label.pack()
+        top.update_idletasks()
+        top.update()
+        return top
+    except Exception:
+        return None
+
+
+def drop_cover(root, cover, delay_ms: int = 350) -> None:
+    """Retire l'image figee : apres un court delai, pour que la nouvelle fenetre ait fini de se mettre en page."""
+    if cover is None:
+        return
+
+    def gone() -> None:
+        try:
+            cover.destroy()
+        except tk.TclError:
+            pass
+    root.after(delay_ms, gone)
+
+
 def run_gui(s, live, on_ready=None) -> None:
     """Cree la fenetre Tk, la construit pour le mode courant et bloque dans mainloop() jusqu'a la fin.
 
@@ -568,8 +618,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     keep_size = None
     if (getattr(s, "vj_state", None) or {}).get("running") and root.winfo_ismapped():
         keep_size = (root.winfo_width(), root.winfo_height())
+    snapshot = grab_window(root)
     for child in list(root.winfo_children()):
         child.destroy()
+    cover = show_cover(root, snapshot)
     apply_a2w_palette()
     install_curve_skin(live)
     live.style_gui(root)
@@ -1987,9 +2039,38 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     status_text = gui_vj_ctl.status_text
     update_master_panel = gui_vj_ctl.update_master_panel
 
+    def bar_signature() -> tuple:
+        """Tout ce que la barre affiche SAUF la scene active : identique = rien a reconstruire (le VJ qui enchaine les scenes ne la
+        detruit plus a chaque changement, elle clignotait)."""
+        vjs = scene_book.vj()
+        rows_ = scene_book.rows()
+        return (
+            tuple((r["index"], r["name"], str(r["media"]), r["scene"].get("bg"), r["scene"].get("mode")) for r in rows_),
+            scene_book.active_set_name(), tuple((n, len(scene_book.get_set(n)["entries"])) for n in scene_book.set_names()),
+            tuple(scene_book.names()), scene_book.undo_label(), scene_book.redo_label(),
+            tuple(sorted((k, str(v)) for k, v in vjs.items() if k != "random")),
+            bool(scene_state["adding"]), bool(getattr(s, "scenes_expanded", False)), bool(getattr(s, "scene_lock", False)),
+            projection is not None, str(root.cget("bg")))
+
     def refresh_scene_bar() -> None:
+        sig = bar_signature()
+        if proj_ui.get("bar_sig") == sig and proj_ui.get("bar_btns") and proj_ui.get("strip") is not None \
+                and scene_bar.winfo_children():
+            current_ = current_index(scene_book.rows())
+            active_ = None
+            for btn_, i_ in proj_ui["bar_btns"]:
+                on_ = i_ == current_
+                btn_.configure(bg=SCENE_COLOR if on_ else a2w.GUI_BG, fg=BANNER_FG if on_ else a2w.GUI_FG)
+                if on_:
+                    active_ = btn_
+            proj_ui["bar_active"] = active_
+            proj_ui["bar_show"]()
+            refresh_scene_panel()
+            return
         for child in scene_bar.winfo_children():
             child.destroy()
+        proj_ui["bar_sig"] = sig
+        proj_ui["bar_btns"] = []
         proj_ui["btn"] = None
         proj_ui["strip"] = None
         if projection is not None:
@@ -2157,6 +2238,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             btn.pack(side="left", padx=2, pady=5)
             if on:
                 active_btn = btn
+            proj_ui["bar_btns"].append((btn, i))
             register_drop(btn, i)                                      # un fichier depose sur la touche = media de la scene
             menu = tk.Menu(btn, tearoff=0)
             fill_entry_menu(menu, row)
@@ -2197,6 +2279,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                     strip.xview_moveto(0)
                     return
                 strip.xview_moveto(proj_ui.get("strip_x") or 0.0)
+                active_btn = proj_ui.get("bar_active")
                 if active_btn is not None:
                     left, right = active_btn.winfo_x(), active_btn.winfo_x() + active_btn.winfo_reqwidth()
                     x0 = strip.canvasx(0)
@@ -2205,6 +2288,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 sync_strip()
             except tk.TclError:
                 pass
+        proj_ui["bar_active"] = active_btn
+        proj_ui["bar_show"] = show_active
         strip.bind("<Configure>", lambda e: (sync_strip(), show_active()))
         after(60, lambda: (sync_strip(), show_active()))
         refresh_scene_panel()
@@ -2375,6 +2460,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     if keep_size is not None:
         root.update_idletasks()
         root.geometry(f"{keep_size[0]}x{keep_size[1]}")        # fixe la taille : plus de redimensionnement automatique
+    drop_cover(root, cover)
     pending = getattr(s, "pending_live_overrides", None)
     if pending:                                  # scene qui a change de mode : on charge son etat dans le panneau neuf
         s.pending_live_overrides = None
