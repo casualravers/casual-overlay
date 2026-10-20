@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 
+from core.onset import OnsetDetector
 from core.phase import PhaseTracker
 from core.rhythm import Rhythm
 from engine.deps import np, sd
@@ -37,6 +38,10 @@ BASELINE_FALL_TAU_S = 0.8    # plus vite qu'elle ne monte donne des faux positif
 DEV_TAU_S = 1.0              # fenetre de l'ecart-type de l'energie basses
 BEAT_DECAY_TAU_S = 0.20      # decroissance de l'enveloppe u_beat
 BEAT_IDLE_S = 10.0           # valeur de since_beat tant qu'aucun kick n'est vu
+HIT_MIN = 0.0003             # energie minimale de la bande aigue pour declarer une frappe (charleys, claps)
+HIT_REFRACTORY_S = 0.09
+HIT_DECAY_TAU_S = 0.12       # decroissance de l'enveloppe des frappes (plus vive que celle du kick)
+EDGES = ("hit", "bg", "logo")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo
 
 
 def _coef(dt: float, tau: float) -> float:
@@ -69,6 +74,11 @@ class FeatureExtractor:
         self.prev_bass = 0.0
         self.last_beat = -1e9
         self.elapsed = 0.0
+        # Rythme secondaire et kicks par couche (sensibilites propres) : reglees par la boucle de rendu a chaque image.
+        self.hit_sens = 1.0
+        self.layer_sens = {"bg": 1.0, "logo": 1.0}
+        self.det_hit = OnsetDetector(HIT_MIN, HIT_REFRACTORY_S)
+        self.det_layer = {name: OnsetDetector(KICK_MIN, KICK_REFRACTORY_S) for name in self.layer_sens}
 
     def process(self, samples, dt: float, now: float) -> tuple[dict, bool]:
         """Retourne (niveaux normalises lisses, kick_detecte)."""
@@ -89,6 +99,11 @@ class FeatureExtractor:
             levels[name] = self.smooth[name]
 
         beat = self._detect_kick(raw["bass"], dt, now)
+        levels["edge_hit"] = self.det_hit.update(raw["high"], dt, now, max(self.sensitivity, 0.05) * self.hit_sens)
+        for name, det in self.det_layer.items():          # kick de la couche : le kick commun a sensibilite 1, sinon son detecteur
+            mult = self.layer_sens[name]
+            own = det.update(raw["bass"], dt, now, max(self.sensitivity, 0.05) * mult)
+            levels["edge_" + name] = beat if abs(mult - 1.0) < 1e-6 else own
         levels["raw_bass"] = raw["bass"]
         levels["raw_mid"], levels["raw_high"], levels["raw_rms"] = raw["mid"], raw["high"], raw["rms"]       # bruts (hors auto-gain) pour les phases du morceau
         return levels, beat
@@ -324,6 +339,7 @@ class AudioAnalyzer:
         self.lock = threading.Lock()
         self.levels = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "raw_bass": 0.0}
         self.t_beat: float | None = None
+        self.t_edge: dict[str, float | None] = {name: None for name in EDGES}
         self.beats = 0
         self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
         self.phase = PhaseTracker()             # phases du morceau (silence, ambiance, groove, montee, cassure, pic), nourries ici elles aussi
@@ -353,8 +369,12 @@ class AudioAnalyzer:
             window = self.ring.latest(self.extractor.win_size)
             now = time.monotonic()
             levels, beat = self.extractor.process(window, dt, now)
+            edges = {name: bool(levels.pop("edge_" + name, False)) for name in EDGES}
             with self.lock:
                 self.levels = levels
+                for name, hit in edges.items():
+                    if hit:
+                        self.t_edge[name] = now
                 if beat:
                     self.t_beat = now
                     self.beats += 1
@@ -368,10 +388,17 @@ class AudioAnalyzer:
         with self.lock:
             state = dict(self.levels)
             t_beat = self.t_beat
+            t_edge = dict(self.t_edge)
             state["beats"] = self.beats
         state["phase"] = self.phase.snapshot()                  # phase du morceau et multiplicateurs lisses (voir core/phase.py)
         state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since
         state["beat"] = math.exp(-since / BEAT_DECAY_TAU_S) if t_beat is not None else 0.0
+        now = time.monotonic()
+        for name, te in t_edge.items():                          # frappes aigues et kicks par couche (voir core/audio_layers.py)
+            gap = BEAT_IDLE_S if te is None else min(now - te, BEAT_IDLE_S)
+            key = "hit" if name == "hit" else "beat_" + name
+            state["since_" + name] = gap
+            state[key] = math.exp(-gap / (HIT_DECAY_TAU_S if name == "hit" else BEAT_DECAY_TAU_S)) if te is not None else 0.0
         return state

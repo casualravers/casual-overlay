@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import audio2wave_gl as gl
 import tkinter as tk
+from core import audio_layers
 
 
 def install(c):
@@ -36,7 +37,52 @@ def install(c):
     zone_melt = c.zone_melt
     zone_noise = c.zone_noise
 
+    src_tip = ("Partie du son qui pilote cette couche. Tout = comme avant. Basses : wobble et kicks. Mediums : wobble et glitch sur les mediums. "
+               "Aigus : wobble et glitch sur les aigus, sans kick. Kick : seulement ce qui part des kicks (onde de choc, aberration, pulsation). "
+               "Frappes : seulement les attaques des aigus (charleys, claps), un rythme secondaire. "
+               "Rien : la couche ne reagit plus a la musique (le noise et les automations continuent).")
+
+    def source_menu(parent, row, label, key):
+        tk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        var = tk.StringVar(value=params[key])
+        c.bind_param(key, var, str)
+        menu = tk.OptionMenu(parent, var, *audio_layers.SOURCES)
+        menu.grid(row=row, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        Tooltip(menu, src_tip)
+        return var
+
+    def layer_sliders(parent, zone, layer, extra=None):
+        """Reglages avances d'une couche, replies par defaut : sensibilite de son kick, retard et lissage de sa reaction au son."""
+        var = tk.IntVar(value=0)
+        toggle = tk.Checkbutton(parent, text="Reglages avances (kick, retard, lissage)", variable=var)
+        toggle.grid(row=zone.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        Tooltip(toggle, "Sensibilite du kick propre a cette couche, retard et lissage de sa reaction au son.")
+        box = tk.Frame(parent)
+        box.grid(row=zone.next_row(), column=0, columnspan=3, sticky="nw")
+        bz = Zone(box)
+        param_slider(bz, "Sensibilite du kick", "sens_" + layer, 0.25, 4.0, 0.05,
+                     "Multiplie la sensibilite du kick pour cette couche seulement : plus haut = elle reagit aux kicks plus faibles. 1 = le kick commun.")
+        param_slider(bz, "Retard", "lag_" + layer, 0.0, 0.5, 0.01,
+                     "La couche reagit au son avec ce retard (secondes) : un effet d'echo entre le fond et le logo. 0 = en direct.")
+        param_slider(bz, "Lissage", "smooth_" + layer, 0.0, 1.0, 0.02,
+                     "Reaction plus douce : attaque et relachement ralentis (jusqu'a 120 ms et 800 ms). 0 = sec.")
+        if extra is not None:
+            extra(bz)
+
+        def show(*_a):
+            if var.get():
+                box.grid()
+            else:
+                box.grid_remove()
+
+        var.trace_add("write", show)
+        show()
+
     add_separator(zone_fx, "Effets")
+    source_menu(tab_fx, zone_fx.next_row(), "Le fond reagit a", "src_bg")
+    layer_sliders(tab_fx, zone_fx, "bg", lambda bz: param_slider(
+        bz, "Sensibilite frappes", "hit_sensitivity", 0.25, 4.0, 0.05,
+        "Sensibilite des frappes des aigus (charleys, claps), utilisees par la source Frappes. Plus haut = plus de frappes detectees."))
     fx_on_vars: list[tk.IntVar] = []
     fx_int_vars: list[tk.DoubleVar] = []
     fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
@@ -78,6 +124,8 @@ def install(c):
     logo_fx_box = tk.Frame(tab_fx)
     logo_fx_box.grid(row=zone_fx.next_row(), column=0, columnspan=3, sticky="nw")
     lz = Zone(logo_fx_box)
+    source_menu(logo_fx_box, lz.next_row(), "Le logo reagit a", "src_logo")
+    layer_sliders(logo_fx_box, lz, "logo")
     fxl_on_vars: list[tk.IntVar] = []
     fxl_int_vars: list[tk.DoubleVar] = []
     for i, name in enumerate(fx_labels[:gl.FX_EFFECTS]):

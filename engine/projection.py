@@ -445,6 +445,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             renderer.add_doodle(item["rgba"], now)
         automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
+        analyzer.extractor.hit_sens = float(params.get("hit_sensitivity", 1.0))                 # frappes aigues
+        analyzer.extractor.layer_sens = {"bg": float(params.get("sens_bg", 1.0)), "logo": float(params.get("sens_logo", 1.0))}      # kick par couche
 
         u0 = time.perf_counter()
         reader = s.reader                       # change quand on bascule Live / Snap / Ridge
