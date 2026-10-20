@@ -48,6 +48,8 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   sessionlog     journal de session
   scenes         scenes, sets, memoires de masters (stockage, export / import)
   randomizer     Full Randomizer (banques d'assets, tirages)
+  schedule       planning de la soiree (heure -> texte du logo)
+  palette        classement de la palette de commandes (Ctrl+K)
   doodles        doodles du site : config, liste du bucket, fichiers vus, validation, position, cycle de vie, mur (voir plus bas)
 engine/          moteur sans rendu GL (importe core/ et les dependances facultatives, jamais la GUI ni la facade) :
   deps           numpy / glfw / moderngl / sounddevice / Pillow importes une fois (`None` si absents, `MISSING`)
@@ -71,6 +73,7 @@ audio2wave_gl.py  point d'entree (parse_args, main, require_deps, bundled_paths)
 gl_gui.py         GUI Tk : fenetre, mise en page, barre des scenes, scenes / VJ (apply_scene, vj_tick...), pont vers le moteur
 gui_fond / gui_effects / gui_logo / gui_audio   onglets de la partie LIVE et OVERLAY (fond, effets + halo / fonte / cellules / noise, logo, analyse)
 gui_sets / gui_drop / gui_random / gui_panel    sets, medias (glisser-deposer, vignettes), Full Randomizer, panneau etendu
+gui_presets / gui_bar / gui_palette / gui_stage   barre de presets (overlay et fond), barre des scenes, palette Ctrl+K, mode scene plein ecran
 gui_vj            espace de controle global du Mode VJ (masters, historique, montee / drop) + garde-fous (panique, tap tempo, aide, console, auto-sauvegarde)
 skin / theme / gui_colors / gui_gates           habillage, couleurs, grisages```
 
