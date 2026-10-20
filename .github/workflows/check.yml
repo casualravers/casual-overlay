@@ -1,9 +1,10 @@
 name: Verifications
 
 # `pur`      : verifications sans GPU, micro ni ffmpeg (python tools/check_gl.py --pur) ; rapide, bloquant.
-# `complet`  : toute la suite, avec un OpenGL logiciel (Mesa llvmpipe) et ffmpeg installes sur le serveur. Les tests de mise en page de la
+# `complet`  : (bloquant) toute la suite, avec un OpenGL logiciel (Mesa llvmpipe) et ffmpeg installes sur le serveur. Les tests de mise en page de la
 #              fenetre connus pour etre instables (FRAGILES dans check_gl.py) font sortir le programme avec le code 3 : la suite est alors
 #              relancee UNE fois ; tout autre echec, ou un echec qui revient, fait echouer le job.
+# `portable` : fabrication et verification de la version portable (sans ffmpeg).
 # La mesure de latence logicielle est ecrite dans le resume du job (information, jamais un seuil : un serveur partage est trop variable).
 on:
   push:
@@ -36,8 +37,6 @@ jobs:
     needs: pur
     runs-on: windows-latest
     timeout-minutes: 45
-    # Passe a false quand le job est vert de facon stable (voir CLAUDE.md, « Integration continue »).
-    continue-on-error: true
     env:
       MESA_VERSION: "26.2.4"
     steps:
