@@ -683,7 +683,7 @@ def install(c):
 
         # ---- banques : FOND (videos plein cadre) et OVERLAY (images, animations, videos), autant de dossiers que l'on veut.
         # C'est le dossier qui classe, jamais l'extension (un .mov peut etre une animation comme une video).
-        banks = random_bank()
+        banks = random_bank(block=False)                  # scan en arriere-plan : le panneau s'ouvre tout de suite
 
         def bank_block(which: str, title: str, tip: str) -> None:
             bank = banks[which]
@@ -713,10 +713,10 @@ def install(c):
                 count = f"{len(bank)} video(s)"
             else:
                 count = f"{n_img} image(s), {len(bank) - n_img} video(s) / animation(s)"
-            tk.Label(fr, text=count if bank else ("vide : ajoute un dossier" if not rs[fkey] else "aucun fichier trouve"),
+            tk.Label(fr, text="scan en cours..." if random_bank.busy() else count if bank else ("vide : ajoute un dossier" if not rs[fkey] else "aucun fichier trouve"),
                      bg=bg, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
             if which == "overlay":
-                scan_btn = tk.Button(fr, text="Rescanner", command=lambda: (random_bank(True), refresh_scene_panel(force=True)), relief="flat",
+                scan_btn = tk.Button(fr, text="Rescanner", command=lambda: (random_bank(True, block=False), refresh_scene_panel(force=True)), relief="flat",
                                      bd=0, padx=8, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG)
                 scan_btn.pack(side="left", padx=2)
                 Tooltip(scan_btn, "Relit les dossiers des deux banques (nouveaux fichiers ajoutes depuis).")

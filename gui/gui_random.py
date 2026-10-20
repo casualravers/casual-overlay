@@ -10,6 +10,7 @@ from core import scenes
 import audio2wave_gl as gl
 import json
 import random
+import threading
 import tkinter as tk
 
 
@@ -42,15 +43,47 @@ def install(c):
         rnd = s.rnd = {"last": {}, "scene": None, "info": "", "bank": {"fond": [], "overlay": []}, "bank_key": None,
                        "rng": random.Random()}
 
-    def random_bank(force: bool = False) -> dict:
+    scan = {"thread": None, "key": None}
+
+    def scan_now(key) -> dict:
+        return {"fond": randomizer.scan_bank(list(key[0]), "fond"), "overlay": randomizer.scan_bank(list(key[1]), "overlay")}
+
+    def random_bank(force: bool = False, block: bool = True) -> dict:
         """Les deux banques d'assets du set, `{"fond": [...], "overlay": [...]}` (rescannees seulement si les dossiers changent
-        ou si `force`)."""
+        ou si `force`). `block` faux (affichage du panneau, bouton Rescanner) : le scan se fait dans un fil et la banque d'avant est
+        rendue en attendant (la GUI n'est jamais gelee par un gros dossier) ; la fin du scan demande un rafraichissement du panneau.
+        `block` vrai (tirage) : on attend un scan en cours ou on le fait."""
         rs = scene_book.vj()["random"]
         key = (tuple(rs["folders_fond"]), tuple(rs["folders_overlay"]))
-        if force or rnd["bank_key"] != key:
-            rnd["bank"] = {"fond": randomizer.scan_bank(list(key[0]), "fond"), "overlay": randomizer.scan_bank(list(key[1]), "overlay")}
+        th = scan["thread"]
+        running = th is not None and th.is_alive()
+        if running and scan["key"] == key and not force:
+            if block:
+                th.join()
+            return rnd["bank"]
+        if not (force or rnd["bank_key"] != key):
+            return rnd["bank"]
+        if block:
+            if running:
+                th.join()
+            rnd["bank"] = scan_now(key)
             rnd["bank_key"] = key
+            return rnd["bank"]
+
+        def work(k=key) -> None:
+            try:
+                bank = scan_now(k)
+            except Exception:
+                bank = {"fond": [], "overlay": []}
+            rnd["bank"], rnd["bank_key"] = bank, k
+            s.thumb_dirty = True                      # le panneau se rafraichit (nouveaux comptes)
+
+        scan["key"] = key
+        scan["thread"] = threading.Thread(target=work, name="scan-banque", daemon=True)
+        scan["thread"].start()
         return rnd["bank"]
+
+    random_bank.busy = lambda: scan["thread"] is not None and scan["thread"].is_alive()
 
     def random_scene() -> tuple[dict, str, dict]:
         """Tire une scene (sans l'appliquer) avec les reglages du hasard du set actif."""

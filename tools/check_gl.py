@@ -1135,6 +1135,8 @@ def check_gui() -> None:
           "sets (GUI): plus de 9 scenes : une touche par scene dans la bande defilante (plus de menu '+N')", str(sm))
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
+    check(out.get("set_async") == (True, True, True, True, True, True),
+          "sets (GUI): export et import d'archive depuis le menu se font dans un fil (la fenetre reste utilisable), meme resultat", str(out.get("set_async")))
     check(out.get("set_pack") == (True, True, True, True),
           "sets (GUI): export .zip avec les medias, reimport apres avoir perdu le fichier d'origine = media extrait et chemin refait", str(out.get("set_pack")))
     ir = out.get("set_import_rename", ())
@@ -2852,6 +2854,27 @@ def gui_sets_steps(c, s, out) -> None:
     sc_mod.IMPORT_DIR = old_import_dir
     out["set_pack"] = (exported_zip and zpath.exists(), imported_zip, "media(s) embarque(s)" in export_msg,
                        bool(media0) and Path(media0).is_file() and str(tmpd / "imported") in media0 and Path(media0).read_bytes() == b"\x89PNG-test-bytes")
+    # export / import d'archive depuis le menu (sans chemin donne) : dans un fil, la fenetre reste utilisable
+    zasync = tmpd / "async.casual-set.zip"
+    ui["ask_save"] = lambda name: str(zasync)
+    ui["ask_open"] = lambda: str(zasync)
+    started_exp = sc["export"]()
+    ticks = 0
+    t_end = time.monotonic() + 15
+    while "exporte" not in sc["msg"].get() and time.monotonic() < t_end:
+        c["root"].update()
+        ticks += 1
+        time.sleep(0.02)
+    out["set_async"] = (started_exp, zasync.exists(), "exporte" in sc["msg"].get(), sc["export"] is not None)
+    ui["chooser"] = stub(["Renommer (garder les deux)"] * 3)
+    old_import_dir2, sc_mod.IMPORT_DIR = sc_mod.IMPORT_DIR, tmpd / "imported-async"
+    started_imp = sc["import"]()
+    t_end = time.monotonic() + 15
+    while "importe" not in sc["msg"].get() and "annule" not in sc["msg"].get() and time.monotonic() < t_end:
+        c["root"].update()
+        time.sleep(0.02)
+    out["set_async"] += (started_imp, "importe" in sc["msg"].get())
+    sc_mod.IMPORT_DIR = old_import_dir2
     book.set_entry_media(0, None)
     calls.clear()
     ui["chooser"] = stub(["Annuler"])

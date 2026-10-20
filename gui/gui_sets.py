@@ -8,6 +8,8 @@ from __future__ import annotations
 from core import scenes
 from core import setpack
 from pathlib import Path
+import threading
+import time
 from tkinter import filedialog
 from tkinter import simpledialog
 import json
@@ -137,30 +139,76 @@ def install(c):
         live.confirm_dialog(root, "Supprimer le set", f"Supprimer le set '{name}' ?\nSes scenes restent dans la bibliotheque.",
                             delete_set_now)
 
-    def export_set_now(path: str | None = None) -> bool:
+    job = {"busy": False}
+
+    def run_job(label: str, work, done) -> None:
+        """Travail long (copie / extraction de medias) dans un fil ; `done(resultat, erreur)` est rappelee dans le fil Tk. La fenetre reste
+        utilisable, un seul travail a la fois."""
+        job["busy"] = True
+        state: dict = {"fin": False, "result": None, "exc": None}
+
+        def runner() -> None:
+            try:
+                state["result"] = work()
+            except Exception as exc:
+                state["exc"] = exc
+            finally:
+                state["fin"] = True
+
+        threading.Thread(target=runner, name="archive-set", daemon=True).start()
+        started = time.monotonic()
+
+        def poll() -> None:
+            if not state["fin"]:
+                scene_msg.set(f"{label} en cours... {time.monotonic() - started:.0f} s")
+                root.after(200, poll)
+                return
+            job["busy"] = False
+            done(state["result"], state["exc"])
+        root.after(200, poll)
+
+    def export_set_now(path: str | None = None, wait: bool | None = None) -> bool:
+        """Exporte le set actif. Une archive .zip copie les medias : depuis le menu (chemin choisi dans le dialogue) c'est fait dans un fil,
+        la fenetre reste utilisable ; avec un chemin donne (tests, scripts) on attend la fin et on rend le resultat."""
+        wait = path is not None if wait is None else wait
         name = scene_book.active_set_name()
+        if job["busy"]:
+            scene_msg.set("Une archive est deja en cours de preparation")
+            return False
         path = path or scene_ui["ask_save"](f"{name}.casual-set.zip")
         if not path:
             return False
         pack = str(path).lower().endswith(".zip")
         try:
             data = scenes.export_set(scene_book, name)
-            if pack:                                       # archive : le set + les medias qu'il utilise (a reimporter sur une autre machine)
-                scene_msg.set(f"Export de '{name}' en cours (copie des medias)...")
-                root.update_idletasks()
-                info = setpack.write_pack(path, data)
-            else:
+            if not pack:
                 Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         except (OSError, ValueError) as exc:
             scene_msg.set(f"Export impossible: {exc}")
             return False
-        if pack:
-            note = f", {info['files']} media(s) embarque(s) ({info['bytes'] / 1048576:.1f} Mo)"
-            if info["missing"]:
-                note += f" - introuvable(s), non embarque(s): {', '.join(Path(m).name for m in info['missing'][:3])}"
-            scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes{note}) : {Path(path).name}")
-        else:
-            scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes, sans medias) : {Path(path).name}")
+
+        def finish(info, exc) -> bool:
+            if exc is not None:
+                scene_msg.set(f"Export impossible: {exc}")
+                return False
+            if pack:
+                note = f", {info['files']} media(s) embarque(s) ({info['bytes'] / 1048576:.1f} Mo)"
+                if info["missing"]:
+                    note += f" - introuvable(s), non embarque(s): {', '.join(Path(m).name for m in info['missing'][:3])}"
+                scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes{note}) : {Path(path).name}")
+            else:
+                scene_msg.set(f"Set '{name}' exporte ({len(data['scenes'])} scenes, sans medias) : {Path(path).name}")
+            return True
+
+        if not pack:
+            return finish(None, None)
+        if wait:
+            try:
+                return finish(setpack.write_pack(path, data), None)
+            except (OSError, ValueError) as exc:
+                return finish(None, exc)
+        scene_msg.set(f"Export de '{name}' en cours (copie des medias)...")
+        run_job(f"Export de '{name}'", lambda: setpack.write_pack(path, data), finish)
         return True
 
     def resolve_conflict(title: str, text: str, what: str) -> str | None:
@@ -173,23 +221,45 @@ def install(c):
             return "replace" if sure == "Remplacer" else None
         return "rename" if choice and choice.startswith("Renommer") else None
 
-    def import_set_now(path: str | None = None) -> bool:
+    def import_set_now(path: str | None = None, wait: bool | None = None) -> bool:
+        """Importe un set (JSON ou archive). Une archive est extraite dans un fil quand le chemin vient du dialogue ; avec un chemin
+        donne (tests, scripts) on attend la fin et on rend le resultat."""
+        wait = path is not None if wait is None else wait
+        if job["busy"]:
+            scene_msg.set("Une archive est deja en cours de preparation")
+            return False
         path = path or scene_ui["ask_open"]()
         if not path:
             return False
         try:
-            if setpack.is_pack(path):                      # archive : les medias sont extraits sur cette machine et les chemins refaits
-                scene_msg.set("Import en cours (extraction des medias)...")
-                root.update_idletasks()
-                parsed = scenes.parse_import(setpack.read_pack(path, scenes.IMPORT_DIR / "media"))
-            else:
+            packed = setpack.is_pack(path)
+            if not packed:
                 parsed = scenes.parse_import(Path(path).read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
             scene_msg.set(f"Import impossible: {exc}")
             return False
-        except ValueError as exc:
-            scene_msg.set(f"Import impossible: {exc}")
-            return False
+        if not packed:
+            return finish_import(parsed)
+        if wait:
+            try:
+                return finish_import(scenes.parse_import(setpack.read_pack(path, scenes.IMPORT_DIR / "media")))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                scene_msg.set(f"Import impossible: {exc}")
+                return False
+
+        def done(text, exc) -> None:
+            if exc is not None:
+                scene_msg.set(f"Import impossible: {exc}")
+                return
+            try:
+                finish_import(scenes.parse_import(text))
+            except ValueError as err:
+                scene_msg.set(f"Import impossible: {err}")
+        scene_msg.set("Import en cours (extraction des medias)...")
+        run_job("Import", lambda: setpack.read_pack(path, scenes.IMPORT_DIR / "media"), done)
+        return True
+
+    def finish_import(parsed) -> bool:
         conflicts = scenes.import_conflicts(scene_book, parsed)
         set_mode = scene_mode = "rename"
         if conflicts["set"]:
