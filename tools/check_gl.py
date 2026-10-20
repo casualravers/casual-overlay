@@ -1135,6 +1135,7 @@ def check_gui() -> None:
           "sets (GUI): plus de 9 scenes : une touche par scene dans la bande defilante (plus de menu '+N')", str(sm))
     check(out.get("set_f9", (None,))[0] == 8, "sets (GUI): F9 joue la 9e entree du set", str(out.get("set_f9")))
     check(out.get("set_export") == (True, True), "sets (GUI): export dans un fichier", str(out.get("set_export")))
+    check(out.get("x_chunks") == (True, True), "panneau etendu (GUI): un gros set est construit par lots (premieres lignes tout de suite, toutes ensuite), sans geler la fenetre", str(out.get("x_chunks")))
     check(out.get("set_async") == (True, True, True, True, True, True),
           "sets (GUI): export et import d'archive depuis le menu se font dans un fil (la fenetre reste utilisable), meme resultat", str(out.get("set_async")))
     check(out.get("set_pack") == (True, True, True, True),
@@ -2995,6 +2996,26 @@ def gui_expand_steps(c, s, out) -> None:
         for ch in w.winfo_children():
             yield from walk_(ch)
     h1 = root.winfo_height()
+    # gros set : les premieres lignes tout de suite, les autres par petits lots (la fenetre ne gele pas)
+    sc["create_set"]("Gros")
+    for _ in range(26):
+        sc["add_entry"]("Scene A")
+    sc["refresh_panel"](force=True)
+    n_now = len(sc["panel_state"]["rows"])
+    t_end = time.monotonic() + 10
+    while len(sc["panel_state"]["rows"]) < 26 and time.monotonic() < t_end:
+        root.update()
+        time.sleep(0.01)
+    out["x_chunks"] = (n_now < 26, len(sc["panel_state"]["rows"]) == 26)
+    sc["switch_set"]("Etendu")
+    sc["delete_set"]() if book.active_set_name() == "Gros" else None
+    sc["switch_set"]("Etendu")
+    sc["refresh_panel"](force=True)
+    root.update()
+    for nm in list(book.set_names()):
+        if nm == "Gros":
+            book.delete_set(nm)
+    panel = sc["panel"]
     out["x_open"] = (h1 > h0 + 150, panel.winfo_ismapped(),
                      sum(1 for w in walk_(panel) if w.winfo_class() == "Button" and w.cget("text") == "Retirer"),
                      any(w.winfo_class() == "Button" and w.cget("text") == "\u25b4 Reduire" for w in walk_(c["scene_bar"])))
@@ -6621,6 +6642,13 @@ def main() -> None:
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
     print()
+    try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
+        import gl_gui as gg_stats
+        print("Fluidite de l'interface pendant les tests (pire temps) :")
+        for line in gg_stats.STATS.report(16):
+            print("  " + line)
+    except Exception:
+        pass
     if failures:
         print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
         sys.exit(1)

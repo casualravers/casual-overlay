@@ -16,7 +16,7 @@ import tkinter as tk
 
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
-    from gl_gui import BANNER_FG, MIN_WIN_H, SCENE_COLOR, THUMB_H          # import tardif : gl_gui importe ce module
+    from gl_gui import BANNER_FG, MIN_WIN_H, SCENE_COLOR, STATS, THUMB_H          # import tardif : gl_gui importe ce module
     import queue
     import uuid
     Tooltip = c.Tooltip
@@ -795,6 +795,8 @@ def install(c):
         return (f"{len(played)}/{len(rows)} scenes dans le VJ, boucle ~ "
                 + (f"{loop / 60:.1f} min" if loop >= 90 else f"{loop:.0f} s"))
 
+    ROWS_FIRST, ROWS_BATCH = 10, 4
+
     def panel_signature(rows: list[dict], settings: dict) -> str:
         """Tout ce qui, hors la scene active, change ce que le panneau affiche : s'il est identique, on ne reconstruit rien."""
         return json.dumps([settings, rows, rnd["info"] if settings["order"] == "alea" else "",
@@ -809,6 +811,7 @@ def install(c):
             for child in scene_panel.winfo_children():
                 child.destroy()
             scene_panel.pack_forget()
+            panel_state["gen"] = panel_state.get("gen", 0) + 1
             panel_state.update(sig=None, rows={}, cv=None, summary=None, dur={})
             return
         rows = scene_book.rows()
@@ -833,6 +836,7 @@ def install(c):
         for child in scene_panel.winfo_children():
             child.destroy()
         panel_state["sel"].intersection_update(range(len(rows)))
+        panel_state["gen"] = panel_state.get("gen", 0) + 1          # abandonne le remplissage par lots d'une construction precedente
         panel_state.update(sig=sig, rows={}, cv=None, summary=None, dur={})
         scene_panel.pack(fill="x")
         head = tk.Frame(scene_panel, bg=a2w.GUI_PANEL_BG)
@@ -870,7 +874,8 @@ def install(c):
                  fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
         wrap = tk.Frame(scene_panel, bg=a2w.GUI_BG)                 # la liste a gauche, l'espace de controle global a droite
         wrap.pack(fill="x")
-        mbox = master_box()
+        with STATS.timed("panel.master_box"):
+            mbox = master_box()
         mbox.pack(in_=wrap, side="right", fill="y")
         mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
         if getattr(s, "library_open", False):
@@ -976,11 +981,32 @@ def install(c):
         else:
             if not rows:
                 tk.Label(inner, text="Ce set est vide : '+ Scene' pour en ajouter.", bg=a2w.GUI_BG, fg=a2w.GUI_MUTED_FG).pack(pady=20)
-            for row in rows:
-                refs = build_panel_row(inner, row, row["index"] == current)
-                panel_state["rows"][row["index"]] = refs
-                panel_state["dur"][row["index"]] = refs["dur"]
-        skin.apply(scene_panel)                    # TOUJOURS : un panneau reconstruit sans habillage (vignettes pretes, Rescanner...) laissait les cases brutes
+            # Un gros set (plusieurs dizaines de lignes) ne gele plus la fenetre : les premieres lignes sont construites tout de suite, les
+            # autres par petits lots entre deux evenements (ROWS_FIRST puis ROWS_BATCH ; un nouveau rafraichissement abandonne le lot en cours).
+            def add_rows(batch: list[dict], dress: bool) -> None:
+                for row in batch:
+                    refs = build_panel_row(inner, row, row["index"] == current)
+                    panel_state["rows"][row["index"]] = refs
+                    panel_state["dur"][row["index"]] = refs["dur"]
+                    if dress:
+                        skin.apply(refs["frame"])
+
+            with STATS.timed("panel.lignes"):
+                add_rows(rows[:ROWS_FIRST], False)
+            rest = rows[ROWS_FIRST:]
+            if rest:
+                gen = panel_state["gen"]
+
+                def more() -> None:
+                    if panel_state.get("gen") != gen or not inner.winfo_exists():
+                        return
+                    with STATS.timed("panel.lot"):
+                        add_rows([rest.pop(0) for _ in range(min(ROWS_BATCH, len(rest)))], True)
+                    if rest:
+                        root.after(1, more)
+                root.after(1, more)
+        with STATS.timed("panel.habillage"):
+            skin.apply(scene_panel)                    # TOUJOURS : un panneau reconstruit sans habillage (vignettes pretes, Rescanner...) laissait les cases brutes
 
     def panel_update_in_place(index: int, kw: dict) -> bool:
         """Duree propre ou case VJ d'une entree : on met a jour le resume et le bouton de duree, sans reconstruire le panneau."""

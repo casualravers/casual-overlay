@@ -2288,8 +2288,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         strip.pack(side="left", fill="x", expand=True, padx=2, pady=0)
         tk.Label(scene_bar, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="e").pack(
             side="right", padx=10)
-        scene_bar.update_idletasks()
-        strip.configure(height=max(inner.winfo_reqheight(), 24))
+        if proj_ui.get("strip_h") is None:                    # hauteur des touches : mesuree une fois (update_idletasks coute ~100 ms a chaque fois)
+            with STATS.timed("bar.mesure"):
+                scene_bar.update_idletasks()
+            proj_ui["strip_h"] = max(inner.winfo_reqheight(), 24) if rows else None
+        strip.configure(height=proj_ui["strip_h"] or 28)
 
         def sync_strip(_e=None) -> None:
             """Region defilable = largeur des touches ; fleches visibles seulement si tout ne tient pas."""
@@ -2329,7 +2332,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         strip.bind("<Configure>", lambda e: (sync_strip(), show_active()))
         after(60, lambda: (sync_strip(), show_active()))
         refresh_scene_panel()
-        skin.apply(scene_top)
+        with STATS.timed("bar.habillage"):
+            skin.apply(scene_top)
         # La rangee ne dicte pas la largeur de la fenetre : trop de touches ou de boutons sont rognes a droite (les boutons du VJ,
         # poses d'abord, restent visibles) au lieu d'elargir la fenetre de reglages.
         if proj_ui.get("bar_h") is None:                      # hauteur mesuree une fois (sans cela la barre n'en aurait plus)
