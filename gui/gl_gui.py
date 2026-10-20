@@ -678,16 +678,30 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         canvas.configure(width=w, height=min(host.winfo_reqheight(), cap_now()), scrollregion=(0, 0, w, h))
         update_scrollbar()
 
+    def under(widget, container) -> bool:
+        if container is None:
+            return False
+        w, c = str(widget), str(container)
+        return w == c or w.startswith(c + ".")
+
     def on_wheel(e) -> None:
         step = -1 if e.delta > 0 else 1
         pcv = panel_state["cv"]                           # liste des scenes du panneau etendu : elle defile sous la souris
         strip = proj_ui.get("strip")                      # bande des touches de scene (barre du haut) : defile en largeur
-        if strip is not None and (str(e.widget) == str(strip) or str(e.widget).startswith(str(strip) + ".")):
+        if e.state & 0x1:                                 # Maj + molette : defilement horizontal de ce qui est sous la souris
+            if under(e.widget, strip):
+                strip.xview_scroll(step * 2, "units")
+            elif under(e.widget, pcv):
+                pcv.xview_scroll(step * 2, "units")
+            return
+        if under(e.widget, strip):
             strip.xview_scroll(step * 2, "units")
-        elif pcv is not None and (str(e.widget) == str(pcv) or str(e.widget).startswith(str(pcv) + ".")):
+        elif under(e.widget, pcv):
             pcv.yview_scroll(step, "units")
-        elif str(e.widget).startswith(str(canvas)) and active_panel().winfo_reqheight() > visible_height() + 1:
+        elif under(e.widget, canvas) and active_panel().winfo_reqheight() > visible_height() + 1:
             canvas.yview_scroll(step, "units")            # le panneau d'audio2wave defile d'abord...
+        elif under(e.widget, right_cv) and right_bar.winfo_ismapped():
+            right_cv.yview_scroll(step, "units")          # ...la colonne OVERLAY a son propre ascenseur...
         elif page_bar.winfo_ismapped():
             page_canvas.yview_scroll(step, "units")       # ...sinon c'est la page
 
@@ -771,7 +785,30 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # Partie OVERLAY: les presets restent toujours visibles en haut, le reste est range en ONGLETS (Effets,
     # Logo, Aura...). Une seule colonne de reglages a la fois: la fenetre fait environ la moitie de la
     # hauteur qu'avec des colonnes empilees (qui depassait la hauteur d'un ecran des qu'un bloc s'ouvrait).
-    right = tk.Frame(page)
+    # La colonne OVERLAY a SON ascenseur (canvas defilant) : a cote de LIVE, l'ascenseur de droite ne defile que l'overlay.
+    right_wrap = tk.Frame(page)
+    right_cv = tk.Canvas(right_wrap, highlightthickness=0, bd=0, width=10, height=10, bg=a2w.GUI_BG, yscrollincrement=24)
+    right_bar = skin.scrollbar(right_wrap, command=right_cv.yview)
+    right_cv.configure(yscrollcommand=right_bar.set)
+    right_cv.pack(side="left", fill="both", expand=True)
+    right = tk.Frame(right_cv)
+    right_item = right_cv.create_window((0, 0), window=right, anchor="nw")
+
+    def right_fit(_e=None) -> None:
+        """Taille voulue du canvas = celle de la colonne (plafonnee a cote de LIVE) ; ascenseur seulement si elle est plus haute que la place."""
+        w, h = right.winfo_reqwidth(), right.winfo_reqheight()
+        vis_w, vis_h = right_cv.winfo_width(), right_cv.winfo_height()
+        right_cv.configure(width=w, height=min(h, cap_now()), scrollregion=(0, 0, max(w, vis_w), h))
+        right_cv.itemconfigure(right_item, width=max(w, vis_w), height=max(h, vis_h if vis_h > 50 else 0))
+        if h > vis_h + 1 and vis_h > 50:
+            if not right_bar.winfo_ismapped():
+                right_bar.pack(side="right", fill="y")
+        elif right_bar.winfo_ismapped():
+            right_bar.pack_forget()
+            right_cv.yview_moveto(0)
+
+    right.bind("<Configure>", right_fit)
+    right_cv.bind("<Configure>", right_fit)
     preset_bar = tk.Frame(right)
     preset_bar.pack(fill="x")
     style = ttk.Style(root)
@@ -2033,6 +2070,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             Tooltip(lockbar, "La scene est VERROUILLEE : le VJ (Play, Suivante), les touches de scene, F1..F9 et les tirages sont sans effet. "
                              "Clique pour deverrouiller (touche K dans la fenetre de rendu).")
         update_vj_button()
+        kick = tk.Label(scene_bar, text="\u25cf -- BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, font=("Segoe UI", 9, "bold"), width=18, anchor="w")
+        kick.pack(side="right", padx=(2, 8), pady=5)
+        vj_ui["kick"] = kick
+        Tooltip(kick, "Voyant de kick : s'allume a chaque kick detecte par l'analyse audio. A droite, le BPM estime a partir des kicks ('-- BPM' tant que "
+                      "les kicks ne sont pas assez reguliers) ; 'cassure' / 'MONTEE' quand l'analyse repere une baisse des basses / une montee.")
         # Set actif : menu pour en changer, creer, renommer, supprimer, exporter, importer
         current_set = scene_book.active_set_name()
         set_btn = tk.Menubutton(scene_bar, text=f"SET  {current_set if len(current_set) <= 16 else current_set[:15] + '.'} \u25be",
@@ -2250,7 +2292,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if layout["name"] == name and live_wrap.winfo_manager():
             return
         layout["name"] = name
-        for w in (banner_live, banner_overlay, live_wrap, separator, right):
+        for w in (banner_live, banner_overlay, live_wrap, separator, right_wrap):
             w.grid_forget()
         for i in range(4):
             page.rowconfigure(i, weight=0)
@@ -2261,17 +2303,18 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             banner_overlay.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=(8, 2))
             live_wrap.grid(row=1, column=0, sticky="nsw", padx=(6, 0))
             separator.grid(row=1, column=1, sticky="ns", padx=ROW_PADX + 4)
-            right.grid(row=1, column=2, sticky="nsew", padx=(0, 10))
+            right_wrap.grid(row=1, column=2, sticky="nsew", padx=(0, 10))
             page.rowconfigure(1, weight=1)
             page.columnconfigure(2, weight=1)             # la largeur en plus va a l'overlay
         else:
             banner_live.grid(row=0, column=0, columnspan=3, sticky="ew", padx=(6, 10), pady=(8, 2))
             live_wrap.grid(row=1, column=0, columnspan=3, sticky="nw", padx=(6, 0))
             banner_overlay.grid(row=2, column=0, columnspan=3, sticky="ew", padx=(6, 10), pady=(8, 2))
-            right.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=(6, 10))
+            right_wrap.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=(6, 10))
             page.rowconfigure(3, weight=1)
             page.columnconfigure(0, weight=1)
         fit()
+        right_fit()
 
     def on_page_config(_e=None) -> None:
         """Page = canvas : largeur du canvas pour le contenu, hauteur au moins celle du contenu (au-dela, ascenseur)."""
@@ -2280,15 +2323,18 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         # taille voulue de la fenetre tant que l'utilisateur ne l'a pas redimensionnee
         page_canvas.configure(width=want_w, height=min(want_h, root.winfo_screenheight() - 100))
         if w > 50:
-            page_canvas.itemconfigure(page_item, width=max(w, want_w if layout["name"] == "stack" else 1), height=max(h, want_h))
-            page_canvas.configure(scrollregion=(0, 0, max(w, want_w), max(h, want_h)))
+            # Cote a cote, la page ne defile pas : LIVE et OVERLAY ont chacun leur ascenseur et se partagent la hauteur de la fenetre.
+            # Empilee, c'est la page qui defile.
+            fixed_h = layout["name"] == "wide"
+            page_canvas.itemconfigure(page_item, width=max(w, want_w if layout["name"] == "stack" else 1), height=h if fixed_h else max(h, want_h))
+            page_canvas.configure(scrollregion=(0, 0, max(w, want_w), h if fixed_h else max(h, want_h)))
             before = layout["name"]
             # Tant que la fenetre n'a pas pris sa taille (premiers instants), une largeur transitoire plus etroite que la
             # taille voulue ne doit pas faire passer en mise en page empilee.
             set_layout("wide" if (w >= layout["wide_need"] or not layout["settled"]) else "stack")
             if layout["name"] != before:
                 root.after_idle(on_page_config)          # les tailles voulues ont change: on recalcule la hauteur de la page
-        if want_h > h + 1 and w > 50:
+        if want_h > h + 1 and w > 50 and layout["name"] != "wide":
             page_bar.grid(row=1, column=1, sticky="ns")
         else:
             page_bar.grid_remove()
@@ -2297,6 +2343,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     skin.zone(right, OVERLAY_COLOR)
     skin.apply(root)                   # avant de mesurer la largeur naturelle : les images changent la taille des widgets
     set_layout("wide")
+    page.update_idletasks()
+    right_fit()
     page.update_idletasks()
     # largeur naturelle cote a cote : en dessous, on empile. L'ascenseur du panneau d'audio2wave (17 px) apparait ou disparait
     # selon la hauteur de la fenetre : il ne compte pas, sinon une fenetre a sa taille naturelle SANS ascenseur etait jugee trop
@@ -2336,8 +2384,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "root": root, "live_host": host, "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": tab_aff, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "page_canvas": page_canvas,
-            "live_wrap": live_wrap, "right_panel": right, "overlay_var": overlay_var,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": tab_aff, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
+            "live_wrap": live_wrap, "right_panel": right_wrap, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
             "overlay_store": overlay_store, "preset_msg": preset_msg, "overlay_menu": overlay_menu,

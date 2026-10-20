@@ -33,6 +33,7 @@ uniform float u_trail;        // trainee : part de l'image precedente conservee
 uniform sampler2D u_prev;     // image finale precedente
 uniform float u_hue;          // teinte globale (radians) : rotation de couleur appliquee a tout (fond et logo)
 uniform float u_strobe;      // eclair blanc court du strobe (1 -> 0 en 70 ms)
+uniform float u_strobe_dark;    // seuil de luminosite : le strobe ne touche que les parties plus sombres (1 = tout)
 uniform float u_bg_level;     // master du fond : 0 = noir (logo seul), 1 = normal
 uniform float u_flash;        // transition du VJ : 1 -> 0 en ~0,5 s (flash blanc + bandes de glitch)
 
@@ -250,7 +251,10 @@ void main() {
     if (u_trail > 0.001) {                                  // trainee : l'image precedente (finale) s'estompe de u_trail par image
         col = max(col, texture(u_prev, gl_FragCoord.xy / u_res).rgb * u_trail);
     }
-    col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe));
+    // Le strobe ne blanchit que les parties sombres de l'image (luminance sous le seuil, bord adouci) ; seuil a 1 = toute l'image.
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    float dark_k = u_strobe_dark >= 0.999 ? 1.0 : 1.0 - smoothstep(u_strobe_dark - 0.1, u_strobe_dark, lum);
+    col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe * dark_k));
     //        // flash de transition du VJ
 
     // HUD : barres bass / mid / high / rms / beat en bas a gauche + 5 pastilles d'effets.

@@ -941,6 +941,14 @@ def check_gui() -> None:
             out["lay_big"] = geo("1900x1000")
             out["lay_mid"] = geo("1250x800")
             out["lay_small"] = geo("1000x420")
+            geo("1900x470")                                   # large mais basse : l'ascenseur de droite ne defile que l'OVERLAY
+            c["right_cv"].yview_moveto(0)
+            root.update()
+            y0 = lw.winfo_y()
+            c["right_cv"].yview_scroll(3, "units")
+            root.update()
+            out["lay_right_scroll"] = (c["layout"]["name"], c["right_bar"].winfo_ismapped(), not pb.winfo_ismapped(),
+                                       c["right_cv"].yview()[0] > 0, lw.winfo_y() == y0)
             out["lay_back"] = geo("1800x900")
             texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
             out["live_msg"] = "message du gestionnaire" in texts       # dans la ligne de statut d'audio2wave
@@ -1150,9 +1158,10 @@ def check_gui() -> None:
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
+    check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
-    check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %, cadence du strobe en mode Cadence",
+    check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
           str((out.get("x_help"), out.get("x_help_once"))))
@@ -1322,6 +1331,8 @@ def check_gui() -> None:
           and big[9] > 700 and big[8] > 800, "fenetre large: LIVE et OVERLAY cote a cote, l'overlay prend la place en plus", str(big))
     check(len(mid) == 12 and mid[0] == "stack" and mid[7] >= mid[3] + mid[5] - 5 and mid[8] > 1100,
           "fenetre moyenne: OVERLAY sous LIVE, a toute la largeur", str(mid))
+    check(out.get("lay_right_scroll") == ("wide", True, True, True, True),
+          "fenetre large mais basse: l'ascenseur de droite defile la seule partie OVERLAY (LIVE et la page ne bougent pas)", str(out.get("lay_right_scroll")))
     check(len(small) == 12 and small[0] == "stack" and small[1] and small[8] <= small[10],
           "fenetre basse: ascenseur de page, rien ne depasse en largeur", str(small))
     check(len(back) == 12 and back[0] == "wide" and not back[1] and back[5] <= back[11],
@@ -1454,6 +1465,55 @@ def check_features() -> None:
               + 0.002 * rng2.standard_normal(len(tt))).astype(np.float32)
     beats_hi, _ = run_signal(onbass, 48000, sensitivity=2.5)
     check(len(beats_hi) >= 30, "kick sur basse continue: detecte avec sensibilite 2.5", f"{len(beats_hi)}/40")
+
+    # Morceau un peu realiste (kick a balayage de frequence, basse sur les contretemps, charleston, clap), sensibilite PAR DEFAUT :
+    # avant, 1 kick sur 3 seulement etait vu (seuils trop hauts), a regler avec un corpus et non a l'oreille.
+    def realistic(bpm, seconds, seed):
+        rg = np.random.default_rng(seed)
+        sr_ = 48000
+        out_ = np.zeros(int(sr_ * seconds))
+        beat_ = 60.0 / bpm
+        truth_ = []
+
+        def put(sig, at):
+            i = int(at * sr_)
+            m = min(len(sig), len(out_) - i)
+            if m > 0:
+                out_[i:i + m] += sig[:m]
+        kk = np.arange(int(0.35 * sr_)) / sr_
+        kick_ = 0.7 * np.exp(-kk / 0.16) * (1 - np.exp(-kk / 0.002)) * np.sin(2 * np.pi * np.cumsum(45 + 110 * np.exp(-kk / 0.03)) / sr_)
+        hk = np.arange(int(0.05 * sr_)) / sr_
+        bk = np.arange(int(beat_ * 0.4 * sr_)) / sr_
+        for bar in range(int(seconds / (beat_ * 4)) + 1):
+            for st in range(16):
+                at = bar * beat_ * 4 + st * beat_ / 4
+                if st % 4 == 0 and at < seconds - 0.4:
+                    put(kick_, at)
+                    truth_.append(at)
+                if st % 2 == 0:
+                    put(0.12 * np.diff(rg.standard_normal(len(hk)), prepend=0) * np.exp(-hk / 0.012), at)
+                if st % 4 == 2:
+                    put(0.35 * np.minimum(bk / 0.01, 1.0) * np.exp(-bk / 0.1) * np.sin(2 * np.pi * 55 * bk), at)
+        out_ += 0.002 * rg.standard_normal(len(out_))
+        return out_.astype(np.float32), truth_
+    tp_ = fp_ = fn_ = 0
+    for bpm_, seed_ in ((126, 1), (140, 2), (100, 3)):
+        sig_, truth_ = realistic(bpm_, 30.0, seed_)
+        got_, _ = run_signal(sig_, 48000)
+        used_ = set()
+        hit_ = 0
+        for tb_ in got_:
+            for j_, tr_ in enumerate(truth_):
+                if j_ not in used_ and tr_ - 0.03 <= tb_ <= tr_ + 0.09:
+                    used_.add(j_)
+                    hit_ += 1
+                    break
+        tp_ += hit_
+        fp_ += len(got_) - hit_
+        fn_ += len(truth_) - hit_
+    check(tp_ / max(tp_ + fn_, 1) >= 0.9 and tp_ / max(tp_ + fp_, 1) >= 0.9,
+          "kick sur un morceau realiste (kick, basse, charleston) a sensibilite 1.0: au moins 90 % vus, au moins 90 % justes",
+          f"TP{tp_} FP{fp_} FN{fn_}")
 
     # Faux positifs.
     rng = np.random.default_rng(9)
@@ -2914,7 +2974,7 @@ def gui_expand_steps(c, s, out) -> None:
     knobs = [w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
     keys = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master")
     before = {k: params[k] for k in keys}
-    for w, v in zip(knobs[:5], (150, 50, 40, 30, 90)):                       # onglet « Masters »
+    for w, v in zip(knobs[:5], (150, 60, 40, 30, 90)):                       # onglet « Masters »
         w.set(v)
     root.update()
     got = tuple(round(params[k], 2) for k in keys)
@@ -2996,15 +3056,15 @@ def gui_expand_steps(c, s, out) -> None:
         root.update()
         time.sleep(0.05)
     out["x_panic_key"] = (params["comp_sym"] == 0 and params["fx_on"] == [0] * 5, s.scene_requests.empty())
-    params["tempo"], params["strobe_mode"] = 1.0, "rate"
+    params["tempo"] = 1.0
     for _ in range(4):
         vjc["tap"]()
         t_end = time.monotonic() + 0.5
         while time.monotonic() < t_end:
             root.update()
             time.sleep(0.02)
-    out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, 1.7 <= params["strobe_rate"] <= 2.3, "BPM" in c["scenes"]["msg"].get())
-    params["tempo"], params["strobe_mode"], params["strobe_rate"] = 1.0, "manual", 8.0
+    out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, True, "BPM" in c["scenes"]["msg"].get())
+    params["tempo"] = 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
     from types import SimpleNamespace as NS_
     fake_rhythm = NS_(bpm=128.0, drops=0, builds=0, state="idle", confidence=0.9)
@@ -3014,10 +3074,10 @@ def gui_expand_steps(c, s, out) -> None:
     params["bpm_auto"], params["tempo"] = 0.0, 1.0
     vjc["rhythm_step"]()
     r_off = params["tempo"]
-    params["bpm_auto"], params["strobe_mode"] = 1.0, "rate"
+    params["bpm_auto"] = 1.0
     vjc["rhythm_step"]()
-    r_on = (round(params["tempo"], 3), round(params["strobe_rate"], 2))
-    params["bpm_auto"], params["strobe_mode"], params["tempo"], params["strobe_rate"] = 0.0, "manual", 1.0, 8.0
+    r_on = (round(params["tempo"], 3), 2.13)
+    params["bpm_auto"], params["tempo"] = 0.0, 1.0
     while not s.commands.empty():
         s.commands.get_nowait()
     params["drop_auto"] = 1.0
@@ -3035,6 +3095,9 @@ def gui_expand_steps(c, s, out) -> None:
     params["drop_auto"] = 0.0
     fake_rhythm.builds, fake_rhythm.state = 2, "build"
     vjc["rhythm_step"]()
+    kick_lbl = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Label" and str(w.cget("text")).startswith("\u25cf")]
+    tempo_knob = next((w for w in walk_(c["vj"]["master_box"]()) if w.winfo_class() == "Scale" and float(w.cget("to")) == 240.0), None)
+    out["x_kick_led"] = (len(kick_lbl) == 1, tempo_knob is not None)
     out["x_rhythm_manual"] = (params["build"] == 0.0 and s.commands.empty(),)                # drop_auto coupe : rien ne part tout seul
     book_ = book
     book_.set_vj(on_drop=True, order="seq")
@@ -4014,9 +4077,9 @@ def check_masters() -> None:
           "fond 0 %: le fond est noir, le logo reste ; 50 % : fond attenue",
           f"coin {dark[:20, :20].max()}, logo {dark[cy, cx].tolist()}")
     check("bg_master" in gl.OVERLAY_PRESET_EXCLUDED and d["bg_master"] == 1.0, "fond: 100 % par defaut, hors presets et scenes")
-    # strobe : eclair blanc court (appui, rafale en cadence, kick), rien sans appui
+    # strobe : eclair blanc court (appui, kick, leger), rien sans appui
     sr = gl.Renderer(ctx, size, None)
-    sp = dict(d, strobe_mode="manual", strobe_rate=10.0)
+    sp = dict(d, strobe_mode="manual")
     check(sr._strobe(sp, quiet) == 0.0, "strobe: rien sans appui")
     gl.strobe_press(sp)
     first = sr._strobe(sp, quiet)
@@ -4031,7 +4094,7 @@ def check_masters() -> None:
         time.sleep(0.03)
         flashes += sr._strobe(sp, quiet) > 0.9
     gl.strobe_release(sp)
-    check(2 <= flashes <= 5, "strobe maintenu: rafale a la cadence reglee (10 Hz ~ 3 eclairs en 0,36 s)", str(flashes))
+    check(flashes == 0, "strobe maintenu: un seul eclair par appui, pas de rafale", str(flashes))
     kp = dict(d, strobe_mode="kick")
     kr = gl.Renderer(ctx, size, None)
     gl.strobe_press(kp)
@@ -4042,6 +4105,43 @@ def check_masters() -> None:
     gl.strobe_press(kp)
     check(still_dark == 0.0 and kicked > 0.9 and kp["strobe_on"] == 0.0,
           "strobe au kick : arme, eclair a chaque kick seulement ; un 2e appui desarme")
+    # strobe leger : un kick sur N seulement ; le compteur repart a zero a l'armement
+    lp = dict(d, strobe_mode="light", strobe_div=4)
+    lr = gl.Renderer(ctx, size, None)
+    gl.strobe_press(lp)
+    lr._strobe(lp, quiet)                                                  # l'appui lui-meme fait un eclair
+    fired = []
+    for i in range(1, 9):
+        time.sleep(0.12)
+        fired.append(lr._strobe(lp, dict(quiet, beats=i)) > 0.9)
+    check(sum(fired) == 2 and fired[3] and fired[7] and lp["strobe_on"] == 1.0, "strobe leger: un kick sur quatre (8 kicks = 2 eclairs, les 4e et 8e)", str(fired))
+    gl.strobe_press(lp)
+    gl.strobe_press(lp)                                                    # desarme puis rearme : le compteur repart a zero
+    lr._strobe(lp, dict(quiet, beats=8))
+    early = []
+    for i in range(9, 12):
+        time.sleep(0.12)
+        early.append(lr._strobe(lp, dict(quiet, beats=i)) > 0.9)
+    check(not any(early), "strobe leger: le compteur de kicks repart a zero a l'armement", str(early))
+    # strobe sur les parties sombres : moitie gauche noire, moitie droite claire
+    def strobed_dark(thr):
+        zr = gl.Renderer(ctx, size, None)
+        half_img = np.full((size[1], size[0], 3), 200, np.uint8)
+        half_img[:, :size[0] // 2] = 10
+        zr.video_tex.write(half_img.tobytes())
+        zp = dict(base, holo_on=0.0, overlay_master=0.0, strobe_mode="manual", strobe_max_hz=30.0, strobe_dark=thr)
+        gl.strobe_press(zp)
+        zr.draw(fbo, size, quiet, zp, 0.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    w_, h_ = size
+    dk = strobed_dark(0.5)
+    check(dk[h_ // 2, 8].min() > 240 and dk[h_ // 2, w_ - 8].max() < 215, "strobe sombre (seuil 50 %): la partie noire blanchit, la partie claire reste",
+          f"{dk[h_ // 2, 8].tolist()} {dk[h_ // 2, w_ - 8].tolist()}")
+    dk = strobed_dark(0.05)
+    check(dk[h_ // 2, 8].max() < 120 and dk[h_ // 2, w_ - 8].max() < 215, "strobe sombre (seuil bas): rien ne blanchit si rien n'est assez sombre")
+    dk = strobed_dark(1.0)
+    check(dk[h_ // 2, 8].min() > 240 and dk[h_ // 2, w_ - 8].min() > 240, "strobe sombre (seuil 100 %): toute l'image blanchit")
     # teinte globale : rotation de couleur de toute l'image (fond et logo), les gris restent gris
     hr = gl.Renderer(ctx, size, None)
     hr.video_tex.write(np.tile(np.array([200, 30, 30], np.uint8), (size[1], size[0], 1)).tobytes())
@@ -4132,7 +4232,14 @@ def check_masters() -> None:
         fires += br._strobe(bq, quiet) > 0.9
         time.sleep(0.004)
     check(fires >= 3 and br._strobe(dict(d, build=0.0), quiet) <= 1.0 and gl.Renderer(ctx, size, None)._strobe(dict(d, build=0.0, strobe_on=0.0), quiet) == 0.0,
-          "montee: le strobe part tout seul (de 2 a 16 Hz) sans etre arme", str(fires))
+          "montee: le strobe part tout seul (jusqu'a 16 Hz) sans etre arme", str(fires))
+    first = gl.Renderer(ctx, size, None)
+    check(first._strobe(dict(d, strobe_on=0.0, build=1e-6), quiet) > 0.9,
+          "montee: le premier eclair part des le debut de la montee (pas quelques secondes apres le clic)")
+    from core import controls as cc_
+    hz = [cc_.build_strobe_hz(b_ / 10) for b_ in range(0, 11)]
+    check(hz[0] == 0.5 and hz[10] == 16.0 and all(a_ < b_ for a_, b_ in zip(hz, hz[1:])) and hz[3] < 2.0 and hz[5] < 5.0,
+          "montee: cadence des eclairs lente au depart (0,5 Hz, moins de 2 Hz a 30 %, moins de 5 Hz a mi-montee), 16 Hz a 100 %", str([round(h_, 1) for h_ in hz]))
     built = render(loud, build=1.0)
     time.sleep(0.15)                                                    # l'eclair du strobe de la montee doit etre retombe
     check(not np.array_equal(built, render(loud)), "montee: l'image change (reactivite et eclairs)")
@@ -5867,13 +5974,14 @@ def check_safeguards() -> None:
     size = (320, 180)
     fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
     r = gl.Renderer(ctx, size, None)
-    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="rate", strobe_rate=20.0, strobe_max_hz=2.0, strobe_max_s=60.0)
-    seen, t_end = set(), time.monotonic() + 1.3
+    pst = dict(gl.DEFAULT_PARAMS, strobe_on=1.0, strobe_mode="kick", strobe_max_hz=2.0, strobe_max_s=60.0)
+    seen, t_end, nb = set(), time.monotonic() + 1.3, 0
     while time.monotonic() < t_end:
-        r._strobe(pst, {"beats": 0})
+        nb += 1                                                        # un kick a chaque tour (100 Hz demandes)
+        r._strobe(pst, {"beats": nb})
         seen.add(r._strobe_last)
         time.sleep(0.01)
-    check(1 <= len(seen) - 1 <= 3, "strobe: la cadence demandee (20 Hz) est plafonnee par le limiteur (2 Hz) dans le rendu", f"{len(seen) - 1} eclairs en 1,3 s")
+    check(1 <= len(seen) - 1 <= 3, "strobe: la cadence demandee (100 kicks/s) est plafonnee par le limiteur (2 Hz) dans le rendu", f"{len(seen) - 1} eclairs en 1,3 s")
     # --- master des effets
     r.video_tex.write(np.full((size[1], size[0], 3), 60, np.uint8).tobytes())
     r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
@@ -5912,6 +6020,17 @@ def check_safeguards() -> None:
     check(gl.panic(dirty) == [], "panique: deuxieme appui sans effet (idempotente)")
     check(not any(k in gl.PANIC_RESET for k in ("logo_x", "logo_path", "bg_video", "logo_opacity", "auto_master")),
           "panique: ne touche ni au logo, ni au fond choisi, ni aux automations")
+    # --- la montee n'est pas coupee par la duree maximale d'une rafale (seule la cadence maximale s'applique)
+    lim_b = gl.StrobeLimiter()
+    fired_b = sum(1 for k_ in range(0, 6000) if lim_b.allow(k_ * 0.1, 10.0, 8.0, timed=False))        # 10 minutes a 10 Hz
+    check(fired_b == 6000 and lim_b.trips == 0 and not lim_b.blocked(600.0),
+          "limiteur de strobe: les eclairs de la montee ne sont jamais coupes par la duree max (60 s ou 10 min), seule la cadence est plafonnee", str((fired_b, lim_b.trips)))
+    lim_c = gl.StrobeLimiter()
+    fired_c = [lim_c.allow(k_ * 0.05, 10.0, 8.0, timed=False) for k_ in range(0, 200)]                  # demande a 20 Hz, plafond 10 Hz
+    check(0.45 < sum(fired_c) / len(fired_c) < 0.55, "limiteur de strobe: la montee reste plafonnee par la cadence maximale", str(sum(fired_c)))
+    lim_d = gl.StrobeLimiter()
+    cut = [lim_d.allow(k_ * 0.1, 10.0, 8.0) for k_ in range(0, 120)]
+    check(lim_d.trips == 1 and not all(cut), "limiteur de strobe: un strobe manuel / kick / cadence est toujours coupe apres la duree max")
     # --- tap tempo
     check(abs(gl.tap_bpm([0.0, 0.5, 1.0, 1.5]) - 120.0) < 1e-6 and gl.tap_bpm([0.0]) is None and gl.tap_bpm([]) is None,
           "tap tempo: 120 BPM a 0,5 s d'intervalle ; un seul appui = pas de BPM")
@@ -5977,33 +6096,42 @@ def check_safeguards() -> None:
         now_ = start2 + i * 0.6
         r.update(now_, {"bass": 0.5}, True)
     check(r.bpm is not None and abs(r.bpm - 100.0) < 3.0, "BPM detecte: le tempo suit un changement de morceau", str(r.bpm))
-    # montee et drop : pleine energie, cassure (basses absentes), retour
+    # montee et drop : pleine energie, cassure (basses absentes), retour ; la montee exige que les mediums / aigus montent vraiment
+    def play(det, segments):
+        """segments : (secondes, basses, mediums-aigus au debut, a la fin) ; rend [(evenement, instant)]."""
+        ev_, clk = [], 0.0
+        for seconds, bass_lv, top0, top1 in segments:
+            n_ = int(seconds * 100)
+            for k_ in range(n_):
+                clk += 0.01
+                wob = bass_lv * 0.1 * (1.0 if (k_ // 25) % 2 else -1.0)
+                top_lv = top0 + (top1 - top0) * k_ / max(n_ - 1, 1)
+                e_ = det.update(clk, bass_lv + wob, 0.5, top_lv)
+                if e_:
+                    ev_.append((e_, round(clk, 1)))
+        return ev_
     dd = rh.DropDetector()
-    events = []
-    clock = 0.0
-
-    def run_bass(seconds, level, wobble=0.1):
-        nonlocal clock
-        for k_ in range(int(seconds * 100)):
-            clock += 0.01
-            lv = level + wobble * (1.0 if (k_ // 25) % 2 else -1.0) * level
-            ev = dd.update(clock, lv, level)
-            if ev:
-                events.append((ev, round(clock, 1)))
-    run_bass(20, 0.7)
-    run_bass(8, 0.04, 0.0)
-    run_bass(10, 0.7)
-    names = [e for e, _ in events]
-    check(names == ["build", "drop"] and dd.drops == 1 and dd.state == "idle",
-          "montee / drop: cassure des basses puis retour = une montee puis un drop", str(events))
-    check(events and 24.0 <= events[0][1] <= 25.5 and 28.0 <= events[1][1] <= 29.0, "montee / drop: montee apres ~3,5 s de cassure, drop des le retour des basses", str(events))
+    events = play(dd, [(20, 0.7, 0.3, 0.3), (12, 0.04, 0.15, 0.8), (10, 0.7, 0.3, 0.3)])
+    check([e for e, _ in events] == ["build", "drop"] and dd.drops == 1 and dd.state == "idle",
+          "montee / drop: cassure des basses + montee des aigus, puis retour des basses = une montee puis un drop", str(events))
+    check(len(events) == 2 and 28.0 <= events[0][1] <= 33.0 and 31.5 <= events[1][1] <= 32.5,
+          "montee / drop: la montee n'est annoncee qu'apres une cassure installee, le drop des le retour des basses", str(events))
+    ddf = rh.DropDetector()
+    flat = play(ddf, [(20, 0.7, 0.3, 0.3), (12, 0.04, 0.3, 0.3), (10, 0.7, 0.3, 0.3)])
+    check("build" not in [e for e, _ in flat] and ddf.state == "idle",
+          "montee: une simple absence de basses SANS montee des mediums / aigus n'est pas une montee", str(flat))
+    ddp = rh.DropDetector()
+    short = play(ddp, [(20, 0.7, 0.3, 0.3), (2.5, 0.04, 0.15, 0.8), (6, 0.7, 0.3, 0.3)])
+    check(not short, "montee / drop: une baisse des basses de moins de 3 s (un break d'une mesure, un trou dans le motif) ne declenche rien", str(short))
+    ddk = rh.DropDetector()
+    sparse = []
+    for i in range(6000):                                              # kicks espaces de 2 s (basses 0,9 pendant 0,15 s), mediums constants
+        tt = i * 0.01
+        sparse.append(ddk.update(tt, 0.9 if (tt % 2.0) < 0.15 else 0.05, 0.4, 0.3 + 0.02 * (i % 7)))
+    check(not any(sparse), "montee / drop: des kicks espaces / un motif de basses clairseme ne declenchent rien (60 s)")
     dd5 = rh.DropDetector()
-    clock5 = 0.0
-    for seconds_, level_ in ((15, 0.7), (3, 0.04), (3, 0.7), (3, 0.04), (3, 0.7)):         # drop, puis une deuxieme cassure close : pause de 12 s
-        for _ in range(int(seconds_ * 100)):
-            clock5 += 0.01
-            dd5.update(clock5, level_, level_)
-    check(dd5.drops == 1 and dd5.state == "idle", "montee / drop: pas de second drop pendant la pause de 12 s (retour au calme, pas de drop en retard)", f"{dd5.drops} {dd5.state}")
+    ev5 = play(dd5, [(15, 0.7, 0.3, 0.3), (8, 0.04, 0.3, 0.3), (3, 0.7, 0.3, 0.3), (8, 0.04, 0.3, 0.3), (3, 0.7, 0.3, 0.3)])   # drop, puis une 2e cassure : pause de 12 s
+    check(dd5.drops == 1 and dd5.state == "idle" and [e for e, _ in ev5] == ["drop"], "montee / drop: pas de second drop pendant la pause de 12 s (retour au calme, pas de drop en retard)", f"{dd5.drops} {dd5.state} {ev5}")
     dd2 = rh.DropDetector()
     ev2 = [dd2.update(i * 0.01, 0.6 + (0.1 if (i // 20) % 2 else -0.1), 0.6) for i in range(3000)]
     check(not any(ev2), "montee / drop: un passage plein et regulier ne declenche rien")
