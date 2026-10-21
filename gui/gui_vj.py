@@ -223,7 +223,7 @@ def install(c):
     def build_tick() -> None:
         if build_ui["t0"] is None:
             return
-        total = max(float(params.get("build_time", 45.0)), 1.0)
+        total = max(float(params.get("build_time", 16.0)), 1.0)
         params["build"] = min((time.monotonic() - build_ui["t0"]) / total, 1.0)
         btn = vj_ui.get("build")
         if btn is not None:
@@ -239,7 +239,7 @@ def install(c):
             return
         build_ui["t0"] = time.monotonic()
         params["build"] = 0.0
-        scene_msg.set(f"Montee sur {float(params.get('build_time', 45.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
+        scene_msg.set(f"Montee sur {float(params.get('build_time', 16.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
         build_tick()
 
     def do_drop() -> None:
@@ -412,7 +412,7 @@ def install(c):
                                                     "La montee et le drop partent aussi tout seuls (montee quand l'energie monte ou que les basses disparaissent, gros eclair au drop). "
                                                     "Le limiteur de securite (10 eclairs par seconde, rafales de 8 s) reste applique.",
                    row=0, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
-            slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
+            slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 16, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
             bb = button(f, build_text(), start_build, row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["build"] = bb
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
@@ -856,6 +856,10 @@ def install(c):
         info = s.status.get("phase_info") or {}
         name = info.get("name") if (info and float(params.get("auto_phase", 1.0)) >= 0.5) else None
         prev, rhythm_ui["phase"] = rhythm_ui.get("phase"), name
+        drops = int(info.get("drops", 0)) if info else 0
+        seen, rhythm_ui["pdrops"] = rhythm_ui.get("pdrops"), drops
+        if seen is not None and drops != seen and name is not None and auto_on():
+            handle_drop("drop (retour du kick)")             # le kick revient apres un vide : le drop part sur CE kick, sans attendre que la phase change
         if name == prev or not auto_on():
             return
         if name == "build" and build_ui["t0"] is None:

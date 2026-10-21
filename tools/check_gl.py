@@ -2603,6 +2603,21 @@ def check_phase() -> None:
     check(any(n == "build" and tt2 > 40 for tt2, n in n_rise), "phases: les mediums / aigus qui montent avec les kicks = montee", str(n_rise))
     n_slow = rise(4.0, seconds=40)
     check(any(n == "build" and tt2 > 40 for tt2, n in n_slow), "phases: une montee lente (x4 en 40 s) avec les kicks est reconnue", str(n_slow))
+    # drop au bon moment : le kick revient apres un vide, le drop part sur ce kick (avant que la phase ait change)
+    pd, td, nx, drop_at, phase_then = ph.PhaseTracker(), 0.0, 0.0, [], None
+    while td < 75:
+        gap = 38 <= td < 50                               # 12 s sans kick au milieu
+        beat = (not gap) and td >= nx
+        if beat:
+            nx = td + k
+        before = pd.drops
+        pd.update(td, {"raw_rms": 0.02 if gap else 0.08, "raw_bass": 0.0 if gap else 0.04, "raw_mid": 0.02, "raw_high": 0.01}, beat, "idle", None if gap else 128.0)
+        if pd.drops != before:
+            drop_at.append(round(td, 2))
+            phase_then = pd.phase
+        td += 0.05
+    check(len(drop_at) == 1 and 50 <= drop_at[0] <= 51.5 and phase_then in ("break", "build", "ambient"),
+          "phases: le drop part sur le kick qui revient apres le vide (avant le changement de phase), une seule fois", str((drop_at, phase_then)))
     n_flat = rise(1.0)
     check(all(n != "build" for _, n in n_flat), "phases: un groove stable n'est jamais une montee", str(n_flat))
     # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau

@@ -61,6 +61,9 @@ BUILD_SLOPE = 0.04            # pente du log de l'energie (par seconde) d'une mo
 KICK_WINDOW_S = 4.0
 TREND_WINDOW_S = 8.0
 LONG_WINDOW_S = 20.0
+DROP_GAP_S = 1.5              # vide de kicks (au moins) avant le drop
+DROP_CONFIRM_S = 1.5          # un second kick dans ce delai confirme le retour
+DROP_MIN_PHASE_S = 3.0        # montee / cassure installee depuis au moins cela
 LONG_SLOPE = 0.03             # montee lente : x1,8 en 20 s
 LONG_GAIN = 1.8
 MIN_DWELL_S = 4.0             # une phase dure au moins cela
@@ -113,6 +116,9 @@ class PhaseTracker:
         self._top_slope = 0.0
         self._top_gain = 1.0
         self._rate = 0.0
+        self._last_kick: float | None = None
+        self._drop_arm: float | None = None
+        self.drops = 0                     # nombre de drops vus (le kick revient apres un vide pendant une montee / cassure)
         self._slope_long = 0.0              # memes mesures sur 20 s : une montee lente (16 mesures) gagne trop peu sur 8 s
         self._top_slope_long = 0.0
         self._top_gain_long = 1.0
@@ -133,6 +139,7 @@ class PhaseTracker:
         bass, mid, high = (max(float(levels.get(k, 0.0)), 0.0) for k in ("raw_bass", "raw_mid", "raw_high"))
         if beat:
             self._kicks.append(now)
+            self._early_drop(now)
         while self._kicks and now - self._kicks[0] > KICK_WINDOW_S:
             self._kicks.popleft()
         rate = len(self._kicks) / KICK_WINDOW_S
@@ -179,6 +186,20 @@ class PhaseTracker:
         self._adopt(now, self._classify(now, rate, rhythm_state, calm, quiet, build_min))
         self._ease(dt)
         return self.phase
+
+    def _early_drop(self, now: float) -> None:
+        """Le drop au bon moment : en montee / cassure, le premier kick qui revient apres un vide, confirme par un second kick dans la seconde et demie,
+        declenche `drops` tout de suite (changer de phase demande 1,5 s de confirmation : le flash arriverait en retard)."""
+        gap = now - self._last_kick if self._last_kick is not None else 1e9
+        self._last_kick = now
+        if not (self.phase in ("build", "break") or (self.phase == "ambient" and now - self._recent_groove < 20.0)) or now - self.since < DROP_MIN_PHASE_S:
+            self._drop_arm = None
+            return
+        if gap >= DROP_GAP_S:
+            self._drop_arm = now
+        elif self._drop_arm is not None and now - self._drop_arm <= DROP_CONFIRM_S:
+            self.drops += 1
+            self._drop_arm = None
 
     def _classify(self, now: float, kick_rate: float, rhythm_state: str, calm: float = CALM_ABS, quiet: float = QUIET_ABS, build_min: float = BUILD_MIN) -> str:
         if now - (now if self.t0 is None else self.t0) < WARMUP_S:
@@ -243,7 +264,7 @@ class PhaseTracker:
         return {"name": self.phase, "label": LABELS[self.phase], "since": self.since, "energy": round(self._boost, 3),
                 "density": round(self._density, 3), "bass": round(self._bass_share, 3), "bright": round(self._bright, 3),
                 "slope": round(self._slope, 4), "kicks": round(self._rate, 2), "top8": round(self._top_gain, 2),
-                "top20": round(self._top_gain_long, 2), "mult": dict(self._mult)}
+                "top20": round(self._top_gain_long, 2), "drops": self.drops, "mult": dict(self._mult)}
 
 
 def apply_to_params(params: dict, snapshot: dict | None) -> str:

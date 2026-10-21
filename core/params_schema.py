@@ -88,7 +88,7 @@ TABLE: tuple[Param, ...] = (
     _p("comp_trail", 0.0, 0.0, 0.97, scope="room", doc="Trainee / feedback : l'image precedente s'estompe lentement."),
     _p("comp_warp", 0.0, 0.0, 1.0, scope="room", doc="Deformation globale."),
     _p("build", 0.0, 0.0, 1.0, scope="state", doc="Montee en cours (0..1), ecrite par le bouton Montee."),
-    _p("build_time", 45.0, 2.0, 60.0, scope="room", doc="Duree de la montee, en secondes (le strobe monte de 0,5 a 16 Hz sur cette duree, puis reste au maximum jusqu'au drop)."),
+    _p("build_time", 16.0, 2.0, 60.0, scope="room", doc="Duree de la montee, en secondes (le strobe monte de 0,5 a 16 Hz sur cette duree, puis reste au maximum jusqu'au drop)."),
     _p("hue_master", 0.0, 0.0, 360.0, scope="room", doc="Teinte globale en degres : rotation de couleur de toute l'image."),
     _p("bg_master", 1.0, 0.0, 1.0, scope="room", doc="Master de la luminosite du fond : 0 = fond noir (logo seul), 1 = normal."),
     _p("strobe_on", 0.0, 0.0, 1.0, scope="state", doc="Strobe arme / maintenu."),
