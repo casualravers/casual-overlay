@@ -37,7 +37,7 @@ def _num(value, digits: int = 3) -> float:
 
 def build_state(*, set_name="", scenes=(), active=None, vj_running=False, vj_remaining="", locked=False, phase=None, bpm=None,
                 voyants=None, masters=None, autos=None, text="", projection_open=False, msg="", build=0.0, preview_on=False,
-                preview_note="") -> dict:
+                preview_note="", memories=()) -> dict:
     """Etat complet. `scenes` : suite de (rang, nom) ; `phase` : dict du `PhaseTracker.snapshot()` ou None ; `voyants` : textes deja formes
     (`phase_why`, `strobe`, `sources`) ; `masters` : cle -> valeur ; `autos` : cle -> bool."""
     rows = [{"i": int(i), "n": clean(n, MAX_NAME)} for i, n in list(scenes)[:MAX_SCENES]]
@@ -58,6 +58,7 @@ def build_state(*, set_name="", scenes=(), active=None, vj_running=False, vj_rem
         "projection": bool(projection_open),
         "msg": clean(msg),
         "build": _num(build, 2),
+        "memories": [clean(m, 24) for m in list(memories)[:remote_auth.MEMORY_SLOTS]],
         "preview": {"on": bool(preview_on), "note": clean(preview_note, 60)},
     }
 
