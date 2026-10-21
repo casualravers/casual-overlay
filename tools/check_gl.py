@@ -4013,11 +4013,13 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_history"] = (grown == 2, first_name != second_name, s.active_scene == first_name, len(s.scene_history) == n0 + 1)
     vjc["lock"]()
     vjc["back"]()
-    lock_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
-    out["x_history_lock"] = (s.active_scene == first_name, "verrouillee" in sc["msg"].get(), "Verrou ●" in lock_texts)
+    def lock_visible() -> bool:
+        """Le bouton « Verrou ● » de la barre est toujours la (place reservee : rien ne se decale) ; il n'est visible que verrou actif."""
+        slot = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text").endswith("Verrou ●")]
+        return len(slot) == 1 and str(slot[0].cget("fg")).lower() != str(slot[0].cget("bg")).lower()
+    out["x_history_lock"] = (s.active_scene == first_name, "verrouillee" in sc["msg"].get(), lock_visible())
     vjc["lock"]()
-    lock_texts_off = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
-    out["x_lock_bar_off"] = "Verrou ●" not in lock_texts_off
+    out["x_lock_bar_off"] = not lock_visible()
     vjc["build"]()
     for _ in range(8):
         root.update()

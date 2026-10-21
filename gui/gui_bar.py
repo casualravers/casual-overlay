@@ -95,7 +95,7 @@ def install(c):
         proj_ui["btn"] = None
         proj_ui["strip"] = None
         if projection is not None:
-            btn = tk.Button(scene_bar, text=proj_text(), command=toggle_projection, padx=10)
+            btn = tk.Button(scene_bar, text=proj_text(), command=toggle_projection, padx=10, width=22)      # largeur fixe : Demarrer / Arreter ne decalent rien
             btn.pack(side="left", padx=(8, 4), pady=5)
             proj_ui["btn"] = btn
             Tooltip(btn, "Ouvre la fenetre de projection : en fenetre, sur un autre ecran que les reglages s'il y en a un "
@@ -158,7 +158,7 @@ def install(c):
                         activeforeground=BANNER_FG, font=("Segoe UI", 9, "bold"))
         nxt.pack(side="right", padx=2, pady=5)
         Tooltip(nxt, "Scene suivante tout de suite, avec un flash (fleche droite dans la fenetre de rendu).")
-        toggle = tk.Button(scene_bar, text="\u25b6 VJ", command=vj_toggle, relief="flat", bd=0, padx=12, pady=3,
+        toggle = tk.Button(scene_bar, text="\u25b6 VJ", command=vj_toggle, relief="flat", bd=0, padx=12, pady=3, width=14,    # largeur fixe : le temps restant ne decale rien
                            cursor="hand2", font=("Segoe UI", 9, "bold"), bg=a2w.GUI_BG, fg=a2w.GUI_FG,
                            activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
         toggle.pack(side="right", padx=2, pady=5)
@@ -166,12 +166,16 @@ def install(c):
                         "a chaque changement. Le chiffre est le temps avant la prochaine scene. Choisir une scene a la main "
                         "met le VJ en pause ; changer de set le redemarre. Ordre et duree : 'reglages VJ'.")
         vj_ui["toggle"] = toggle
-        if getattr(s, "scene_lock", False):
-            # Verrou actif : bien visible dans la barre (sinon Play, Suivante et les scenes semblent « mortes » sans qu'on sache pourquoi)
-            lockbar = tk.Button(scene_bar, text="Verrou ●", command=toggle_scene_lock, relief="flat", bd=0, padx=10, pady=3,
-                                cursor="hand2", font=("Segoe UI", 9, "bold"), bg=SCENE_COLOR, fg=BANNER_FG,
-                                activebackground=SCENE_COLOR, activeforeground=BANNER_FG)
-            lockbar.pack(side="right", padx=2, pady=5)
+        # Verrou actif : bien visible dans la barre (sinon Play, Suivante et les scenes semblent « mortes » sans qu'on sache pourquoi).
+        # La place est TOUJOURS reservee (bouton invisible quand il n'y a pas de verrou) : l'apparition du verrou ne decale rien.
+        locked = bool(getattr(s, "scene_lock", False))
+        lockbar = tk.Button(scene_bar, text="​Verrou ●", command=toggle_scene_lock if locked else (lambda: None), relief="flat", bd=0, padx=10, pady=3,
+                            cursor="hand2" if locked else "arrow", font=("Segoe UI", 9, "bold"), bg=SCENE_COLOR if locked else a2w.GUI_PANEL_BG,
+                            fg=BANNER_FG if locked else a2w.GUI_PANEL_BG,
+                            activebackground=SCENE_COLOR if locked else a2w.GUI_PANEL_BG, activeforeground=BANNER_FG if locked else a2w.GUI_PANEL_BG,
+                            takefocus=0)
+        lockbar.pack(side="right", padx=2, pady=5)
+        if locked:
             Tooltip(lockbar, "La scene est VERROUILLEE : le VJ (Play, Suivante), les touches de scene, F1..F9 et les tirages sont sans effet. "
                              "Clique pour deverrouiller (touche K dans la fenetre de rendu).")
         update_vj_button()
