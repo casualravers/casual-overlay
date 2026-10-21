@@ -3033,6 +3033,32 @@ def check_qrcode() -> None:
     check(raised and len(qr.encode("e" + chr(233) + "\u20ac")) >= 21, "qrcode: trop long = erreur claire ; accents et euro en UTF-8 acceptes")
 
 
+def check_remote_page() -> None:
+    print("Telecommande : page du telephone (gui/remote)")
+    import re
+    from core import remote_auth as ra
+    from engine import remote as rem
+    d = ROOT / "gui" / "remote"
+    files = {name: (d / name) for name, _ in rem.STATIC.values()}
+    check(all(f.is_file() for f in files.values()), "page telecommande: les cinq fichiers servis existent", str([n for n, f in files.items() if not f.is_file()]))
+    total = sum(f.stat().st_size for f in files.values() if f.is_file())
+    check(total < 150_000, "page telecommande: moins de 150 Ko au total (charge vite sur le Wi-Fi d'une salle)", str(total))
+    html = files["index.html"].read_text(encoding="utf-8")
+    js = files["app.js"].read_text(encoding="utf-8")
+    check(not re.search(r"<script(?![^>]*\bsrc=)", html) and " style=" not in html and "onclick=" not in html and "<style" not in html,
+          "page telecommande: aucun script ni style en ligne (la CSP les interdit)")
+    ids = set(re.findall(r'id="([^"]+)"', html))
+    used = set(re.findall(r'\$\("([a-z0-9_-]+)"\)', js))
+    dyn = {"o-", "m-", "a-", "tab-", "mem-"}
+    missing = sorted(u for u in used if u not in ids)
+    check(not missing, "page telecommande: chaque element que le script cherche existe dans la page", str(missing))
+    api_used = set(re.findall(r'"/api/([a-z]+)"', js)) - {"login"}
+    check(api_used == set(ra.COMMANDS), "page telecommande: chaque commande de la liste blanche a son bouton, et le script n'en appelle aucune autre", str(sorted(api_used ^ set(ra.COMMANDS))))
+    check("panic" not in js.lower() and "tap" not in api_used, "page telecommande: ni PANIQUE ni tap tempo")
+    check("localStorage" not in js and "document.cookie" not in js, "page telecommande: le jeton reste en sessionStorage (ni cookie ni stockage durable)")
+    check({"react_master", "fx_master"} <= set(re.findall(r'id="m-([a-z_]+)"', html)), "page telecommande: Reactivite et Effets sont des curseurs de la page")
+
+
 def check_tempo() -> None:
     print("Tempo du son, sans kick (core/tempo.py)")
     import random
@@ -8112,7 +8138,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_remote_server", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -8179,6 +8205,7 @@ def main() -> None:
     check_tempo()
     check_remote_auth()
     check_remote_server()
+    check_remote_page()
     check_qrcode()
     check_phase()
     check_schedule()

@@ -1272,6 +1272,19 @@ de base garde en plus la latence propre d'`--averaging` (voir CLAUDE.md d'audio2
 Le generateur video `--synthetic` est limite par numpy a ~16 frames/s en 1080p : ce n'est pas
 une mesure de l'application.
 
+### Telecommande telephone (`core/remote_auth.py`, `core/remote_state.py`, `core/qrcode.py`, `engine/remote.py`, `gui/gui_remote.py`, `gui/remote/`)
+
+Petite page web servie par le processus (serveur `http.server` dans un fil, sans dependance) pour piloter depuis un telephone sur le Wi-Fi local. Plan et decisions : `docs/PLAN_VJ_REMOTE.md`.
+Case **Telecommande telephone** (onglet *Affichage*, reglage `remote_on`, portee `state` : decochee a chaque lancement) ; bouton **QR / code...** ouvre la fenetre du QR (`core.qrcode`, Python pur, versions 1 a 10, niveau M, verifie par OpenCV et un decodeur de relecture), de l'adresse et du code a 6 chiffres.
+- **Securite** (`core/remote_auth.py`, pur, temps injecte) : pairs d'un reseau PRIVE seulement (403 sinon), en-tetes Host et Origin verifies (DNS rebinding), jeton d'activation (fragment `#k=` du QR, jamais envoye au serveur dans l'URL) ou code a 6 chiffres echange contre un **jeton de session** (`Authorization: Bearer`, pas de cookie) ; **un seul telephone** : une connexion valide revoque l'ancienne (le flux SSE de l'ancien recoit `bye`) ; 5 essais rates par minute puis blocage 5 min ; 30 commandes/s ; corps <= 4 Ko, JSON, Content-Type exige ; CSP stricte, aucun chemin libre (table `STATIC`). Commandes = **liste blanche** `COMMANDS` (types et bornes verifies avant le moteur). **Pas de PANIQUE, pas de tap tempo** (decision de l'utilisateur). HTTP clair, jamais expose hors du reseau local (dit dans la fenetre du QR).
+- **Etat** : `build_state` (dict, `v` = 1) publie par le pont a 5 Hz au plus ; SSE sur `/events` lu cote page par `fetch` + flux (EventSource ne sait pas envoyer d'en-tete : ecart volontaire au plan), `ping` toutes les 15 s, un seul abonne.
+- **Pont** (`gui_remote.install`) : le fil HTTP ne touche NI Tk NI glfw ; il pose les commandes validees dans `s.remote_requests` (file) que le fil Tk execute toutes les 100 ms avec les gestes existants (`apply_entry`, `vj_toggle`, `vj_advance`, `back_scene`, `toggle_scene_lock`, `gl.strobe_press/release`, `start_build` / `do_drop`, memoires de masters, `do_one`, texte du logo). Le Verrou refuse tout de suite scene / suite / retour (409 + message). **Strobe maintenu** : la page renvoie « appui » toutes les 500 ms ; sans nouvelles pendant 1,5 s (telephone perdu, ecran verrouille) ou serveur arrete, le pont relache le strobe.
+- **Apercu** (facultatif, coupe par defaut, `POST /api/preview`) : le pont demande une capture reduite (480 px) au fil GL au plus toutes les 5 s, jamais si la projection est fermee ni si `gpu_ms` depasse 80 % du budget d'une image (note affichee sur la page).
+- **Page** (`gui/remote/`, JS sans framework ni style en ligne, < 150 Ko) : onglets SCENES / MACRO / BOUM / INFOS ; Reactivite et Effets en deux grands curseurs verticaux ; Montee (appui court) / Drop (appui long 0,4 s) ; ecran garde allume (Wake Lock) ; installable (manifeste + icone).
+- Variables d'environnement pour les tests : `CASUAL_REMOTE_HOST`, `CASUAL_REMOTE_PORT` (0 = port libre).
+- `check_gl.py` : `check_remote_auth`, `check_remote_server` (vrai serveur local), `check_remote_page`, `check_qrcode` (pures), `x_remote_bridge` (GUI : vraies requetes HTTP, Verrou, strobe relache seul).
+- Lecons : un QR faux peut cacher un bug de zigzag derriere la correction d'erreur Reed-Solomon (d'ou le decodeur de relecture) ; `http.server` normalise `//chemin` ; lire un flux SSE avec `http.client` casse apres un timeout (socket brute dans les tests).
+
 ## Hors POC
 
 Presets combines live + overlay (les deux se chargent separement), automation des reglages live via le moteur GL (ils gardent celle d'audio2wave, qui
