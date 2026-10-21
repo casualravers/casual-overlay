@@ -1576,6 +1576,8 @@ def build_gui(args: argparse.Namespace, width: int, height: int, status: dict,
              command=lambda: request_switch("snap")).pack(side="left", padx=(8, 0))
     tk.Button(device_frame, text="Ridge",
              command=lambda: request_switch("ridge")).pack(side="left", padx=(4, 0))
+    tk.Button(device_frame, text="Sphere",
+             command=lambda: request_switch("sphere")).pack(side="left", padx=(4, 0))
 
     style_var = tk.StringVar(value=args.style)
     widgets["style_var"] = style_var          # variable Tk exposee a l'hote (grisages de casual-overlay)

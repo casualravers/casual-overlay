@@ -2223,6 +2223,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
                        "l'entree audio choisie ci-dessus -- ferme cette fenetre et "
                        "ouvre celle de Ridge a la place, jamais les deux en meme "
                        "temps.")
+    tk.Button(device_frame, text="Sphere", command=lambda: request_switch("sphere")).pack(side="left", padx=(4, 0))
 
     refresh_devices()
 

@@ -667,6 +667,8 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
              command=lambda: request_switch("snap")).pack(side="left", padx=(8, 0))
     tk.Button(device_frame, text="Live",
              command=lambda: request_switch("live")).pack(side="left", padx=(4, 0))
+    tk.Button(device_frame, text="Sphere",
+             command=lambda: request_switch("sphere")).pack(side="left", padx=(4, 0))
 
     def add_slider(label: str, attr: str, lo: float, hi: float, step: float,
                   initial: float | None = None, panel: str = "left",

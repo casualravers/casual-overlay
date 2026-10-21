@@ -8146,6 +8146,137 @@ def check_native_modes() -> None:
           "retour au mode Live en --synthetic : flux d'origine rendu, mode GL arrete", str(msg))
 
 
+def check_sphere_mode() -> None:
+    """Mode Sphere (engine/sphere_mode.py, audio2wave_sphere.py) : bandes de frequences, taille qui suit l'intensite, trois styles en GL,
+    bascule de mode, presets et fenetre de reglages."""
+    print("mode Sphere")
+    import math
+    import threading
+    import tkinter as tk
+    from types import SimpleNamespace as NS
+
+    from engine import sphere_mode as sm
+    sys.path.insert(0, str(gl.DEFAULT_A2W_DIR)) if str(gl.DEFAULT_A2W_DIR) not in sys.path else None
+    import audio2wave_sphere as mod
+    rate = 48000
+
+    def tone(freq, amp, n=sm.WIN, phase=0):
+        t = (np.arange(n) + phase) / rate
+        return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+    args = mod.parse_args(["--gui"])
+    check(args.style == "wire" and args.size_react > 0 and args.spin == 0, "sphere: options par defaut (fil de fer, taille qui suit l'intensite, camera fixe)")
+    # bandes : une sinusoide de 1 kHz allume la bande qui la contient, pas celles des graves ni des aigus
+    tr = sm.SpectrumTracker()
+    for i in range(30):
+        tr.update(tone(1000, 0.3, phase=i * 800), rate, 1 / 60, args)
+    lo, hi, _ = tr._band_edges(32, rate)
+    hz = np.geomspace(sm.F_LOW, min(sm.F_HIGH, rate / 2.0 - 100.0), 33)
+    want = int(np.searchsorted(hz, 1000.0) - 1)
+    best = int(np.argmax(tr.bands[:32]))
+    check(abs(best - want) <= 1 and tr.bands[best] > 0.8 and tr.bands[:max(0, want - 6)].max() < 0.5 and tr.bands[want + 6:32].max() < 0.5,
+          "sphere: 1 kHz allume sa bande (ni graves ni aigus)", f"{best} {want} {tr.bands[:32].round(2)}")
+    # silence : aucun relief ; intensite : la taille de la sphere suit le niveau du morceau
+    quiet = sm.SpectrumTracker()
+    for i in range(60):
+        quiet.update(np.zeros(sm.WIN, np.float32), rate, 1 / 60, args)
+    check(float(quiet.bands.max()) == 0.0 and quiet.loudness == 0.0, "sphere: silence = aucun relief, intensite nulle")
+    track = sm.SpectrumTracker()
+    for i in range(120):                                        # un passage fort
+        track.update(tone(200, 0.5, phase=i * 800), rate, 1 / 60, args)
+    big = track.scale(args)
+    for i in range(240):                                        # puis le morceau retombe de 24 dB
+        track.update(tone(200, 0.03, phase=i * 800), rate, 1 / 60, args)
+    small = track.scale(args)
+    check(big > 1.15 and small < 0.85 and big > small * 1.4,
+          "sphere: la taille suit l'intensite du morceau (grosse au fort, petite quand il retombe)", f"{big:.2f} {small:.2f}")
+    flat = NS(**{**vars(args), "size_react": 0.0, "pulse": 0.0})
+    check(abs(track.scale(flat) - 1.0) < 1e-6, "sphere: taille fixe quand `size_react` = 0")
+    # rendu GL
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone (sphere)", str(exc))
+        return
+
+    class Ring:
+        total = 10 ** 6
+        phase = 0
+        amp = 0.4
+
+        def latest(self, n):
+            return tone(120, self.amp, n, self.phase) + tone(1500, self.amp / 3, n, self.phase)
+
+    audio = NS(rate=rate, ring=Ring(), synthetic=True)
+    size = (320, 180)
+    src = sm.SphereSource(mod, args, size, audio)
+    src.start()
+
+    def frame(source, i):
+        audio.ring.phase += 800
+        tex = source.render(ctx, i / 60.0)
+        return np.frombuffer(tex.read(), np.uint8).reshape(size[1], size[0], 3).astype(int)
+
+    lit = {}
+    for style in ("wire", "surface", "points"):
+        args.style = style
+        for i in range(40):
+            img = frame(src, i)
+        lit[style] = int((img.sum(axis=2) > 30).sum())
+    check(all(v > 400 for v in lit.values()) and lit["surface"] > lit["wire"] > lit["points"] * 0.5,
+          "sphere: les trois styles dessinent (fil de fer, surface pleine, points)", str(lit))
+    mid = img.shape[1] // 2
+    check(img[:, :mid // 3].sum() == 0 and img[:, -mid // 3:].sum() == 0, "sphere: la sphere reste au centre, les bords du cadre sont vides")
+    args.style, args.relief, args.spin, args.pulse = "surface", 0.0, 0.0, 0.0           # surface sans relief : l'aire ne depend que de la taille
+    areas = []
+    for amp in (0.5, 0.02):
+        audio.ring.amp = amp
+        for i in range(200):
+            img = frame(src, 100 + i)
+        areas.append(int((img.sum(axis=2) > 30).sum()))
+    check(areas[0] > areas[1] * 1.5, "sphere: l'image montre la sphere plus grosse quand le morceau est fort", str(areas))
+    args.spin = 45.0
+    before = frame(src, 400)
+    after = frame(src, 460)
+    args.spin = 0.0
+    check(src.tracker.head >= 0 and before.shape == after.shape, "sphere: la rotation facultative ne casse pas le rendu")
+    src.stop()
+    src.release_gl()
+    check(src.stop_event.is_set() and src.finished_event.is_set(), "sphere: arret propre")
+    # bascule de mode (sans ffmpeg) et presets
+    import gl_gui
+    live_mod = gl.load_live(gl.DEFAULT_A2W_DIR)
+    base_reader = object()
+    sess = NS(mode="live", pysrc=None, manager=None, reader=base_reader, live_args=NS(device=None), mode_args={}, render_size=size, audio=audio)
+    msg = gl_gui.activate_mode(sess, live_mod, "sphere")
+    check(msg is None and sess.mode == "sphere" and sess.pysrc.name == "sphere" and getattr(sess.pysrc, "native", False),
+          "bascule vers Sphere : mode GL actif, sans ffmpeg", str(msg))
+    msg = gl_gui.activate_mode(sess, live_mod, "snap")
+    check(msg is None and sess.mode == "snap" and sess.pysrc.name == "snap", "bascule Sphere -> Snap", str(msg))
+    gl_gui.activate_mode(sess, live_mod, "live")
+    store = gl_gui.mode_store(live_mod, "sphere")
+    names = set(store.all())
+    check({"default", "neon", "metal", "poussiere"} <= names, "sphere: presets integres dans le magasin du mode", str(sorted(names)))
+    # fenetre de reglages : controleur, etat capture / applique, boutons de bascule
+    root = tk.Tk()
+    try:
+        status: dict = {}
+        ctl = mod.build_gui(mod.parse_args(["--gui"]), size, status, threading.Event(), threading.Event(), root=root, compact=True, embedded=True)
+        root.update()
+        state = ctl.capture_state()
+        check(ctl.mode == "sphere" and {"style", "relief", "size_react", "pulse", "history", "colors"} <= set(state) and "_automation" in state,
+              "sphere: fenetre de reglages (controleur, etat complet avec automations)", str(sorted(state)))
+        skipped = ctl.apply_state(dict(state, style="points", relief=1.2, size_react=0.9))
+        root.update()
+        after_state = ctl.capture_state()
+        check(not skipped and after_state["style"] == "points" and abs(after_state["relief"] - 1.2) < 1e-6 and abs(after_state["size_react"] - 0.9) < 1e-6,
+              "sphere: un preset applique change les reglages", str(skipped))
+        texts = [w.cget("text") for w in root.winfo_children() if w.winfo_class() == "Frame" for w in w.winfo_children() if w.winfo_class() == "Button"]
+        check({"Snap", "Ridge", "Live"} <= set(texts), "sphere: boutons de bascule vers Snap / Ridge / Live", str(texts))
+    finally:
+        root.destroy()
+
+
 # Verifications de taille / mise en page de la fenetre : elles dependent de l'etat de l'ecran (fenetre deja deplacee, focus, minuteurs de Tk) et
 # echouent parfois seules sans qu'il y ait de defaut. Si TOUS les echecs d'une execution sont de cette liste, le programme sort avec le code 3
 # (et non 1) : l'integration continue relance alors la suite une fois ; un echec qui revient, ou tout autre echec, reste un echec (code 1).
@@ -8249,7 +8380,8 @@ def main() -> None:
     check_params()
     check_manager()
     check_native_modes()
-    os.environ["CASUAL_MODES_PYTHON"] = "1"          # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
+    check_sphere_mode()
+    os.environ["CASUAL_MODES_PYTHON"] = "1"         # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
     check_gui()
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()

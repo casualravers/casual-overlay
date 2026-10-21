@@ -13,8 +13,8 @@ import sys
 import threading
 from pathlib import Path
 
-MODES = ("live", "snap", "ridge")
-MODE_LABELS = {"live": "Live", "snap": "Snap", "ridge": "Ridge"}
+MODES = ("live", "snap", "ridge", "sphere")
+MODE_LABELS = {"live": "Live", "snap": "Snap", "ridge": "Ridge", "sphere": "Sphere"}
 
 
 class PushStream:

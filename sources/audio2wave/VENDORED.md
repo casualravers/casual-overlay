@@ -21,3 +21,6 @@ rapporter ou refaire une synchronisation avec le depot d'origine.
 - `audio2wave_live.py` (`style_var`, `shape_var`), `audio2wave_snap.py` (`style_var`, `wave_var`, `kick_glow_var`, `glow_live_var`, `gain_auto_var`),
   `audio2wave_ridge.py` (`gain_auto_var`) : la variable Tk de chaque choix qui grise d'autres reglages est rangee dans `widgets` (`GuiController.widgets`).
   Raison : `gui_gates` retrouvait ces variables en cherchant un bouton par son texte ; un libelle change et le grisage cassait en silence.
+- `audio2wave_sphere.py` (**fichier ajoute**) : le mode Sphere (options, presets, fenetre de reglages ; dessine en GL par `engine/sphere_mode.py`). Il n'existe pas dans le depot
+  d'origine et n'a pas de mode ligne de commande. `audio2wave_live.py`, `audio2wave_snap.py`, `audio2wave_ridge.py` : un bouton « Sphere » a cote de Live / Snap / Ridge
+  (bascule de mode seulement sous casual-overlay) ; `preset_registry.py` (`MODES`) et `check_contract.py` : le mode `sphere` en plus.

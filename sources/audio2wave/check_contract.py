@@ -121,7 +121,7 @@ check(callable(live.AutomationManager.snapshot), "AutomationManager.snapshot")
 check(hasattr(common, "move_rows_to_top") and hasattr(common, "watch_args"), "common.move_rows_to_top / watch_args")
 
 print("preset_registry")
-check(preset_registry.MODES == ("snap", "live", "ridge"), "MODES")
+check(preset_registry.MODES == ("snap", "live", "ridge", "sphere"), "MODES")
 check({"style", "shape", "_automation"} <= set(preset_registry.CROSS_MODE_UNSAFE_KEYS),
       "CROSS_MODE_UNSAFE_KEYS")
 check(preset_registry.strip_foreign({"style": "radio", "gain": 3}) == {"gain": 3}, "strip_foreign")
