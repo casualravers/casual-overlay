@@ -1,6 +1,6 @@
 :root{--bg:#2b1055;--bg2:#7597de;--pink:#ff3d9a;--blue:#2dd4ff;--green:#5cf06b;--amber:#ffc633;--purple:#a46bff;--ink:#1a0b3a;--card:#ffffff22}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
-html,body{margin:0;height:100%;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:#fff;overflow:hidden}
+html,body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;margin:0;height:100%;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:#fff;overflow:hidden}
 body{background:linear-gradient(160deg,#2b1055,#5b2a9b 55%,#ff3d9a);background-attachment:fixed;display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;font-size:18px}
 #title{flex:1;letter-spacing:1px;text-shadow:2px 2px 0 var(--pink)}
@@ -53,3 +53,5 @@ nav{display:flex;gap:6px;padding:8px 8px calc(8px + env(safe-area-inset-bottom))
 nav button{flex:1;padding:12px 2px;font-size:16px;border-radius:20px;background:#fff9;box-shadow:none}
 nav button.on{background:var(--amber)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+textarea,input[type=text],#code{-webkit-user-select:text;user-select:text}
+img{-webkit-user-drag:none;pointer-events:none}
