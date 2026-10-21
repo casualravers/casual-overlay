@@ -231,6 +231,7 @@ class SphereGL:
                   "u_depth": _num(args, "history", 0.6, 0.0, 2.0) * HIST_RATE, "u_relief": _num(args, "relief", 0.7, 0.0, 1.5),
                   "u_scale": BASE_RADIUS * tracker.scale(args), "u_style": STYLES.index(style),
                   "u_c0": c0, "u_c1": c1, "u_c2": c2, "u_ncol": ncol,
+                  "u_shape": _num(args, "shape", 0.0, 0.0, 4.0),
                   "u_point": float(_num(args, "point_size", 2, 1, 8)), "u_rows": float(HIST_ROWS)}
         for name, value in values.items():
             if name in prog and value is not None:

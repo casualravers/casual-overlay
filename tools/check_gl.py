@@ -8235,6 +8235,17 @@ def check_sphere_mode() -> None:
             img = frame(src, 100 + i)
         areas.append(int((img.sum(axis=2) > 30).sum()))
     check(areas[0] > areas[1] * 1.5, "sphere: l'image montre la sphere plus grosse quand le morceau est fort", str(areas))
+    sil = {}
+    for shape in (0.0, 1.0, 2.0, 3.0, 4.0, 0.5):                 # le curseur « Forme » : sphere, cube, octaedre, cylindre, etoile, melange
+        args.shape = shape
+        for i in range(30):
+            img = frame(src, 300 + i)
+        mask = img.sum(axis=2) > 30
+        sil[shape] = int(mask.sum())
+        check(mask[:, :4].sum() + mask[:, -4:].sum() + mask[:3].sum() + mask[-3:].sum() == 0, f"sphere: forme {shape:g} entierement dans le cadre")
+    check(len(set(sil.values())) == len(sil) and sil[0.5] not in (sil[0.0], sil[1.0]),
+          "sphere: chaque forme a sa silhouette, un curseur entre deux les melange", str(sil))
+    args.shape = 0.0
     args.spin = 45.0
     before = frame(src, 400)
     after = frame(src, 460)

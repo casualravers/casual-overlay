@@ -62,6 +62,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--size-react", dest="size_react", type=float, default=0.6,
                    help="Part de la taille de la sphere qui suit l'intensite du morceau (0 = taille fixe, 1 = tres sensible)")
     p.add_argument("--pulse", type=float, default=0.4, help="Pulsation de la sphere entiere aux graves / kicks (0 a 1)")
+    p.add_argument("--shape", type=float, default=0.0,
+                   help="Forme (0 a 4) : 0 sphere, 1 cube, 2 octaedre, 3 cylindre, 4 etoile ; une valeur entre deux melange les deux formes")
     p.add_argument("--history", type=float, default=0.6, help="Profondeur de l'historique, en secondes (0 = anneaux identiques)")
     p.add_argument("--smooth", type=float, default=0.4, help="Lissage du relachement (0 a 1)")
     p.add_argument("--range", dest="db_range", type=float, default=40.0, help="Dynamique affichee, en dB (20 a 70)")
@@ -253,6 +255,9 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         tk.Radiobutton(style_frame, text=STYLE_LABELS[key], value=key, variable=style_var,
                        command=on_style_change).pack(side="left", padx=(0, 6))
 
+    add_slider("Forme", "shape", 0.0, 4.0, 0.01,
+               tooltip="0 sphere, 1 cube, 2 octaedre, 3 cylindre, 4 etoile. Entre deux, les formes se melangent (une courbe "
+                       "d'automation fait morpher toute seule).", automatable=True)
     add_slider("Relief", "relief", 0.0, 1.5, 0.01, tooltip="Hauteur des deformations dues aux frequences.", automatable=True)
     add_slider("Taille selon l'intensite", "size_react", 0.0, 1.0, 0.01,
                tooltip="La sphere grossit quand le morceau est fort et rapetisse quand il est calme. 0 = taille fixe.",
