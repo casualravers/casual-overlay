@@ -375,7 +375,7 @@ def check_gui() -> None:
                               buttons=("Live" in texts, "Snap" in texts, "Ridge" in texts),
                               overlay=any(t.startswith("OVERLAY") for t in texts),
                               height=root.winfo_reqheight(), reader_ok=s.reader is s.pysrc.reader,
-                              presets_top=presets_top_state(c["live_host"]))
+                              presets_top=presets_top_state(c["live_host"]), col_x=(root.update_idletasks(), c["right_panel"].winfo_x())[1])
 
             def later(tries=0):
                 # La premiere image d'un mode arrive apres un "temps par photo" (4 s par defaut pour Snap).
@@ -405,7 +405,7 @@ def check_gui() -> None:
                                     resumed=[r.device for r in manager.resumed], reader_ok=s.reader is manager.reader,
                                     banner=any(t.startswith("LIVE") for t in texts),
                                     gain=find_scale(c["live_host"], "Gain (dB)") is not None,
-                                    presets_top=presets_top_state(c["live_host"]))
+                                    presets_top=presets_top_state(c["live_host"]), col_x=(root.update_idletasks(), c["right_panel"].winfo_x())[1])
             # GuiController.apply_state en live: le panneau prend l'etat ET le producteur ffmpeg est relance avec (rien ne prend effet sans)
             ctrl = c["panel"]["ctrl"]
             skipped = ctrl.apply_state({"gain": 17.0, "pas_une_cle": 1})
@@ -1447,6 +1447,9 @@ def check_gui() -> None:
     check(b.get("mode") == "live" and b.get("src") is None and b.get("suspended") is False
           and b.get("resumed") == ["Micro"] and b.get("reader_ok") and b.get("banner") and b.get("gain"),
           "retour au mode Live : ffmpeg relance sur l'entree courante, lecteur d'origine, panneau Live reconstruit", str(b))
+    check(b.get("col_x") == out.get("ridge", {}).get("col_x") and out.get("ridge", {}).get("col_x", 0) >= out.get("snap", {}).get("col_x", 1),
+          "GUI: la partie LIVE garde une largeur constante (la colonne OVERLAY ne recule pas en revenant a un mode plus etroit)",
+          str((out.get("snap", {}).get("col_x"), out.get("ridge", {}).get("col_x"), b.get("col_x"))))
     sb = out.get("scrollbars", (-1, 0))
     check(sb[0] == 0 and sb[1] >= 2, "GUI: les ascenseurs de la fenetre sont aux couleurs de la GUI (aucun ascenseur Windows clair)", str(sb))
     mn = out.get("menus", (0, -1))
