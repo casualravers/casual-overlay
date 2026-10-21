@@ -8282,8 +8282,14 @@ def check_sphere_mode() -> None:
         after_state = ctl.capture_state()
         check(not skipped and after_state["style"] == "points" and abs(after_state["relief"] - 1.2) < 1e-6 and abs(after_state["size_react"] - 0.9) < 1e-6,
               "sphere: un preset applique change les reglages", str(skipped))
-        texts = [w.cget("text") for w in root.winfo_children() if w.winfo_class() == "Frame" for w in w.winfo_children() if w.winfo_class() == "Button"]
+        buttons = ctl.widgets.get("mode_buttons", {})
+        texts = [b.cget("text") for b in buttons.values()]
         check({"Snap", "Ridge", "Live"} <= set(texts), "sphere: boutons de bascule vers Snap / Ridge / Live", str(texts))
+        refresh = next((w for f in root.winfo_children() for w in f.winfo_children() if w.winfo_class() == "Button" and w.cget("text") == "Actualiser"), None)
+        any_button = next(iter(buttons.values()), None)
+        check(any_button is not None and refresh is not None and any_button.winfo_rooty() >= refresh.winfo_rooty() + refresh.winfo_height(),
+              "sphere: les boutons de mode sont sur la ligne SOUS le selecteur d'entree",
+              f"{any_button and any_button.winfo_rooty()} / {refresh and refresh.winfo_rooty() + refresh.winfo_height()}")
     finally:
         root.destroy()
 
