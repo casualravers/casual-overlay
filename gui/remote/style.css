@@ -8,8 +8,6 @@ header{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-
 .dot.on{background:var(--green)}.dot.off{background:#f33}
 .chip{background:var(--card);border-radius:999px;padding:4px 12px;font-weight:bold;font-size:16px}
 .chip.wide{flex:1;text-align:center}
-#toast{position:fixed;left:12px;right:12px;top:calc(56px + env(safe-area-inset-top));background:var(--amber);color:var(--ink);border-radius:18px;padding:10px 14px;font-weight:bold;z-index:5;opacity:0;transform:translateY(-8px);transition:.25s;pointer-events:none}
-#toast.show{opacity:1;transform:none}
 main{flex:1;display:flex;flex-direction:column;min-height:0}
 main[hidden],.tab[hidden]{display:none}
 #login{align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
