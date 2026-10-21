@@ -2647,6 +2647,112 @@ def check_phase() -> None:
           "phases: application aux reglages (neutre si desactive ou sans mesure)", name)
 
 
+def check_remote_auth() -> None:
+    print("Telecommande : securite pure (core/remote_auth.py, core/remote_state.py)")
+    from core import remote_auth as ra
+    from core import remote_state as rs
+    for addr in ("192.168.1.23", "10.0.0.5", "172.16.0.1", "172.31.255.254", "127.0.0.1", "169.254.3.4", "::1", "fe80::1", "fd12:3456::1", "::ffff:192.168.1.9", "fe80::1%eth0"):
+        check(ra.is_private(addr), f"telecommande: adresse privee acceptee ({addr})")
+    for addr in ("8.8.8.8", "172.32.0.1", "172.15.255.255", "192.169.0.1", "11.0.0.1", "2001:db8::1", "::ffff:8.8.8.8", "", "abc", None, "999.1.1.1", "192.168.1"):
+        check(not ra.is_private(addr), f"telecommande: adresse non privee ou mal formee refusee ({addr!r})")
+    t1, t2 = ra.new_token(), ra.new_token()
+    check(t1 != t2 and len(t1) >= 40 and ra.check_token(t1, t1) and not ra.check_token(t1, t2) and not ra.check_token("", "") and not ra.check_token(None, t1)
+          and not ra.check_token(t1, None) and not ra.check_token(123, t1), "telecommande: jetons longs, differents, comparaison stricte")
+    codes = {ra.new_code() for _ in range(50)}
+    check(all(len(c) == 6 and c.isdigit() for c in codes) and len(codes) > 20, "telecommande: code a 6 chiffres")
+    clock = [0.0]
+    lim = ra.LoginLimiter(lambda: clock[0])
+    for _ in range(4):
+        lim.fail("192.168.1.5")
+    check(lim.allowed("192.168.1.5"), "telecommande: 4 essais rates, pas encore bloque")
+    lim.fail("192.168.1.5")
+    check(not lim.allowed("192.168.1.5") and lim.allowed("192.168.1.6"), "telecommande: 5 essais rates = pair bloque, les autres non")
+    clock[0] = 299.0
+    still = not lim.allowed("192.168.1.5")
+    clock[0] = 301.0
+    check(still and lim.allowed("192.168.1.5"), "telecommande: blocage de 5 minutes puis reprise")
+    lim.fail("p")
+    lim.ok("p")
+    for _ in range(4):
+        lim.fail("p")
+    check(lim.allowed("p"), "telecommande: un essai reussi remet le compteur a zero")
+    clock[0] = 1000.0
+    rate = ra.RateLimiter(lambda: clock[0], per_second=30)
+    got = sum(rate.allow("s") for _ in range(40))
+    clock[0] = 1001.5
+    check(got == 30 and rate.allow("s") and rate.allow("autre"), "telecommande: 30 commandes par seconde au plus, puis reprise", str(got))
+    ok = [
+        ("scene", {"index": 3}, {"cmd": "scene", "index": 3}), ("vj", {"action": "next"}, {"cmd": "vj", "action": "next"}),
+        ("lock", {}, {"cmd": "lock"}), ("strobe", {"down": True}, {"cmd": "strobe", "down": True}), ("build", {"action": "drop"}, {"cmd": "build", "action": "drop"}),
+        ("master", {"key": "react_master", "value": 1.5}, {"cmd": "master", "key": "react_master", "value": 1.5}),
+        ("master", {"key": "bg_master", "value": 7}, {"cmd": "master", "key": "bg_master", "value": 1.0}),
+        ("memory", {"slot": 4}, {"cmd": "memory", "slot": 4}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
+        ("auto", {"key": "strobe_auto", "value": 0}, {"cmd": "auto", "key": "strobe_auto", "value": False}), ("preview", {"on": True}, {"cmd": "preview", "on": True}),
+    ]
+    bad_all = True
+    for name, body, want in ok:
+        if ra.validate_command(name, body) != want:
+            bad_all = False
+            print("   attendu", want, "obtenu", ra.validate_command(name, body))
+    check(bad_all, "telecommande: chaque commande valide est normalisee (texte nettoye, master ramene dans sa plage)")
+    refused = [("nope", {}), ("scene", {"index": -1}), ("scene", {"index": "3"}), ("scene", {"index": True}), ("scene", {"index": 1, "x": 1}), ("scene", []),
+               ("vj", {"action": "panic"}), ("strobe", {"down": "yes"}), ("master", {"key": "gpu_cap", "value": 1}), ("master", {"key": "tempo", "value": "1"}),
+               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 5}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
+               ("auto", {"key": "auto_phase", "value": 2}), ("lock", {"x": 1}), ("build", {"action": "panic"}), ("preview", {"on": "1"})]
+    wrong = []
+    for name, body in refused:
+        try:
+            ra.validate_command(name, body)
+            wrong.append((name, body))
+        except ra.CommandError:
+            pass
+    check(not wrong, "telecommande: commande inconnue, mauvais type, cle hors liste, champ en trop, hors plage = refuses (jamais de PANIQUE)", str(wrong))
+    check("panic" not in ra.COMMANDS and "tap" not in ra.COMMANDS, "telecommande: ni PANIQUE ni tap tempo parmi les commandes")
+    long_text = ra.validate_command("text", {"text": "x" * 5000})["text"]
+    check(len(long_text) == ra.MAX_TEXT, "telecommande: texte du logo tronque")
+    # acces : un seul telephone
+    clock[0] = 0.0
+    acc = ra.Access(lambda: clock[0])
+    check(acc.login("192.168.1.2", token="x")[0] == 503, "telecommande: inactive = connexion refusee (503)")
+    acc.activate()
+    tok, code = acc.token, acc.code
+    check(acc.login("8.8.8.8", token=tok)[0] == 403, "telecommande: pair public refuse (403) meme avec le bon jeton")
+    check(acc.login("192.168.1.2", token="mauvais")[0] == 401 and acc.login("192.168.1.2", code="000000" if code != "000000" else "111111")[0] == 401, "telecommande: mauvais jeton / code = 401")
+    st1, s1 = acc.login("192.168.1.2", token=tok)
+    check(st1 == 200 and acc.authorize(s1) and not acc.authorize(tok) and not acc.authorize("") and acc.connected(), "telecommande: jeton d'activation contre jeton de session ; l'activation seule ne suffit pas")
+    st2, s2 = acc.login("192.168.1.9", code=code)
+    check(st2 == 200 and acc.authorize(s2) and not acc.authorize(s1) and acc.was_revoked(s1), "telecommande: un seul telephone, le nouveau remplace l'ancien (l'ancien est revoque)")
+    acc.disconnect()
+    check(not acc.authorize(s2) and not acc.connected(), "telecommande: Deconnecter revoque la session")
+    for _ in range(5):
+        acc.login("192.168.1.77", token="faux")
+    check(acc.login("192.168.1.77", token=tok)[0] == 429, "telecommande: apres 5 essais rates, meme le bon jeton est refuse (429)")
+    old_tok = tok
+    acc.deactivate()
+    acc.activate()
+    check(acc.token != old_tok and acc.login("192.168.1.2", token=old_tok)[0] == 401, "telecommande: nouvel jeton a chaque activation")
+    events = " | ".join(acc.pop_events())
+    check(tok not in events and code not in events and s1 not in events and "essai de connexion rate" in events, "telecommande: le journal ne contient jamais jeton ni code")
+    # etat
+    st = rs.build_state(set_name="Club", scenes=[(0, "A"), (1, "B\x07" + "z" * 200)], active=1, vj_running=True, vj_remaining="12 s", phase={"name": "groove", "label": "groove", "x": 1},
+                        bpm=127.6, voyants={"phase": "p", "strobe": "s", "sources": "o"}, masters={"react_master": 1.234567, "gpu_cap": 1, "tempo": 1}, autos={"auto_phase": 1, "x": 1},
+                        text="TEXTE", projection_open=True, msg="ok", build=0.5)
+    js = rs.to_json(st)
+    check(st["v"] == 1 and st["bpm"] == 128 and len(st["set"]["scenes"][1]["n"]) == rs.MAX_NAME and "\x07" not in js and "gpu_cap" not in js and '"x"' not in js
+          and set(st) == {"v", "set", "vj", "phase", "bpm", "voyants", "masters", "autos", "text", "projection", "msg", "build", "preview"},
+          "etat telecommande: cles du contrat, nettoyage, aucune cle etrangere", js[:120])
+    check(rs.to_json(rs.build_state(set_name="Club")) == rs.to_json(rs.build_state(set_name="Club")) and len(js) < rs.MAX_BYTES, "etat telecommande: stable et petit")
+    big = rs.build_state(scenes=[(i, "n" * 80) for i in range(400)], msg="m" * 900, text="t" * 900)
+    check(len(rs.to_json(big)) < rs.MAX_BYTES, "etat telecommande: meme avec 400 scenes et de longs textes, moins de 8 Ko", str(len(rs.to_json(big))))
+    check("token" not in js and "code" not in js and "session" not in js, "etat telecommande: aucune donnee sensible")
+    th = rs.Throttle()
+    a = th.next("{1}", 0.0)
+    b = th.next("{2}", 0.1)
+    c_ = th.next("{2}", 0.3)
+    d = th.next("{2}", 0.9)
+    check((a, b, c_, d) == ("{1}", None, "{2}", None), "etat telecommande: au plus 5 evenements par seconde, le dernier etat n'est jamais perdu, rien si inchange", str((a, b, c_, d)))
+
+
 def check_tempo() -> None:
     print("Tempo du son, sans kick (core/tempo.py)")
     import random
@@ -7655,7 +7761,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7720,6 +7826,7 @@ def main() -> None:
     check_latence()
     check_beat_grid()
     check_tempo()
+    check_remote_auth()
     check_phase()
     check_schedule()
     check_palette()
