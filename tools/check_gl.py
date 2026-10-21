@@ -1227,7 +1227,7 @@ def check_gui() -> None:
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
-    check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
+    check(out.get("x_kick_led") == (True,) * 4, "rythme (GUI): voyant de kick + BPM (valeur en clair, gardee 4 s si la detection decroche) dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
           str(out.get("x_stage")))
@@ -3559,7 +3559,19 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     kick_lbl = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Label" and str(w.cget("text")).startswith("\u25cf")]
     tempo_knob = next((w for w in walk_(c["vj"]["master_box"]()) if w.winfo_class() == "Scale" and float(w.cget("to")) == 240.0), None)
-    out["x_kick_led"] = (len(kick_lbl) == 1, tempo_knob is not None)
+    t_end_ = time.monotonic() + 0.4
+    while time.monotonic() < t_end_:                                 # le planificateur (50 ms) met le voyant a jour
+        root.update()
+        time.sleep(0.03)
+    shown_bpm = "128 BPM" in kick_lbl[0].cget("text")
+    fake_rhythm.bpm = None
+    t_end_ = time.monotonic() + 0.4
+    while time.monotonic() < t_end_:
+        root.update()
+        time.sleep(0.03)
+    shown_held = "128 BPM" in kick_lbl[0].cget("text")              # detection perdue depuis moins de 4 s : la valeur reste affichee
+    fake_rhythm.bpm = 128.0
+    out["x_kick_led"] = (len(kick_lbl) == 1, tempo_knob is not None, shown_bpm, shown_held)
     out["x_rhythm_manual"] = (params["build"] == 0.0 and s.commands.empty(),)                # drop_auto coupe : rien ne part tout seul
     book_ = book
     book_.set_vj(on_drop=True, order="seq")
