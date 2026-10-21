@@ -73,6 +73,12 @@ def install(c):
             return f"{det:.0f} BPM auto"
         return f"{tap_state['bpm']:.0f} BPM (tap)" if tap_state["bpm"] else "\u2014 BPM"
 
+    def knob_text(key: str, value: float, dec: int, unit: str) -> str:
+        """Valeur affichee a droite d'un curseur de master. Tempo auto sans BPM detecte : « -- BPM » (le curseur reste a 120, mais ce n'est pas un tempo mesure)."""
+        if key == "tempo" and float(params.get("bpm_auto", 0.0)) >= 0.5 and not detected_bpm() and not tap_state["bpm"]:
+            return "-- BPM"
+        return f"{value:.{dec}f}{unit}"
+
     def sources_line() -> str:
         info = s.status.get("phase_info") or {}
         bg, logo, bg_auto, logo_auto = s.status.get("sources", ("tout", "tout", False, False))
@@ -83,6 +89,10 @@ def install(c):
         info = s.status.get("phase_info") or {}
         on = float(params.get("auto_phase", 1.0)) >= 0.5
         return explain.phase_effects_text(info.get("mult") if info else None, on)
+
+    def phase_why_line() -> str:
+        info = s.status.get("phase_info") or {}
+        return explain.phase_measures_text(info if (info and float(params.get("auto_phase", 1.0)) >= 0.5) else None)
 
     def strobe_line() -> str:
         info = s.status.get("strobe_info")
@@ -99,6 +109,14 @@ def install(c):
             except tk.TclError:
                 vj_ui.pop("strobe", None)
         update_lock_button()
+        for key, var, factor, dec, text, unit in vj_ui.get("knobs", []):
+            if key == "tempo":
+                try:
+                    want = knob_text(key, float(var.get()), dec, unit)
+                    if text.get() != want:
+                        text.set(want)
+                except tk.TclError:
+                    pass
         bpm = vj_ui.get("bpm")
         if bpm is not None:
             try:
@@ -111,7 +129,7 @@ def install(c):
                 root.title(text)
         except tk.TclError:
             pass
-        for key, make in (("sources", sources_line), ("phase_fx", phase_fx_line), ("strobe_info", strobe_line)):
+        for key, make in (("sources", sources_line), ("phase_fx", phase_fx_line), ("phase_why", phase_why_line), ("strobe_info", strobe_line)):
             lbl = vj_ui.get(key)
             if lbl is not None:
                 try:
@@ -133,6 +151,7 @@ def install(c):
         for key, var, factor, dec, text, unit in vj_ui.get("knobs", []):
             try:
                 var.set(round(float(params[key]) * factor, dec))
+                text.set(knob_text(key, float(var.get()), dec, unit))          # (var.set ne rappelle pas la commande du curseur : la valeur affichee se met a jour ici)
             except (tk.TclError, KeyError, ValueError):
                 pass
         for key, var in vj_ui.get("vars", {}).items():
@@ -204,7 +223,7 @@ def install(c):
     def build_tick() -> None:
         if build_ui["t0"] is None:
             return
-        total = max(float(params.get("build_time", 45.0)), 1.0)
+        total = max(float(params.get("build_time", 16.0)), 1.0)
         params["build"] = min((time.monotonic() - build_ui["t0"]) / total, 1.0)
         btn = vj_ui.get("build")
         if btn is not None:
@@ -220,7 +239,7 @@ def install(c):
             return
         build_ui["t0"] = time.monotonic()
         params["build"] = 0.0
-        scene_msg.set(f"Montee sur {float(params.get('build_time', 45.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
+        scene_msg.set(f"Montee sur {float(params.get('build_time', 16.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
         build_tick()
 
     def do_drop() -> None:
@@ -367,10 +386,6 @@ def install(c):
             toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %). "
                                                  "Il faut des kicks reguliers : sans BPM fiable, le tempo ne bouge pas.",
                    row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
-            toggle(f, "drop_auto", "Montee / drop auto", "Une cassure detectee (les basses disparaissent un moment) lance la montee ; le retour des basses "
-                                                         "= le drop : flash blanc et retour aux reglages normaux. Le VJ peut aussi changer de scene au "
-                                                         "drop (menu « reglages VJ »).",
-                   row=4, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
             toggle(f, "gpu_cap", "Securite GPU", "Quand le VJ enchaine une scene, ses effets couteux (cellules, halo, fonte) sont coupes si, ajoutes a la charge mesuree "
                                                   "du GPU, ils ne tiendraient plus dans le budget d'une image. Une scene choisie a la main n'est jamais touchee.",
                    row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
@@ -394,9 +409,10 @@ def install(c):
             toggle(f, "strobe_auto", "Strobe auto", "Le strobe decide seul quand eclairer, sans aucun reglage : jamais en silence, en ambiance ni en cassure ; "
                                                     "un accent discret de temps en temps en groove (sur le « 1 » si la grille est connue, sinon sur une frappe des "
                                                     "aigus) ; une cadence qui accelere pendant une montee ; un gros eclair au drop ; un eclair a chaque kick au pic. "
+                                                    "La montee et le drop partent aussi tout seuls (montee quand l'energie monte ou que les basses disparaissent, gros eclair au drop). "
                                                     "Le limiteur de securite (10 eclairs par seconde, rafales de 8 s) reste applique.",
                    row=0, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
-            slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
+            slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 16, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
             bb = button(f, build_text(), start_build, row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["build"] = bb
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
@@ -425,7 +441,7 @@ def install(c):
             Tooltip(cb, "Le visuel suit les phases du morceau tout seul, sans reglage : le silence et les passages calmes ralentissent tres doucement les "
                         "animations (le visuel ne s'eteint jamais), la montee et le pic donnent plus de reactivite et d'effets, la cassure ralentit. "
                         "Les phases sont reconnues a l'energie, aux kicks et a la repartition des frequences ; les seuils s'adaptent au morceau et au micro. "
-                        "Jamais de strobe automatique.")
+                        "C'est aussi elles qui lancent la Montee (phase montee) et le Drop (passage au pic) automatiques : flash et retour au normal.")
             phase = tk.Label(f, text="phase : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w")
             phase.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
             vj_ui["phase"] = phase
@@ -439,6 +455,13 @@ def install(c):
             vj_ui["phase_fx"] = effects
             Tooltip(effects, "Ce que la phase du morceau change a tes reglages en ce moment (multiplicateurs lisses) : vitesse des animations, reactivite au son, "
                              "intensite des effets, luminosite du fond et derive de teinte. x1,00 = rien ne change.")
+
+            why = tk.Label(f, text="mesures : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
+            why.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=(2, 0))
+            vj_ui["phase_why"] = why
+            Tooltip(why, "Ce que le detecteur de phases mesure, pour comprendre (ou regler) sa decision : kicks par seconde (>= 1,2 = groove), "
+                         "energie par rapport a la moyenne des passages a kicks (x1,2 ou plus = pic), et gain des mediums + aigus sur 8 s et 20 s "
+                         "(montee quand ca grimpe vite, x1,5 en 8 s ou x1,8 en 20 s).")
 
         new_tab("Audio", fill_2)
 
@@ -760,16 +783,26 @@ def install(c):
     # ---- rythme detecte : tempo automatique, montee / drop automatiques, changement de scene au drop
     rhythm_ui: dict = {"drops": None, "builds": None, "auto_build": False}
 
-    def handle_drop() -> None:
-        """Un drop vient d'etre detecte (retour des basses apres une cassure)."""
-        auto = float(params.get("drop_auto", 0.0)) >= 0.5
+    def auto_on() -> bool:
+        """Montee / drop automatiques : plus de case a part. Ils partent des qu'une fonction intelligente les utilise : « Phases auto » (la phase
+        montee / le passage au pic les declenchent) ou « Strobe auto » (ses eclairs de montee et de drop). `drop_auto` reste lu pour les anciens fichiers."""
+        return any(float(params.get(k, 0.0)) >= 0.5 for k in ("auto_phase", "strobe_auto", "drop_auto"))
+
+    def handle_drop(why: str = "drop (retour des basses)") -> None:
+        """Un drop vient d'etre detecte (retour des basses apres une cassure, ou passage de la montee au pic)."""
+        auto = auto_on()
+        recent = time.monotonic() - rhythm_ui.get("t_drop", -99.0) < 4.0       # deux detecteurs voient le meme drop : un seul flash
         if auto and build_ui["t0"] is not None:
+            params["strobe_why"] = why
             do_drop()                                        # relache la montee : flash + eclair
-        elif auto:
+            rhythm_ui["t_drop"] = time.monotonic()
+        elif auto and not recent:
             s.commands.put("flash")
+            params["strobe_why"] = why
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+            rhythm_ui["t_drop"] = time.monotonic()
             scene_msg.set("DROP detecte")
-        else:
+        elif not auto:
             scene_msg.set("Drop detecte")
         rhythm_ui["auto_build"] = False
         if vj["running"] and scene_book.vj().get("on_drop"):
@@ -791,14 +824,16 @@ def install(c):
                 sync_master_panel()
         if int(r.builds) != rhythm_ui["builds"]:
             rhythm_ui["builds"] = int(r.builds)
-            if float(params.get("drop_auto", 0.0)) >= 0.5 and build_ui["t0"] is None:
+            if auto_on() and build_ui["t0"] is None:
                 start_build()
                 rhythm_ui["auto_build"] = True
+                rhythm_ui["auto_src"] = "rhythm"
                 scene_msg.set("Cassure detectee : montee automatique")
+        phase_step()
         if int(r.drops) != rhythm_ui["drops"]:
             rhythm_ui["drops"] = int(r.drops)
             handle_drop()
-        elif rhythm_ui["auto_build"]:
+        elif rhythm_ui["auto_build"] and rhythm_ui.get("auto_src", "rhythm") == "rhythm":
             if build_ui["t0"] is None:
                 rhythm_ui["auto_build"] = False
             elif r.state == "idle":                          # la cassure s'est terminee sans drop : la montee automatique est annulee
@@ -813,6 +848,37 @@ def install(c):
                         vj_ui.pop("build", None)
 
     BPM_HOLD_S = 4.0                                         # le BPM reste affiche ce temps apres l'avoir perdu (pas de clignotement)
+
+    def phase_step() -> None:
+        """Montee et drop par les PHASES du morceau (en plus des evenements du detecteur de rythme) : quand la phase « montee » est reconnue
+        (energie qui monte sans kick), la montee demarre ; le passage au « pic » apres une montee ou une cassure est le drop ; une montee qui
+        retombe (ambiance, groove) est annulee. Seulement si la montee / le drop automatiques sont actifs (voir `auto_on`)."""
+        info = s.status.get("phase_info") or {}
+        name = info.get("name") if (info and float(params.get("auto_phase", 1.0)) >= 0.5) else None
+        prev, rhythm_ui["phase"] = rhythm_ui.get("phase"), name
+        drops = int(info.get("drops", 0)) if info else 0
+        seen, rhythm_ui["pdrops"] = rhythm_ui.get("pdrops"), drops
+        if seen is not None and drops != seen and name is not None and auto_on():
+            handle_drop("drop (retour du kick)")             # le kick revient apres un vide : le drop part sur CE kick, sans attendre que la phase change
+        if name == prev or not auto_on():
+            return
+        if name == "build" and build_ui["t0"] is None:
+            start_build()
+            rhythm_ui["auto_build"] = True
+            rhythm_ui["auto_src"] = "phase"
+            scene_msg.set("Montee detectee (l'energie monte) : montee automatique")
+        elif name == "peak" and prev in ("build", "break") and (build_ui["t0"] is not None or rhythm_ui["auto_build"]):
+            handle_drop("drop (passage au pic)")
+        elif name not in ("build", "break", "peak") and rhythm_ui["auto_build"] and rhythm_ui.get("auto_src") == "phase":
+            build_ui["t0"] = None                            # la montee detectee a retombe sans drop : annulee
+            params["build"] = 0.0
+            rhythm_ui["auto_build"] = False
+            btn = vj_ui.get("build")
+            if btn is not None:
+                try:
+                    btn.configure(text=build_text())
+                except tk.TclError:
+                    vj_ui.pop("build", None)
 
     def kick_tick() -> None:
         """Voyant de la barre : s'allume a chaque kick detecte, avec le BPM detecte (et la cassure / montee reperee)."""

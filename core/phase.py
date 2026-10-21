@@ -60,11 +60,30 @@ TOP_MIN_RATIO = 1.5           # et ont gagne au moins ce rapport sur la fenetre
 BUILD_SLOPE = 0.04            # pente du log de l'energie (par seconde) d'une montee : elle double en ~17 s
 KICK_WINDOW_S = 4.0
 TREND_WINDOW_S = 8.0
+LONG_WINDOW_S = 20.0
+DROP_GAP_S = 1.5              # vide de kicks (au moins) avant le drop
+DROP_CONFIRM_S = 1.5          # un second kick dans ce delai confirme le retour
+DROP_MIN_PHASE_S = 3.0        # montee / cassure installee depuis au moins cela
+LONG_SLOPE = 0.03             # montee lente : x1,8 en 20 s
+LONG_GAIN = 1.8
 MIN_DWELL_S = 4.0             # une phase dure au moins cela
 ENTER_S = {"silence": 2.5, "ambient": 2.5, "groove": 1.5, "build": 1.5, "break": 1.5, "peak": 1.5}
 MULT_TAU_S = 2.5              # glissement des multiplicateurs vers le profil de la phase
 BUILD_MAX_S = 40.0
 BUILD_RAMP_S = 16.0           # la montee gagne en intensite sur ce temps
+
+
+def _trend_of(trend, window: float) -> tuple[float, float]:
+    """(pente du log par seconde, gain) de la courbe `trend` [(t, log)] sur les `window` dernieres secondes ; (0, 1) tant qu'il n'y a pas assez de recul."""
+    if len(trend) < 6:
+        return 0.0, 1.0
+    now = trend[-1][0]
+    first = next((p for p in trend if now - p[0] <= window), trend[-1])
+    span = now - first[0]
+    if span < 0.7 * window:
+        return 0.0, 1.0
+    d = trend[-1][1] - first[1]
+    return d / span, math.exp(d)
 
 
 class PhaseTracker:
@@ -96,6 +115,13 @@ class PhaseTracker:
         self._top_trend: deque[tuple[float, float]] = deque()
         self._top_slope = 0.0
         self._top_gain = 1.0
+        self._rate = 0.0
+        self._last_kick: float | None = None
+        self._drop_arm: float | None = None
+        self.drops = 0                     # nombre de drops vus (le kick revient apres un vide pendant une montee / cassure)
+        self._slope_long = 0.0              # memes mesures sur 20 s : une montee lente (16 mesures) gagne trop peu sur 8 s
+        self._top_slope_long = 0.0
+        self._top_gain_long = 1.0
         self._mult = dict(NEUTRAL)
         self._build_t: float | None = None
         self._grooving = False
@@ -113,6 +139,7 @@ class PhaseTracker:
         bass, mid, high = (max(float(levels.get(k, 0.0)), 0.0) for k in ("raw_bass", "raw_mid", "raw_high"))
         if beat:
             self._kicks.append(now)
+            self._early_drop(now)
         while self._kicks and now - self._kicks[0] > KICK_WINDOW_S:
             self._kicks.popleft()
         rate = len(self._kicks) / KICK_WINDOW_S
@@ -134,23 +161,22 @@ class PhaseTracker:
             self._bass_share += (bass / total - self._bass_share) * 0.1
             self._bright += ((mid + 2.0 * high) / (total + high) - self._bright) * 0.05
         rate = len(self._kicks) / KICK_WINDOW_S
+        self._rate = rate
         self._density = min(rate / (max(bpm, 60.0) / 60.0), 1.0) if bpm else min(rate / 2.0, 1.0)
         self._grooving = self._density >= 0.55 or rate >= 1.2
         self._boost = self._e / self._mean if self._mean > 0.0 else 1.0
         if now - self._trend_at >= 0.5:
             self._trend_at = now
             self._trend.append((now, math.log(max(self._e, 1e-5))))
-            while self._trend and now - self._trend[0][0] > TREND_WINDOW_S:
+            while self._trend and now - self._trend[0][0] > LONG_WINDOW_S:
                 self._trend.popleft()
             self._top_trend.append((now, math.log(max(self._top, 1e-5))))
-            while self._top_trend and now - self._top_trend[0][0] > TREND_WINDOW_S:
+            while self._top_trend and now - self._top_trend[0][0] > LONG_WINDOW_S:
                 self._top_trend.popleft()
-            if len(self._top_trend) >= 6:
-                span = max(self._top_trend[-1][0] - self._top_trend[0][0], 1e-6)
-                self._top_gain = math.exp(self._top_trend[-1][1] - self._top_trend[0][1])
-                self._top_slope = (self._top_trend[-1][1] - self._top_trend[0][1]) / span
-            if len(self._trend) >= 6:
-                self._slope = (self._trend[-1][1] - self._trend[0][1]) / max(self._trend[-1][0] - self._trend[0][0], 1e-6)
+            self._slope, _ = _trend_of(self._trend, TREND_WINDOW_S)
+            self._top_slope, self._top_gain = _trend_of(self._top_trend, TREND_WINDOW_S)
+            self._slope_long, _ = _trend_of(self._trend, LONG_WINDOW_S)
+            self._top_slope_long, self._top_gain_long = _trend_of(self._top_trend, LONG_WINDOW_S)
         sil, calm, quiet, build_min = thresholds(self._mean)
         if self._e < sil:
             if self._silent_since is None:
@@ -161,6 +187,20 @@ class PhaseTracker:
         self._ease(dt)
         return self.phase
 
+    def _early_drop(self, now: float) -> None:
+        """Le drop au bon moment : en montee / cassure, le premier kick qui revient apres un vide, confirme par un second kick dans la seconde et demie,
+        declenche `drops` tout de suite (changer de phase demande 1,5 s de confirmation : le flash arriverait en retard)."""
+        gap = now - self._last_kick if self._last_kick is not None else 1e9
+        self._last_kick = now
+        if not (self.phase in ("build", "break") or (self.phase == "ambient" and now - self._recent_groove < 20.0)) or now - self.since < DROP_MIN_PHASE_S:
+            self._drop_arm = None
+            return
+        if gap >= DROP_GAP_S:
+            self._drop_arm = now
+        elif self._drop_arm is not None and now - self._drop_arm <= DROP_CONFIRM_S:
+            self.drops += 1
+            self._drop_arm = None
+
     def _classify(self, now: float, kick_rate: float, rhythm_state: str, calm: float = CALM_ABS, quiet: float = QUIET_ABS, build_min: float = BUILD_MIN) -> str:
         if now - (now if self.t0 is None else self.t0) < WARMUP_S:
             return self.phase
@@ -170,7 +210,9 @@ class PhaseTracker:
         kicks_on = self._density >= 0.55 or kick_rate >= 1.2
         if kicks_on:
             if self._top > build_min * 0.5 and self.phase in ("groove", "build"):
-                if self.phase == "groove" and self._top_slope > TOP_SLOPE and self._top_gain >= TOP_MIN_RATIO and now - self.since >= TREND_WINDOW_S:
+                fast = self._top_slope > TOP_SLOPE and self._top_gain >= TOP_MIN_RATIO
+                slow = self._top_slope_long > LONG_SLOPE and self._top_gain_long >= LONG_GAIN
+                if self.phase == "groove" and ((fast and now - self.since >= TREND_WINDOW_S) or (slow and now - self.since >= LONG_WINDOW_S)):
                     return "build"                             # montee avec kicks : les mediums / aigus s'envolent
                 if self.phase == "build" and self._build_t is not None and now - self._build_t < BUILD_MAX_S and self._top_slope > 0.0:
                     return "build"
@@ -178,7 +220,7 @@ class PhaseTracker:
             if self._boost >= limit and self._bass_share >= min(0.3, 0.7 * self._share_mean) and self._e > 2.0 * calm / 3.0:
                 return "peak"
             return "groove"
-        rising = self._slope > BUILD_SLOPE and self._e > build_min and kick_rate < 0.5 and self.phase in ("ambient", "break", "groove", "build")
+        rising = (self._slope > BUILD_SLOPE or self._slope_long > LONG_SLOPE) and self._e > build_min and kick_rate < 0.5 and self.phase in ("ambient", "break", "groove", "build")
         if rhythm_state == "build" or rising:
             return "build"
         if (self.phase == "build" and self._build_t is not None and now - self._build_t < BUILD_MAX_S and self._slope > -0.01
@@ -221,7 +263,8 @@ class PhaseTracker:
         """Etat lisible sans verrou : nom de la phase, depuis quand, mesures et multiplicateurs lisses."""
         return {"name": self.phase, "label": LABELS[self.phase], "since": self.since, "energy": round(self._boost, 3),
                 "density": round(self._density, 3), "bass": round(self._bass_share, 3), "bright": round(self._bright, 3),
-                "slope": round(self._slope, 4), "mult": dict(self._mult)}
+                "slope": round(self._slope, 4), "kicks": round(self._rate, 2), "top8": round(self._top_gain, 2),
+                "top20": round(self._top_gain_long, 2), "drops": self.drops, "mult": dict(self._mult)}
 
 
 def apply_to_params(params: dict, snapshot: dict | None) -> str:

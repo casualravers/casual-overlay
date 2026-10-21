@@ -18,6 +18,7 @@ def effective_tempo(p: dict) -> float:
 def strobe_press(params: dict) -> None:
     """Appui sur le strobe (bouton ou touche S) : manuel = eclairs tant que c'est maintenu ; kick / cadence = arme ou desarme."""
     params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+    params["strobe_why"] = ""
     if params.get("strobe_mode", "manual") == "manual":
         params["strobe_on"] = 1.0
     else:

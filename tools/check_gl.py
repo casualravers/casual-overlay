@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import sys
+
+os.environ.setdefault("CASUAL_NO_EXPAND", "1")        # les tests partent d'un panneau replie (le vrai programme etend le Mode VJ au lancement)
 import tempfile
 import time
 from pathlib import Path
@@ -1240,6 +1242,8 @@ def check_gui() -> None:
           str(out.get("x_sched")))
     check(out.get("x_grid_vj") == (True,) * 6,
           "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
+    check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
+          str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
@@ -2597,6 +2601,23 @@ def check_phase() -> None:
         return names2
     n_rise = rise(6.0)
     check(any(n == "build" and tt2 > 40 for tt2, n in n_rise), "phases: les mediums / aigus qui montent avec les kicks = montee", str(n_rise))
+    n_slow = rise(4.0, seconds=40)
+    check(any(n == "build" and tt2 > 40 for tt2, n in n_slow), "phases: une montee lente (x4 en 40 s) avec les kicks est reconnue", str(n_slow))
+    # drop au bon moment : le kick revient apres un vide, le drop part sur ce kick (avant que la phase ait change)
+    pd, td, nx, drop_at, phase_then = ph.PhaseTracker(), 0.0, 0.0, [], None
+    while td < 75:
+        gap = 38 <= td < 50                               # 12 s sans kick au milieu
+        beat = (not gap) and td >= nx
+        if beat:
+            nx = td + k
+        before = pd.drops
+        pd.update(td, {"raw_rms": 0.02 if gap else 0.08, "raw_bass": 0.0 if gap else 0.04, "raw_mid": 0.02, "raw_high": 0.01}, beat, "idle", None if gap else 128.0)
+        if pd.drops != before:
+            drop_at.append(round(td, 2))
+            phase_then = pd.phase
+        td += 0.05
+    check(len(drop_at) == 1 and 50 <= drop_at[0] <= 51.5 and phase_then in ("break", "build", "ambient"),
+          "phases: le drop part sur le kick qui revient apres le vide (avant le changement de phase), une seule fois", str((drop_at, phase_then)))
     n_flat = rise(1.0)
     check(all(n != "build" for _, n in n_flat), "phases: un groove stable n'est jamais une montee", str(n_flat))
     # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau
@@ -3628,7 +3649,7 @@ def gui_expand_steps(c, s, out) -> None:
                        and "DROP" in c["scenes"]["msg"].get())
     while not s.commands.empty():
         s.commands.get_nowait()
-    params["drop_auto"] = 0.0
+    params["drop_auto"], params["auto_phase"] = 0.0, 0.0
     fake_rhythm.builds, fake_rhythm.state = 2, "build"
     vjc["rhythm_step"]()
     kick_lbl = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Label" and str(w.cget("text")).startswith("\u25cf")]
@@ -3661,6 +3682,41 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     out["x_rhythm_vj"] = (before_idx != after_idx, s.active_entry == after_idx)         # sur le drop le VJ avance ; reglage coupe : il reste
     vjc["state"]["running"] = False
+    # montee / drop automatiques par les phases du morceau, pilotes par « Strobe auto » (faux detecteur de phase)
+    def phase_at(name):
+        s.status["phase_info"] = {"name": name} if name else None
+        vjc["rhythm_step"]()
+
+    def pump(seconds):
+        t_end_ = time.monotonic() + seconds
+        while time.monotonic() < t_end_:
+            root.update()
+            time.sleep(0.03)
+    params["drop_auto"], params["strobe_auto"], params["auto_phase"] = 0.0, 0.0, 0.0
+    phase_at(None)
+    msg_before = c["scenes"]["msg"].get()
+    phase_at("build")
+    off_quiet = c["scenes"]["msg"].get() == msg_before and params["build"] == 0.0         # strobe auto coupe : rien ne part tout seul
+    phase_at(None)
+    params["auto_phase"] = 1.0                                                              # les phases suffisent (Strobe auto n'est pas necessaire)
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    phase_at("build")
+    pump(0.25)
+    started = "montee" in c["scenes"]["msg"].get().lower() and params["build"] > 0.0
+    hits_before = params["strobe_hits"]
+    phase_at("peak")
+    dropped = (params["build"] == 0.0 and params["strobe_hits"] == hits_before + 1 and not s.commands.empty()
+               and params["strobe_why"] == "drop (passage au pic)" and "DROP" in c["scenes"]["msg"].get())
+    phase_at(None)
+    phase_at("build")
+    pump(0.25)
+    running_again = params["build"] > 0.0
+    phase_at("groove")
+    pump(0.2)
+    cancelled = params["build"] == 0.0                                                    # la montee retombe sans drop : annulee
+    s.status["phase_info"], params["strobe_auto"] = None, 0.0
+    out["x_phase_build"] = (off_quiet, started, dropped, running_again, cancelled)
     # palette de commandes
     pc = c["palette"]
     labels_ = [lab for lab, _kw, _fn in pc.items()]
@@ -4675,6 +4731,9 @@ def check_strobe_auto() -> None:
     first, second = [f for f, _ in build if f < 8.0], [f for f, _ in build if f >= 8.0]
     check(22 <= len(build) <= 32 and len(second) > len(first) * 1.5 and all(d == sa.DARK_BUILD for _, d in build),
           "strobe auto: pendant une montee la cadence accelere (0,5 puis jusqu'a 4 Hz)", f"{len(build)} eclairs, {len(first)} puis {len(second)}")
+    busy = sa.StrobeBrain()
+    quiet_ = [busy.update(100.0 + i * 0.05, "peak" if i > 10 else "build", 0.0, 1, 1, 0, busy=True)[0] for i in range(60)]
+    check(not any(quiet_) and not busy.update(103.5, "peak", 0.0, 0, 0, None)[0], "strobe auto: pendant une montee en cours le cerveau se tait (c'est la montee qui eclaire), meme au passage au pic")
     from core import controls
     pp = {"strobe_auto": 1.0}
     controls.panic(pp)

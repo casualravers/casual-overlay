@@ -2303,6 +2303,15 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     on_page_config()
     after(400, lambda: (layout.__setitem__("settled", True), on_page_config()))
 
+    def open_panel_by_default() -> None:
+        """Au premier affichage le Mode VJ est etendu (la liste des scenes et l'espace de controle sont la, pas caches) ; une seule fois par session."""
+        if os.environ.get("CASUAL_NO_EXPAND") or getattr(s, "expand_default_done", False):
+            return
+        s.expand_default_done = True
+        set_expanded(True)
+
+    after(900, open_panel_by_default)
+
     def watch_page() -> None:
         """La taille VOULUE de la page change sans que la page change de taille (section « Affichage et analyse » qu'on ouvre, onglet plus haut,
         panneau etendu) : aucun <Configure>, donc ni ascenseur ni zone de defilement. On la surveille."""
