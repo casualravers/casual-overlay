@@ -2579,6 +2579,26 @@ def check_phase() -> None:
     check("build" in names[:8] and "peak" in names and "break" in names, "phases: montee, pic et cassure detectes", str(names))
     check(all(b - a >= ph.MIN_DWELL_S - 0.1 for (a, _), (b, _) in zip(seq[1:], seq[2:])), "phases: chaque phase dure au moins 4 s (hysteresis)", str(seq))
     check(seq[-1][1] == "silence", "phases: le silence final est reconnu", str(seq[-3:]))
+    # montee AVEC kicks (le kick continue, un riser / roulement fait monter les mediums et aigus) : montee, pas groove
+    def rise(top_end, seconds=20, steady=40, kick=True):
+        pt2, tt2, nxt2, names2 = ph.PhaseTracker(), 0.0, 0.0, []
+        total = steady + seconds
+        while tt2 < total:
+            f = min(max((tt2 - steady) / seconds, 0.0), 1.0)
+            top = 0.02 * (top_end ** f)
+            bass = 0.06
+            beat = kick and tt2 >= nxt2
+            if beat:
+                nxt2 = tt2 + k
+            nm = pt2.update(tt2, {"raw_rms": bass + top, "raw_bass": bass, "raw_mid": top * 0.6, "raw_high": top * 0.4}, beat, "idle", 128.0 if kick else None)
+            if not names2 or names2[-1][1] != nm:
+                names2.append((tt2, nm))
+            tt2 += 0.05
+        return names2
+    n_rise = rise(6.0)
+    check(any(n == "build" and tt2 > 40 for tt2, n in n_rise), "phases: les mediums / aigus qui montent avec les kicks = montee", str(n_rise))
+    n_flat = rise(1.0)
+    check(all(n != "build" for _, n in n_flat), "phases: un groove stable n'est jamais une montee", str(n_flat))
     # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau
     soft = [(d, (lambda f, r=r: r(f) * 0.2) if callable(r) else r * 0.2, per, sh, st) for d, r, per, sh, st in segs]
     soft_seq, _ = run(soft)

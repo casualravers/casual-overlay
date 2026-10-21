@@ -5,7 +5,7 @@ boucle de rendu qui en tire des multiplicateurs (`PhaseTracker.snapshot()["mult"
 
 Ce qui est regarde :
   * l'energie (rms brut, lisse sur ~1 s) comparee a la moyenne de l'energie PENDANT LES PASSAGES A KICKS (constante de temps 40 s, amorcee au premier
-    passage a kicks) : un morceau regulier est « groove », le « pic » est un passage nettement plus fort que d'habitude ; planchers absolus pour le
+    passage a kicks) : un morceau regulier est Â« groove Â», le Â« pic Â» est un passage nettement plus fort que d'habitude ; planchers absolus pour le
     silence et l'ambiance ;
   * la densite de kicks (kicks des 4 dernieres secondes rapportes au tempo detecte) et le temps depuis le dernier ;
   * la repartition des bandes (part des basses, luminosite = poids des aigus) ;
@@ -46,15 +46,17 @@ def thresholds(mean: float) -> tuple[float, float, float, float]:
             min(QUIET_ABS, max(0.003, 0.30 * mean)), min(BUILD_MIN, max(0.004, 0.25 * mean)))
 
 
-WARMUP_S = 3.0                # avant cela on ne sait rien : phase « ambient »
+WARMUP_S = 3.0                # avant cela on ne sait rien : phase Â« ambient Â»
 SILENCE_ABS = 0.002           # rms brut (1 = pleine echelle) sous lequel c'est du silence (~ -54 dBFS) ; plus bas quand le morceau est faible (voir `_thresholds`)
 CALM_ABS = 0.012              # sous cela l'energie est faible quelle que soit la moyenne
 QUIET_ABS = 0.04              # sans kick, sous cette energie : ambiance
 MEAN_TAU_S = 40.0
 E_TAU_S = 1.0
-PEAK_BOOST = 1.2              # energie / moyenne pour entrer en « pic » (on en sort sous PEAK_KEEP)
+PEAK_BOOST = 1.2              # energie / moyenne pour entrer en Â« pic Â» (on en sort sous PEAK_KEEP)
 PEAK_KEEP = 1.08
 BUILD_MIN = 0.03              # une montee se reconnait au-dessus de cette energie (une entree en douceur depuis le silence n'en est pas une)
+TOP_SLOPE = 0.07            # montee AVEC kicks : les mediums / aigus (riser, roulement de caisse claire) doublent en ~7 s
+TOP_MIN_RATIO = 1.5           # et ont gagne au moins ce rapport sur la fenetre
 BUILD_SLOPE = 0.04            # pente du log de l'energie (par seconde) d'une montee : elle double en ~17 s
 KICK_WINDOW_S = 4.0
 TREND_WINDOW_S = 8.0
@@ -90,6 +92,10 @@ class PhaseTracker:
         self._bass_share = 0.0
         self._density = 0.0
         self._slope = 0.0
+        self._top = 0.0                     # energie lissee des mediums + aigus (une montee avec kicks se voit la, pas dans le total)
+        self._top_trend: deque[tuple[float, float]] = deque()
+        self._top_slope = 0.0
+        self._top_gain = 1.0
         self._mult = dict(NEUTRAL)
         self._build_t: float | None = None
         self._grooving = False
@@ -113,6 +119,7 @@ class PhaseTracker:
         self._grooving = self._density >= 0.55 or rate >= 1.2          # (etat du pas precedent pour l'amorce)
         if dt > 0:
             self._e += (rms - self._e) * (1.0 - math.exp(-dt / E_TAU_S))
+            self._top += (mid + high - self._top) * (1.0 - math.exp(-dt / E_TAU_S))
             if self._grooving:
                 if self._mean <= 0.0:
                     self._mean = max(self._e, CALM_ABS)       # amorce : la moyenne part du premier passage a kicks, pas de zero
@@ -135,6 +142,13 @@ class PhaseTracker:
             self._trend.append((now, math.log(max(self._e, 1e-5))))
             while self._trend and now - self._trend[0][0] > TREND_WINDOW_S:
                 self._trend.popleft()
+            self._top_trend.append((now, math.log(max(self._top, 1e-5))))
+            while self._top_trend and now - self._top_trend[0][0] > TREND_WINDOW_S:
+                self._top_trend.popleft()
+            if len(self._top_trend) >= 6:
+                span = max(self._top_trend[-1][0] - self._top_trend[0][0], 1e-6)
+                self._top_gain = math.exp(self._top_trend[-1][1] - self._top_trend[0][1])
+                self._top_slope = (self._top_trend[-1][1] - self._top_trend[0][1]) / span
             if len(self._trend) >= 6:
                 self._slope = (self._trend[-1][1] - self._trend[0][1]) / max(self._trend[-1][0] - self._trend[0][0], 1e-6)
         sil, calm, quiet, build_min = thresholds(self._mean)
@@ -155,6 +169,11 @@ class PhaseTracker:
         since_kick = now - self._kicks[-1] if self._kicks else 1e9
         kicks_on = self._density >= 0.55 or kick_rate >= 1.2
         if kicks_on:
+            if self._top > build_min * 0.5 and self.phase in ("groove", "build"):
+                if self.phase == "groove" and self._top_slope > TOP_SLOPE and self._top_gain >= TOP_MIN_RATIO and now - self.since >= TREND_WINDOW_S:
+                    return "build"                             # montee avec kicks : les mediums / aigus s'envolent
+                if self.phase == "build" and self._build_t is not None and now - self._build_t < BUILD_MAX_S and self._top_slope > 0.0:
+                    return "build"
             limit = PEAK_KEEP if self.phase == "peak" else PEAK_BOOST
             if self._boost >= limit and self._bass_share >= min(0.3, 0.7 * self._share_mean) and self._e > 2.0 * calm / 3.0:
                 return "peak"
@@ -206,8 +225,8 @@ class PhaseTracker:
 
 
 def apply_to_params(params: dict, snapshot: dict | None) -> str:
-    """Ecrit dans `params` les multiplicateurs de la phase (`phase_tempo`, `phase_react`...) lus par le rendu et l'automation. Sans « phases auto »
-    (`auto_phase` < 0,5) ou sans mesure, tout est neutre. Rend le nom de la phase appliquee (« neutre » si aucune)."""
+    """Ecrit dans `params` les multiplicateurs de la phase (`phase_tempo`, `phase_react`...) lus par le rendu et l'automation. Sans Â« phases auto Â»
+    (`auto_phase` < 0,5) ou sans mesure, tout est neutre. Rend le nom de la phase appliquee (Â« neutre Â» si aucune)."""
     on = snapshot is not None and float(params.get("auto_phase", 1.0)) >= 0.5
     mult = snapshot["mult"] if on else NEUTRAL
     for key in KEYS:
