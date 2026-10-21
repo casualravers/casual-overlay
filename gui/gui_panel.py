@@ -415,7 +415,7 @@ def install(c):
         fill_library(lib, rows)
         filter_var.trace_add("write", lambda *_: refresh_library(scene_book.rows()))
         Tooltip(tv, "Toutes les scenes enregistrees, rangees par dossier (nom `dossier/scene`) avec les favoris en tete. Glisse une scene sur la liste du set "
-                    "pour l'y ajouter a cet endroit (autant de fois que tu veux), double-clic = a la fin, clic droit = jouer la scene / favori / renommer / ranger / garder. "
+                    "pour l'y ajouter a cet endroit (autant de fois que tu veux), double-clic = a la fin, clic droit = jouer cette scene / favori / renommer / ranger / garder. "
                     "\u00d7N = nombre d'entrees dans ce set.")
 
         def folder_of(iid: str) -> str:
@@ -520,7 +520,7 @@ def install(c):
             tv.selection_set(tv.identify_row(e.y))
             starred = any(x["name"] == name and x.get("star") for x in scene_book.list())
             m = tk.Menu(tv, tearoff=0)
-            m.add_command(label="Jouer la scene", command=lambda: apply_scene(name))
+            m.add_command(label="Jouer cette scene", command=lambda: apply_scene(name))
             m.add_separator()
             m.add_command(label="Ajouter a la fin du set", command=lambda: add_at(name, None))
             m.add_command(label="Retirer des favoris" if starred else "Mettre en favori", command=lambda: star_now(name))

@@ -1292,7 +1292,7 @@ def check_gui() -> None:
     check(out.get("x_select") == (True,) * 7, "etendu (GUI): lignes cochees : VJ off / on, duree, dupliquer, copier vers un autre set, retirer", str(out.get("x_select")))
     panel_src = Path(ROOT, "gui", "gui_panel.py").read_text(encoding="utf-8")
     main_src = Path(ROOT, "gui", "gl_gui.py").read_text(encoding="utf-8")
-    check('label="Jouer la scene"' in panel_src and "apply_scene=apply_scene" in main_src and "LIBRARY_DEFAULT" in panel_src,
+    check('label="Jouer cette scene"' in panel_src and "apply_scene=apply_scene" in main_src and "LIBRARY_DEFAULT" in panel_src,
           "bibliotheque (GUI): clic droit > Jouer la scene (applique la scene comme un choix a la main), colonne ouverte par defaut")
     check(out.get("x_library") == (True,) * 4, "etendu (GUI): bibliotheque a gauche du set, glisser une scene sur la liste l'ajoute au rang vise", str(out.get("x_library")))
     check(out.get("x_plus5") == (True,) * 5,
