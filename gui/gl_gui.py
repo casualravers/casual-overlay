@@ -111,7 +111,7 @@ def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> 
 
 
 MIN_WIN_W, MIN_WIN_H = 940, 420   # en dessous, le panneau d'audio2wave seul ne tient plus
-LIVE_MAX_HEIGHT = 600           # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
+LIVE_MAX_HEIGHT = 585         # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "snap": "SNAP  -  photo de l'onde (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)",
@@ -1422,6 +1422,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # rendu). Une scene = (fond audio2wave OU motif genere) + overlay, voir scenes.py.
     scene_book = scenes.SceneBook(lambda: scenes.SCENES_PATH)
     scene_msg = tk.StringVar(value="")
+    # Messages (scene appliquee, media, VJ...) : une ligne a part sous la barre, de hauteur constante ; sur la barre ils volaient la place des touches
+    scene_msg_label = tk.Label(scene_top, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left")
+    scene_msg_label.pack(fill="x", padx=10, pady=(0, 2), after=scene_bar)
     if not getattr(s, "diag_shown", False):       # une fois : ce que le diagnostic de demarrage a signale
         s.diag_shown = True
         scene_msg.set(diagnostics.summary_line(getattr(getattr(s, "args", None), "diag_checks", None) or []))

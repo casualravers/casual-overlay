@@ -279,8 +279,6 @@ def install(c):
                          + "Glisse un fichier (image / video) dessus pour lui lier un media. "
                          + "Clic droit: mettre a jour, media, deplacer, retirer, supprimer.")
         strip.pack(side="left", fill="x", expand=True, padx=2, pady=0)
-        tk.Label(scene_bar, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="e").pack(
-            side="right", padx=10)
         if proj_ui.get("strip_h") is None:                    # hauteur des touches : mesuree une fois (update_idletasks coute ~100 ms a chaque fois)
             with STATS.timed("bar.mesure"):
                 scene_bar.update_idletasks()
