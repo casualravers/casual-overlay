@@ -5,7 +5,8 @@ Python pur (stdlib seulement, temps injecte). Aucun reglage : l'operateur arme �
   * silence, ambiance, cassure : jamais d'eclair (le noir fait partie du morceau) ;
   * groove : un petit accent de temps en temps (un eclair discret qui ne blanchit que les parties sombres de l'image) : le « 1 » de la mesure (au plus
     toutes les ~4 mesures) si la grille du temps est connue, sinon une frappe des aigus (clap, caisse claire) espacee de 3 s, sinon un kick sur 16 ;
-  * montee : cadence qui accelere avec la montee (0,5 Hz au depart, 4 Hz apres 16 s, courbe en carre) ;
+  * montee : la montee (reglage « build ») est lancee toute seule par l'interface des que la phase « montee » est detectee ; elle eclaire elle-meme.
+    Sans interface (ou si elle n'est pas lancee) le cerveau suit : cadence qui accelere avec la montee (0,5 Hz au depart, 4 Hz apres 16 s, courbe en carre) ;
   * drop : le passage en « pic » apres une montee ou une cassure donne UN gros eclair blanc ;
   * pic : un eclair sur chaque kick (3 par seconde au plus), toute l'image.
 Le limiteur de securite du strobe (cadence maximale, duree d'une rafale) reste applique par le rendu a tous les eclairs.
@@ -35,10 +36,15 @@ class StrobeBrain:
         self.kicks = 0
         self.reason = ""                       # pourquoi le dernier eclair est parti (affiche dans l'interface)
 
-    def update(self, now: float, phase: str | None, since: float | None, kicks: int, hits: int, beat_index: int | None = None) -> tuple[bool, float]:
+    def update(self, now: float, phase: str | None, since: float | None, kicks: int, hits: int, beat_index: int | None = None,
+               busy: bool = False) -> tuple[bool, float]:
         """Un pas (une image). `kicks` / `hits` : nouveaux kicks / frappes aigues depuis le pas precedent ; `since` : instant ou la phase a commence.
-        Rend (eclair a partir maintenant, seuil de luminosite de cet eclair)."""
+        Rend (eclair a partir maintenant, seuil de luminosite de cet eclair). `busy` : une montee est en cours (automatique ou manuelle), c'est elle
+        qui eclaire (cadence jusqu'a 16 Hz, eclair du drop) : le cerveau se tait pour ne pas doubler les eclairs."""
         prev, self.prev = self.prev, phase
+        if busy:
+            self.kicks = 0
+            return False, 1.0
         if phase is None or phase in SILENT_PHASES:
             self.kicks = 0
             return False, 1.0

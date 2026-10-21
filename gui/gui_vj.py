@@ -394,6 +394,7 @@ def install(c):
             toggle(f, "strobe_auto", "Strobe auto", "Le strobe decide seul quand eclairer, sans aucun reglage : jamais en silence, en ambiance ni en cassure ; "
                                                     "un accent discret de temps en temps en groove (sur le « 1 » si la grille est connue, sinon sur une frappe des "
                                                     "aigus) ; une cadence qui accelere pendant une montee ; un gros eclair au drop ; un eclair a chaque kick au pic. "
+                                                    "La montee et le drop partent aussi tout seuls (montee quand l'energie monte ou que les basses disparaissent, gros eclair au drop). "
                                                     "Le limiteur de securite (10 eclairs par seconde, rafales de 8 s) reste applique.",
                    row=0, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
             slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 45, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
@@ -760,16 +761,25 @@ def install(c):
     # ---- rythme detecte : tempo automatique, montee / drop automatiques, changement de scene au drop
     rhythm_ui: dict = {"drops": None, "builds": None, "auto_build": False}
 
-    def handle_drop() -> None:
-        """Un drop vient d'etre detecte (retour des basses apres une cassure)."""
-        auto = float(params.get("drop_auto", 0.0)) >= 0.5
+    def auto_on() -> bool:
+        """Montee / drop automatiques : la case « Montee / drop auto », ou « Strobe auto » (qui s'appuie sur eux pour ses eclairs de montee et de drop)."""
+        return float(params.get("drop_auto", 0.0)) >= 0.5 or float(params.get("strobe_auto", 0.0)) >= 0.5
+
+    def handle_drop(why: str = "drop (retour des basses)") -> None:
+        """Un drop vient d'etre detecte (retour des basses apres une cassure, ou passage de la montee au pic)."""
+        auto = auto_on()
+        recent = time.monotonic() - rhythm_ui.get("t_drop", -99.0) < 4.0       # deux detecteurs voient le meme drop : un seul flash
         if auto and build_ui["t0"] is not None:
+            params["strobe_why"] = why
             do_drop()                                        # relache la montee : flash + eclair
-        elif auto:
+            rhythm_ui["t_drop"] = time.monotonic()
+        elif auto and not recent:
             s.commands.put("flash")
+            params["strobe_why"] = why
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+            rhythm_ui["t_drop"] = time.monotonic()
             scene_msg.set("DROP detecte")
-        else:
+        elif not auto:
             scene_msg.set("Drop detecte")
         rhythm_ui["auto_build"] = False
         if vj["running"] and scene_book.vj().get("on_drop"):
@@ -791,14 +801,16 @@ def install(c):
                 sync_master_panel()
         if int(r.builds) != rhythm_ui["builds"]:
             rhythm_ui["builds"] = int(r.builds)
-            if float(params.get("drop_auto", 0.0)) >= 0.5 and build_ui["t0"] is None:
+            if auto_on() and build_ui["t0"] is None:
                 start_build()
                 rhythm_ui["auto_build"] = True
+                rhythm_ui["auto_src"] = "rhythm"
                 scene_msg.set("Cassure detectee : montee automatique")
+        phase_step()
         if int(r.drops) != rhythm_ui["drops"]:
             rhythm_ui["drops"] = int(r.drops)
             handle_drop()
-        elif rhythm_ui["auto_build"]:
+        elif rhythm_ui["auto_build"] and rhythm_ui.get("auto_src", "rhythm") == "rhythm":
             if build_ui["t0"] is None:
                 rhythm_ui["auto_build"] = False
             elif r.state == "idle":                          # la cassure s'est terminee sans drop : la montee automatique est annulee
@@ -811,6 +823,33 @@ def install(c):
                         btn.configure(text=build_text())
                     except tk.TclError:
                         vj_ui.pop("build", None)
+
+    def phase_step() -> None:
+        """Montee et drop par les PHASES du morceau (en plus des evenements du detecteur de rythme) : quand la phase « montee » est reconnue
+        (energie qui monte sans kick), la montee demarre ; le passage au « pic » apres une montee ou une cassure est le drop ; une montee qui
+        retombe (ambiance, groove) est annulee. Seulement si la montee / le drop automatiques sont actifs (voir `auto_on`)."""
+        info = s.status.get("phase_info") or {}
+        name = info.get("name") if (info and float(params.get("auto_phase", 1.0)) >= 0.5) else None
+        prev, rhythm_ui["phase"] = rhythm_ui.get("phase"), name
+        if name == prev or not auto_on():
+            return
+        if name == "build" and build_ui["t0"] is None:
+            start_build()
+            rhythm_ui["auto_build"] = True
+            rhythm_ui["auto_src"] = "phase"
+            scene_msg.set("Montee detectee (l'energie monte) : montee automatique")
+        elif name == "peak" and prev in ("build", "break") and (build_ui["t0"] is not None or rhythm_ui["auto_build"]):
+            handle_drop("drop (passage au pic)")
+        elif name not in ("build", "break", "peak") and rhythm_ui["auto_build"] and rhythm_ui.get("auto_src") == "phase":
+            build_ui["t0"] = None                            # la montee detectee a retombe sans drop : annulee
+            params["build"] = 0.0
+            rhythm_ui["auto_build"] = False
+            btn = vj_ui.get("build")
+            if btn is not None:
+                try:
+                    btn.configure(text=build_text())
+                except tk.TclError:
+                    vj_ui.pop("build", None)
 
     def kick_tick() -> None:
         """Voyant de la barre : s'allume a chaque kick detecte, avec le BPM detecte (et la cassure / montee reperee)."""
