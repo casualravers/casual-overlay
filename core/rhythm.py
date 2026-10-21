@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import math
 
+from core.tempo import TempoTracker
+
 BPM_LO, BPM_HI = 70.0, 180.0           # plage de repli : un tempo a la double ou a la moitie est ramene dans cette plage
 BPM_MIN_KICKS = 6                      # pas d'estimation avant ce nombre de kicks recents
 BPM_WINDOW_S = 24.0                    # on ne regarde que les kicks des dernieres secondes (le morceau change)
@@ -247,6 +249,8 @@ class Rhythm:
 
     def __init__(self) -> None:
         self.est = BpmEstimator()
+        self.tempo = TempoTracker()
+        self._from_tempo = False               # le BPM affiche vient du suivi de tempo (et non des kicks)
         self.drop = DropDetector()
         self.bpm: float | None = None
         self.confidence = 0.0
@@ -267,18 +271,36 @@ class Rhythm:
 
     def reset(self) -> None:
         self.est.reset()
+        self.tempo.reset()
         self.bpm, self.confidence, self._off, self._last_kick = None, 0.0, 0, None
         self.grid.clear()
         self.beat_index = None
 
     def _evaluate(self, now: float) -> None:
-        if self._last_kick is not None and now - self._last_kick > BPM_LOST_S:
+        tempo, tconf = self.tempo.estimate(now)             # periodicite du son, sans kick
+        lost = self._last_kick is not None and now - self._last_kick > BPM_LOST_S
+        if lost:
             self.est.reset()
-            self.bpm, self.confidence, self._off = None, 0.0, 0
             self.grid.clear()                       # plus de kick : la mesure est perdue, il faudra redonner le « 1 »
             self.beat_index = None
-            return
-        value, conf = self.est.estimate()
+            if tempo is None:
+                self.bpm, self.confidence, self._off = None, 0.0, 0
+                return
+            value, conf, from_tempo = tempo, tconf, True
+        else:
+            value, conf = self.est.estimate()
+            from_tempo = False
+            if value is None or conf < BPM_MIN_CONFIDENCE:
+                if tempo is not None:
+                    value, conf, from_tempo = tempo, tconf, True        # les kicks ne donnent rien (telephone, pas de kick franc) : le tempo du son
+                elif self._from_tempo:
+                    self.bpm, self._off, self._from_tempo = None, 0, False     # le tempo du son s'est perdu et les kicks n'ont rien : plus de BPM perime
+                    self.confidence = 0.0
+                    return
+            elif tempo is not None and abs(tempo / value / 2.0 - 1.0) < 0.05:
+                value, conf, from_tempo = tempo, max(conf, tconf), True     # kicks a la moitie du tempo du son : le tempo double est le bon
+        if value is not None and conf >= BPM_MIN_CONFIDENCE:
+            self._from_tempo = from_tempo
         self.confidence = conf
         if value is None or conf < BPM_MIN_CONFIDENCE:
             return
@@ -294,6 +316,8 @@ class Rhythm:
 
     def update(self, now: float, levels: dict, beat: bool = False) -> str | None:
         """Un pas d'analyse : `beat` = un kick vient d'etre detecte. Rend "build" / "drop" quand la montee ou le drop est detecte."""
+        if "flux" in levels:
+            self.tempo.feed(now, float(levels["flux"]))
         if beat:
             self.est.feed(now)
             self._last_kick = now

@@ -812,6 +812,8 @@ def install(c):
                     except tk.TclError:
                         vj_ui.pop("build", None)
 
+    BPM_HOLD_S = 4.0                                         # le BPM reste affiche ce temps apres l'avoir perdu (pas de clignotement)
+
     def kick_tick() -> None:
         """Voyant de la barre : s'allume a chaque kick detecte, avec le BPM detecte (et la cassure / montee reperee)."""
         lbl = vj_ui.get("kick")
@@ -821,13 +823,18 @@ def install(c):
                 on = float(latest.get("beat", 0.0)) > 0.4
                 r = rhythm_source()
                 det = detected_bpm()
+                now_ = time.monotonic()
+                if det:
+                    rhythm_ui["bpm_seen"] = (det, now_)
+                elif rhythm_ui.get("bpm_seen") and now_ - rhythm_ui["bpm_seen"][1] < BPM_HOLD_S:
+                    det = rhythm_ui["bpm_seen"][0]                 # la detection decroche un instant (kick manque) : la valeur reste affichee
                 text = "\u25cf " + (f"{det:.0f} BPM" if det else "-- BPM")
                 state = getattr(r, "state", "idle")
                 if state != "idle":
                     text += "  cassure" if state == "break" else "  MONTEE"
                 if lbl.cget("text") != text:
                     lbl.configure(text=text)
-                color = SCENE_COLOR if on else a2w.GUI_MUTED_FG
+                color = SCENE_COLOR if on else (a2w.GUI_FG if det else a2w.GUI_MUTED_FG)       # BPM fiable = texte clair, sinon grise
                 if str(lbl.cget("fg")) != color:
                     lbl.configure(fg=color)
         except tk.TclError:

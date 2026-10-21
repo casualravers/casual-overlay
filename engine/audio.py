@@ -25,6 +25,7 @@ PEAK_HALF_LIFE_S = 8.0       # decroissance du maximum glissant de l'auto-gain
 ATTACK_TAU_S = 0.02          # lissage: attaque rapide
 RELEASE_TAU_S = 0.25         # lissage: relachement lent
 KICK_MIN = 0.0002            # energie basses minimale pour declarer un kick (0,002 avant : un telephone ou un micro eloigne n'atteignait jamais ce niveau)
+FLUX_BAND = (40.0, 6000.0)   # bande du flux d'attaques (tempo sans kick, voir core.tempo)
 KICK_WIDE = (20.0, 400.0)    # bande large du critere de montee rapide (voir core.onset.WideRise)
 # Regles par balayage sur signaux synthetiques (voir CLAUDE.md): a sensibilite 1.0, zero
 # faux positif sur bruit blanc constant, kicks francs detectes meme a -30 dB de micro.
@@ -71,6 +72,9 @@ class FeatureExtractor:
         idx = np.nonzero((freqs >= KICK_WIDE[0]) & (freqs < KICK_WIDE[1]))[0]
         self.wide_slice = slice(int(idx[0]), int(idx[-1]) + 1)
         self.wide_rise = WideRise()
+        fidx = np.nonzero((freqs >= FLUX_BAND[0]) & (freqs < FLUX_BAND[1]))[0]
+        self.flux_slice = slice(int(fidx[0]), int(fidx[-1]) + 1)
+        self._prev_logmag = None
         self._wide = 0.0
         self.peak = {k: 0.0 for k in (*BANDS, "rms")}
         self.smooth = {k: 0.0 for k in (*BANDS, "rms")}
@@ -91,6 +95,9 @@ class FeatureExtractor:
         mag = np.abs(np.fft.rfft(samples * self.window)) * self.scale
         raw = {name: float(math.sqrt(float(np.mean(mag[sl] ** 2)))) for name, sl in self.slices.items()}
         self._wide = float(math.sqrt(float(np.mean(mag[self.wide_slice] ** 2))))
+        logmag = np.log1p(mag[self.flux_slice] * 1000.0)
+        flux = 0.0 if self._prev_logmag is None else float(np.maximum(logmag - self._prev_logmag, 0.0).sum())       # hausse du spectre depuis la trame precedente
+        self._prev_logmag = logmag
         tail = samples[-512:]
         raw["rms"] = float(math.sqrt(float(np.mean(tail * tail))))
 
@@ -110,6 +117,7 @@ class FeatureExtractor:
             mult = self.layer_sens[name]
             own = det.update(raw["bass"], dt, now, max(self.sensitivity, 0.05) * mult, self._wide)
             levels["edge_" + name] = beat if abs(mult - 1.0) < 1e-6 else own
+        levels["flux"] = flux                                  # flux d'attaques : le tempo se lit sur sa periodicite (core.tempo), sans dependre des kicks
         levels["raw_bass"] = raw["bass"]
         levels["raw_mid"], levels["raw_high"], levels["raw_rms"] = raw["mid"], raw["high"], raw["rms"]       # bruts (hors auto-gain) pour les phases du morceau
         return levels, beat

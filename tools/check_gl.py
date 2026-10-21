@@ -1227,7 +1227,7 @@ def check_gui() -> None:
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
           "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
-    check(out.get("x_kick_led") == (True, True), "rythme (GUI): voyant de kick + BPM dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
+    check(out.get("x_kick_led") == (True,) * 4, "rythme (GUI): voyant de kick + BPM (valeur en clair, gardee 4 s si la detection decroche) dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
           str(out.get("x_stage")))
@@ -2579,6 +2579,26 @@ def check_phase() -> None:
     check("build" in names[:8] and "peak" in names and "break" in names, "phases: montee, pic et cassure detectes", str(names))
     check(all(b - a >= ph.MIN_DWELL_S - 0.1 for (a, _), (b, _) in zip(seq[1:], seq[2:])), "phases: chaque phase dure au moins 4 s (hysteresis)", str(seq))
     check(seq[-1][1] == "silence", "phases: le silence final est reconnu", str(seq[-3:]))
+    # montee AVEC kicks (le kick continue, un riser / roulement fait monter les mediums et aigus) : montee, pas groove
+    def rise(top_end, seconds=20, steady=40, kick=True):
+        pt2, tt2, nxt2, names2 = ph.PhaseTracker(), 0.0, 0.0, []
+        total = steady + seconds
+        while tt2 < total:
+            f = min(max((tt2 - steady) / seconds, 0.0), 1.0)
+            top = 0.02 * (top_end ** f)
+            bass = 0.06
+            beat = kick and tt2 >= nxt2
+            if beat:
+                nxt2 = tt2 + k
+            nm = pt2.update(tt2, {"raw_rms": bass + top, "raw_bass": bass, "raw_mid": top * 0.6, "raw_high": top * 0.4}, beat, "idle", 128.0 if kick else None)
+            if not names2 or names2[-1][1] != nm:
+                names2.append((tt2, nm))
+            tt2 += 0.05
+        return names2
+    n_rise = rise(6.0)
+    check(any(n == "build" and tt2 > 40 for tt2, n in n_rise), "phases: les mediums / aigus qui montent avec les kicks = montee", str(n_rise))
+    n_flat = rise(1.0)
+    check(all(n != "build" for _, n in n_flat), "phases: un groove stable n'est jamais une montee", str(n_flat))
     # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau
     soft = [(d, (lambda f, r=r: r(f) * 0.2) if callable(r) else r * 0.2, per, sh, st) for d, r, per, sh, st in segs]
     soft_seq, _ = run(soft)
@@ -2604,6 +2624,60 @@ def check_phase() -> None:
     ph.apply_to_params(off, pt2.snapshot())
     check(name == "silence" and p["phase_tempo"] < 0.3 and all(off["phase_" + x] == ph.NEUTRAL[x] for x in ph.KEYS) and ph.apply_to_params({}, None) == "neutre",
           "phases: application aux reglages (neutre si desactive ou sans mesure)", name)
+
+
+def check_tempo() -> None:
+    print("Tempo du son, sans kick (core/tempo.py)")
+    import random
+    from core.tempo import TempoTracker
+    from core.rhythm import Rhythm
+
+    def train(bpm, seconds, seed=1, jitter=0.012, floor=0.2):
+        rnd = random.Random(seed)
+        period = 60.0 / bpm
+        hits = set()
+        k = 0
+        while k * period < seconds:
+            hits.add(int((k * period + rnd.uniform(-jitter, jitter)) / 0.0107))
+            k += 1
+        for i in range(int(seconds / 0.0107)):
+            t = i * 0.0107
+            yield t, (5.0 if i in hits else 0.0) + floor * rnd.random()
+
+    for bpm in (80, 100, 124, 140, 170):
+        tt, first = TempoTracker(), None
+        for t, f in train(bpm, 30.0, seed=bpm):
+            tt.feed(t, f)
+            v, c = tt.estimate(t)
+            if v is not None and first is None:
+                first = t
+        check(tt.bpm is not None and abs(tt.bpm / bpm - 1.0) < 0.04 and first is not None and first < 9.0,
+              f"tempo: train d'attaques a {bpm} BPM retrouve", f"{tt.bpm and round(tt.bpm, 1)} des {first and round(first, 1)} s")
+    for label, gen in (("son continu (sinus)", lambda rnd, i: 1.0 + 0.1 * rnd.random()), ("bruit", lambda rnd, i: rnd.random() * 2.0), ("silence", lambda rnd, i: 0.0)):
+        rnd, tt, seen = random.Random(3), TempoTracker(), 0
+        for i in range(3000):
+            t = i * 0.0107
+            tt.feed(t, gen(rnd, i))
+            seen += tt.estimate(t)[0] is not None
+        check(seen == 0, f"tempo: {label} ne donne aucun BPM", str(seen))
+    tt = TempoTracker()
+    for t, f in train(120, 20.0):
+        tt.feed(t, f)
+        tt.estimate(t)
+    check(tt.bpm is not None and tt.estimate(25.0)[0] is None, "tempo: le BPM disparait quand le flux s'arrete")
+    r = Rhythm()
+    for t, f in train(128, 25.0, seed=5):
+        r.update(t, {"flux": f}, False)
+    check(r.bpm is not None and abs(r.bpm / 128 - 1.0) < 0.04, "rythme: sans aucun kick detecte, le BPM vient du tempo du son", str(r.bpm))
+    for i in range(1500):
+        r.update(26.0 + i * 0.0107, {"flux": 0.0}, False)
+    check(r.bpm is None, "rythme: plus de son rythme, plus de BPM perime", str(r.bpm))
+    r2 = Rhythm()
+    for t, f in train(140, 30.0, seed=6):
+        r2.update(t, {"flux": f}, False)
+        if int(t / (60 / 70.0) * 100) % 100 == 0 and t > 3.0:        # des kicks a la moitie du tempo (70 BPM) : le tempo double l'emporte
+            r2.update(t, {"flux": 0.0}, True)
+    check(r2.bpm is not None and abs(r2.bpm / 140 - 1.0) < 0.05, "rythme: kicks a la moitie du tempo du son, le BPM est le tempo double", str(r2.bpm))
 
 
 def check_beat_grid() -> None:
@@ -3559,7 +3633,19 @@ def gui_expand_steps(c, s, out) -> None:
     vjc["rhythm_step"]()
     kick_lbl = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Label" and str(w.cget("text")).startswith("\u25cf")]
     tempo_knob = next((w for w in walk_(c["vj"]["master_box"]()) if w.winfo_class() == "Scale" and float(w.cget("to")) == 240.0), None)
-    out["x_kick_led"] = (len(kick_lbl) == 1, tempo_knob is not None)
+    t_end_ = time.monotonic() + 0.4
+    while time.monotonic() < t_end_:                                 # le planificateur (50 ms) met le voyant a jour
+        root.update()
+        time.sleep(0.03)
+    shown_bpm = "128 BPM" in kick_lbl[0].cget("text")
+    fake_rhythm.bpm = None
+    t_end_ = time.monotonic() + 0.4
+    while time.monotonic() < t_end_:
+        root.update()
+        time.sleep(0.03)
+    shown_held = "128 BPM" in kick_lbl[0].cget("text")              # detection perdue depuis moins de 4 s : la valeur reste affichee
+    fake_rhythm.bpm = 128.0
+    out["x_kick_led"] = (len(kick_lbl) == 1, tempo_knob is not None, shown_bpm, shown_held)
     out["x_rhythm_manual"] = (params["build"] == 0.0 and s.commands.empty(),)                # drop_auto coupe : rien ne part tout seul
     book_ = book
     book_.set_vj(on_drop=True, order="seq")
@@ -7510,7 +7596,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7574,6 +7660,7 @@ def main() -> None:
     check_render()
     check_latence()
     check_beat_grid()
+    check_tempo()
     check_phase()
     check_schedule()
     check_palette()
