@@ -38,6 +38,7 @@ import preset_registry
 import audio2wave_live as live
 import audio2wave_snap as snap
 import audio2wave_ridge as ridge
+import audio2wave_sphere as sphere
 
 print("common")
 for name in ("GUI_BG", "GUI_PANEL_BG", "GUI_FG", "GUI_MUTED_FG", "GUI_ACCENT", "GUI_ACCENT_FG",
@@ -115,6 +116,31 @@ try:
           "build_gui renvoie un GuiController avec ses widgets nommes")
     check(isinstance(_ctl.capture_state(), dict) and "_automation" in _ctl.capture_state(),
           "GuiController.capture_state() -> dict avec _automation")
+finally:
+    _root.destroy()
+check(common.MODE_BUTTONS == (("live", "Live"), ("snap", "Snap"), ("ridge", "Ridge"), ("sphere", "Sphere")),
+      "common.MODE_BUTTONS : les modes dans l'ordre fixe")
+_root = _tk.Tk()
+try:
+    for _mode, _build in (("live", lambda cb: live.build_gui(live.parse_args(["-d", "x"]), 320, 180, {}, _threading.Event(), _threading.Event(),
+                                                              _threading.Event(), root=_root, on_switch_mode=cb, compact=True)),
+                          ("snap", lambda cb: snap.build_gui(snap.parse_args(["-d", "x"]), (320, 180), {}, {}, _threading.Event(), _threading.Event(),
+                                                              root=_root, on_switch_mode=cb, compact=True)),
+                          ("ridge", lambda cb: ridge.build_gui(ridge.parse_args(["-d", "x"]), (320, 180), {}, _threading.Event(), _threading.Event(),
+                                                                root=_root, on_switch_mode=cb, compact=True)),
+                          ("sphere", lambda cb: sphere.build_gui(sphere.parse_args(["-d", "x"]), (320, 180), {}, _threading.Event(), _threading.Event(),
+                                                                  root=_root, on_switch_mode=cb, compact=True))):
+        _asked = []
+        _ctl = _build(_asked.append)
+        _root.update()
+        _buttons = _ctl.widgets.get("mode_buttons", {})
+        check(list(_buttons) == [k for k, _ in common.MODE_BUTTONS], f"{_mode}: les quatre boutons de mode sont la, dans le meme ordre")
+        check({k for k, b in _buttons.items() if str(b.cget("bg")).lower() == common.GUI_MODE_ACTIVE} == {_mode},
+              f"{_mode}: seul le bouton du mode en cours est colore")
+        for _k, _b in _buttons.items():
+            _b.invoke()
+        _root.update()
+        check(_asked == [k for k, _ in common.MODE_BUTTONS if k != _mode], f"{_mode}: un clic sur un autre mode le demande, sur le mode en cours ne fait rien", str(_asked))
 finally:
     _root.destroy()
 check(callable(live.AutomationManager.snapshot), "AutomationManager.snapshot")

@@ -41,7 +41,7 @@ from audio2wave_live import (
     find_window_position, list_audio_devices, primary_screen_size, require_tools,
     secondary_monitor_rect, target_monitor_rect,
 )
-from common import GuiController, move_rows_to_top, watch_args
+from common import GuiController, add_mode_buttons, move_rows_to_top, watch_args
 # Reutilise la plomberie generique d'audio2wave_snap.py (capture, fil de lecture,
 # enveloppe d'amplitude, sonde de couleur) plutot que de la dupliquer: c'est le meme
 # choix qu'audio2wave_snap.py fait deja vis-a-vis d'audio2wave.py/audio2wave_live.py.
@@ -663,12 +663,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
     # Boutons de bascule accoles au selecteur d'entree (meme emplacement
     # qu'audio2wave_snap.py/audio2wave_live.py --gui) plutot qu'une ligne
     # dediee: economise une ligne de hauteur en plus.
-    tk.Button(device_frame, text="Snap",
-             command=lambda: request_switch("snap")).pack(side="left", padx=(8, 0))
-    tk.Button(device_frame, text="Live",
-             command=lambda: request_switch("live")).pack(side="left", padx=(4, 0))
-    tk.Button(device_frame, text="Sphere",
-             command=lambda: request_switch("sphere")).pack(side="left", padx=(4, 0))
+    widgets["mode_buttons"] = add_mode_buttons(device_frame, "ridge", request_switch, Tooltip)
 
     def add_slider(label: str, attr: str, lo: float, hi: float, step: float,
                   initial: float | None = None, panel: str = "left",

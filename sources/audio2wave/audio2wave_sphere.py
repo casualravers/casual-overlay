@@ -31,7 +31,7 @@ from audio2wave_live import (
     AUTOMATE_TICK_MS, AutomationManager, PresetStore, Tooltip, confirm_dialog, list_audio_devices,
 )
 from audio2wave_snap import probe_color  # noqa: F401  (utilise par l'hote pour lire une couleur nommee)
-from common import GuiController, move_rows_to_top, watch_args
+from common import GuiController, add_mode_buttons, move_rows_to_top, watch_args
 
 STYLES = ("wire", "surface", "points")
 STYLE_LABELS = {"wire": "Fil de fer", "surface": "Surface eclairee", "points": "Nuage de points"}
@@ -199,9 +199,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         status["text"] = f"{len(names)} entree(s) audio detectee(s)"
 
     tk.Button(device_frame, text="Actualiser", command=refresh_devices).pack(side="left", padx=(8, 0))
-    tk.Button(device_frame, text="Snap", command=lambda: request_switch("snap")).pack(side="left", padx=(8, 0))
-    tk.Button(device_frame, text="Ridge", command=lambda: request_switch("ridge")).pack(side="left", padx=(4, 0))
-    tk.Button(device_frame, text="Live", command=lambda: request_switch("live")).pack(side="left", padx=(4, 0))
+    widgets["mode_buttons"] = add_mode_buttons(device_frame, "sphere", request_switch, Tooltip)
 
     def add_slider(label: str, attr: str, lo: float, hi: float, step: float, panel: str = "left",
                    tooltip: str | None = None, automatable: bool = False) -> None:

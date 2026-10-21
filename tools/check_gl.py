@@ -1437,8 +1437,8 @@ def check_gui() -> None:
               and m.get("reader_ok") and m.get("frames", 0) > 5,
               f"mode {name}: source active, ffmpeg live suspendu, images du mode lues par le rendu",
               f"{m.get('frames')} images")
-        check(m.get("banner") and m.get("presets") and m.get("overlay") and m.get("buttons") == (True, name != "snap", name != "ridge"),
-              f"mode {name}: panneau d'audio2wave (bandeau, presets, boutons de bascule) + partie OVERLAY", str(m.get("buttons")))
+        check(m.get("banner") and m.get("presets") and m.get("overlay") and m.get("buttons") == (True, True, True),
+              f"mode {name}: panneau d'audio2wave (bandeau, presets, boutons de bascule : tous les modes, le mode en cours compris) + partie OVERLAY", str(m.get("buttons")))
         check(m.get("height", 9999) <= 700, f"mode {name}: fenetre sous 700 px de haut (ascenseur dans le panneau)",
               str(m.get("height")))
     check(out.get("fs_frames", 0) >= 6, "mode snap: un preset qui change Plein ecran (visionneur remplace) n'interrompt pas le flux",
