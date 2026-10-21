@@ -1245,6 +1245,7 @@ def check_gui() -> None:
     check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
+    check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
     check(out.get("x_remote_bridge") == (True,) * 9, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
           str(out.get("x_remote_bridge")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
@@ -4129,6 +4130,17 @@ def gui_expand_steps(c, s, out) -> None:
         stopped_ = not rc_.running()
     else:
         stopped_ = False
+    # onglet Affichage : enfant de la barre pose DANS l'onglet ; reconstruire le panneau remonte la boite des onglets, l'onglet doit remonter aussi (sinon vide)
+    c["aff_toggle"](True)
+    t_e_ = time.monotonic() + 1.5
+    while time.monotonic() < t_e_:
+        root.update()
+        time.sleep(0.02)
+    box_aff_ = c["vj"]["master_box"]()
+    c["scenes"]["refresh_panel"](force=True)
+    root.update()
+    kids_aff_ = list(c["aff_frame"].master.winfo_children())            # l'ordre de la liste est l'ordre d'empilement (le plus bas d'abord)
+    out["x_aff_stack"] = (c["aff_frame"] in kids_aff_ and box_aff_ in kids_aff_ and kids_aff_.index(c["aff_frame"]) > kids_aff_.index(box_aff_),)
     out["x_remote_bridge"] = tuple(rem_ok) + (stopped_,)
     params["react_master"], params["bpm_auto"] = 1.0, 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop

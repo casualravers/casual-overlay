@@ -2005,6 +2005,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     gui_panel_ctl = gui_panel.install(types.SimpleNamespace(
         Tooltip=Tooltip,
         a2w=a2w,
+        tab_aff=tab_aff,
         a2w_clear=a2w_clear,
         add_random_scene=add_random_scene,
         add_random_scenes=add_random_scenes,

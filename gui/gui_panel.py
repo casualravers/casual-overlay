@@ -26,6 +26,7 @@ def install(c):
     add_random_scenes = c.add_random_scenes
     move_entry_to = c.move_entry_to
     apply_entry = c.apply_entry
+    tab_aff = c.tab_aff
     bg_clear = c.bg_clear
     current_index = c.current_index
     dnd = c.dnd
@@ -1071,6 +1072,8 @@ def install(c):
             mbox = master_box()
         mbox.pack(in_=wrap, side="right", fill="y")
         mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
+        if tab_aff.winfo_manager() == "pack":
+            tab_aff.lift()                                          # l'onglet Affichage est un enfant de la barre, pose dans l'onglet : remonte par-dessus la boite, sinon il reste cache (onglet vide)
         if getattr(s, "library_open", False):
             build_library(wrap, rows)
         else:
