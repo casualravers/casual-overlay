@@ -7909,6 +7909,17 @@ def check_safeguards() -> None:
     check("INFO" in text and "Scene : Purple" in text and "ERROR" in text and "ValueError: boum" in text and "Traceback" in text,
           "journal: evenements et erreurs (avec la trace) ecrits dans le fichier")
     check(any("Scene : Purple" in line for line in sessionlog.tail(10, log_path)), "journal: tail rend les dernieres lignes")
+    import faulthandler
+    crash_path = Path(tempfile.mkdtemp()) / "crash.log"
+    crash_path.write_text("Fatal Python error: simulation\nThread 0x1 (most recent call first):\n  File gl_main\n", encoding="utf-8")
+    ok_dump = sessionlog.install_crash_dump(crash_path)
+    enabled = faulthandler.is_enabled()
+    seen_before = sessionlog.previous_crash(crash_path)
+    faulthandler.disable()
+    if sessionlog._crash_file is not None:
+        sessionlog._crash_file.close()
+    check(ok_dump and enabled and "Fatal Python error" in seen_before and crash_path.exists() and crash_path.stat().st_size == 0,
+          "journal: un plantage natif laisse ses piles dans crash.log, rendues au lancement suivant (l'ancien fichier est garde)", str((ok_dump, enabled, seen_before[:30])))
     for h in list(sessionlog.logger().handlers):                    # le journal de test ne reste pas branche
         sessionlog.logger().removeHandler(h)
         h.close()
