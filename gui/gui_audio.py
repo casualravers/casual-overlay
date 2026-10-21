@@ -104,6 +104,9 @@ def install(c):
     Tooltip(doodle_check, "Recupere les doodles deposes sur le site (config : ~/.audio2wave/depot.json) et les affiche par-dessus la projection. "
                           "Seuls les fichiers apparus apres l'activation sont montres. Jamais enregistre dans un preset ni une scene.")
 
+    remote_box = tk.Frame(tab_aff)                   # la ligne de la telecommande telephone (remplie par gui_remote)
+    remote_box.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+
     shortcuts_label = tk.Label(frame, text=" (i) ", fg=a2w.GUI_ACCENT, font=a2w.GUI_FONT, cursor="question_arrow")
     shortcuts_label.pack(side="left", padx=(8, 0))
     Tooltip(shortcuts_label, SHORTCUTS_HELP)
@@ -121,4 +124,4 @@ def install(c):
     status_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
 
     import types
-    return types.SimpleNamespace(auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)
+    return types.SimpleNamespace(remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)

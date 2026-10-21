@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#2b1055">
+<title>Casual Remote</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="top">
+  <span id="dot" class="dot off" title="connexion"></span>
+  <strong id="title">CASUAL REMOTE</strong>
+  <span id="bpm" class="chip">-- BPM</span>
+  <span id="phase" class="chip">...</span>
+</header>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<main id="login" hidden>
+  <h1>Code magique</h1>
+  <p>Scanne le QR de l'ordi, ou tape le code a 6 chiffres :</p>
+  <input id="code" inputmode="numeric" autocomplete="off" maxlength="7" placeholder="000 000">
+  <button id="go" class="big pink">C'est parti !</button>
+  <p id="loginmsg" class="warn"></p>
+</main>
+
+<main id="app" hidden>
+  <section id="tab-scenes" class="tab">
+    <div class="row">
+      <button id="vj-back" class="big blue">&#9664; Retour</button>
+      <button id="vj-toggle" class="big green">&#9654; VJ</button>
+      <button id="vj-next" class="big blue">Suite &#9654;</button>
+    </div>
+    <div class="row">
+      <button id="lock" class="big amber">Verrou</button>
+      <span id="remaining" class="chip wide"></span>
+    </div>
+    <div id="scenes" class="grid"></div>
+  </section>
+
+  <section id="tab-macro" class="tab" hidden>
+    <div class="faders">
+      <label class="fader"><span>Reactivite</span><output id="o-react_master"></output><input type="range" orient="vertical" id="m-react_master" min="0" max="2" step="0.01"></label>
+      <label class="fader"><span>Effets</span><output id="o-fx_master"></output><input type="range" orient="vertical" id="m-fx_master" min="0" max="2" step="0.01"></label>
+    </div>
+    <div class="hsliders">
+      <label><span>Overlay</span><input type="range" id="m-overlay_master" min="0" max="1" step="0.01"></label>
+      <label><span>Fond</span><input type="range" id="m-bg_master" min="0" max="1" step="0.01"></label>
+      <label><span>Teinte</span><input type="range" id="m-hue_master" min="0" max="360" step="1"></label>
+      <label><span>Tempo</span><input type="range" id="m-tempo" min="0" max="2" step="0.01"></label>
+    </div>
+    <div class="row">
+      <button id="mem-1" class="big purple">Memoire 1</button>
+      <button id="mem-2" class="big purple">Memoire 2</button>
+      <button id="mem-3" class="big purple">Memoire 3</button>
+      <button id="mem-4" class="big purple">Memoire 4</button>
+    </div>
+  </section>
+
+  <section id="tab-boum" class="tab" hidden>
+    <button id="strobe" class="huge white">STROBE<small>maintiens</small></button>
+    <button id="drop" class="huge pink">MONTEE<small>appui = monte, appui long = DROP</small></button>
+    <div class="bar"><i id="buildbar"></i></div>
+    <button id="one" class="big blue">Temps 1</button>
+  </section>
+
+  <section id="tab-infos" class="tab" hidden>
+    <label class="field"><span>Texte du logo</span><textarea id="text" rows="3" maxlength="200"></textarea></label>
+    <button id="send-text" class="big green">Afficher le texte</button>
+    <div class="switches">
+      <label class="sw"><input type="checkbox" id="a-auto_phase"><span>Phases auto</span></label>
+      <label class="sw"><input type="checkbox" id="a-strobe_auto"><span>Strobe auto</span></label>
+      <label class="sw"><input type="checkbox" id="a-bpm_auto"><span>Tempo auto</span></label>
+    </div>
+    <ul class="voyants">
+      <li id="v-phase"></li>
+      <li id="v-strobe"></li>
+      <li id="v-sources"></li>
+    </ul>
+    <label class="sw"><input type="checkbox" id="preview-on"><span>Apercu de l'ecran</span></label>
+    <p id="preview-note" class="muted"></p>
+    <img id="preview" alt="" hidden>
+  </section>
+
+  <nav id="tabs">
+    <button data-tab="scenes" class="on">SCENES</button>
+    <button data-tab="macro">MACRO</button>
+    <button data-tab="boum">BOUM</button>
+    <button data-tab="infos">INFOS</button>
+  </nav>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -52,6 +52,7 @@ import gui_logo
 import gui_bar
 import gui_palette
 import gui_presets
+import gui_remote
 import gui_stage
 import gui_audio
 import gui_panel
@@ -1333,6 +1334,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         tab_aff=tab_aff,
         zone_aff=zone_aff))
     auto_master_var = gui_audio_ctl.auto_master_var
+    remote_box = gui_audio_ctl.remote_box
     bars = gui_audio_ctl.bars
     diag_btn = gui_audio_ctl.diag_btn
     diagnostic_report = gui_audio_ctl.diagnostic_report
@@ -2111,6 +2113,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     do_panic = gui_vj_ctl.do_panic
     do_tap = gui_vj_ctl.do_tap
     do_one = gui_vj_ctl.do_one
+    vj_voyants = gui_vj_ctl.voyants
+    sync_master_panel = gui_vj_ctl.sync_master_panel
+    detected_bpm = gui_vj_ctl.detected_bpm
     help_window = gui_vj_ctl.help_window
     master_box = gui_vj_ctl.master_box
     record_history = gui_vj_ctl.record_history
@@ -2341,6 +2346,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         vj=vj,
         vj_advance=vj_advance,
         vj_toggle=vj_toggle))
+    remote_ctl = gui_remote.install(types.SimpleNamespace(
+        a2w=a2w, Tooltip=Tooltip, apply_entry=apply_entry, back_scene=back_scene, current_index=current_index, detected_bpm=detected_bpm,
+        do_drop=do_drop, do_one=do_one, master_book=master_book, params=params, projection=projection, remote_box=remote_box, root=root, s=s,
+        scene_book=scene_book, scene_msg=scene_msg, skin=skin, start_build=start_build, sync_master_panel=sync_master_panel, sync_widgets=sync_widgets,
+        toggle_scene_lock=toggle_scene_lock, ui_every=ui_every, vj=vj, vj_advance=vj_advance, vj_remaining_text=vj_remaining_text,
+        vj_toggle=vj_toggle, vj_voyants=vj_voyants))
     stage_ref["open"] = stage_ctl.open
     palette_ctl = gui_palette.install(types.SimpleNamespace(
         open_stage=stage_ctl.open,
@@ -2406,7 +2417,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
-            "palette": palette_ctl, "stage": stage_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
+            "palette": palette_ctl, "stage": stage_ctl, "remote": remote_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
             "image_box": image_box, "text_box": text_box, "font_var": font_var})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))
