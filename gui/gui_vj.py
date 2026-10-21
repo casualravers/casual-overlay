@@ -73,6 +73,12 @@ def install(c):
             return f"{det:.0f} BPM auto"
         return f"{tap_state['bpm']:.0f} BPM (tap)" if tap_state["bpm"] else "\u2014 BPM"
 
+    def knob_text(key: str, value: float, dec: int, unit: str) -> str:
+        """Valeur affichee a droite d'un curseur de master. Tempo auto sans BPM detecte : « -- BPM » (le curseur reste a 120, mais ce n'est pas un tempo mesure)."""
+        if key == "tempo" and float(params.get("bpm_auto", 0.0)) >= 0.5 and not detected_bpm() and not tap_state["bpm"]:
+            return "-- BPM"
+        return f"{value:.{dec}f}{unit}"
+
     def sources_line() -> str:
         info = s.status.get("phase_info") or {}
         bg, logo, bg_auto, logo_auto = s.status.get("sources", ("tout", "tout", False, False))
@@ -103,6 +109,14 @@ def install(c):
             except tk.TclError:
                 vj_ui.pop("strobe", None)
         update_lock_button()
+        for key, var, factor, dec, text, unit in vj_ui.get("knobs", []):
+            if key == "tempo":
+                try:
+                    want = knob_text(key, float(var.get()), dec, unit)
+                    if text.get() != want:
+                        text.set(want)
+                except tk.TclError:
+                    pass
         bpm = vj_ui.get("bpm")
         if bpm is not None:
             try:
@@ -137,6 +151,7 @@ def install(c):
         for key, var, factor, dec, text, unit in vj_ui.get("knobs", []):
             try:
                 var.set(round(float(params[key]) * factor, dec))
+                text.set(knob_text(key, float(var.get()), dec, unit))          # (var.set ne rappelle pas la commande du curseur : la valeur affichee se met a jour ici)
             except (tk.TclError, KeyError, ValueError):
                 pass
         for key, var in vj_ui.get("vars", {}).items():
