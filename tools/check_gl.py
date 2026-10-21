@@ -2606,6 +2606,60 @@ def check_phase() -> None:
           "phases: application aux reglages (neutre si desactive ou sans mesure)", name)
 
 
+def check_tempo() -> None:
+    print("Tempo du son, sans kick (core/tempo.py)")
+    import random
+    from core.tempo import TempoTracker
+    from core.rhythm import Rhythm
+
+    def train(bpm, seconds, seed=1, jitter=0.012, floor=0.2):
+        rnd = random.Random(seed)
+        period = 60.0 / bpm
+        hits = set()
+        k = 0
+        while k * period < seconds:
+            hits.add(int((k * period + rnd.uniform(-jitter, jitter)) / 0.0107))
+            k += 1
+        for i in range(int(seconds / 0.0107)):
+            t = i * 0.0107
+            yield t, (5.0 if i in hits else 0.0) + floor * rnd.random()
+
+    for bpm in (80, 100, 124, 140, 170):
+        tt, first = TempoTracker(), None
+        for t, f in train(bpm, 30.0, seed=bpm):
+            tt.feed(t, f)
+            v, c = tt.estimate(t)
+            if v is not None and first is None:
+                first = t
+        check(tt.bpm is not None and abs(tt.bpm / bpm - 1.0) < 0.04 and first is not None and first < 9.0,
+              f"tempo: train d'attaques a {bpm} BPM retrouve", f"{tt.bpm and round(tt.bpm, 1)} des {first and round(first, 1)} s")
+    for label, gen in (("son continu (sinus)", lambda rnd, i: 1.0 + 0.1 * rnd.random()), ("bruit", lambda rnd, i: rnd.random() * 2.0), ("silence", lambda rnd, i: 0.0)):
+        rnd, tt, seen = random.Random(3), TempoTracker(), 0
+        for i in range(3000):
+            t = i * 0.0107
+            tt.feed(t, gen(rnd, i))
+            seen += tt.estimate(t)[0] is not None
+        check(seen == 0, f"tempo: {label} ne donne aucun BPM", str(seen))
+    tt = TempoTracker()
+    for t, f in train(120, 20.0):
+        tt.feed(t, f)
+        tt.estimate(t)
+    check(tt.bpm is not None and tt.estimate(25.0)[0] is None, "tempo: le BPM disparait quand le flux s'arrete")
+    r = Rhythm()
+    for t, f in train(128, 25.0, seed=5):
+        r.update(t, {"flux": f}, False)
+    check(r.bpm is not None and abs(r.bpm / 128 - 1.0) < 0.04, "rythme: sans aucun kick detecte, le BPM vient du tempo du son", str(r.bpm))
+    for i in range(1500):
+        r.update(26.0 + i * 0.0107, {"flux": 0.0}, False)
+    check(r.bpm is None, "rythme: plus de son rythme, plus de BPM perime", str(r.bpm))
+    r2 = Rhythm()
+    for t, f in train(140, 30.0, seed=6):
+        r2.update(t, {"flux": f}, False)
+        if int(t / (60 / 70.0) * 100) % 100 == 0 and t > 3.0:        # des kicks a la moitie du tempo (70 BPM) : le tempo double l'emporte
+            r2.update(t, {"flux": 0.0}, True)
+    check(r2.bpm is not None and abs(r2.bpm / 140 - 1.0) < 0.05, "rythme: kicks a la moitie du tempo du son, le BPM est le tempo double", str(r2.bpm))
+
+
 def check_beat_grid() -> None:
     print("Grille du temps (Temps 1)")
     from core import rhythm as rh
@@ -7522,7 +7576,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7586,6 +7640,7 @@ def main() -> None:
     check_render()
     check_latence()
     check_beat_grid()
+    check_tempo()
     check_phase()
     check_schedule()
     check_palette()
