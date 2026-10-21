@@ -114,7 +114,8 @@ MIN_WIN_W, MIN_WIN_H = 940, 420   # en dessous, le panneau d'audio2wave seul ne 
 LIVE_MAX_HEIGHT = 600           # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "snap": "SNAP  -  photo de l'onde (audio2wave)",
-                "ridge": "RIDGE  -  vagues empilees (audio2wave)"}
+                "ridge": "RIDGE  -  vagues empilees (audio2wave)",
+                "sphere": "SPHERE  -  spectre sur une sphere (audio2wave)"}
 
 
 AUDIO2WAVE_API_MIN = 2           # `common.API_VERSION` exige (API hote : GuiController, parent / embedded..., start_headless, snapshot)
@@ -197,7 +198,7 @@ def tidy_mode_gui(host, mode: str, widgets: dict) -> None:
         else:
             style_band(label, a2w, f"PRESETS {mode.upper()}  (audio2wave)" if text.upper() == "PRESETS" else text.upper())
     for child in gui_gates.leaves(host):          # le titre de la fenetre ("Reglages Live"...) : pas de section_titles pour lui
-        if child.winfo_class() == "Label" and child.cget("text") in ("Reglages Live", "Reglages Snap", "Reglages Ridge"):
+        if child.winfo_class() == "Label" and child.cget("text") in ("Reglages Live", "Reglages Snap", "Reglages Ridge", "Reglages Sphere"):
             child.grid_remove()
         elif child.winfo_class() == "Label" and child.cget("text") == "Taille fenetre":
             child.config(text="Taille du rendu")
@@ -232,6 +233,8 @@ def activate_mode(s, live, new: str) -> str | None:
     native = native_modes.available() and not os.environ.get("CASUAL_MODES_PYTHON")      # dessin en GL ; CASUAL_MODES_PYTHON=1 : rendus Python d'audio2wave
     if s.manager is None and not native:
         return "Les modes Snap et Ridge ne sont pas disponibles en --synthetic"
+    if new == "sphere" and not native:
+        return "Le mode Sphere demande numpy et moderngl (dessin GL)"
     old_src = s.pysrc
     device = (old_src.args.device if old_src is not None else s.live_args.device) or ""
     if new == "ridge" and not device and not (native and s.audio.synthetic):
@@ -244,7 +247,10 @@ def activate_mode(s, live, new: str) -> str | None:
             if args is None:
                 args = s.mode_args[new] = py_modes.make_args(mod, new, device, s.render_size)
             args.device = device or None
-            if native:
+            if new == "sphere":
+                from engine import sphere_mode
+                src = sphere_mode.SphereSource(mod, args, s.render_size, s.audio)
+            elif native:
                 src = native_modes.NativeModeSource(new, mod, args, s.render_size, s.audio)
             else:
                 src = py_modes.PyModeSource(new, mod, args, s.render_size, gl.FrameReader)

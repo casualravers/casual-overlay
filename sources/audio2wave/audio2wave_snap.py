@@ -45,7 +45,7 @@ from audio2wave_live import (
     Tooltip, confirm_dialog, find_window_position, list_audio_devices, primary_screen_size,
     require_tools, secondary_monitor_rect, target_monitor_rect,
 )
-from common import GuiController, move_rows_to_top, watch_args
+from common import GuiController, add_mode_buttons, move_rows_to_top, watch_args
 
 # Format du flux PCM intermediaire. Contrairement aux deux autres scripts, l'audio
 # transite par Python entre la capture et le rendu: fixer le format a la sortie de
@@ -2211,18 +2211,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         status_label.config(text=f"Bascule vers {mode_name}...")
         on_switch_mode(mode_name)
 
-    live_btn = tk.Button(device_frame, text="Live", command=lambda: request_switch("live"))
-    live_btn.pack(side="left", padx=(8, 0))
-    Tooltip(live_btn, "Bascule vers audio2wave_live.py (analyseur de spectre temps "
-                      "reel) avec l'entree audio choisie ci-dessus -- ferme cette "
-                      "fenetre et ouvre celle de Live a la place, jamais les deux "
-                      "en meme temps.")
-    ridge_btn = tk.Button(device_frame, text="Ridge", command=lambda: request_switch("ridge"))
-    ridge_btn.pack(side="left", padx=(4, 0))
-    Tooltip(ridge_btn, "Bascule vers audio2wave_ridge.py (vagues empilees) avec "
-                       "l'entree audio choisie ci-dessus -- ferme cette fenetre et "
-                       "ouvre celle de Ridge a la place, jamais les deux en meme "
-                       "temps.")
+    widgets["mode_buttons"] = add_mode_buttons(device_frame, "snap", request_switch, Tooltip)
 
     refresh_devices()
 
