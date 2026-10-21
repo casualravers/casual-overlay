@@ -1245,6 +1245,7 @@ def check_gui() -> None:
     check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
+    check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
     check(out.get("x_remote_bridge") == (True,) * 9, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
           str(out.get("x_remote_bridge")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
@@ -1292,6 +1293,10 @@ def check_gui() -> None:
           "etendu (GUI): scenes tirees par +5 = provisoires (repere, Garder avec renommage en ligne, nom pris refuse), Retirer les provisoires",
           str((out.get("x_temp"), out.get("x_temp_clean"))))
     check(out.get("x_select") == (True,) * 7, "etendu (GUI): lignes cochees : VJ off / on, duree, dupliquer, copier vers un autre set, retirer", str(out.get("x_select")))
+    panel_src = Path(ROOT, "gui", "gui_panel.py").read_text(encoding="utf-8")
+    main_src = Path(ROOT, "gui", "gl_gui.py").read_text(encoding="utf-8")
+    check('label="Jouer cette scene"' in panel_src and "apply_scene=apply_scene" in main_src and "LIBRARY_DEFAULT" in panel_src,
+          "bibliotheque (GUI): clic droit > Jouer la scene (applique la scene comme un choix a la main), colonne ouverte par defaut")
     check(out.get("x_library") == (True,) * 4, "etendu (GUI): bibliotheque a gauche du set, glisser une scene sur la liste l'ajoute au rang vise", str(out.get("x_library")))
     check(out.get("x_plus5") == (True,) * 5,
           "etendu (GUI): le bouton +5 ajoute cinq scenes aleatoires d'un coup (noms inedits, aucun preset, rien d'applique)", str(out.get("x_plus5")))
@@ -4129,6 +4134,17 @@ def gui_expand_steps(c, s, out) -> None:
         stopped_ = not rc_.running()
     else:
         stopped_ = False
+    # onglet Affichage : enfant de la barre pose DANS l'onglet ; reconstruire le panneau remonte la boite des onglets, l'onglet doit remonter aussi (sinon vide)
+    c["aff_toggle"](True)
+    t_e_ = time.monotonic() + 1.5
+    while time.monotonic() < t_e_:
+        root.update()
+        time.sleep(0.02)
+    box_aff_ = c["vj"]["master_box"]()
+    c["scenes"]["refresh_panel"](force=True)
+    root.update()
+    kids_aff_ = list(c["aff_frame"].master.winfo_children())            # l'ordre de la liste est l'ordre d'empilement (le plus bas d'abord)
+    out["x_aff_stack"] = (c["aff_frame"] in kids_aff_ and box_aff_ in kids_aff_ and kids_aff_.index(c["aff_frame"]) > kids_aff_.index(box_aff_),)
     out["x_remote_bridge"] = tuple(rem_ok) + (stopped_,)
     params["react_master"], params["bpm_auto"] = 1.0, 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
