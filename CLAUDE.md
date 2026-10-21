@@ -794,7 +794,7 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   tests n'ecrivent jamais dans le vrai fichier ; sans fichier branche tout se tait). Evenements (lancement, scene appliquee... verrou, VJ, panique,
   strobe limite, projection ouverte / fermee / relancee, arret propre ou anormal) et **toutes les erreurs avec leur trace** : callbacks Tk
   (`root.report_callback_exception` dans `run_gui`), exceptions non rattrapees du fil principal et des autres fils (`install_hooks`),
-  fenetre GL morte. `sessionlog.tail(n)` rend les dernieres lignes.
+  fenetre GL morte. `sessionlog.tail(n)` rend les dernieres lignes. **Plantage natif** (pilote graphique, bibliotheque C : le processus meurt sans trace Python, code de sortie brut comme -1 ou -1073740791) : `sessionlog.install_crash_dump()` (`faulthandler`) ecrit la pile de chaque fil dans `~/.audio2wave/crash.log` ; au lancement suivant l'ancien fichier devient `crash.precedent.log` et son contenu est copie dans le journal (« Plantage natif au lancement precedent »). Un arret par `abort()` / fast-fail (0xC0000409) ne laisse pas de pile : l'Observateur d'evenements Windows (Application, evenement 1000) donne alors le module fautif.
 - **Auto-sauvegarde** (`write_autosave` / `read_autosave` / `clear_autosave` / `recover_autosave`, `~/.audio2wave/autosave.json`) : toutes les
   minutes la GUI (`autosave_tick`) ecrit atomiquement les reglages (sans `TRANSIENT_KEYS`) + scene et set actifs. **Sortie propre = fichier efface** ;
   un fichier present au lancement signale un arret brutal : `run_app` charge ces reglages a la place de `gl_params.json`, met l'ancien fichier
