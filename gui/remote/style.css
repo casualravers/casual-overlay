@@ -55,3 +55,6 @@ nav button.on{background:var(--amber)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 textarea,input[type=text],#code{-webkit-user-select:text;user-select:text}
 img{-webkit-user-drag:none;pointer-events:none}
+#tab-macro .row{gap:6px}
+#tab-macro .row button{min-width:0;padding:8px 2px;font-size:22px;display:flex;flex-direction:column;align-items:center;gap:2px}
+#tab-macro .row button small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:normal}

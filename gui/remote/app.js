@@ -116,6 +116,13 @@
     $("v-phase").textContent = st.voyants.phase || "";
     $("v-strobe").textContent = st.voyants.strobe || "";
     $("v-sources").textContent = st.voyants.sources || "";
+    (st.memories || []).forEach(function (n, i) {
+      var b = $("mem-" + (i + 1));
+      b.textContent = "";
+      var num = document.createElement("b"); num.textContent = String(i + 1);
+      var nm = document.createElement("small"); nm.textContent = n || "vide";
+      b.appendChild(num); b.appendChild(nm);
+    });
     $("buildbar").style.width = Math.round(st.build * 100) + "%";
     if (document.activeElement !== $("text")) $("text").value = st.text;
     $("preview-on").checked = !!st.preview.on;

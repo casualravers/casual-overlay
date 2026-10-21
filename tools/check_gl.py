@@ -2767,7 +2767,7 @@ def check_remote_auth() -> None:
                         text="TEXTE", projection_open=True, msg="ok", build=0.5)
     js = rs.to_json(st)
     check(st["v"] == 1 and st["bpm"] == 128 and len(st["set"]["scenes"][1]["n"]) == rs.MAX_NAME and "\x07" not in js and "gpu_cap" not in js and '"x"' not in js
-          and set(st) == {"v", "set", "vj", "phase", "bpm", "voyants", "masters", "autos", "text", "projection", "msg", "build", "preview"},
+          and set(st) == {"v", "set", "vj", "phase", "bpm", "voyants", "masters", "autos", "text", "projection", "msg", "build", "preview", "memories"},
           "etat telecommande: cles du contrat, nettoyage, aucune cle etrangere", js[:120])
     check(rs.to_json(rs.build_state(set_name="Club")) == rs.to_json(rs.build_state(set_name="Club")) and len(js) < rs.MAX_BYTES, "etat telecommande: stable et petit")
     big = rs.build_state(scenes=[(i, "n" * 80) for i in range(400)], msg="m" * 900, text="t" * 900)
