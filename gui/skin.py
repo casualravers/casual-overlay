@@ -193,7 +193,8 @@ def accent_for(w: tk.Misc) -> str:
 SCROLL_STYLE = "Casual.Vertical.TScrollbar"
 SCROLL_WIDTH = 10
 SCROLL_STYLE_H = "Casual.Horizontal.TScrollbar"
-FIELD_MAX_TEXT = 360                                  # px : un nom de preset tres long n'elargit pas les listes a l'infini
+FIELD_MIN_TEXT = 110                                  # px : largeur minimale du texte d'une liste (un preset de plus ne la fait pas grandir pour si peu)
+FIELD_MAX_TEXT = 360                                 # px : un nom de preset tres long n'elargit pas les listes a l'infini
 
 
 def scrollbar(parent: tk.Misc, command=None, orient: str = "vertical") -> ttk.Scrollbar:
@@ -446,7 +447,8 @@ def _render_field(w: tk.Misc) -> None:
     labels = [str(w.tk.call(menu._w, "entrycget", i, "-label")) for i in range(int(menu.index("end") or -1) + 1)
               if str(w.tk.call(menu._w, "type", i)) != "separator"]
     labels.append(str(_orig_cget(w, "text")))
-    width = min(max([font.measure(t) for t in labels] + [30]), FIELD_MAX_TEXT) + 12 + 28
+    width = min(max([font.measure(t) for t in labels] + [FIELD_MIN_TEXT]), FIELD_MAX_TEXT) + 12 + 28
+    width = sk["field_w"] = max(width, sk.get("field_w", 0))     # un champ ne retrecit jamais : ajouter / supprimer une entree ne decale pas ses voisins
     height = max(24, font.metrics("linespace") + 8)
     border = T.FAINT if dis else (sk["accent"] if sk.get("hover") else T.LINE)
     key = (width, height, dis, border)

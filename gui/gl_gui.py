@@ -111,7 +111,7 @@ def style_band(label, a2w, text: str | None = None, color: str = LIVE_COLOR) -> 
 
 
 MIN_WIN_W, MIN_WIN_H = 940, 420   # en dessous, le panneau d'audio2wave seul ne tient plus
-LIVE_MAX_HEIGHT = 600           # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
+LIVE_MAX_HEIGHT = 585         # hauteur maxi du panneau d'audio2wave avant d'afficher un ascenseur
 MODE_BANNERS = {"live": "LIVE  -  spectre audio (audio2wave)",
                 "snap": "SNAP  -  photo de l'onde (audio2wave)",
                 "ridge": "RIDGE  -  vagues empilees (audio2wave)",
@@ -816,7 +816,12 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def fit(_e=None) -> None:
         """Taille voulue du canvas = celle du panneau (plafonnee a l'ouverture) ; ensuite c'est la fenetre qui decide,
         et un ascenseur apparait des que le panneau est plus haut que la place disponible."""
-        w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth())      # largeur et hauteur stables d'un fond a l'autre
+        # Largeur CONSTANTE de la partie LIVE : la plus large vue dans la session (Live, Snap, Ridge, Sphere et le fond genere n'ont pas la meme
+        # largeur naturelle ; sans cela la colonne OVERLAY glissait a chaque changement de mode). Elle ne fait que grandir, une fois par mode.
+        w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth(), layout.get("live_w", 0))
+        layout["live_w"] = w
+        if layout["name"] == "wide":                # l'ascenseur du panneau apparait selon le mode : sa place est comptee, la colonne OVERLAY ne glisse pas
+            page.columnconfigure(0, minsize=w + vbar.winfo_reqwidth() + 6)
         h = active_panel().winfo_reqheight()
         canvas.configure(width=w, height=min(host.winfo_reqheight(), cap_now()), scrollregion=(0, 0, w, h))
         update_scrollbar()
@@ -825,7 +830,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         """Reconstruit seulement le panneau d'audio2wave pour `s.mode` (ce que faisait `build_window` en entier : ~1,5 s de plus)."""
         t0 = time.perf_counter()
         new_mode = s.mode
-        old_w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth())
+        old_w = layout.get("live_w", 0)
         keep = None
         if (getattr(s, "vj_state", None) or {}).get("running") and root.winfo_ismapped():
             keep = (root.winfo_width(), root.winfo_height())            # le VJ enchaine des modes : la fenetre garde sa taille
@@ -844,7 +849,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if bg_state["mode"] == "live":
             banner_live.config(text=MODE_BANNERS[new_mode])
         fit()
-        new_w = max(host.winfo_reqwidth(), pattern_holder.winfo_reqwidth())
+        new_w = layout.get("live_w", 0)
         layout["wide_need"] = max(layout["wide_need"] + new_w - old_w, 0)       # largeur cote a cote : les panneaux n'ont pas la meme largeur
         on_page_config()
         if keep is not None:
@@ -978,6 +983,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     def right_fit(_e=None) -> None:
         """Taille voulue du canvas = celle de la colonne (plafonnee a cote de LIVE) ; ascenseur seulement si elle est plus haute que la place."""
         w, h = right.winfo_reqwidth(), right.winfo_reqheight()
+        w = layout["right_w"] = max(w, layout.get("right_w", 0))          # largeur de la colonne OVERLAY : ne retrecit pas d'un onglet a l'autre
         vis_w, vis_h = right_cv.winfo_width(), right_cv.winfo_height()
         right_cv.configure(width=w, height=min(h, cap_now()), scrollregion=(0, 0, max(w, vis_w), h))
         right_cv.itemconfigure(right_item, width=max(w, vis_w), height=max(h, vis_h if vis_h > 50 else 0))
@@ -1416,6 +1422,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # rendu). Une scene = (fond audio2wave OU motif genere) + overlay, voir scenes.py.
     scene_book = scenes.SceneBook(lambda: scenes.SCENES_PATH)
     scene_msg = tk.StringVar(value="")
+    # Messages (scene appliquee, media, VJ...) : une ligne a part sous la barre, de hauteur constante ; sur la barre ils volaient la place des touches
+    scene_msg_label = tk.Label(scene_top, textvariable=scene_msg, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left")
+    scene_msg_label.pack(fill="x", padx=10, pady=(0, 2), after=scene_bar)
     if not getattr(s, "diag_shown", False):       # une fois : ce que le diagnostic de demarrage a signale
         s.diag_shown = True
         scene_msg.set(diagnostics.summary_line(getattr(getattr(s, "args", None), "diag_checks", None) or []))
@@ -2256,7 +2265,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         for i in range(4):
             page.rowconfigure(i, weight=0)
         for i in range(3):
-            page.columnconfigure(i, weight=0)
+            page.columnconfigure(i, weight=0, minsize=0)
         if name == "wide":
             banner_live.grid(row=0, column=0, sticky="ew", padx=(6, 0), pady=(8, 2))
             banner_overlay.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=(8, 2))
@@ -2310,7 +2319,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # largeur naturelle cote a cote : en dessous, on empile. L'ascenseur du panneau d'audio2wave (17 px) apparait ou disparait
     # selon la hauteur de la fenetre : il ne compte pas, sinon une fenetre a sa taille naturelle SANS ascenseur etait jugee trop
     # etroite et passait en mise en page empilee alors que tout tenait.
-    layout["wide_need"] = page.winfo_reqwidth() - (vbar.winfo_reqwidth() if vbar.winfo_ismapped() else 0)
+    layout["wide_need"] = page.winfo_reqwidth()      # la place de l'ascenseur du panneau est toujours comptee (minsize de la colonne LIVE, voir `fit`)
     page.bind("<Configure>", on_page_config)
     page_canvas.bind("<Configure>", on_page_config)
     on_page_config()

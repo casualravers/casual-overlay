@@ -375,7 +375,7 @@ def check_gui() -> None:
                               buttons=("Live" in texts, "Snap" in texts, "Ridge" in texts),
                               overlay=any(t.startswith("OVERLAY") for t in texts),
                               height=root.winfo_reqheight(), reader_ok=s.reader is s.pysrc.reader,
-                              presets_top=presets_top_state(c["live_host"]))
+                              presets_top=presets_top_state(c["live_host"]), col_x=(root.update_idletasks(), c["right_panel"].winfo_x())[1])
 
             def later(tries=0):
                 # La premiere image d'un mode arrive apres un "temps par photo" (4 s par defaut pour Snap).
@@ -405,7 +405,7 @@ def check_gui() -> None:
                                     resumed=[r.device for r in manager.resumed], reader_ok=s.reader is manager.reader,
                                     banner=any(t.startswith("LIVE") for t in texts),
                                     gain=find_scale(c["live_host"], "Gain (dB)") is not None,
-                                    presets_top=presets_top_state(c["live_host"]))
+                                    presets_top=presets_top_state(c["live_host"]), col_x=(root.update_idletasks(), c["right_panel"].winfo_x())[1])
             # GuiController.apply_state en live: le panneau prend l'etat ET le producteur ffmpeg est relance avec (rien ne prend effet sans)
             ctrl = c["panel"]["ctrl"]
             skipped = ctrl.apply_state({"gain": 17.0, "pas_une_cle": 1})
@@ -1447,6 +1447,9 @@ def check_gui() -> None:
     check(b.get("mode") == "live" and b.get("src") is None and b.get("suspended") is False
           and b.get("resumed") == ["Micro"] and b.get("reader_ok") and b.get("banner") and b.get("gain"),
           "retour au mode Live : ffmpeg relance sur l'entree courante, lecteur d'origine, panneau Live reconstruit", str(b))
+    check(b.get("col_x") == out.get("ridge", {}).get("col_x") and out.get("ridge", {}).get("col_x", 0) >= out.get("snap", {}).get("col_x", 1),
+          "GUI: la partie LIVE garde une largeur constante (la colonne OVERLAY ne recule pas en revenant a un mode plus etroit)",
+          str((out.get("snap", {}).get("col_x"), out.get("ridge", {}).get("col_x"), b.get("col_x"))))
     sb = out.get("scrollbars", (-1, 0))
     check(sb[0] == 0 and sb[1] >= 2, "GUI: les ascenseurs de la fenetre sont aux couleurs de la GUI (aucun ascenseur Windows clair)", str(sb))
     mn = out.get("menus", (0, -1))
@@ -4013,11 +4016,13 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_history"] = (grown == 2, first_name != second_name, s.active_scene == first_name, len(s.scene_history) == n0 + 1)
     vjc["lock"]()
     vjc["back"]()
-    lock_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
-    out["x_history_lock"] = (s.active_scene == first_name, "verrouillee" in sc["msg"].get(), "Verrou ●" in lock_texts)
+    def lock_visible() -> bool:
+        """Le bouton « Verrou ● » de la barre est toujours la (place reservee : rien ne se decale) ; il n'est visible que verrou actif."""
+        slot = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text").endswith("Verrou ●")]
+        return len(slot) == 1 and str(slot[0].cget("fg")).lower() != str(slot[0].cget("bg")).lower()
+    out["x_history_lock"] = (s.active_scene == first_name, "verrouillee" in sc["msg"].get(), lock_visible())
     vjc["lock"]()
-    lock_texts_off = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
-    out["x_lock_bar_off"] = "Verrou ●" not in lock_texts_off
+    out["x_lock_bar_off"] = not lock_visible()
     vjc["build"]()
     for _ in range(8):
         root.update()
@@ -8282,8 +8287,14 @@ def check_sphere_mode() -> None:
         after_state = ctl.capture_state()
         check(not skipped and after_state["style"] == "points" and abs(after_state["relief"] - 1.2) < 1e-6 and abs(after_state["size_react"] - 0.9) < 1e-6,
               "sphere: un preset applique change les reglages", str(skipped))
-        texts = [w.cget("text") for w in root.winfo_children() if w.winfo_class() == "Frame" for w in w.winfo_children() if w.winfo_class() == "Button"]
+        buttons = ctl.widgets.get("mode_buttons", {})
+        texts = [b.cget("text") for b in buttons.values()]
         check({"Snap", "Ridge", "Live"} <= set(texts), "sphere: boutons de bascule vers Snap / Ridge / Live", str(texts))
+        refresh = next((w for f in root.winfo_children() for w in f.winfo_children() if w.winfo_class() == "Button" and w.cget("text") == "Actualiser"), None)
+        any_button = next(iter(buttons.values()), None)
+        check(any_button is not None and refresh is not None and any_button.winfo_rooty() >= refresh.winfo_rooty() + refresh.winfo_height(),
+              "sphere: les boutons de mode sont sur la ligne SOUS le selecteur d'entree",
+              f"{any_button and any_button.winfo_rooty()} / {refresh and refresh.winfo_rooty() + refresh.winfo_height()}")
     finally:
         root.destroy()
 
