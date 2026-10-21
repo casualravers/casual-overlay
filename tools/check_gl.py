@@ -8236,7 +8236,7 @@ def check_sphere_mode() -> None:
         areas.append(int((img.sum(axis=2) > 30).sum()))
     check(areas[0] > areas[1] * 1.5, "sphere: l'image montre la sphere plus grosse quand le morceau est fort", str(areas))
     sil = {}
-    for shape in (0.0, 1.0, 2.0, 3.0, 4.0, 0.5):                 # le curseur « Forme » : sphere, cube, octaedre, cylindre, etoile, melange
+    for shape in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 0.5):           # le curseur « Forme » : sphere, tore, noeud de trefle, ressort, fleur, bouteille de Klein, melange
         args.shape = shape
         for i in range(30):
             img = frame(src, 300 + i)

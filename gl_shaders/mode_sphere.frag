@@ -19,7 +19,7 @@ void main() {
     vec3 base = ramp(v_amp * 1.4);
     if (u_style == 1) {
         vec3 n = normalize(cross(dFdx(v_pos), dFdy(v_pos)));
-        if (dot(n, v_pos) < 0.0) n = -n;                                // normale vers l'exterieur
+        if (n.z < 0.0) n = -n;                                          // formes non convexes : eclairage a deux faces, normale vers la camera
         float lit = max(dot(n, normalize(vec3(-0.4, 0.6, 0.7))), 0.0);
         float rim = pow(1.0 - max(n.z, 0.0), 2.0);
         f_color = vec4(base * (0.18 + 0.82 * lit) + base * 0.25 * rim, 1.0);
