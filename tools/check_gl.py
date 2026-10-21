@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import sys
+
+os.environ.setdefault("CASUAL_NO_EXPAND", "1")        # les tests partent d'un panneau replie (le vrai programme etend le Mode VJ au lancement)
 import tempfile
 import time
 from pathlib import Path
@@ -2599,6 +2601,8 @@ def check_phase() -> None:
         return names2
     n_rise = rise(6.0)
     check(any(n == "build" and tt2 > 40 for tt2, n in n_rise), "phases: les mediums / aigus qui montent avec les kicks = montee", str(n_rise))
+    n_slow = rise(4.0, seconds=40)
+    check(any(n == "build" and tt2 > 40 for tt2, n in n_slow), "phases: une montee lente (x4 en 40 s) avec les kicks est reconnue", str(n_slow))
     n_flat = rise(1.0)
     check(all(n != "build" for _, n in n_flat), "phases: un groove stable n'est jamais une montee", str(n_flat))
     # musique faible (telephone pose pres du micro, niveau divise par 5) : les memes phases, seuils proportionnels a l'energie du morceau
@@ -3630,7 +3634,7 @@ def gui_expand_steps(c, s, out) -> None:
                        and "DROP" in c["scenes"]["msg"].get())
     while not s.commands.empty():
         s.commands.get_nowait()
-    params["drop_auto"] = 0.0
+    params["drop_auto"], params["auto_phase"] = 0.0, 0.0
     fake_rhythm.builds, fake_rhythm.state = 2, "build"
     vjc["rhythm_step"]()
     kick_lbl = [w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Label" and str(w.cget("text")).startswith("\u25cf")]
@@ -3673,13 +3677,13 @@ def gui_expand_steps(c, s, out) -> None:
         while time.monotonic() < t_end_:
             root.update()
             time.sleep(0.03)
-    params["drop_auto"], params["strobe_auto"], params["auto_phase"] = 0.0, 0.0, 1.0
+    params["drop_auto"], params["strobe_auto"], params["auto_phase"] = 0.0, 0.0, 0.0
     phase_at(None)
     msg_before = c["scenes"]["msg"].get()
     phase_at("build")
     off_quiet = c["scenes"]["msg"].get() == msg_before and params["build"] == 0.0         # strobe auto coupe : rien ne part tout seul
     phase_at(None)
-    params["strobe_auto"] = 1.0
+    params["auto_phase"] = 1.0                                                              # les phases suffisent (Strobe auto n'est pas necessaire)
     while not s.commands.empty():
         s.commands.get_nowait()
     phase_at("build")

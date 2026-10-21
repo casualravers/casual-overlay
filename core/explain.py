@@ -37,3 +37,11 @@ def strobe_info_text(reason: str | None, age: float | None, armed: bool) -> str:
     if not reason:
         return "strobe auto : arme, aucun eclair pour l'instant"
     return f"strobe auto : dernier eclair = {reason}, il y a {_fr(age or 0.0, 0)} s"
+
+
+def phase_measures_text(info: dict | None) -> str:
+    """Ce que le detecteur de phases mesure (kicks par seconde, energie / moyenne, gain des mediums + aigus sur 8 et 20 s)."""
+    if not info or "kicks" not in info:
+        return "mesures : -"
+    return (f"mesures : kicks {_fr(info['kicks'], 1)}/s | energie x{_fr(info.get('energy', 1.0))} | "
+            f"mediums + aigus x{_fr(info.get('top8', 1.0))} (8 s) x{_fr(info.get('top20', 1.0))} (20 s)")

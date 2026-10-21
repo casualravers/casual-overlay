@@ -84,6 +84,10 @@ def install(c):
         on = float(params.get("auto_phase", 1.0)) >= 0.5
         return explain.phase_effects_text(info.get("mult") if info else None, on)
 
+    def phase_why_line() -> str:
+        info = s.status.get("phase_info") or {}
+        return explain.phase_measures_text(info if (info and float(params.get("auto_phase", 1.0)) >= 0.5) else None)
+
     def strobe_line() -> str:
         info = s.status.get("strobe_info")
         armed = float(params.get("strobe_auto", 0.0)) >= 0.5
@@ -111,7 +115,7 @@ def install(c):
                 root.title(text)
         except tk.TclError:
             pass
-        for key, make in (("sources", sources_line), ("phase_fx", phase_fx_line), ("strobe_info", strobe_line)):
+        for key, make in (("sources", sources_line), ("phase_fx", phase_fx_line), ("phase_why", phase_why_line), ("strobe_info", strobe_line)):
             lbl = vj_ui.get(key)
             if lbl is not None:
                 try:
@@ -367,10 +371,6 @@ def install(c):
             toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %). "
                                                  "Il faut des kicks reguliers : sans BPM fiable, le tempo ne bouge pas.",
                    row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
-            toggle(f, "drop_auto", "Montee / drop auto", "Une cassure detectee (les basses disparaissent un moment) lance la montee ; le retour des basses "
-                                                         "= le drop : flash blanc et retour aux reglages normaux. Le VJ peut aussi changer de scene au "
-                                                         "drop (menu « reglages VJ »).",
-                   row=4, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
             toggle(f, "gpu_cap", "Securite GPU", "Quand le VJ enchaine une scene, ses effets couteux (cellules, halo, fonte) sont coupes si, ajoutes a la charge mesuree "
                                                   "du GPU, ils ne tiendraient plus dans le budget d'une image. Une scene choisie a la main n'est jamais touchee.",
                    row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
@@ -426,7 +426,7 @@ def install(c):
             Tooltip(cb, "Le visuel suit les phases du morceau tout seul, sans reglage : le silence et les passages calmes ralentissent tres doucement les "
                         "animations (le visuel ne s'eteint jamais), la montee et le pic donnent plus de reactivite et d'effets, la cassure ralentit. "
                         "Les phases sont reconnues a l'energie, aux kicks et a la repartition des frequences ; les seuils s'adaptent au morceau et au micro. "
-                        "Jamais de strobe automatique.")
+                        "C'est aussi elles qui lancent la Montee (phase montee) et le Drop (passage au pic) automatiques : flash et retour au normal.")
             phase = tk.Label(f, text="phase : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w")
             phase.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
             vj_ui["phase"] = phase
@@ -440,6 +440,13 @@ def install(c):
             vj_ui["phase_fx"] = effects
             Tooltip(effects, "Ce que la phase du morceau change a tes reglages en ce moment (multiplicateurs lisses) : vitesse des animations, reactivite au son, "
                              "intensite des effets, luminosite du fond et derive de teinte. x1,00 = rien ne change.")
+
+            why = tk.Label(f, text="mesures : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
+            why.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=(2, 0))
+            vj_ui["phase_why"] = why
+            Tooltip(why, "Ce que le detecteur de phases mesure, pour comprendre (ou regler) sa decision : kicks par seconde (>= 1,2 = groove), "
+                         "energie par rapport a la moyenne des passages a kicks (x1,2 ou plus = pic), et gain des mediums + aigus sur 8 s et 20 s "
+                         "(montee quand ca grimpe vite, x1,5 en 8 s ou x1,8 en 20 s).")
 
         new_tab("Audio", fill_2)
 
@@ -762,8 +769,9 @@ def install(c):
     rhythm_ui: dict = {"drops": None, "builds": None, "auto_build": False}
 
     def auto_on() -> bool:
-        """Montee / drop automatiques : la case « Montee / drop auto », ou « Strobe auto » (qui s'appuie sur eux pour ses eclairs de montee et de drop)."""
-        return float(params.get("drop_auto", 0.0)) >= 0.5 or float(params.get("strobe_auto", 0.0)) >= 0.5
+        """Montee / drop automatiques : plus de case a part. Ils partent des qu'une fonction intelligente les utilise : « Phases auto » (la phase
+        montee / le passage au pic les declenchent) ou « Strobe auto » (ses eclairs de montee et de drop). `drop_auto` reste lu pour les anciens fichiers."""
+        return any(float(params.get(k, 0.0)) >= 0.5 for k in ("auto_phase", "strobe_auto", "drop_auto"))
 
     def handle_drop(why: str = "drop (retour des basses)") -> None:
         """Un drop vient d'etre detecte (retour des basses apres une cassure, ou passage de la montee au pic)."""

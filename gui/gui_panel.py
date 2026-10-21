@@ -56,7 +56,7 @@ def install(c):
     thumb_photo = c.thumb_photo
     undo_now = c.undo_now
 
-    PANEL_BODY_H = 200
+    PANEL_BODY_H = 280
     PANEL_BODY_MIN = 80
     NAME_MIN, NAME_MAX = 14, 70                     # largeur (caracteres) du bouton du nom : la plus longue entree, bornee
     DUR_W = 13
@@ -1253,8 +1253,12 @@ def install(c):
             root.update_idletasks()
             if flag:
                 s.scene_panel_h = scene_panel.winfo_reqheight()
+            if flag:
+                s.height_before_expand = root.winfo_height()
             delta = getattr(s, "scene_panel_h", 0) * (1 if flag else -1)
             height = max(MIN_WIN_H, min(root.winfo_height() + delta, root.winfo_screenheight() - 80))
+            if not flag and getattr(s, "height_before_expand", None) and getattr(s, "panel_overflow", 0) == 0 and root.winfo_height() >= root.winfo_screenheight() - 90:
+                height = s.height_before_expand                    # la fenetre avait ete limitee par l'ecran a l'ouverture : on rend la hauteur d'avant, pas hauteur - panneau
             root.geometry(f"{root.winfo_width()}x{height}")
 
     import types
