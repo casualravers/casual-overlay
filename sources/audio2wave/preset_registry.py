@@ -20,7 +20,7 @@ import contextlib
 import importlib
 from typing import Iterator
 
-MODES = ("snap", "live", "ridge")
+MODES = ("snap", "live", "ridge", "sphere")
 
 # Cles d'un preset dont le sens est propre a UN mode. `style`/`shape` : valeurs
 # valides differentes (analyzer/radio, bar/line en live ; pencil/rekordbox/simple en

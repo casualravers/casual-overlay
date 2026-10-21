@@ -47,7 +47,7 @@ def set_gui_accent(accent: str, accent_fg: str | None = None) -> None:
     (ex. casual-overlay) doit appeler ceci AVANT de construire les widgets, au
     lieu d'aller reecrire les constantes module par module. Sans effet sur les
     modules pas encore importes (ils liront la valeur de `common` modifiee)."""
-    for name in ("common", "audio2wave", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge"):
+    for name in ("common", "audio2wave", "audio2wave_live", "audio2wave_snap", "audio2wave_ridge", "audio2wave_sphere"):
         module = sys.modules.get(name)
         if module is not None and hasattr(module, "GUI_ACCENT"):
             module.GUI_ACCENT = accent
@@ -63,6 +63,34 @@ def set_gui_accent(accent: str, accent_fg: str | None = None) -> None:
 # au lieu de multiplier les hasattr. 1 = avant GuiController ; 2 = celle-ci.
 API_VERSION = 2
 
+
+# Les boutons de bascule de mode des quatre fenetres : toujours les memes, dans le meme ordre, y compris le mode en cours, qui est colore
+# (et sans effet quand on le clique). Ajouter un mode = une ligne ici.
+MODE_BUTTONS = (("live", "Live"), ("snap", "Snap"), ("ridge", "Ridge"), ("sphere", "Sphere"))
+GUI_MODE_ACTIVE = "#2563eb"
+GUI_MODE_ACTIVE_FG = "#ffffff"
+MODE_TIPS = {"live": "Analyseur de spectre temps reel", "snap": "Photo de l'onde", "ridge": "Vagues empilees", "sphere": "Spectre sur une sphere"}
+
+
+def add_mode_buttons(parent, current: str, request_switch, tooltip=None) -> dict:
+    """Pose, dans `parent` (pack, a gauche), un bouton par mode (`MODE_BUTTONS`) ; celui de `current` est colore et ne fait rien.
+    `request_switch(mode)` est appele pour les autres. Rend `{mode: bouton}` (a ranger dans `widgets["mode_buttons"]`)."""
+    import tkinter as tk
+    buttons = {}
+    for index, (key, label) in enumerate(MODE_BUTTONS):
+        pad = (8, 0) if index == 0 else (4, 0)
+        if key == current:
+            button = tk.Button(parent, text=label, command=lambda: None, bg=GUI_MODE_ACTIVE, fg=GUI_MODE_ACTIVE_FG,
+                               activebackground=GUI_MODE_ACTIVE, activeforeground=GUI_MODE_ACTIVE_FG)
+        else:
+            button = tk.Button(parent, text=label, command=lambda k=key: request_switch(k))
+        button.pack(side="left", padx=pad)
+        button.mode_key = key
+        if tooltip is not None:
+            tooltip(button, f"Mode en cours : {MODE_TIPS[key]}." if key == current else
+                    f"Bascule vers le mode {label} ({MODE_TIPS[key].lower()}) avec l'entree audio actuelle.")
+        buttons[key] = button
+    return buttons
 
 class GuiController:
     """Poignee renvoyee par chaque `build_gui()` : tout ce qu'un programme hote doit

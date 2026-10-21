@@ -32,7 +32,7 @@ from audio2wave import (
     style_option_menu,
 )
 from common import (
-    GuiController, move_rows_to_top, watch_args,
+    GuiController, add_mode_buttons, move_rows_to_top, watch_args,
     capture_input_args, find_window_position, list_audio_devices, measure_level,
     primary_screen_size, require_tools, secondary_monitor_rect,
     set_window_title, target_monitor_rect,
@@ -1572,10 +1572,7 @@ def build_gui(args: argparse.Namespace, width: int, height: int, status: dict,
     # Boutons de bascule accoles au selecteur d'entree (meme emplacement
     # qu'audio2wave_snap.py --gui, voir sa docstring) plutot qu'une ligne
     # dediee: economise une ligne de hauteur en plus.
-    tk.Button(device_frame, text="Snap",
-             command=lambda: request_switch("snap")).pack(side="left", padx=(8, 0))
-    tk.Button(device_frame, text="Ridge",
-             command=lambda: request_switch("ridge")).pack(side="left", padx=(4, 0))
+    widgets["mode_buttons"] = add_mode_buttons(device_frame, "live", request_switch, Tooltip)
 
     style_var = tk.StringVar(value=args.style)
     widgets["style_var"] = style_var          # variable Tk exposee a l'hote (grisages de casual-overlay)

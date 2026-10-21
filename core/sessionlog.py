@@ -8,6 +8,7 @@ Tout est sans danger : si le fichier est inscriptible nulle part, le journal se 
 """
 from __future__ import annotations
 
+import faulthandler
 import logging
 import logging.handlers
 import sys
@@ -16,6 +17,7 @@ import traceback
 from pathlib import Path
 
 LOG_PATH = Path.home() / ".audio2wave" / "casual-overlay.log"
+CRASH_PATH = Path.home() / ".audio2wave" / "crash.log"          # piles Python de tous les fils si le processus meurt d'un plantage natif
 _NAME = "casual-overlay"
 _FORMAT = "%(asctime)s %(levelname)-7s %(message)s"
 _hooks_done = False
@@ -91,6 +93,36 @@ def install_hooks() -> None:
         previous_thread(args)
 
     threading.excepthook = thread_hook
+
+
+_crash_file = None
+
+
+def install_crash_dump(path: Path | str | None = None) -> bool:
+    """Un plantage natif (pilote graphique, bibliotheque C) tue Python sans passer par `excepthook` : plus rien dans le journal, le programme sort
+    avec un code brut. `faulthandler` ecrit alors la pile de CHAQUE fil dans `crash.log` (signal de plantage, ou arret force). L'ancien contenu est
+    garde dans `crash.precedent.log` : `previous_crash()` le rend au lancement suivant."""
+    global _crash_file
+    target = Path(path or CRASH_PATH)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and target.stat().st_size > 0:
+            target.replace(target.with_name(target.stem + ".precedent" + target.suffix))
+        _crash_file = open(target, "a", encoding="utf-8")
+        faulthandler.enable(file=_crash_file, all_threads=True)
+        return True
+    except Exception:
+        return False
+
+
+def previous_crash(path: Path | str | None = None) -> str:
+    """Contenu du `crash.log` du lancement precedent (vide si le dernier arret n'a laisse aucune pile)."""
+    target = Path(path or CRASH_PATH)
+    old = target.with_name(target.stem + ".precedent" + target.suffix)
+    try:
+        return old.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
 
 
 def tail(lines: int = 40, path: Path | str | None = None) -> list[str]:

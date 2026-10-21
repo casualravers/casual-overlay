@@ -1245,6 +1245,7 @@ def check_gui() -> None:
     check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
+    check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
     check(out.get("x_remote_bridge") == (True,) * 9, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
           str(out.get("x_remote_bridge")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
@@ -1292,6 +1293,10 @@ def check_gui() -> None:
           "etendu (GUI): scenes tirees par +5 = provisoires (repere, Garder avec renommage en ligne, nom pris refuse), Retirer les provisoires",
           str((out.get("x_temp"), out.get("x_temp_clean"))))
     check(out.get("x_select") == (True,) * 7, "etendu (GUI): lignes cochees : VJ off / on, duree, dupliquer, copier vers un autre set, retirer", str(out.get("x_select")))
+    panel_src = Path(ROOT, "gui", "gui_panel.py").read_text(encoding="utf-8")
+    main_src = Path(ROOT, "gui", "gl_gui.py").read_text(encoding="utf-8")
+    check('label="Jouer cette scene"' in panel_src and "apply_scene=apply_scene" in main_src and "LIBRARY_DEFAULT" in panel_src,
+          "bibliotheque (GUI): clic droit > Jouer la scene (applique la scene comme un choix a la main), colonne ouverte par defaut")
     check(out.get("x_library") == (True,) * 4, "etendu (GUI): bibliotheque a gauche du set, glisser une scene sur la liste l'ajoute au rang vise", str(out.get("x_library")))
     check(out.get("x_plus5") == (True,) * 5,
           "etendu (GUI): le bouton +5 ajoute cinq scenes aleatoires d'un coup (noms inedits, aucun preset, rien d'applique)", str(out.get("x_plus5")))
@@ -1432,8 +1437,8 @@ def check_gui() -> None:
               and m.get("reader_ok") and m.get("frames", 0) > 5,
               f"mode {name}: source active, ffmpeg live suspendu, images du mode lues par le rendu",
               f"{m.get('frames')} images")
-        check(m.get("banner") and m.get("presets") and m.get("overlay") and m.get("buttons") == (True, name != "snap", name != "ridge"),
-              f"mode {name}: panneau d'audio2wave (bandeau, presets, boutons de bascule) + partie OVERLAY", str(m.get("buttons")))
+        check(m.get("banner") and m.get("presets") and m.get("overlay") and m.get("buttons") == (True, True, True),
+              f"mode {name}: panneau d'audio2wave (bandeau, presets, boutons de bascule : tous les modes, le mode en cours compris) + partie OVERLAY", str(m.get("buttons")))
         check(m.get("height", 9999) <= 700, f"mode {name}: fenetre sous 700 px de haut (ascenseur dans le panneau)",
               str(m.get("height")))
     check(out.get("fs_frames", 0) >= 6, "mode snap: un preset qui change Plein ecran (visionneur remplace) n'interrompt pas le flux",
@@ -4129,6 +4134,17 @@ def gui_expand_steps(c, s, out) -> None:
         stopped_ = not rc_.running()
     else:
         stopped_ = False
+    # onglet Affichage : enfant de la barre pose DANS l'onglet ; reconstruire le panneau remonte la boite des onglets, l'onglet doit remonter aussi (sinon vide)
+    c["aff_toggle"](True)
+    t_e_ = time.monotonic() + 1.5
+    while time.monotonic() < t_e_:
+        root.update()
+        time.sleep(0.02)
+    box_aff_ = c["vj"]["master_box"]()
+    c["scenes"]["refresh_panel"](force=True)
+    root.update()
+    kids_aff_ = list(c["aff_frame"].master.winfo_children())            # l'ordre de la liste est l'ordre d'empilement (le plus bas d'abord)
+    out["x_aff_stack"] = (c["aff_frame"] in kids_aff_ and box_aff_ in kids_aff_ and kids_aff_.index(c["aff_frame"]) > kids_aff_.index(box_aff_),)
     out["x_remote_bridge"] = tuple(rem_ok) + (stopped_,)
     params["react_master"], params["bpm_auto"] = 1.0, 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
@@ -7893,6 +7909,17 @@ def check_safeguards() -> None:
     check("INFO" in text and "Scene : Purple" in text and "ERROR" in text and "ValueError: boum" in text and "Traceback" in text,
           "journal: evenements et erreurs (avec la trace) ecrits dans le fichier")
     check(any("Scene : Purple" in line for line in sessionlog.tail(10, log_path)), "journal: tail rend les dernieres lignes")
+    import faulthandler
+    crash_path = Path(tempfile.mkdtemp()) / "crash.log"
+    crash_path.write_text("Fatal Python error: simulation\nThread 0x1 (most recent call first):\n  File gl_main\n", encoding="utf-8")
+    ok_dump = sessionlog.install_crash_dump(crash_path)
+    enabled = faulthandler.is_enabled()
+    seen_before = sessionlog.previous_crash(crash_path)
+    faulthandler.disable()
+    if sessionlog._crash_file is not None:
+        sessionlog._crash_file.close()
+    check(ok_dump and enabled and "Fatal Python error" in seen_before and crash_path.exists() and crash_path.stat().st_size == 0,
+          "journal: un plantage natif laisse ses piles dans crash.log, rendues au lancement suivant (l'ancien fichier est garde)", str((ok_dump, enabled, seen_before[:30])))
     for h in list(sessionlog.logger().handlers):                    # le journal de test ne reste pas branche
         sessionlog.logger().removeHandler(h)
         h.close()
@@ -8119,6 +8146,148 @@ def check_native_modes() -> None:
           "retour au mode Live en --synthetic : flux d'origine rendu, mode GL arrete", str(msg))
 
 
+def check_sphere_mode() -> None:
+    """Mode Sphere (engine/sphere_mode.py, audio2wave_sphere.py) : bandes de frequences, taille qui suit l'intensite, trois styles en GL,
+    bascule de mode, presets et fenetre de reglages."""
+    print("mode Sphere")
+    import math
+    import threading
+    import tkinter as tk
+    from types import SimpleNamespace as NS
+
+    from engine import sphere_mode as sm
+    sys.path.insert(0, str(gl.DEFAULT_A2W_DIR)) if str(gl.DEFAULT_A2W_DIR) not in sys.path else None
+    import audio2wave_sphere as mod
+    rate = 48000
+
+    def tone(freq, amp, n=sm.WIN, phase=0):
+        t = (np.arange(n) + phase) / rate
+        return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+    args = mod.parse_args(["--gui"])
+    check(args.style == "wire" and args.size_react > 0 and args.spin == 0, "sphere: options par defaut (fil de fer, taille qui suit l'intensite, camera fixe)")
+    # bandes : une sinusoide de 1 kHz allume la bande qui la contient, pas celles des graves ni des aigus
+    tr = sm.SpectrumTracker()
+    for i in range(30):
+        tr.update(tone(1000, 0.3, phase=i * 800), rate, 1 / 60, args)
+    lo, hi, _ = tr._band_edges(32, rate)
+    hz = np.geomspace(sm.F_LOW, min(sm.F_HIGH, rate / 2.0 - 100.0), 33)
+    want = int(np.searchsorted(hz, 1000.0) - 1)
+    best = int(np.argmax(tr.bands[:32]))
+    check(abs(best - want) <= 1 and tr.bands[best] > 0.8 and tr.bands[:max(0, want - 6)].max() < 0.5 and tr.bands[want + 6:32].max() < 0.5,
+          "sphere: 1 kHz allume sa bande (ni graves ni aigus)", f"{best} {want} {tr.bands[:32].round(2)}")
+    # silence : aucun relief ; intensite : la taille de la sphere suit le niveau du morceau
+    quiet = sm.SpectrumTracker()
+    for i in range(60):
+        quiet.update(np.zeros(sm.WIN, np.float32), rate, 1 / 60, args)
+    check(float(quiet.bands.max()) == 0.0 and quiet.loudness == 0.0, "sphere: silence = aucun relief, intensite nulle")
+    track = sm.SpectrumTracker()
+    for i in range(120):                                        # un passage fort
+        track.update(tone(200, 0.5, phase=i * 800), rate, 1 / 60, args)
+    big = track.scale(args)
+    for i in range(240):                                        # puis le morceau retombe de 24 dB
+        track.update(tone(200, 0.03, phase=i * 800), rate, 1 / 60, args)
+    small = track.scale(args)
+    check(big > 1.15 and small < 0.85 and big > small * 1.4,
+          "sphere: la taille suit l'intensite du morceau (grosse au fort, petite quand il retombe)", f"{big:.2f} {small:.2f}")
+    flat = NS(**{**vars(args), "size_react": 0.0, "pulse": 0.0})
+    check(abs(track.scale(flat) - 1.0) < 1e-6, "sphere: taille fixe quand `size_react` = 0")
+    # rendu GL
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone (sphere)", str(exc))
+        return
+
+    class Ring:
+        total = 10 ** 6
+        phase = 0
+        amp = 0.4
+
+        def latest(self, n):
+            return tone(120, self.amp, n, self.phase) + tone(1500, self.amp / 3, n, self.phase)
+
+    audio = NS(rate=rate, ring=Ring(), synthetic=True)
+    size = (320, 180)
+    src = sm.SphereSource(mod, args, size, audio)
+    src.start()
+
+    def frame(source, i):
+        audio.ring.phase += 800
+        tex = source.render(ctx, i / 60.0)
+        return np.frombuffer(tex.read(), np.uint8).reshape(size[1], size[0], 3).astype(int)
+
+    lit = {}
+    for style in ("wire", "surface", "points"):
+        args.style = style
+        for i in range(40):
+            img = frame(src, i)
+        lit[style] = int((img.sum(axis=2) > 30).sum())
+    check(all(v > 400 for v in lit.values()) and lit["surface"] > lit["wire"] > lit["points"] * 0.5,
+          "sphere: les trois styles dessinent (fil de fer, surface pleine, points)", str(lit))
+    mid = img.shape[1] // 2
+    check(img[:, :mid // 3].sum() == 0 and img[:, -mid // 3:].sum() == 0, "sphere: la sphere reste au centre, les bords du cadre sont vides")
+    args.style, args.relief, args.spin, args.pulse = "surface", 0.0, 0.0, 0.0           # surface sans relief : l'aire ne depend que de la taille
+    areas = []
+    for amp in (0.5, 0.02):
+        audio.ring.amp = amp
+        for i in range(200):
+            img = frame(src, 100 + i)
+        areas.append(int((img.sum(axis=2) > 30).sum()))
+    check(areas[0] > areas[1] * 1.5, "sphere: l'image montre la sphere plus grosse quand le morceau est fort", str(areas))
+    sil = {}
+    for shape in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 0.5):           # le curseur « Forme » : sphere, tore, noeud de trefle, ressort, fleur, bouteille de Klein, melange
+        args.shape = shape
+        for i in range(30):
+            img = frame(src, 300 + i)
+        mask = img.sum(axis=2) > 30
+        sil[shape] = int(mask.sum())
+        check(mask[:, :4].sum() + mask[:, -4:].sum() + mask[:3].sum() + mask[-3:].sum() == 0, f"sphere: forme {shape:g} entierement dans le cadre")
+    check(len(set(sil.values())) == len(sil) and sil[0.5] not in (sil[0.0], sil[1.0]),
+          "sphere: chaque forme a sa silhouette, un curseur entre deux les melange", str(sil))
+    args.shape = 0.0
+    args.spin = 45.0
+    before = frame(src, 400)
+    after = frame(src, 460)
+    args.spin = 0.0
+    check(src.tracker.head >= 0 and before.shape == after.shape, "sphere: la rotation facultative ne casse pas le rendu")
+    src.stop()
+    src.release_gl()
+    check(src.stop_event.is_set() and src.finished_event.is_set(), "sphere: arret propre")
+    # bascule de mode (sans ffmpeg) et presets
+    import gl_gui
+    live_mod = gl.load_live(gl.DEFAULT_A2W_DIR)
+    base_reader = object()
+    sess = NS(mode="live", pysrc=None, manager=None, reader=base_reader, live_args=NS(device=None), mode_args={}, render_size=size, audio=audio)
+    msg = gl_gui.activate_mode(sess, live_mod, "sphere")
+    check(msg is None and sess.mode == "sphere" and sess.pysrc.name == "sphere" and getattr(sess.pysrc, "native", False),
+          "bascule vers Sphere : mode GL actif, sans ffmpeg", str(msg))
+    msg = gl_gui.activate_mode(sess, live_mod, "snap")
+    check(msg is None and sess.mode == "snap" and sess.pysrc.name == "snap", "bascule Sphere -> Snap", str(msg))
+    gl_gui.activate_mode(sess, live_mod, "live")
+    store = gl_gui.mode_store(live_mod, "sphere")
+    names = set(store.all())
+    check({"default", "neon", "metal", "poussiere"} <= names, "sphere: presets integres dans le magasin du mode", str(sorted(names)))
+    # fenetre de reglages : controleur, etat capture / applique, boutons de bascule
+    root = tk.Tk()
+    try:
+        status: dict = {}
+        ctl = mod.build_gui(mod.parse_args(["--gui"]), size, status, threading.Event(), threading.Event(), root=root, compact=True, embedded=True)
+        root.update()
+        state = ctl.capture_state()
+        check(ctl.mode == "sphere" and {"style", "relief", "size_react", "pulse", "history", "colors"} <= set(state) and "_automation" in state,
+              "sphere: fenetre de reglages (controleur, etat complet avec automations)", str(sorted(state)))
+        skipped = ctl.apply_state(dict(state, style="points", relief=1.2, size_react=0.9))
+        root.update()
+        after_state = ctl.capture_state()
+        check(not skipped and after_state["style"] == "points" and abs(after_state["relief"] - 1.2) < 1e-6 and abs(after_state["size_react"] - 0.9) < 1e-6,
+              "sphere: un preset applique change les reglages", str(skipped))
+        texts = [w.cget("text") for w in root.winfo_children() if w.winfo_class() == "Frame" for w in w.winfo_children() if w.winfo_class() == "Button"]
+        check({"Snap", "Ridge", "Live"} <= set(texts), "sphere: boutons de bascule vers Snap / Ridge / Live", str(texts))
+    finally:
+        root.destroy()
+
+
 # Verifications de taille / mise en page de la fenetre : elles dependent de l'etat de l'ecran (fenetre deja deplacee, focus, minuteurs de Tk) et
 # echouent parfois seules sans qu'il y ait de defaut. Si TOUS les echecs d'une execution sont de cette liste, le programme sort avec le code 3
 # (et non 1) : l'integration continue relance alors la suite une fois ; un echec qui revient, ou tout autre echec, reste un echec (code 1).
@@ -8222,7 +8391,8 @@ def main() -> None:
     check_params()
     check_manager()
     check_native_modes()
-    os.environ["CASUAL_MODES_PYTHON"] = "1"          # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
+    check_sphere_mode()
+    os.environ["CASUAL_MODES_PYTHON"] = "1"         # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
     check_gui()
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()

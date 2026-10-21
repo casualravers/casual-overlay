@@ -9,6 +9,7 @@ from core import randomizer
 from core import scenes
 from pathlib import Path
 import json
+import os
 import skin
 import time
 import tkinter as tk
@@ -26,6 +27,9 @@ def install(c):
     add_random_scenes = c.add_random_scenes
     move_entry_to = c.move_entry_to
     apply_entry = c.apply_entry
+    tab_aff = c.tab_aff
+    apply_scene = c.apply_scene
+    LIBRARY_DEFAULT = not os.environ.get("CASUAL_NO_EXPAND")       # bibliotheque ouverte au lancement (les tests partent d'un panneau replie)
     bg_clear = c.bg_clear
     current_index = c.current_index
     dnd = c.dnd
@@ -264,7 +268,7 @@ def install(c):
 
     def toggle_library() -> None:
         """Ouvre / ferme la colonne sans reconstruire le panneau : seule la colonne est creee ou detruite."""
-        s.library_open = not getattr(s, "library_open", False)
+        s.library_open = not getattr(s, "library_open", LIBRARY_DEFAULT)
         wrap, body = panel_state.get("wrap"), panel_state.get("body")
         try:
             ok = wrap is not None and body is not None and wrap.winfo_exists()
@@ -412,7 +416,7 @@ def install(c):
         fill_library(lib, rows)
         filter_var.trace_add("write", lambda *_: refresh_library(scene_book.rows()))
         Tooltip(tv, "Toutes les scenes enregistrees, rangees par dossier (nom `dossier/scene`) avec les favoris en tete. Glisse une scene sur la liste du set "
-                    "pour l'y ajouter a cet endroit (autant de fois que tu veux), double-clic = a la fin, clic droit = favori / renommer / ranger / garder. "
+                    "pour l'y ajouter a cet endroit (autant de fois que tu veux), double-clic = a la fin, clic droit = jouer cette scene / favori / renommer / ranger / garder. "
                     "\u00d7N = nombre d'entrees dans ce set.")
 
         def folder_of(iid: str) -> str:
@@ -517,6 +521,8 @@ def install(c):
             tv.selection_set(tv.identify_row(e.y))
             starred = any(x["name"] == name and x.get("star") for x in scene_book.list())
             m = tk.Menu(tv, tearoff=0)
+            m.add_command(label="Jouer cette scene", command=lambda: apply_scene(name))
+            m.add_separator()
             m.add_command(label="Ajouter a la fin du set", command=lambda: add_at(name, None))
             m.add_command(label="Retirer des favoris" if starred else "Mettre en favori", command=lambda: star_now(name))
             m.add_command(label="Renommer...", command=lambda: rename_scene_dialog(name))
@@ -583,7 +589,7 @@ def install(c):
         cp["menu"] = cm
         Tooltip(cp, "Copie les lignes cochees (avec leurs medias) a la fin d'un autre set.")
         mini("Retirer les \u2736", drop_temp, "Supprime toutes les scenes provisoires (\u2736 : tirees par + / +5 et jamais gardees) de la bibliotheque.")
-        lib_btn = tk.Button(bar_, text="Bibliotheque " + ("\u25c0" if getattr(s, "library_open", False) else "\u25b6"), command=toggle_library,
+        lib_btn = tk.Button(bar_, text="Bibliotheque " + ("\u25c0" if getattr(s, "library_open", LIBRARY_DEFAULT) else "\u25b6"), command=toggle_library,
                             relief="flat", bd=0, padx=8, cursor="hand2", bg=SCENE_COLOR, fg=BANNER_FG, font=BOLD)
         lib_btn.pack(side="right", padx=8, pady=3)
         panel_state["lib_btn"] = lib_btn
@@ -1071,7 +1077,9 @@ def install(c):
             mbox = master_box()
         mbox.pack(in_=wrap, side="right", fill="y")
         mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
-        if getattr(s, "library_open", False):
+        if tab_aff.winfo_manager() == "pack":
+            tab_aff.lift()                                          # l'onglet Affichage est un enfant de la barre, pose dans l'onglet : remonte par-dessus la boite, sinon il reste cache (onglet vide)
+        if getattr(s, "library_open", LIBRARY_DEFAULT):
             build_library(wrap, rows)
         else:
             panel_state.pop("lib", None)

@@ -21,9 +21,13 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
     """gui_loader rend le module de la GUI (l'application l'injecte : le moteur n'importe jamais la GUI)."""
     sessionlog.setup()
     sessionlog.install_hooks()
+    sessionlog.install_crash_dump()
     sessionlog.event(f"Lancement (gui={bool(args.gui)}, synthetic={bool(args.synthetic)})")
     params = load_params()
     params, recovery_msg = recover_autosave(params)
+    crash = sessionlog.previous_crash()
+    if crash:
+        sessionlog.event("Plantage natif au lancement precedent (piles des fils) :\n" + crash[:4000])
     if args.sensitivity is not None:
         params["sensitivity"] = args.sensitivity
     params["_automation"] = merge_automation(params.get("_automation"))
