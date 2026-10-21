@@ -92,6 +92,7 @@ TABLE: tuple[Param, ...] = (
     _p("hue_master", 0.0, 0.0, 360.0, scope="room", doc="Teinte globale en degres : rotation de couleur de toute l'image."),
     _p("bg_master", 1.0, 0.0, 1.0, scope="room", doc="Master de la luminosite du fond : 0 = fond noir (logo seul), 1 = normal."),
     _p("strobe_on", 0.0, 0.0, 1.0, scope="state", doc="Strobe arme / maintenu."),
+    _p("strobe_why", "", scope="state", doc="Raison du dernier eclair demande par la GUI (drop...), affichee par le voyant du strobe ; vide = eclair manuel."),
     _p("strobe_auto", 0.0, 0.0, 1.0, scope="room", doc="Strobe auto : le strobe decide seul quand eclairer (phase du morceau, kicks, frappes aigues, grille du temps) ; coupe par la PANIQUE."),
     _p("strobe_mode", "manual", choices=("manual", "kick", "light"), scope="room", doc="Mode du strobe (light = leger : un kick sur N)."),
     _p("strobe_div", 4, 2, 16, scope="room", doc="Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre, soit un par mesure)."),

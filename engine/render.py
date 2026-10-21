@@ -403,7 +403,8 @@ class Renderer:
         hit_total = int(state.get("hits", 0))
         new_hits, self._strobe_hits = max(hit_total - self._strobe_hits, 0), hit_total
         ph = state.get("phase") or {}
-        auto_fire, auto_dark = self.strobe_brain.update(now, ph.get("name"), ph.get("since"), new_kicks, new_hits, state.get("beat_index"))
+        auto_fire, auto_dark = self.strobe_brain.update(now, ph.get("name"), ph.get("since"), new_kicks, new_hits, state.get("beat_index"),
+                                                        busy=_unit(p.get("build", 0.0)) > 0.0)
         if float(p.get("strobe_auto", 0.0)) >= 0.5:
             fire = fire or auto_fire
         build = _unit(p.get("build", 0.0))
@@ -416,7 +417,7 @@ class Renderer:
             self.strobe_fired += 1
             self._strobe_auto_now = bool(auto_fire and not manual_fire and float(p.get("strobe_auto", 0.0)) >= 0.5)
             self._strobe_auto_dark = auto_dark
-            self.strobe_info = (self.strobe_brain.reason if self._strobe_auto_now else ("montee manuelle" if (build > 0.0 and not manual_fire) else "manuel"), now)
+            self.strobe_info = (self.strobe_brain.reason if self._strobe_auto_now else ("montee (eclairs de plus en plus rapides)" if (build > 0.0 and not manual_fire) else (str(p.get("strobe_why") or "") or "manuel")), now)
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
