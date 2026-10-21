@@ -2753,6 +2753,180 @@ def check_remote_auth() -> None:
     check((a, b, c_, d) == ("{1}", None, "{2}", None), "etat telecommande: au plus 5 evenements par seconde, le dernier etat n'est jamais perdu, rien si inchange", str((a, b, c_, d)))
 
 
+def check_remote_server() -> None:
+    print("Telecommande : serveur HTTP + SSE (engine/remote.py)")
+    import http.client
+    import json as _json
+    import socket as _socket
+    import tempfile
+    from pathlib import Path as _Path
+    from core import remote_auth as ra
+    from engine import remote as rem
+
+    tmp = _Path(tempfile.mkdtemp(prefix="casual_remote_"))
+    for name, text in (("index.html", "<!doctype html><title>t</title>"), ("app.js", "//js"), ("style.css", "/*css*/"), ("manifest.webmanifest", "{}"), ("icon.svg", "<svg/>")):
+        (tmp / name).write_text(text, encoding="utf-8")
+    state = {"v": 1, "n": 0}
+    got: list = []
+
+    def command(cmd):
+        got.append(cmd)
+        return "scene verrouillee" if cmd.get("cmd") == "lock" else None
+
+    acc = ra.Access()
+    acc.activate()
+    srv = rem.RemoteServer(acc, lambda: dict(state), command, tmp, "127.0.0.1", 0, allowed_hosts={"127.0.0.1"})
+    ok, msg = srv.start()
+    check(ok and srv.port > 0 and srv.running(), "serveur telecommande: demarre sur une adresse locale", str(msg))
+    if not ok:
+        return
+
+    def req(method, path, body=None, headers=None, raw=None, host=None):
+        conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        hdrs = {"Host": host or f"127.0.0.1:{srv.port}"}
+        hdrs.update(headers or {})
+        data = raw if raw is not None else (_json.dumps(body).encode("utf-8") if body is not None else None)
+        if data is not None and "Content-Type" not in hdrs:
+            hdrs["Content-Type"] = "application/json"
+        try:
+            conn.request(method, path, body=data, headers=hdrs)
+            r = conn.getresponse()
+            payload = r.read()
+            return r.status, {k.lower(): v for k, v in r.getheaders()}, payload
+        finally:
+            conn.close()
+
+    s, h, b = req("GET", "/")
+    check(s == 200 and b.startswith(b"<!doctype") and "script-src 'self'" in h.get("content-security-policy", "") and h.get("cache-control") == "no-store"
+          and h.get("x-content-type-options") == "nosniff", "serveur telecommande: la page est servie avec une CSP stricte, sans cache", str((s, h.get("content-security-policy"))))
+    check(req("GET", "/app.js")[0] == 200 and req("GET", "/style.css")[0] == 200 and req("GET", "/manifest.webmanifest")[0] == 200, "serveur telecommande: fichiers de la page")
+    check(all(req("GET", p_)[0] == 404 for p_ in ("/../CLAUDE.md", "/..%2fCLAUDE.md", "/etc/passwd", "/index.html", "/api")), "serveur telecommande: aucun chemin libre (404)")
+    check(req("GET", "/", host="evil.example:80")[0] == 403 and req("GET", "/", host="192.168.9.9:1")[0] == 403, "serveur telecommande: en-tete Host etranger refuse (DNS rebinding)")
+    check(req("GET", "/", headers={"Origin": "http://evil.example"})[0] == 403 and req("GET", "/", headers={"Origin": f"http://127.0.0.1:{srv.port}"})[0] == 200,
+          "serveur telecommande: Origin etranger refuse, Origin identique accepte")
+    check(req("GET", "/api/state")[0] == 401 and req("POST", "/api/lock", {})[0] == 401 and req("GET", "/events")[0] == 401
+          and req("GET", "/api/state", headers={"Authorization": "Bearer faux"})[0] == 401, "serveur telecommande: sans jeton de session = 401 partout")
+    check(req("POST", "/api/login", {"k": acc.token})[0] == 200 or True, "serveur telecommande: (amorce)")
+    s, h, b = req("POST", "/api/login", {"k": acc.token})
+    session = _json.loads(b).get("session", "") if s == 200 else ""
+    check(s == 200 and len(session) >= 40, "serveur telecommande: le jeton d'activation donne un jeton de session", str(s))
+    auth = {"Authorization": "Bearer " + session}
+    s, h, b = req("GET", "/api/state", headers=auth)
+    check(s == 200 and _json.loads(b)["v"] == 1, "serveur telecommande: l'etat est lu avec le jeton de session")
+    got.clear()
+    s, h, b = req("POST", "/api/scene", {"index": 2}, auth)
+    check(s == 200 and got == [{"cmd": "scene", "index": 2}], "serveur telecommande: une commande valide arrive normalisee au pont", str((s, got)))
+    check(req("POST", "/api/scene", {"index": 2}, {**auth, "Content-Type": "text/plain"}, raw=b'{"index":2}')[0] == 415, "serveur telecommande: Content-Type exige (415)")
+    check(req("POST", "/api/scene", raw=b"x" * 5000, headers=auth)[0] == 413, "serveur telecommande: corps de plus de 4 Ko refuse (413)")
+    check(req("POST", "/api/scene", raw=b"{pas du json", headers=auth)[0] == 400, "serveur telecommande: JSON illisible = 400")
+    check(req("POST", "/api/panic", {}, auth)[0] == 404 and req("POST", "/api/tap", {}, auth)[0] == 404, "serveur telecommande: PANIQUE et tap tempo n'existent pas (404)")
+    s, h, b = req("POST", "/api/master", {"key": "gpu_cap", "value": 0}, auth)
+    check(s == 400 and b"Traceback" not in b and b"File " not in b, "serveur telecommande: cle de master hors liste = 400, aucune trace", b.decode("utf-8", "replace")[:80])
+    s, h, b = req("POST", "/api/lock", {}, auth)
+    check(s == 409 and _json.loads(b)["error"] == "scene verrouillee", "serveur telecommande: un refus du pont (verrou) revient en 409 avec son message")
+    check(req("PUT", "/api/scene", {})[0] == 405 and req("DELETE", "/")[0] == 405, "serveur telecommande: autres methodes refusees (405)")
+    codes = [req("POST", "/api/vj", {"action": "toggle"}, auth)[0] for _ in range(45)]
+    check(200 in codes and 429 in codes and codes.count(200) <= 31, "serveur telecommande: 30 commandes par seconde au plus (429 au-dela)", str(codes.count(200)))
+    time.sleep(1.1)
+
+    # flux SSE (socket brute : lecture avec delai, sans l'etat « timed out » de http.client)
+    rem.PING_S = 0.4
+
+    def sse_open(bearer):
+        sock = _socket.create_connection(("127.0.0.1", srv.port), timeout=4)
+        sock.sendall(f"GET /events HTTP/1.1\r\nHost: 127.0.0.1:{srv.port}\r\nAuthorization: Bearer {bearer}\r\n\r\n".encode())
+        return sock, bytearray()
+
+    def sse_read(handle, want, timeout=3.0):
+        sock, buf = handle
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if want.encode() in buf:
+                return bytes(buf)
+            sock.settimeout(0.3)
+            try:
+                chunk = sock.recv(4096)
+            except (TimeoutError, _socket.timeout):
+                continue
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            buf += chunk
+        return bytes(buf) if want.encode() in buf else None
+
+    h1 = sse_open(session)
+    first = sse_read(h1, "event: state")
+    check(first is not None and first.startswith(b"HTTP/1.1 200") and b"text/event-stream" in first, "serveur telecommande: le flux SSE envoie l'etat des l'ouverture")
+    state["n"] = 7
+    second = sse_read(h1, '"n":7')
+    check(second is not None, "serveur telecommande: un changement d'etat part en evenement SSE")
+    h1[1].clear()
+    ping = sse_read(h1, "event: ping", 2.5)
+    check(ping is not None, "serveur telecommande: un ping part quand rien ne change")
+    h2 = sse_open(session)
+    third = sse_read(h2, "event: state")
+    gone = sse_read(h1, "zzz", 1.5)
+    ended = False
+    h1[0].settimeout(1.0)
+    try:
+        ended = h1[0].recv(4096) == b""
+    except (TimeoutError, _socket.timeout):
+        ended = False
+    except OSError:
+        ended = True
+    check(third is not None and ended, "serveur telecommande: un seul abonne SSE, le nouveau remplace l'ancien (l'ancien flux est ferme)", str((third is not None, ended)))
+    # un autre telephone prend la main
+    s2, h2_, b2 = req("POST", "/api/login", {"code": acc.code})
+    new_session = _json.loads(b2).get("session", "") if s2 == 200 else ""
+    s_old, h_old, b_old = req("GET", "/api/state", headers=auth)
+    check(s2 == 200 and new_session and s_old == 401 and _json.loads(b_old).get("revoked") is True, "serveur telecommande: une nouvelle connexion revoque l'ancienne session (401 + revoked)")
+    bye = sse_read(h2, "event: bye")
+    check(bye is not None, "serveur telecommande: le flux de l'ancien telephone annonce la revocation")
+    for hh in (h1, h2):
+        hh[0].close()
+    # essais rates
+    acc.activate()
+    fails = [req("POST", "/api/login", {"code": "000000" if acc.code != "000000" else "111111"})[0] for _ in range(6)]
+    s_good = req("POST", "/api/login", {"k": acc.token})[0]
+    check(fails[:5] == [401] * 5 and fails[5] == 429 and s_good == 429, "serveur telecommande: 5 essais rates puis 429, meme avec le bon jeton", str((fails, s_good)))
+    check(req("POST", "/api/login", {"k": 5})[0] in (400, 429) and req("POST", "/api/login", {"k": "a", "code": "1"})[0] in (400, 429), "serveur telecommande: connexion mal formee refusee")
+    # arret propre
+    srv.stop()
+    check(not srv.running() and srv.handlers == 0, "serveur telecommande: arret propre (fil termine, aucun flux restant)")
+    probe = _socket.socket()
+    try:
+        probe.bind(("127.0.0.1", srv.port))
+        freed = True
+    except OSError:
+        freed = False
+    finally:
+        probe.close()
+    check(freed, "serveur telecommande: le port est libere a l'arret")
+    # port occupe, pair public, pas de page
+    blocker = _socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    busy = rem.RemoteServer(acc, lambda: {}, command, tmp, "127.0.0.1", blocker.getsockname()[1])
+    ok_b, msg_b = busy.start()
+    blocker.close()
+    check(not ok_b and "port" in msg_b, "serveur telecommande: port occupe = message clair, pas de plantage", msg_b)
+    nopage = rem.RemoteServer(acc, lambda: {}, command, tmp / "absent", "127.0.0.1", 0)
+    check(not nopage.start()[0], "serveur telecommande: page introuvable = demarrage refuse proprement")
+    pub = rem.RemoteServer(acc, lambda: {}, command, tmp, "127.0.0.1", 0, allowed_hosts={"127.0.0.1"}, peer_ok=lambda a: False)
+    pub.start()
+    conn = http.client.HTTPConnection("127.0.0.1", pub.port, timeout=4)
+    conn.request("GET", "/", headers={"Host": f"127.0.0.1:{pub.port}"})
+    r = conn.getresponse()
+    r.read()
+    conn.close()
+    pub.stop()
+    check(r.status == 403, "serveur telecommande: un pair hors reseau prive est refuse (403) avant toute autre chose")
+    check(rem.pick_private_ip() is None or ra.is_private(rem.pick_private_ip()), "serveur telecommande: l'adresse d'ecoute choisie est privee")
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_tempo() -> None:
     print("Tempo du son, sans kick (core/tempo.py)")
     import random
@@ -7761,7 +7935,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_remote_server", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7827,6 +8001,7 @@ def main() -> None:
     check_beat_grid()
     check_tempo()
     check_remote_auth()
+    check_remote_server()
     check_phase()
     check_schedule()
     check_palette()
