@@ -44,4 +44,4 @@ def phase_measures_text(info: dict | None) -> str:
     if not info or "kicks" not in info:
         return "mesures : -"
     return (f"mesures : kicks {_fr(info['kicks'], 1)}/s | energie x{_fr(info.get('energy', 1.0))} | "
-            f"mediums + aigus x{_fr(info.get('top8', 1.0))} (8 s) x{_fr(info.get('top20', 1.0))} (20 s)")
+            f"mediums + aigus x{_fr(info.get('top8', 1.0))} (8 s) x{_fr(info.get('top20', 1.0))} (20 s) | calme {round(100 * float(info.get('calm', 0.0)))} %")
