@@ -2636,8 +2636,34 @@ def check_phase() -> None:
         mult = pt2.snapshot()["mult"]
         jump = max(jump, max(abs(mult[x] - prev[x]) for x in ph.KEYS if x != "hue"))
         prev, t = dict(mult), t + 0.05
-    check(jump < 0.05 and prev["tempo"] < 0.3 and prev["fx"] < 0.4 and prev["overlay"] >= 0.85, "phases: multiplicateurs lisses, silence tres lent mais l'overlay reste",
+    check(jump < 0.12 and prev["tempo"] < 0.3 and prev["fx"] < 0.4 and prev["overlay"] >= 0.85, "phases: multiplicateurs lisses, silence tres lent mais l'overlay reste",
           f"{jump:.3f} {prev}")
+    # calme proportionnel et reactif : plus le son baisse, plus le profil d'ambiance prend le dessus, en moins d'une seconde, sans palier
+    def level_run(level, hold=2.0):
+        pc, tc, last = ph.PhaseTracker(), 0.0, None
+        for i in range(int(40 / 0.05)):
+            lv = 0.1 if tc < 30 else level
+            pc.update(tc, {"raw_rms": lv, "raw_bass": lv * 0.5, "raw_mid": lv * 0.3, "raw_high": lv * 0.2}, i % 10 == 0, "idle", 120.0)
+            if tc >= 30 + hold:
+                break
+            tc += 0.05
+        return pc.snapshot()
+    snaps = [level_run(v) for v in (0.1, 0.07, 0.05, 0.03, 0.01)]
+    tempos = [sn["mult"]["tempo"] for sn in snaps]
+    calms = [sn["calm"] for sn in snaps]
+    check(all(a_ > b_ for a_, b_ in zip(tempos, tempos[1:])) and all(a_ < b_ for a_, b_ in zip(calms, calms[1:])) and calms[0] == 0.0 and calms[-1] > 0.85,
+          "phases: le calme est proportionnel a la baisse d'energie (plus le son baisse, plus les animations ralentissent), 2 s apres la baisse", f"tempo {tempos} calme {calms}")
+    pg, tg, calm_max = ph.PhaseTracker(), 0.0, 0.0
+    for i in range(int(40 / 0.05)):                     # groove : l'energie pulse avec chaque kick (0,06 a 0,10) sans jamais baisser vraiment
+        beat = i % 10 == 0
+        lv = 0.10 if (i % 10) < 2 else 0.065
+        pg.update(tg, {"raw_rms": lv, "raw_bass": lv * 0.5, "raw_mid": lv * 0.3, "raw_high": lv * 0.2}, beat, "idle", 120.0)
+        if tg > 10:
+            calm_max = max(calm_max, pg.snapshot()["calm"])
+        tg += 0.05
+    check(calm_max < 0.2, "phases: les pulsations des kicks d'un groove ne declenchent pas le calme", str(calm_max))
+    quick = level_run(0.01, hold=0.5)
+    check(quick["calm"] > 0.4, "phases: le calme reagit en une demi-seconde", str(quick["calm"]))
     check("strobe" not in ph.KEYS, "phases: jamais de strobe automatique")
     p = {"auto_phase": 1.0}
     name = ph.apply_to_params(p, pt2.snapshot())

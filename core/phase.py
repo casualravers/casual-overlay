@@ -61,6 +61,9 @@ BUILD_SLOPE = 0.04            # pente du log de l'energie (par seconde) d'une mo
 KICK_WINDOW_S = 4.0
 TREND_WINDOW_S = 8.0
 LONG_WINDOW_S = 20.0
+FAST_ATTACK_S = 0.12          # energie reactive : monte vite, redescend un peu moins vite
+FAST_RELEASE_S = 0.35
+CALM_FROM = 0.85              # au-dessus de 85 % du plus haut niveau recent : aucun calme
 DROP_GAP_S = 1.5              # vide de kicks (au moins) avant le drop
 DROP_CONFIRM_S = 1.5          # un second kick dans ce delai confirme le retour
 DROP_MIN_PHASE_S = 3.0        # montee / cassure installee depuis au moins cela
@@ -116,6 +119,9 @@ class PhaseTracker:
         self._top_slope = 0.0
         self._top_gain = 1.0
         self._rate = 0.0
+        self._fast = 0.0                    # energie reactive (attaque 0,12 s, relachement 0,35 s) : sert au calme proportionnel
+        self._peak = 0.0                    # plus haut niveau recent de l'energie lissee (1 s), oublie avec MEAN_TAU_S : les pulsations des kicks ne sont pas du calme
+        self._calm = 0.0                    # 0 = plein son, 1 = tres calme (poids du profil « ambiance » dans les multiplicateurs)
         self._last_kick: float | None = None
         self._drop_arm: float | None = None
         self.drops = 0                     # nombre de drops vus (le kick revient apres un vide pendant une montee / cassure)
@@ -123,6 +129,8 @@ class PhaseTracker:
         self._top_slope_long = 0.0
         self._top_gain_long = 1.0
         self._mult = dict(NEUTRAL)
+        self._idle = dict(PROFILES["ambient"])         # profil de calme, glisse (1 s) entre ambiance et silence
+        self._started = False
         self._build_t: float | None = None
         self._grooving = False
         self._recent_groove = -1e9          # derniere fois qu'on etait en groove / pic / montee (distingue cassure et ambiance)
@@ -147,6 +155,11 @@ class PhaseTracker:
         if dt > 0:
             self._e += (rms - self._e) * (1.0 - math.exp(-dt / E_TAU_S))
             self._top += (mid + high - self._top) * (1.0 - math.exp(-dt / E_TAU_S))
+            if not self._started:
+                self._started, self._fast = True, rms
+            tau = FAST_ATTACK_S if rms > self._fast else FAST_RELEASE_S
+            self._fast += (rms - self._fast) * (1.0 - math.exp(-dt / tau))
+            self._peak = max(self._e, self._peak * math.exp(-dt / MEAN_TAU_S))
             if self._grooving:
                 if self._mean <= 0.0:
                     self._mean = max(self._e, CALM_ABS)       # amorce : la moyenne part du premier passage a kicks, pas de zero
@@ -185,6 +198,7 @@ class PhaseTracker:
             self._silent_since = None
         self._adopt(now, self._classify(now, rate, rhythm_state, calm, quiet, build_min))
         self._ease(dt)
+        self._breathe(sil)
         return self.phase
 
     def _early_drop(self, now: float) -> None:
@@ -246,9 +260,23 @@ class PhaseTracker:
             self.phase, self.since, self._cand = target, now, None
             self._build_t = now if target == "build" else None
 
+    def _breathe(self, sil: float) -> None:
+        """Calme proportionnel : plus l'energie reactive tombe sous le plus haut niveau recent, plus le profil « ambiance » (animations lentes, respiration) prend
+        le dessus, tout de suite et sans palier (les phases, elles, changent par paliers de plusieurs secondes). 0 au-dessus de CALM_FROM de ce niveau, 1 a zero."""
+        if not self._started:
+            self._calm = 0.0
+            return
+        ref = max(self._peak, 4.0 * sil)
+        x = self._fast / ref if ref > 0 else 1.0
+        self._calm = min(max((CALM_FROM - x) / CALM_FROM, 0.0), 1.0)
+
     def _ease(self, dt: float) -> None:
         if self.phase in ("groove", "peak", "build"):
             self._recent_groove = self._last or 0.0
+        goal_idle = PROFILES["silence" if self.phase == "silence" else "ambient"]
+        ki = 1.0 - math.exp(-dt / 1.0) if dt > 0 else 0.0
+        for key in KEYS:
+            self._idle[key] += (goal_idle[key] - self._idle[key]) * ki
         prof = PROFILES[self.phase]
         k = 1.0 - math.exp(-dt / MULT_TAU_S) if dt > 0 else 0.0
         ramp = 1.0
@@ -259,12 +287,17 @@ class PhaseTracker:
             self._mult[key] += (goal - self._mult[key]) * k
 
     # ---- sortie
+    def blended(self) -> dict:
+        """Multiplicateurs de la phase (lisses) melanges au profil « ambiance » en proportion du calme (voir `_breathe`) : ils reagissent a la vitesse de l'energie."""
+        w = self._calm
+        return {k: self._mult[k] + (self._idle[k] - self._mult[k]) * w for k in KEYS}
+
     def snapshot(self) -> dict:
         """Etat lisible sans verrou : nom de la phase, depuis quand, mesures et multiplicateurs lisses."""
         return {"name": self.phase, "label": LABELS[self.phase], "since": self.since, "energy": round(self._boost, 3),
                 "density": round(self._density, 3), "bass": round(self._bass_share, 3), "bright": round(self._bright, 3),
                 "slope": round(self._slope, 4), "kicks": round(self._rate, 2), "top8": round(self._top_gain, 2),
-                "top20": round(self._top_gain_long, 2), "drops": self.drops, "mult": dict(self._mult)}
+                "top20": round(self._top_gain_long, 2), "drops": self.drops, "calm": round(self._calm, 2), "mult": self.blended()}
 
 
 def apply_to_params(params: dict, snapshot: dict | None) -> str:
