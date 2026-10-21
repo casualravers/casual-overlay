@@ -920,4 +920,8 @@ def install(c):
     ui_every("rhythm", 100, rhythm_tick, first_ms=500)
 
     import types
-    return types.SimpleNamespace(rhythm_step=rhythm_step, autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, do_one=do_one, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)
+    def voyants() -> dict:
+        """Les textes des voyants de l'espace de controle (pour la telecommande telephone : lecture seule)."""
+        return {"phase": phase_why_line(), "strobe": strobe_line(), "sources": sources_line()}
+
+    return types.SimpleNamespace(voyants=voyants, sync_master_panel=sync_master_panel, detected_bpm=detected_bpm, rhythm_step=rhythm_step, autosave_tick=autosave_tick, back_scene=back_scene, console_window=console_window, do_drop=do_drop, do_panic=do_panic, do_tap=do_tap, do_one=do_one, help_window=help_window, master_box=master_box, record_history=record_history, start_build=start_build, status_text=status_text, update_master_panel=update_master_panel)

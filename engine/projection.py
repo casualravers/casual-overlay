@@ -13,7 +13,7 @@ from core.automation import AutomationEngine, set_fx_link
 from core import phase as core_phase
 from core.controls import panic, strobe_press, strobe_release
 from core.params import FX_NAMES, load_params, save_params
-from engine.preview import write_preview
+from engine.preview import PREVIEW_WIDTH, write_preview
 from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_text
 from engine.deps import PIL_Image, glfw, moderngl
 from engine.session import Session
@@ -506,7 +506,10 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 dest = s.preview_requests.get_nowait()
             except queue.Empty:
                 break
-            write_preview(ctx.screen.read(viewport=(0, 0, size[0], size[1]), components=3), size, dest)
+            width = PREVIEW_WIDTH
+            if isinstance(dest, tuple):                 # (chemin, largeur) : l'apercu de la telecommande est plus grand que celui des scenes
+                dest, width = dest
+            write_preview(ctx.screen.read(viewport=(0, 0, size[0], size[1]), components=3), size, dest, width)
         s.status["noise"] = renderer.noise_out
         glfw.swap_buffers(handle)
         if period:

@@ -302,3 +302,13 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
   l'ordinateur sous la main. A securiser (reseau local seulement, code d'acces).
 
 Details d'architecture, pieges et mesures : [CLAUDE.md](CLAUDE.md).
+
+## Telecommande telephone
+
+Pilote les scenes, le VJ, le Verrou, le strobe, la montee / drop, les masters (reactivite, effets, overlay, fond, teinte, tempo), les 4 memoires, « Temps 1 » et le texte du logo depuis un telephone, sur le Wi-Fi local.
+
+1. Dans les reglages, onglet *Affichage* : coche **Telecommande telephone** (desactivee a chaque lancement), puis **QR / code...**.
+2. Scanne le QR avec l'appareil photo du telephone (meme Wi-Fi que l'ordi), ou ouvre l'adresse affichee et tape le code a 6 chiffres.
+3. Optionnel : « Ajouter a l'ecran d'accueil » pour l'ouvrir comme une appli.
+
+Limites et securite : reseau local seulement (les adresses hors reseau prive sont refusees), trafic **non chiffre** (HTTP) : ne l'utilise pas sur un Wi-Fi public ; un seul telephone a la fois ; pas de bouton PANIQUE ni de tap tempo (reste sur l'ordi). Si le telephone ne trouve pas l'ordi : autorise Python dans le pare-feu Windows pour le profil *Prive*, et verifie que le routeur n'a pas l'isolation des clients (« AP isolation »). L'apercu de l'ecran est facultatif et coupe par defaut.

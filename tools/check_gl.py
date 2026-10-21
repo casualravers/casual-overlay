@@ -1245,6 +1245,8 @@ def check_gui() -> None:
     check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
+    check(out.get("x_remote_bridge") == (True,) * 9, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
+          str(out.get("x_remote_bridge")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
@@ -2673,6 +2675,416 @@ def check_phase() -> None:
           "phases: application aux reglages (neutre si desactive ou sans mesure)", name)
 
 
+def check_remote_auth() -> None:
+    print("Telecommande : securite pure (core/remote_auth.py, core/remote_state.py)")
+    from core import remote_auth as ra
+    from core import remote_state as rs
+    for addr in ("192.168.1.23", "10.0.0.5", "172.16.0.1", "172.31.255.254", "127.0.0.1", "169.254.3.4", "::1", "fe80::1", "fd12:3456::1", "::ffff:192.168.1.9", "fe80::1%eth0"):
+        check(ra.is_private(addr), f"telecommande: adresse privee acceptee ({addr})")
+    for addr in ("8.8.8.8", "172.32.0.1", "172.15.255.255", "192.169.0.1", "11.0.0.1", "2001:db8::1", "::ffff:8.8.8.8", "", "abc", None, "999.1.1.1", "192.168.1"):
+        check(not ra.is_private(addr), f"telecommande: adresse non privee ou mal formee refusee ({addr!r})")
+    t1, t2 = ra.new_token(), ra.new_token()
+    check(t1 != t2 and len(t1) >= 40 and ra.check_token(t1, t1) and not ra.check_token(t1, t2) and not ra.check_token("", "") and not ra.check_token(None, t1)
+          and not ra.check_token(t1, None) and not ra.check_token(123, t1), "telecommande: jetons longs, differents, comparaison stricte")
+    codes = {ra.new_code() for _ in range(50)}
+    check(all(len(c) == 6 and c.isdigit() for c in codes) and len(codes) > 20, "telecommande: code a 6 chiffres")
+    clock = [0.0]
+    lim = ra.LoginLimiter(lambda: clock[0])
+    for _ in range(4):
+        lim.fail("192.168.1.5")
+    check(lim.allowed("192.168.1.5"), "telecommande: 4 essais rates, pas encore bloque")
+    lim.fail("192.168.1.5")
+    check(not lim.allowed("192.168.1.5") and lim.allowed("192.168.1.6"), "telecommande: 5 essais rates = pair bloque, les autres non")
+    clock[0] = 299.0
+    still = not lim.allowed("192.168.1.5")
+    clock[0] = 301.0
+    check(still and lim.allowed("192.168.1.5"), "telecommande: blocage de 5 minutes puis reprise")
+    lim.fail("p")
+    lim.ok("p")
+    for _ in range(4):
+        lim.fail("p")
+    check(lim.allowed("p"), "telecommande: un essai reussi remet le compteur a zero")
+    clock[0] = 1000.0
+    rate = ra.RateLimiter(lambda: clock[0], per_second=30)
+    got = sum(rate.allow("s") for _ in range(40))
+    clock[0] = 1001.5
+    check(got == 30 and rate.allow("s") and rate.allow("autre"), "telecommande: 30 commandes par seconde au plus, puis reprise", str(got))
+    ok = [
+        ("scene", {"index": 3}, {"cmd": "scene", "index": 3}), ("vj", {"action": "next"}, {"cmd": "vj", "action": "next"}),
+        ("lock", {}, {"cmd": "lock"}), ("strobe", {"down": True}, {"cmd": "strobe", "down": True}), ("build", {"action": "drop"}, {"cmd": "build", "action": "drop"}),
+        ("master", {"key": "react_master", "value": 1.5}, {"cmd": "master", "key": "react_master", "value": 1.5}),
+        ("master", {"key": "bg_master", "value": 7}, {"cmd": "master", "key": "bg_master", "value": 1.0}),
+        ("memory", {"slot": 4}, {"cmd": "memory", "slot": 4}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
+        ("auto", {"key": "strobe_auto", "value": 0}, {"cmd": "auto", "key": "strobe_auto", "value": False}), ("preview", {"on": True}, {"cmd": "preview", "on": True}),
+    ]
+    bad_all = True
+    for name, body, want in ok:
+        if ra.validate_command(name, body) != want:
+            bad_all = False
+            print("   attendu", want, "obtenu", ra.validate_command(name, body))
+    check(bad_all, "telecommande: chaque commande valide est normalisee (texte nettoye, master ramene dans sa plage)")
+    refused = [("nope", {}), ("scene", {"index": -1}), ("scene", {"index": "3"}), ("scene", {"index": True}), ("scene", {"index": 1, "x": 1}), ("scene", []),
+               ("vj", {"action": "panic"}), ("strobe", {"down": "yes"}), ("master", {"key": "gpu_cap", "value": 1}), ("master", {"key": "tempo", "value": "1"}),
+               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 5}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
+               ("auto", {"key": "auto_phase", "value": 2}), ("lock", {"x": 1}), ("build", {"action": "panic"}), ("preview", {"on": "1"})]
+    wrong = []
+    for name, body in refused:
+        try:
+            ra.validate_command(name, body)
+            wrong.append((name, body))
+        except ra.CommandError:
+            pass
+    check(not wrong, "telecommande: commande inconnue, mauvais type, cle hors liste, champ en trop, hors plage = refuses (jamais de PANIQUE)", str(wrong))
+    check("panic" not in ra.COMMANDS and "tap" not in ra.COMMANDS, "telecommande: ni PANIQUE ni tap tempo parmi les commandes")
+    long_text = ra.validate_command("text", {"text": "x" * 5000})["text"]
+    check(len(long_text) == ra.MAX_TEXT, "telecommande: texte du logo tronque")
+    # acces : un seul telephone
+    clock[0] = 0.0
+    acc = ra.Access(lambda: clock[0])
+    check(acc.login("192.168.1.2", token="x")[0] == 503, "telecommande: inactive = connexion refusee (503)")
+    acc.activate()
+    tok, code = acc.token, acc.code
+    check(acc.login("8.8.8.8", token=tok)[0] == 403, "telecommande: pair public refuse (403) meme avec le bon jeton")
+    check(acc.login("192.168.1.2", token="mauvais")[0] == 401 and acc.login("192.168.1.2", code="000000" if code != "000000" else "111111")[0] == 401, "telecommande: mauvais jeton / code = 401")
+    st1, s1 = acc.login("192.168.1.2", token=tok)
+    check(st1 == 200 and acc.authorize(s1) and not acc.authorize(tok) and not acc.authorize("") and acc.connected(), "telecommande: jeton d'activation contre jeton de session ; l'activation seule ne suffit pas")
+    st2, s2 = acc.login("192.168.1.9", code=code)
+    check(st2 == 200 and acc.authorize(s2) and not acc.authorize(s1) and acc.was_revoked(s1), "telecommande: un seul telephone, le nouveau remplace l'ancien (l'ancien est revoque)")
+    acc.disconnect()
+    check(not acc.authorize(s2) and not acc.connected(), "telecommande: Deconnecter revoque la session")
+    for _ in range(5):
+        acc.login("192.168.1.77", token="faux")
+    check(acc.login("192.168.1.77", token=tok)[0] == 429, "telecommande: apres 5 essais rates, meme le bon jeton est refuse (429)")
+    old_tok = tok
+    acc.deactivate()
+    acc.activate()
+    check(acc.token != old_tok and acc.login("192.168.1.2", token=old_tok)[0] == 401, "telecommande: nouvel jeton a chaque activation")
+    events = " | ".join(acc.pop_events())
+    check(tok not in events and code not in events and s1 not in events and "essai de connexion rate" in events, "telecommande: le journal ne contient jamais jeton ni code")
+    # etat
+    st = rs.build_state(set_name="Club", scenes=[(0, "A"), (1, "B\x07" + "z" * 200)], active=1, vj_running=True, vj_remaining="12 s", phase={"name": "groove", "label": "groove", "x": 1},
+                        bpm=127.6, voyants={"phase": "p", "strobe": "s", "sources": "o"}, masters={"react_master": 1.234567, "gpu_cap": 1, "tempo": 1}, autos={"auto_phase": 1, "x": 1},
+                        text="TEXTE", projection_open=True, msg="ok", build=0.5)
+    js = rs.to_json(st)
+    check(st["v"] == 1 and st["bpm"] == 128 and len(st["set"]["scenes"][1]["n"]) == rs.MAX_NAME and "\x07" not in js and "gpu_cap" not in js and '"x"' not in js
+          and set(st) == {"v", "set", "vj", "phase", "bpm", "voyants", "masters", "autos", "text", "projection", "msg", "build", "preview"},
+          "etat telecommande: cles du contrat, nettoyage, aucune cle etrangere", js[:120])
+    check(rs.to_json(rs.build_state(set_name="Club")) == rs.to_json(rs.build_state(set_name="Club")) and len(js) < rs.MAX_BYTES, "etat telecommande: stable et petit")
+    big = rs.build_state(scenes=[(i, "n" * 80) for i in range(400)], msg="m" * 900, text="t" * 900)
+    check(len(rs.to_json(big)) < rs.MAX_BYTES, "etat telecommande: meme avec 400 scenes et de longs textes, moins de 8 Ko", str(len(rs.to_json(big))))
+    check("token" not in js and "code" not in js and "session" not in js, "etat telecommande: aucune donnee sensible")
+    th = rs.Throttle()
+    a = th.next("{1}", 0.0)
+    b = th.next("{2}", 0.1)
+    c_ = th.next("{2}", 0.3)
+    d = th.next("{2}", 0.9)
+    check((a, b, c_, d) == ("{1}", None, "{2}", None), "etat telecommande: au plus 5 evenements par seconde, le dernier etat n'est jamais perdu, rien si inchange", str((a, b, c_, d)))
+
+
+def check_remote_server() -> None:
+    print("Telecommande : serveur HTTP + SSE (engine/remote.py)")
+    import http.client
+    import json as _json
+    import socket as _socket
+    import tempfile
+    from pathlib import Path as _Path
+    from core import remote_auth as ra
+    from engine import remote as rem
+
+    tmp = _Path(tempfile.mkdtemp(prefix="casual_remote_"))
+    for name, text in (("index.html", "<!doctype html><title>t</title>"), ("app.js", "//js"), ("style.css", "/*css*/"), ("manifest.webmanifest", "{}"), ("icon.svg", "<svg/>")):
+        (tmp / name).write_text(text, encoding="utf-8")
+    state = {"v": 1, "n": 0}
+    got: list = []
+
+    def command(cmd):
+        got.append(cmd)
+        return "scene verrouillee" if cmd.get("cmd") == "lock" else None
+
+    acc = ra.Access()
+    acc.activate()
+    srv = rem.RemoteServer(acc, lambda: dict(state), command, tmp, "127.0.0.1", 0, allowed_hosts={"127.0.0.1"})
+    ok, msg = srv.start()
+    check(ok and srv.port > 0 and srv.running(), "serveur telecommande: demarre sur une adresse locale", str(msg))
+    if not ok:
+        return
+
+    def req(method, path, body=None, headers=None, raw=None, host=None):
+        conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        hdrs = {"Host": host or f"127.0.0.1:{srv.port}"}
+        hdrs.update(headers or {})
+        data = raw if raw is not None else (_json.dumps(body).encode("utf-8") if body is not None else None)
+        if data is not None and "Content-Type" not in hdrs:
+            hdrs["Content-Type"] = "application/json"
+        try:
+            conn.request(method, path, body=data, headers=hdrs)
+            r = conn.getresponse()
+            payload = r.read()
+            return r.status, {k.lower(): v for k, v in r.getheaders()}, payload
+        finally:
+            conn.close()
+
+    s, h, b = req("GET", "/")
+    check(s == 200 and b.startswith(b"<!doctype") and "script-src 'self'" in h.get("content-security-policy", "") and h.get("cache-control") == "no-store"
+          and h.get("x-content-type-options") == "nosniff", "serveur telecommande: la page est servie avec une CSP stricte, sans cache", str((s, h.get("content-security-policy"))))
+    check(req("GET", "/app.js")[0] == 200 and req("GET", "/style.css")[0] == 200 and req("GET", "/manifest.webmanifest")[0] == 200, "serveur telecommande: fichiers de la page")
+    check(all(req("GET", p_)[0] == 404 for p_ in ("/../CLAUDE.md", "/..%2fCLAUDE.md", "/etc/passwd", "/index.html", "/api")), "serveur telecommande: aucun chemin libre (404)")
+    check(req("GET", "/", host="evil.example:80")[0] == 403 and req("GET", "/", host="192.168.9.9:1")[0] == 403, "serveur telecommande: en-tete Host etranger refuse (DNS rebinding)")
+    check(req("GET", "/", headers={"Origin": "http://evil.example"})[0] == 403 and req("GET", "/", headers={"Origin": f"http://127.0.0.1:{srv.port}"})[0] == 200,
+          "serveur telecommande: Origin etranger refuse, Origin identique accepte")
+    check(req("GET", "/api/state")[0] == 401 and req("POST", "/api/lock", {})[0] == 401 and req("GET", "/events")[0] == 401
+          and req("GET", "/api/state", headers={"Authorization": "Bearer faux"})[0] == 401, "serveur telecommande: sans jeton de session = 401 partout")
+    check(req("POST", "/api/login", {"k": acc.token})[0] == 200 or True, "serveur telecommande: (amorce)")
+    s, h, b = req("POST", "/api/login", {"k": acc.token})
+    session = _json.loads(b).get("session", "") if s == 200 else ""
+    check(s == 200 and len(session) >= 40, "serveur telecommande: le jeton d'activation donne un jeton de session", str(s))
+    auth = {"Authorization": "Bearer " + session}
+    s, h, b = req("GET", "/api/state", headers=auth)
+    check(s == 200 and _json.loads(b)["v"] == 1, "serveur telecommande: l'etat est lu avec le jeton de session")
+    got.clear()
+    s, h, b = req("POST", "/api/scene", {"index": 2}, auth)
+    check(s == 200 and got == [{"cmd": "scene", "index": 2}], "serveur telecommande: une commande valide arrive normalisee au pont", str((s, got)))
+    check(req("POST", "/api/scene", {"index": 2}, {**auth, "Content-Type": "text/plain"}, raw=b'{"index":2}')[0] == 415, "serveur telecommande: Content-Type exige (415)")
+    check(req("POST", "/api/scene", raw=b"x" * 5000, headers=auth)[0] == 413, "serveur telecommande: corps de plus de 4 Ko refuse (413)")
+    check(req("POST", "/api/scene", raw=b"{pas du json", headers=auth)[0] == 400, "serveur telecommande: JSON illisible = 400")
+    check(req("POST", "/api/panic", {}, auth)[0] == 404 and req("POST", "/api/tap", {}, auth)[0] == 404, "serveur telecommande: PANIQUE et tap tempo n'existent pas (404)")
+    s, h, b = req("POST", "/api/master", {"key": "gpu_cap", "value": 0}, auth)
+    check(s == 400 and b"Traceback" not in b and b"File " not in b, "serveur telecommande: cle de master hors liste = 400, aucune trace", b.decode("utf-8", "replace")[:80])
+    s, h, b = req("POST", "/api/lock", {}, auth)
+    check(s == 409 and _json.loads(b)["error"] == "scene verrouillee", "serveur telecommande: un refus du pont (verrou) revient en 409 avec son message")
+    check(req("PUT", "/api/scene", {})[0] == 405 and req("DELETE", "/")[0] == 405, "serveur telecommande: autres methodes refusees (405)")
+    codes = [req("POST", "/api/vj", {"action": "toggle"}, auth)[0] for _ in range(45)]
+    check(200 in codes and 429 in codes and codes.count(200) <= 31, "serveur telecommande: 30 commandes par seconde au plus (429 au-dela)", str(codes.count(200)))
+    time.sleep(1.1)
+
+    # flux SSE (socket brute : lecture avec delai, sans l'etat « timed out » de http.client)
+    rem.PING_S = 0.4
+
+    def sse_open(bearer):
+        sock = _socket.create_connection(("127.0.0.1", srv.port), timeout=4)
+        sock.sendall(f"GET /events HTTP/1.1\r\nHost: 127.0.0.1:{srv.port}\r\nAuthorization: Bearer {bearer}\r\n\r\n".encode())
+        return sock, bytearray()
+
+    def sse_read(handle, want, timeout=3.0):
+        sock, buf = handle
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if want.encode() in buf:
+                return bytes(buf)
+            sock.settimeout(0.3)
+            try:
+                chunk = sock.recv(4096)
+            except (TimeoutError, _socket.timeout):
+                continue
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            buf += chunk
+        return bytes(buf) if want.encode() in buf else None
+
+    h1 = sse_open(session)
+    first = sse_read(h1, "event: state")
+    check(first is not None and first.startswith(b"HTTP/1.1 200") and b"text/event-stream" in first, "serveur telecommande: le flux SSE envoie l'etat des l'ouverture")
+    state["n"] = 7
+    second = sse_read(h1, '"n":7')
+    check(second is not None, "serveur telecommande: un changement d'etat part en evenement SSE")
+    h1[1].clear()
+    ping = sse_read(h1, "event: ping", 2.5)
+    check(ping is not None, "serveur telecommande: un ping part quand rien ne change")
+    h2 = sse_open(session)
+    third = sse_read(h2, "event: state")
+    gone = sse_read(h1, "zzz", 1.5)
+    ended = False
+    h1[0].settimeout(1.0)
+    try:
+        ended = h1[0].recv(4096) == b""
+    except (TimeoutError, _socket.timeout):
+        ended = False
+    except OSError:
+        ended = True
+    check(third is not None and ended, "serveur telecommande: un seul abonne SSE, le nouveau remplace l'ancien (l'ancien flux est ferme)", str((third is not None, ended)))
+    # un autre telephone prend la main
+    s2, h2_, b2 = req("POST", "/api/login", {"code": acc.code})
+    new_session = _json.loads(b2).get("session", "") if s2 == 200 else ""
+    s_old, h_old, b_old = req("GET", "/api/state", headers=auth)
+    check(s2 == 200 and new_session and s_old == 401 and _json.loads(b_old).get("revoked") is True, "serveur telecommande: une nouvelle connexion revoque l'ancienne session (401 + revoked)")
+    bye = sse_read(h2, "event: bye")
+    check(bye is not None, "serveur telecommande: le flux de l'ancien telephone annonce la revocation")
+    for hh in (h1, h2):
+        hh[0].close()
+    # essais rates
+    acc.activate()
+    fails = [req("POST", "/api/login", {"code": "000000" if acc.code != "000000" else "111111"})[0] for _ in range(6)]
+    s_good = req("POST", "/api/login", {"k": acc.token})[0]
+    check(fails[:5] == [401] * 5 and fails[5] == 429 and s_good == 429, "serveur telecommande: 5 essais rates puis 429, meme avec le bon jeton", str((fails, s_good)))
+    check(req("POST", "/api/login", {"k": 5})[0] in (400, 429) and req("POST", "/api/login", {"k": "a", "code": "1"})[0] in (400, 429), "serveur telecommande: connexion mal formee refusee")
+    # arret propre
+    srv.stop()
+    check(not srv.running() and srv.handlers == 0, "serveur telecommande: arret propre (fil termine, aucun flux restant)")
+    probe = _socket.socket()
+    try:
+        probe.bind(("127.0.0.1", srv.port))
+        freed = True
+    except OSError:
+        freed = False
+    finally:
+        probe.close()
+    check(freed, "serveur telecommande: le port est libere a l'arret")
+    # port occupe, pair public, pas de page
+    blocker = _socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    busy = rem.RemoteServer(acc, lambda: {}, command, tmp, "127.0.0.1", blocker.getsockname()[1])
+    ok_b, msg_b = busy.start()
+    blocker.close()
+    check(not ok_b and "port" in msg_b, "serveur telecommande: port occupe = message clair, pas de plantage", msg_b)
+    nopage = rem.RemoteServer(acc, lambda: {}, command, tmp / "absent", "127.0.0.1", 0)
+    check(not nopage.start()[0], "serveur telecommande: page introuvable = demarrage refuse proprement")
+    pub = rem.RemoteServer(acc, lambda: {}, command, tmp, "127.0.0.1", 0, allowed_hosts={"127.0.0.1"}, peer_ok=lambda a: False)
+    pub.start()
+    conn = http.client.HTTPConnection("127.0.0.1", pub.port, timeout=4)
+    conn.request("GET", "/", headers={"Host": f"127.0.0.1:{pub.port}"})
+    r = conn.getresponse()
+    r.read()
+    conn.close()
+    pub.stop()
+    check(r.status == 403, "serveur telecommande: un pair hors reseau prive est refuse (403) avant toute autre chose")
+    check(rem.pick_private_ip() is None or ra.is_private(rem.pick_private_ip()), "serveur telecommande: l'adresse d'ecoute choisie est privee")
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_qrcode() -> None:
+    print("QR code (core/qrcode.py)")
+    import hashlib
+    import random as _random
+    from core import qrcode as qr
+    check([qr.capacity(v) for v in range(1, 11)] == [14, 26, 42, 62, 84, 106, 122, 152, 180, 213], "qrcode: capacites en octets (niveau M, versions 1 a 10)")
+
+    def read_back(matrix):
+        """Decodeur de relecture : format (BCH), masque, zigzag, entrelacement, restes Reed-Solomon, mode octets. Rend le texte ou leve AssertionError."""
+        size = len(matrix)
+        version = (size - 17) // 4
+        grid = qr._Grid(version)
+        grid.draw_function_patterns()
+        bits = 0
+        for i in range(15):                                              # premiere copie du format, en haut a gauche
+            x, y = (8, i) if i < 6 else ((8, 7) if i == 6 else ((8, 8) if i == 7 else ((7, 8) if i == 8 else (14 - i, 8))))
+            bits |= int(matrix[y][x]) << i
+        mask = None
+        for m in range(8):
+            if qr._format_bits(m) == bits:
+                mask = m
+        assert mask is not None, "format illisible"
+        raw = [row[:] for row in matrix]
+        un = qr._Grid(version)
+        un.func = grid.func
+        un.mod = raw
+        un.apply_mask(mask)
+        data, bit_i, acc = [], 0, 0
+        right = size - 1
+        seen = set()
+        while right >= 1:
+            if right == 6:
+                right = 5
+            for vert in range(size):
+                for j in range(2):
+                    x = right - j
+                    y = size - 1 - vert if ((right + 1) & 2) == 0 else vert
+                    if not grid.func[y][x]:
+                        assert (x, y) not in seen, "module lu deux fois"
+                        seen.add((x, y))
+                        acc = acc << 1 | int(raw[y][x])
+                        bit_i += 1
+                        if bit_i % 8 == 0:
+                            data.append(acc)
+                            acc = 0
+            right -= 2
+        layout, ec_len = qr.BLOCKS_M[version]
+        sizes = [s_ for n, s_ in layout for _ in range(n)]
+        total = sum(sizes)
+        blocks = [[] for _ in sizes]
+        pos = 0
+        for i in range(max(sizes)):
+            for b, s_ in enumerate(sizes):
+                if i < s_:
+                    blocks[b].append(data[pos])
+                    pos += 1
+        ecs = [[] for _ in sizes]
+        for i in range(ec_len):
+            for b in range(len(sizes)):
+                ecs[b].append(data[pos])
+                pos += 1
+        div = qr._generator(ec_len)
+        for b in range(len(sizes)):
+            assert qr._remainder(blocks[b], div) == ecs[b], "correction d'erreur fausse"
+        flat = [x for blk in blocks for x in blk]
+        stream = "".join(f"{x:08b}" for x in flat)
+        assert stream[:4] == "0100", "mode octets attendu"
+        width = 8 if version <= 9 else 16
+        n = int(stream[4:4 + width], 2)
+        body = bytes(int(stream[4 + width + 8 * i:12 + width + 8 * i], 2) for i in range(n))
+        return body.decode("utf-8"), version, total
+
+    rnd = _random.Random(5)
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:/#.=?& e"
+    bad, count = [], 0
+    for ver in range(1, 11):
+        for n in sorted({1, max(1, qr.capacity(ver) - 1), qr.capacity(ver)}):
+            for mask in (None, 0, 1, 2, 3, 4, 5, 6, 7):
+                text = "".join(rnd.choice(alphabet) for _ in range(n))
+                m = qr.encode(text, mask)
+                count += 1
+                try:
+                    back, got_ver, _ = read_back(m)
+                    ok = back == text and len(m) == got_ver * 4 + 17 and got_ver <= ver
+                except (AssertionError, IndexError, ValueError) as exc:
+                    ok = False
+                    back = str(exc)
+                if not ok:
+                    bad.append((ver, n, mask, back if isinstance(back, str) else ""))
+    check(not bad, f"qrcode: {count} codes (versions 1 a 10, 8 masques, tailles limites) relus : donnees, format, correction d'erreur", str(bad[:2]))
+    url = "http://192.168.1.23:8765/#k=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+    m = qr.encode(url)
+    sha = hashlib.sha1(qr.to_text(m).encode()).hexdigest()
+    check(len(m) == 37 and sha == "3c55fdf4144c8ded4c343a3289b3a412f340d0db", "qrcode: l'adresse de la telecommande donne toujours le meme symbole (version 5, 37 modules, decode par OpenCV a la mise au point)", sha)
+    finder = all(m[y][x] == (max(abs(x - 3), abs(y - 3)) not in (2, 4)) for x in range(7) for y in range(7))
+    check(finder and m[6][8] == (8 % 2 == 0) and m[8][6] == (8 % 2 == 0) and m[37 - 8][8] is True, "qrcode: reperes, timing et module sombre aux bons endroits")
+    try:
+        qr.encode("x" * 214)
+        raised = False
+    except ValueError:
+        raised = True
+    check(raised and len(qr.encode("e" + chr(233) + "\u20ac")) >= 21, "qrcode: trop long = erreur claire ; accents et euro en UTF-8 acceptes")
+
+
+def check_remote_page() -> None:
+    print("Telecommande : page du telephone (gui/remote)")
+    import re
+    from core import remote_auth as ra
+    from engine import remote as rem
+    d = ROOT / "gui" / "remote"
+    files = {name: (d / name) for name, _ in rem.STATIC.values()}
+    check(all(f.is_file() for f in files.values()), "page telecommande: les cinq fichiers servis existent", str([n for n, f in files.items() if not f.is_file()]))
+    total = sum(f.stat().st_size for f in files.values() if f.is_file())
+    check(total < 150_000, "page telecommande: moins de 150 Ko au total (charge vite sur le Wi-Fi d'une salle)", str(total))
+    html = files["index.html"].read_text(encoding="utf-8")
+    js = files["app.js"].read_text(encoding="utf-8")
+    check(not re.search(r"<script(?![^>]*\bsrc=)", html) and " style=" not in html and "onclick=" not in html and "<style" not in html,
+          "page telecommande: aucun script ni style en ligne (la CSP les interdit)")
+    ids = set(re.findall(r'id="([^"]+)"', html))
+    used = set(re.findall(r'\$\("([a-z0-9_-]+)"\)', js))
+    dyn = {"o-", "m-", "a-", "tab-", "mem-"}
+    missing = sorted(u for u in used if u not in ids)
+    check(not missing, "page telecommande: chaque element que le script cherche existe dans la page", str(missing))
+    api_used = set(re.findall(r'"/api/([a-z]+)"', js)) - {"login"}
+    check(api_used == set(ra.COMMANDS), "page telecommande: chaque commande de la liste blanche a son bouton, et le script n'en appelle aucune autre", str(sorted(api_used ^ set(ra.COMMANDS))))
+    check("panic" not in js.lower() and "tap" not in api_used, "page telecommande: ni PANIQUE ni tap tempo")
+    check("localStorage" not in js and "document.cookie" not in js, "page telecommande: le jeton reste en sessionStorage (ni cookie ni stockage durable)")
+    check({"react_master", "fx_master"} <= set(re.findall(r'id="m-([a-z_]+)"', html)), "page telecommande: Reactivite et Effets sont des curseurs de la page")
+
+
 def check_tempo() -> None:
     print("Tempo du son, sans kick (core/tempo.py)")
     import random
@@ -3648,6 +4060,77 @@ def gui_expand_steps(c, s, out) -> None:
             time.sleep(0.02)
     out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, True, "BPM" in c["scenes"]["msg"].get())
     params["tempo"] = 1.0
+    # telecommande telephone : pont GUI <-> serveur local (vrai serveur sur 127.0.0.1, vraies requetes HTTP)
+    import http.client as _hc
+    import json as _js
+    rc_ = c.get("remote")
+    rem_ok = [rc_ is not None, False, False, False, False, False, False, False]
+    if rc_ is not None:
+        os.environ["CASUAL_REMOTE_HOST"], os.environ["CASUAL_REMOTE_PORT"] = "127.0.0.1", "0"
+        saved_lock_ = s.scene_lock
+        s.scene_lock = False
+        try:
+            rc_.var.set(1)
+            rc_.toggle()
+            srv_ = rc_.state["server"]
+            rem_ok[1] = bool(rc_.running() and srv_ is not None and srv_.port > 0)
+
+            def rq_(method, path, body=None, bearer=None):
+                cn = _hc.HTTPConnection("127.0.0.1", srv_.port, timeout=5)
+                h = {"Host": f"127.0.0.1:{srv_.port}"}
+                if body is not None:
+                    h["Content-Type"] = "application/json"
+                if bearer:
+                    h["Authorization"] = "Bearer " + bearer
+                try:
+                    cn.request(method, path, body=None if body is None else _js.dumps(body), headers=h)
+                    r_ = cn.getresponse()
+                    return r_.status, r_.read()
+                finally:
+                    cn.close()
+
+            def pump_(sec=0.45):
+                t_e = time.monotonic() + sec
+                while time.monotonic() < t_e:
+                    root.update()
+                    time.sleep(0.02)
+            code_, body_ = rq_("POST", "/api/login", {"k": rc_.access.token})
+            sess_ = _js.loads(body_).get("session", "") if code_ == 200 else ""
+            rem_ok[2] = bool(sess_)
+            rq_("POST", "/api/master", {"key": "react_master", "value": 0.37}, sess_)
+            rq_("POST", "/api/auto", {"key": "bpm_auto", "value": False}, sess_)
+            pump_()
+            rem_ok[3] = abs(params["react_master"] - 0.37) < 1e-6 and params["bpm_auto"] == 0.0
+            rq_("POST", "/api/text", {"text": "TEST TEL"}, sess_)
+            pump_()
+            rem_ok[4] = params["text_content"] == "TEST TEL" and params["logo_source"] == "text"
+            pump_(0.4)
+            code_, body_ = rq_("GET", "/api/state", None, sess_)
+            st_ = _js.loads(body_) if code_ == 200 else {}
+            rem_ok[5] = len(st_.get("set", {}).get("scenes", [])) == len(c["scene_book"].rows()) and abs(st_.get("masters", {}).get("react_master", -1) - 0.37) < 0.01
+            rq_("POST", "/api/lock", {}, sess_)
+            pump_()
+            locked_now_ = bool(s.scene_lock)
+            code_, _b = rq_("POST", "/api/scene", {"index": 0}, sess_)
+            rem_ok[6] = locked_now_ and code_ == 409
+            rq_("POST", "/api/lock", {}, sess_)
+            pump_()
+            rq_("POST", "/api/strobe", {"down": True}, sess_)
+            pump_(0.3)
+            held_ = bool(rc_.state["strobe_held"])
+            pump_(1.9)                                     # plus de « appui » renouvele : le pont relache seul
+            rem_ok[7] = held_ and not rc_.state["strobe_held"]
+        finally:
+            rc_.var.set(0)
+            rc_.toggle()
+            s.scene_lock = saved_lock_
+            os.environ.pop("CASUAL_REMOTE_HOST", None)
+            os.environ.pop("CASUAL_REMOTE_PORT", None)
+        stopped_ = not rc_.running()
+    else:
+        stopped_ = False
+    out["x_remote_bridge"] = tuple(rem_ok) + (stopped_,)
+    params["react_master"], params["bpm_auto"] = 1.0, 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
     from types import SimpleNamespace as NS_
     fake_rhythm = NS_(bpm=128.0, drops=0, builds=0, state="idle", confidence=0.9)
@@ -7681,7 +8164,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -7746,6 +8229,10 @@ def main() -> None:
     check_latence()
     check_beat_grid()
     check_tempo()
+    check_remote_auth()
+    check_remote_server()
+    check_remote_page()
+    check_qrcode()
     check_phase()
     check_schedule()
     check_palette()
