@@ -1245,6 +1245,8 @@ def check_gui() -> None:
     check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
+    check(out.get("x_remote_bridge") == (True,) * 9, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
+          str(out.get("x_remote_bridge")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
     check(out.get("x_help") is True and out.get("x_help_once") is True, "aide des raccourcis: une seule fenetre, liste X / K / S / Retour arriere",
@@ -4006,6 +4008,77 @@ def gui_expand_steps(c, s, out) -> None:
             time.sleep(0.02)
     out["x_tap"] = (0.88 <= params["tempo"] <= 1.12, True, "BPM" in c["scenes"]["msg"].get())
     params["tempo"] = 1.0
+    # telecommande telephone : pont GUI <-> serveur local (vrai serveur sur 127.0.0.1, vraies requetes HTTP)
+    import http.client as _hc
+    import json as _js
+    rc_ = c.get("remote")
+    rem_ok = [rc_ is not None, False, False, False, False, False, False, False]
+    if rc_ is not None:
+        os.environ["CASUAL_REMOTE_HOST"], os.environ["CASUAL_REMOTE_PORT"] = "127.0.0.1", "0"
+        saved_lock_ = s.scene_lock
+        s.scene_lock = False
+        try:
+            rc_.var.set(1)
+            rc_.toggle()
+            srv_ = rc_.state["server"]
+            rem_ok[1] = bool(rc_.running() and srv_ is not None and srv_.port > 0)
+
+            def rq_(method, path, body=None, bearer=None):
+                cn = _hc.HTTPConnection("127.0.0.1", srv_.port, timeout=5)
+                h = {"Host": f"127.0.0.1:{srv_.port}"}
+                if body is not None:
+                    h["Content-Type"] = "application/json"
+                if bearer:
+                    h["Authorization"] = "Bearer " + bearer
+                try:
+                    cn.request(method, path, body=None if body is None else _js.dumps(body), headers=h)
+                    r_ = cn.getresponse()
+                    return r_.status, r_.read()
+                finally:
+                    cn.close()
+
+            def pump_(sec=0.45):
+                t_e = time.monotonic() + sec
+                while time.monotonic() < t_e:
+                    root.update()
+                    time.sleep(0.02)
+            code_, body_ = rq_("POST", "/api/login", {"k": rc_.access.token})
+            sess_ = _js.loads(body_).get("session", "") if code_ == 200 else ""
+            rem_ok[2] = bool(sess_)
+            rq_("POST", "/api/master", {"key": "react_master", "value": 0.37}, sess_)
+            rq_("POST", "/api/auto", {"key": "bpm_auto", "value": False}, sess_)
+            pump_()
+            rem_ok[3] = abs(params["react_master"] - 0.37) < 1e-6 and params["bpm_auto"] == 0.0
+            rq_("POST", "/api/text", {"text": "TEST TEL"}, sess_)
+            pump_()
+            rem_ok[4] = params["text_content"] == "TEST TEL" and params["logo_source"] == "text"
+            pump_(0.4)
+            code_, body_ = rq_("GET", "/api/state", None, sess_)
+            st_ = _js.loads(body_) if code_ == 200 else {}
+            rem_ok[5] = len(st_.get("set", {}).get("scenes", [])) == len(c["scene_book"].rows()) and abs(st_.get("masters", {}).get("react_master", -1) - 0.37) < 0.01
+            rq_("POST", "/api/lock", {}, sess_)
+            pump_()
+            locked_now_ = bool(s.scene_lock)
+            code_, _b = rq_("POST", "/api/scene", {"index": 0}, sess_)
+            rem_ok[6] = locked_now_ and code_ == 409
+            rq_("POST", "/api/lock", {}, sess_)
+            pump_()
+            rq_("POST", "/api/strobe", {"down": True}, sess_)
+            pump_(0.3)
+            held_ = bool(rc_.state["strobe_held"])
+            pump_(1.9)                                     # plus de « appui » renouvele : le pont relache seul
+            rem_ok[7] = held_ and not rc_.state["strobe_held"]
+        finally:
+            rc_.var.set(0)
+            rc_.toggle()
+            s.scene_lock = saved_lock_
+            os.environ.pop("CASUAL_REMOTE_HOST", None)
+            os.environ.pop("CASUAL_REMOTE_PORT", None)
+        stopped_ = not rc_.running()
+    else:
+        stopped_ = False
+    out["x_remote_bridge"] = tuple(rem_ok) + (stopped_,)
+    params["react_master"], params["bpm_auto"] = 1.0, 1.0
     # rythme detecte (faux detecteur) : tempo auto, montee / drop auto, changement de scene sur le drop
     from types import SimpleNamespace as NS_
     fake_rhythm = NS_(bpm=128.0, drops=0, builds=0, state="idle", confidence=0.9)
