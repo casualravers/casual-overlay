@@ -1148,6 +1148,7 @@ def install(c):
             height = max(MIN_WIN_H, drag["win"] + win)
             if height != root.winfo_height():
                 root.geometry(f"{drag['w']}x{height}")
+                root.after(120, keep_on_screen)
 
         def grip_move(e) -> None:
             if not drag:
@@ -1250,6 +1251,30 @@ def install(c):
         panel_state["sig"] = panel_signature(rows, scene_book.vj())
         return True
 
+    def keep_on_screen() -> None:
+        """La fenetre qui grandit ne depasse pas la zone utile de l'ecran (barre des taches comprise) : on la remonte (sa hauteur est deja plafonnee a l'ecran).
+        Sans cela, le bas de la page (ascenseur de l'overlay, poignee de la liste) restait sous la barre des taches, inatteignable."""
+        try:
+            root.update_idletasks()
+            work_bottom = root.winfo_screenheight() - 48
+            try:
+                import ctypes
+                from ctypes import wintypes
+                rect = wintypes.RECT()
+                if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):      # SPI_GETWORKAREA
+                    work_bottom = rect.bottom
+            except (AttributeError, OSError, ImportError):
+                pass
+            top, client_top = root.winfo_y(), root.winfo_rooty()
+            border = 8
+            overshoot = client_top + root.winfo_height() + border - work_bottom
+            if overshoot <= 0:
+                return
+            root.geometry(f"+{root.winfo_x()}+{top - min(overshoot, max(top, 0))}")          # on ne fait que la remonter : sa hauteur est deja plafonnee par l'ecran
+            root.update_idletasks()
+        except tk.TclError:
+            pass
+
     def set_expanded(flag: bool) -> None:
         """Ouvre / ferme le panneau etendu : la fenetre grandit (ou reprend sa taille) de la hauteur du panneau."""
         if bool(getattr(s, "scenes_expanded", False)) == bool(flag):
@@ -1268,6 +1293,8 @@ def install(c):
             if not flag and getattr(s, "height_before_expand", None) and getattr(s, "panel_overflow", 0) == 0 and root.winfo_height() >= root.winfo_screenheight() - 90:
                 height = s.height_before_expand                    # la fenetre avait ete limitee par l'ecran a l'ouverture : on rend la hauteur d'avant, pas hauteur - panneau
             root.geometry(f"{root.winfo_width()}x{height}")
+            if flag:
+                root.after(120, keep_on_screen)
 
     import types
     ops = types.SimpleNamespace(toggle_sel=toggle_sel, select_all=select_all, select_none=select_none, sel_remove=sel_remove, sel_skip=sel_skip,

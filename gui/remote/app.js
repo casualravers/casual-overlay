@@ -3,16 +3,8 @@
   var $ = function (id) { return document.getElementById(id); };
   var session = "";
   try { session = sessionStorage.getItem("cr_session") || ""; } catch (e) { session = ""; }
-  var last = null, abortSse = null, held = {}, strobeTimer = null, wake = null, previewTimer = null, previewUrl = "", toastTimer = null;
+  var last = null, abortSse = null, held = {}, strobeTimer = null, wake = null, previewTimer = null, previewUrl = "";
 
-  function toast(text) {
-    if (!text) return;
-    var t = $("toast");
-    t.textContent = text;
-    t.classList.add("show");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2600);
-  }
   function buzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) { /* tant pis */ } }
 
   function api(path, body) {
@@ -22,7 +14,7 @@
       body: JSON.stringify(body || {})
     }).then(function (r) {
       if (r.status === 401) { lost("Connexion remplacee ou fermee"); return null; }
-      if (!r.ok) { return r.json().then(function (j) { toast(j.error || "Refuse"); }, function () { toast("Refuse"); }); }
+      if (!r.ok) { return r.json().then(function (j) { 0; }, function () { 0; }); }
       return null;
     }).catch(function () { setDot(false); });
   }
@@ -124,12 +116,18 @@
     $("v-phase").textContent = st.voyants.phase || "";
     $("v-strobe").textContent = st.voyants.strobe || "";
     $("v-sources").textContent = st.voyants.sources || "";
+    (st.memories || []).forEach(function (n, i) {
+      var b = $("mem-" + (i + 1));
+      b.textContent = "";
+      var num = document.createElement("b"); num.textContent = String(i + 1);
+      var nm = document.createElement("small"); nm.textContent = n || "vide";
+      b.appendChild(num); b.appendChild(nm);
+    });
     $("buildbar").style.width = Math.round(st.build * 100) + "%";
     if (document.activeElement !== $("text")) $("text").value = st.text;
     $("preview-on").checked = !!st.preview.on;
     $("preview-note").textContent = st.preview.note || "";
     managePreview(st.preview.on);
-    if (st.msg && firstMsg) toast(st.msg);
   }
 
   // ---- commandes

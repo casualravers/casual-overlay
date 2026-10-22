@@ -53,6 +53,16 @@ def install(c):
         server = st["server"]
         return server is not None and server.running()
 
+    def memory_names() -> list:
+        out = []
+        for i in range(remote_auth.MEMORY_SLOTS):
+            try:
+                slot = c.master_book.get(i)
+            except Exception:
+                slot = None
+            out.append(str(slot.get("name", "")) if slot else "")
+        return out
+
     # ---- etat publie
     def snapshot() -> dict:
         rows = scene_book.rows()
@@ -69,7 +79,7 @@ def install(c):
             vj_running=bool(c.vj["running"]), vj_remaining=c.vj_remaining_text() if c.vj["running"] else "", locked=bool(getattr(s, "scene_lock", False)),
             phase=s.status.get("phase_info"), bpm=c.detected_bpm(), voyants=voyants, masters=masters, autos=autos,
             text=params.get("text_content", ""), projection_open=bool(proj is not None and proj.running()), msg=scene_msg.get(),
-            build=params.get("build", 0.0), preview_on=st["preview_on"], preview_note=st["preview_note"])
+            build=params.get("build", 0.0), preview_on=st["preview_on"], preview_note=st["preview_note"], memories=memory_names())
 
     # ---- commandes (fil HTTP -> file) puis execution (fil Tk)
     def command_in(cmd: dict):

@@ -1,6 +1,6 @@
 :root{--bg:#2b1055;--bg2:#7597de;--pink:#ff3d9a;--blue:#2dd4ff;--green:#5cf06b;--amber:#ffc633;--purple:#a46bff;--ink:#1a0b3a;--card:#ffffff22}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
-html,body{margin:0;height:100%;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:#fff;overflow:hidden}
+html,body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;margin:0;height:100%;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:#fff;overflow:hidden}
 body{background:linear-gradient(160deg,#2b1055,#5b2a9b 55%,#ff3d9a);background-attachment:fixed;display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;font-size:18px}
 #title{flex:1;letter-spacing:1px;text-shadow:2px 2px 0 var(--pink)}
@@ -8,8 +8,6 @@ header{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-
 .dot.on{background:var(--green)}.dot.off{background:#f33}
 .chip{background:var(--card);border-radius:999px;padding:4px 12px;font-weight:bold;font-size:16px}
 .chip.wide{flex:1;text-align:center}
-#toast{position:fixed;left:12px;right:12px;top:calc(56px + env(safe-area-inset-top));background:var(--amber);color:var(--ink);border-radius:18px;padding:10px 14px;font-weight:bold;z-index:5;opacity:0;transform:translateY(-8px);transition:.25s;pointer-events:none}
-#toast.show{opacity:1;transform:none}
 main{flex:1;display:flex;flex-direction:column;min-height:0}
 main[hidden],.tab[hidden]{display:none}
 #login{align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
@@ -55,3 +53,8 @@ nav{display:flex;gap:6px;padding:8px 8px calc(8px + env(safe-area-inset-bottom))
 nav button{flex:1;padding:12px 2px;font-size:16px;border-radius:20px;background:#fff9;box-shadow:none}
 nav button.on{background:var(--amber)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+textarea,input[type=text],#code{-webkit-user-select:text;user-select:text}
+img{-webkit-user-drag:none;pointer-events:none}
+#tab-macro .row{gap:6px}
+#tab-macro .row button{min-width:0;padding:8px 2px;font-size:22px;display:flex;flex-direction:column;align-items:center;gap:2px}
+#tab-macro .row button small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:normal}

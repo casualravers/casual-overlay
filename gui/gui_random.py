@@ -114,7 +114,9 @@ def install(c):
         rnd["last"], rnd["scene"], rnd["info"] = record, scene, info
         apply_scene_dict(scene)
         s.active_scene, s.active_entry = "Full Randomizer", None
-        scene_msg.set("Full Randomizer : " + info)
+        applied = scene_msg.get()
+        lightened = applied[applied.find(" (allegee"):] if " (allegee" in applied else ""      # la securite GPU a coupe des effets de ce tirage : on le dit
+        scene_msg.set("Full Randomizer : " + info + lightened)
         return True
 
     def add_random_scene() -> str:

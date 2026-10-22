@@ -77,13 +77,24 @@ def add_mode_buttons(parent, current: str, request_switch, tooltip=None) -> dict
     `request_switch(mode)` est appele pour les autres. Rend `{mode: bouton}` (a ranger dans `widgets["mode_buttons"]`)."""
     import tkinter as tk
     buttons = {}
+    row = parent
+    info = parent.grid_info()
+    if info:
+        # Les boutons passent sur une ligne SOUS le selecteur d'entree (largeur du panneau reduite) : `parent` (grille) est range avec la
+        # nouvelle ligne dans un conteneur qui prend sa place dans la grille.
+        holder = tk.Frame(parent.master)
+        holder.grid(**{k: v for k, v in info.items() if k != "in"})
+        parent.grid_forget()
+        parent.pack(in_=holder, side="top", anchor="w")
+        row = tk.Frame(holder)
+        row.pack(side="top", anchor="w", pady=(2, 0))
     for index, (key, label) in enumerate(MODE_BUTTONS):
         pad = (8, 0) if index == 0 else (4, 0)
         if key == current:
-            button = tk.Button(parent, text=label, command=lambda: None, bg=GUI_MODE_ACTIVE, fg=GUI_MODE_ACTIVE_FG,
+            button = tk.Button(row, text=label, command=lambda: None, bg=GUI_MODE_ACTIVE, fg=GUI_MODE_ACTIVE_FG,
                                activebackground=GUI_MODE_ACTIVE, activeforeground=GUI_MODE_ACTIVE_FG)
         else:
-            button = tk.Button(parent, text=label, command=lambda k=key: request_switch(k))
+            button = tk.Button(row, text=label, command=lambda k=key: request_switch(k))
         button.pack(side="left", padx=pad)
         button.mode_key = key
         if tooltip is not None:
