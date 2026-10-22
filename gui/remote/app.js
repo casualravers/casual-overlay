@@ -123,6 +123,9 @@
       var nm = document.createElement("small"); nm.textContent = n || "vide";
       b.appendChild(num); b.appendChild(nm);
     });
+    if (st.build > 0) climbing = true;
+    else if (Date.now() - tappedAt > 1500) climbing = false;
+    showClimb();
     $("buildbar").style.width = Math.round(st.build * 100) + "%";
     if (document.activeElement !== $("text")) $("text").value = st.text;
     $("preview-on").checked = !!st.preview.on;
@@ -178,17 +181,18 @@
   sb.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
   // montee : appui court = lancer (ou relacher si deja en cours), appui long (0,4 s) = DROP
-  var dr = $("drop"), dropTimer = null, dropLong = false;
-  dr.addEventListener("pointerdown", function (e) {
-    e.preventDefault(); dropLong = false; dr.classList.add("held");
-    dropTimer = setTimeout(function () { dropLong = true; buzz([60, 40, 120]); api("/api/build", { action: "drop" }); }, 400);
-  });
-  function dropUp() {
-    if (dropTimer === null) return;
-    clearTimeout(dropTimer); dropTimer = null; dr.classList.remove("held");
-    if (!dropLong) { buzz(20); api("/api/build", { action: "start" }); }
+  var dr = $("drop"), climbing = false, tappedAt = 0;
+  function showClimb() {
+    dr.firstChild.nodeValue = climbing ? "DROP" : "MONTEE";
+    dr.lastChild.textContent = climbing ? "appuie pour lacher" : "appuie pour monter";
+    dr.className = "huge " + (climbing ? "amber" : "pink");
   }
-  ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) { dr.addEventListener(ev, dropUp); });
+  dr.addEventListener("click", function () {
+    tappedAt = Date.now();
+    if (climbing) { buzz([60, 40, 120]); api("/api/build", { action: "drop" }); climbing = false; }
+    else { buzz(20); api("/api/build", { action: "start" }); climbing = true; }
+    showClimb();
+  });
   dr.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
   // ---- apercu (facultatif) : une image toutes les 5 s, recuperee avec le jeton puis affichee en blob
