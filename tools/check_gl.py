@@ -1242,7 +1242,7 @@ def check_gui() -> None:
           str(out.get("x_sched")))
     check(out.get("x_grid_vj") == (True,) * 6,
           "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
-    check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
+    check(out.get("x_phase_build") == (True,) * 6, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe ; une montee lancee a la main n'est jamais annulee par les phases",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
@@ -4288,8 +4288,20 @@ def gui_expand_steps(c, s, out) -> None:
     phase_at("groove")
     pump(0.2)
     cancelled = params["build"] == 0.0                                                    # la montee retombe sans drop : annulee
+    # montee MANUELLE apres une montee automatique lachee a la main : les phases ne doivent pas l'annuler (le drapeau auto restait vrai)
+    phase_at("build")
+    pump(0.25)
+    vjc["drop"]()
+    phase_at("groove")
+    vjc["build"]()
+    pump(0.25)
+    phase_at(None)
+    phase_at("groove")
+    pump(0.2)
+    manual_kept = params["build"] > 0.0
+    vjc["drop"]()
     s.status["phase_info"], params["strobe_auto"] = None, 0.0
-    out["x_phase_build"] = (off_quiet, started, dropped, running_again, cancelled)
+    out["x_phase_build"] = (off_quiet, started, dropped, running_again, cancelled, manual_kept)
     # palette de commandes
     pc = c["palette"]
     labels_ = [lab for lab, _kw, _fn in pc.items()]
