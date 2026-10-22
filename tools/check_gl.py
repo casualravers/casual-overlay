@@ -3147,6 +3147,49 @@ def check_tempo() -> None:
     check(r2.bpm is not None and abs(r2.bpm / 140 - 1.0) < 0.05, "rythme: kicks a la moitie du tempo du son, le BPM est le tempo double", str(r2.bpm))
 
 
+def check_playback() -> None:
+    print("Reprise des medias")
+    from core.playback import Playback, EXPIRE_S
+    from engine import video as vid
+    h = [0.0]
+    pb = Playback(clock=lambda: h[0])
+    check(pb.start("a.webm", 10.0) == 0.0, "reprise: premier lancement au debut")
+    h[0] = 4.0
+    check(abs(pb.position("a.webm") - 4.0) < 1e-9, "reprise: position d'un media qui joue")
+    check(abs(pb.stop("a.webm") - 4.0) < 1e-9 and pb.stop("a.webm") is None, "reprise: arret memorise la position (une seule fois)")
+    h[0] = 100.0
+    check(abs(pb.start("a.webm") - 4.0) < 1e-9, "reprise: relance la ou le media s'etait arrete (le temps ecoule scene absente ne compte pas)")
+    h[0] = 127.0
+    check(abs(pb.stop("a.webm") - 1.0) < 1e-9, "reprise: la position boucle dans la duree du fichier (4 + 27 = 31 -> 1)", str(pb.saved))
+    h[0] = 128.0
+    check(pb.start("a.webm") == 1.0 and pb.start("b.mp4") == 0.0, "reprise: un autre fichier repart du debut")
+    pb.start("c.mp4")
+    h[0] = 128.2
+    pb.stop("c.mp4")
+    h[0] = 129.0
+    check(pb.start("c.mp4") == 0.0, "reprise: moins de 0,5 s = du debut")
+    pb.stop("c.mp4")
+    h[0] += EXPIRE_S + 50
+    pb.saved["z"] = (7.0, h[0] - EXPIRE_S - 1)
+    check(pb.start("z") == 0.0, "reprise: un media oublie depuis une heure repart du debut")
+    pb2 = Playback(clock=lambda: h[0])
+    pb2.start("u.gif")
+    h[0] += 12.5
+    pb2.stop("u.gif")
+    check(abs(pb2.saved["u.gif"][0] - 12.5) < 1e-9, "reprise: duree inconnue = position brute")
+    for i in range(100):
+        pb2.start(f"f{i}")
+        pb2.stop(f"f{i}")
+    check(len(pb2.saved) <= 64, "reprise: memoire bornee", str(len(pb2.saved)))
+    bg = vid.bg_video_command("x.mp4", (64, 36), "cover", 3.5)
+    check(bg[bg.index("-ss") + 1] == "3.500" and bg.index("-ss") < bg.index("-i") and bg.index("-stream_loop") < bg.index("-ss"),
+          "reprise: -ss avant -i (apres -stream_loop : seule la premiere lecture est decalee)", str(bg))
+    check("-ss" not in vid.bg_video_command("x.mp4", (64, 36)) and "-ss" not in vid.logo_video_command("x.webm", (64, 36), "vp9"),
+          "reprise: pas de -ss au debut")
+    lg = vid.logo_video_command("x.webm", (64, 36), "vp9", "", 2.25)
+    check(lg[lg.index("-ss") + 1] == "2.250" and lg.index("-ss") < lg.index("-i"), "reprise: commande du logo anime", str(lg))
+
+
 def check_beat_grid() -> None:
     print("Grille du temps (Temps 1)")
     from core import rhythm as rh
@@ -8344,7 +8387,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout")
 
 
@@ -8409,6 +8452,7 @@ def main() -> None:
     check_render()
     check_latence()
     check_beat_grid()
+    check_playback()
     check_tempo()
     check_remote_auth()
     check_remote_server()

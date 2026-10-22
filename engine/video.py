@@ -17,6 +17,7 @@ import threading
 import time
 from pathlib import Path
 
+from core.playback import PLAYBACK
 from engine.deps import np
 
 
@@ -300,7 +301,26 @@ def probe_video(path: str) -> tuple[int, int, str]:
         raise RuntimeError(f"pas de flux video lisible ({out.stderr.strip()[:120] or 'fichier invalide'})")
 
 
-def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = "") -> list[str]:
+def probe_duration(path: str) -> float | None:
+    """Duree du fichier en secondes (ffprobe), None si inconnue (image animee sans duree, ffprobe absent)."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                             capture_output=True, text=True, timeout=15)
+        value = float(out.stdout.strip().splitlines()[0])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+    return value if value > 0 else None
+
+
+def seek_args(start: float) -> list[str]:
+    """`-ss` en entree (rapide) pour reprendre a `start` secondes ; rien au debut. Les boucles suivantes repartent de 0."""
+    return ["-ss", f"{start:.3f}"] if start > 0 else []
+
+
+def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = "", start: float = 0.0) -> list[str]:
     """Commande ffmpeg: decode `path` en boucle, a sa cadence native (-re), en rawvideo rgba
     (alpha DROIT, non premultiplie: le shader le premultiplie). `key` (#rrggbb) detoure cette
     couleur pour un fichier sans canal alpha (fond vert...)."""
@@ -313,7 +333,7 @@ def logo_video_command(path: str, size: tuple[int, int], codec: str, key: str = 
     filters = [f"scale={size[0]}:{size[1]}:flags=bilinear", "format=rgba"]
     if key:
         filters.append(f"colorkey=0x{key.lstrip('#')}:{LOGO_KEY_SIMILARITY}:{LOGO_KEY_BLEND}")
-    return cmd + ["-i", path, "-an", "-vf", ",".join(filters), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]
+    return cmd + seek_args(start) + ["-i", path, "-an", "-vf", ",".join(filters), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]
 
 
 class LogoVideo:
@@ -322,9 +342,11 @@ class LogoVideo:
 
     def __init__(self, path: str, key: str = ""):
         w, h, codec = probe_video(path)
+        self.path = path
+        start = PLAYBACK.start(path, probe_duration(path))
         ratio = min(1.0, LOGO_VIDEO_MAX_SIDE / max(w, h))
         self.size = (max(2, round(w * ratio)), max(2, round(h * ratio)))
-        cmd = logo_video_command(path, self.size, codec, key)
+        cmd = logo_video_command(path, self.size, codec, key, start)
         self.proc = spawn_big_pipe(cmd, stderr=subprocess.PIPE) or subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.reader = FrameReader(self.proc.stdout, self.size[0] * self.size[1] * 4)
@@ -340,6 +362,7 @@ class LogoVideo:
             return "ffmpeg s'est arrete"
 
     def stop(self) -> None:
+        PLAYBACK.stop(self.path)
         self.reader.stop()
         stop_process(self.proc)
         for stream in (self.proc.stdout, self.proc.stderr):
@@ -354,7 +377,7 @@ class LogoVideo:
 BG_VIDEO_FITS = ("cover", "stretch")
 
 
-def bg_video_command(path: str, size: tuple[int, int], fit: str = "cover") -> list[str]:
+def bg_video_command(path: str, size: tuple[int, int], fit: str = "cover", start: float = 0.0) -> list[str]:
     """Commande ffmpeg : decode `path` en boucle, a sa cadence native (-re), a la taille du rendu, en rawvideo rgb24 (meme
     format que le producteur d'audio2wave : la texture du fond la lit telle quelle). `cover` remplit le cadre en recadrant
     le debordement (le ratio du fichier est garde), `stretch` etire."""
@@ -364,7 +387,7 @@ def bg_video_command(path: str, size: tuple[int, int], fit: str = "cover") -> li
     else:
         vf = f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=bilinear,crop={w}:{h}"
     return [shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",
-            "-i", path, "-an", "-vf", vf + ",setsar=1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+            *seek_args(start), "-i", path, "-an", "-vf", vf + ",setsar=1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
 
 
 class BgVideo(LogoVideo):
@@ -373,7 +396,8 @@ class BgVideo(LogoVideo):
 
     def __init__(self, path: str, size: tuple[int, int], fit: str = "cover"):
         self.size = size
-        cmd = bg_video_command(path, size, fit)
+        self.path = path
+        cmd = bg_video_command(path, size, fit, PLAYBACK.start(path, probe_duration(path)))
         self.proc = spawn_big_pipe(cmd, stderr=subprocess.PIPE) or subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.reader = FrameReader(self.proc.stdout, size[0] * size[1] * 3)

@@ -335,6 +335,12 @@ glisser-deposer d'un fichier sur le bloc (`drop_bg_video`, `a2w_from_file` : une
 `check_gl.py` (`check_bg_video`, `gui_bgvideo_steps`) : commande, cover / stretch, decodage reel en boucle, relance au changement,
 arret propre, fichier absent / vide / corrompu, scenes, trois modes exclusifs, depot.
 
+**Reprise des medias** (`core/playback.py`, pur, horloge injectee ; `PLAYBACK`, registre unique) : un media (video du logo, video de fond, videos interieure / exterieure de Snap) qui disparait quand la scene change (VJ ou a la main) **repart la ou il s'etait arrete**
+au retour, au lieu du debut. `LogoVideo.__init__` (donc aussi `BgVideo`, sous-classe) appelle `PLAYBACK.start(chemin, duree ffprobe)` et passe la position a `logo_video_command` / `bg_video_command` (`start`, `-ss` en entree **apres** `-stream_loop` : seule la premiere lecture
+est decalee, les boucles suivantes repartent de 0) ; `LogoVideo.stop` appelle `PLAYBACK.stop(chemin)`. Position = (position au lancement + temps ecoule) ramenee dans la duree du fichier (il boucle) ; le temps passe scene absente ne compte pas (le media est « en pause ») ; moins de 0,5 s ou
+moins de 0,5 s de la fin = du debut ; oublie depuis 1 h (`EXPIRE_S`) = du debut ; 64 fichiers retenus au plus ; duree inconnue (ffprobe absent, image animee) = position brute. Cle = chemin : deux decodeurs du meme fichier en meme temps se partagent l'entree (cas rare). Pas de reglage ni de voyant
+(rien n'est decide automatiquement : le media reprend simplement). Limite : `-ss` tombe sur l'image cle precedente (quelques dixiemes de seconde d'ecart sur un mp4 long), et le temps de lancement de ffmpeg (~0,3 s) n'est pas compte. `check_gl.py` : `check_playback` (pure, dans `PURES`).
+
 ### Fond genere (`--background pattern`, touche B)
 
 Second mode de fond, a cote du spectre ffmpeg (`bg_mode` = `live` | `pattern` | `video`) : le motif
