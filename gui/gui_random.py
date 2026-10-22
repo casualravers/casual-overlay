@@ -14,6 +14,12 @@ import threading
 import tkinter as tk
 
 
+def _native_ok() -> bool:
+    """Les modes dessines en GL (Sphere) sont-ils disponibles (numpy et moderngl) ?"""
+    from engine import native_modes
+    return bool(native_modes.available())
+
+
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
     from gl_gui import mode_store          # import tardif : gl_gui importe ce module
@@ -96,6 +102,8 @@ def install(c):
         a2w_modes: dict = {}
         if "params" in settings["bg_sources"]:               # config aleatoire : tous les modes autorises (charges seulement ici)
             for mode in settings["modes"]:
+                if mode == "sphere" and not _native_ok():
+                    continue                                 # dessin GL seulement : sans numpy / moderngl le mode est refuse, on ne le tire pas
                 try:
                     a2w_modes[mode] = a2w_presets if mode == s.mode else mode_store(live, mode).all()
                 except Exception:

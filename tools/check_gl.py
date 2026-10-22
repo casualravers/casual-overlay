@@ -1370,7 +1370,7 @@ def check_gui() -> None:
           "Full Randomizer (GUI): nom deja pris ou 'default' refuse, annuler n'ecrit rien, un seul champ rempli = seulement celui-la, "
           "pas de preset de fond sans fond genere", str(out.get("r_keep_err")))
     rm = out.get("r_modes", (0, [], [], False, False))
-    check(rm[0] == 1 and rm[1] == ["live", "ridge"] and sorted(rm[2]) == ["live", "ridge", "snap"] and rm[3] and rm[4],
+    check(rm[0] == 1 and rm[1] == ["live", "ridge", "sphere"] and sorted(rm[2]) == ["live", "ridge", "snap", "sphere"] and rm[3] and rm[4],
           "Full Randomizer (GUI): cases des modes audio2wave de la config aleatoire ; sans mode coche, la config aleatoire reste un fond genere (aucun changement de mode)",
           str(out.get("r_modes")))
     check(out.get("r_vj") == (True, True, True, True),
@@ -6289,7 +6289,19 @@ def check_randomizer() -> None:
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
     stores = {m: gl_gui.mode_store(live, m).all() for m in rz.A2W_MODES}
     check(all(isinstance(v, dict) and "default" in v for v in stores.values()),
-          "presets des trois modes audio2wave lisibles (config aleatoire du fond)", str({m: len(v) for m, v in stores.items()}))
+          "presets des modes audio2wave lisibles (config aleatoire du fond)", str({m: len(v) for m, v in stores.items()}))
+    import preset_registry
+    check(set(rz.A2W_MODES) == set(preset_registry.MODES),
+          "Full Randomizer: tous les modes d'audio2wave sont tirables (A2W_MODES = preset_registry.MODES : un nouveau mode s'y ajoute)",
+          str((rz.A2W_MODES, tuple(preset_registry.MODES))))
+    sphere_rng = __import__("random").Random(3)
+    sphere_modes = set()
+    for _ in range(40):
+        sphere_scene, _info, _rec = rz.draw_scene(sphere_rng, {"bg_sources": ["params"], "modes": ["sphere"]},
+                                                  rz.Context(a2w_modes={"sphere": {"fil": {"style": "wire"}}}))
+        if sphere_scene["bg"] == "live":
+            sphere_modes.add(sphere_scene["mode"])
+    check(sphere_modes == {"sphere"}, "Full Randomizer: la config aleatoire peut tirer le mode Sphere (scene audio2wave en mode sphere)", str(sphere_modes))
     import build_portable
     check("core" in build_portable.APP_DIRS, "version portable: le dossier core/ (randomizer, scenes, reglages...) est embarque")
 
@@ -6426,7 +6438,7 @@ def gui_random_steps(c, s, out) -> None:
     for _ in range(14):
         rd["draw"]()
     out["r_modes"] = (len(snap_box), modes_off, modes_on, s.mode == mode_before == "live", rd["state"]["scene"] is not None)
-    book.set_vj(random={**book.vj()["random"], "bg_sources": ["preset", "params", "video"], "modes": ["live", "snap", "ridge"]})
+    book.set_vj(random={**book.vj()["random"], "bg_sources": ["preset", "params", "video"], "modes": ["live", "snap", "ridge", "sphere"]})
     # categories, dossiers
     sc["switch_set"]("Alea")
     root.update()
