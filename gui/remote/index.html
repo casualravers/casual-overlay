@@ -15,7 +15,9 @@
   <strong id="title">CASUAL REMOTE</strong>
   <span id="bpm" class="chip">-- BPM</span>
   <span id="phase" class="chip">...</span>
+  <span id="climb" class="chip">calme</span>
 </header>
+<div id="offline" hidden>PC INJOIGNABLE<small>reconnexion en cours... rien n'est envoye</small></div>
 
 <main id="login" hidden>
   <h1>Code magique</h1>
@@ -27,6 +29,7 @@
 
 <main id="app" hidden>
   <section id="tab-scenes" class="tab">
+    <img id="preview" alt="" hidden>
     <div class="row">
       <button id="vj-back" class="big blue">&#9664; Retour</button>
       <button id="vj-toggle" class="big green">&#9654; VJ</button>
@@ -80,7 +83,7 @@
     </ul>
     <label class="sw"><input type="checkbox" id="preview-on"><span>Apercu de l'ecran</span></label>
     <p id="preview-note" class="muted"></p>
-    <img id="preview" alt="" hidden>
+    <label class="sw"><input type="checkbox" id="confirm-drop"><span>Confirmer le drop (2 appuis)</span></label>
   </section>
 
   <nav id="tabs">
