@@ -183,9 +183,11 @@
   // montee : appui court = lancer (ou relacher si deja en cours), appui long (0,4 s) = DROP
   var dr = $("drop"), climbing = false, tappedAt = 0;
   function showClimb() {
-    dr.firstChild.nodeValue = climbing ? "DROP" : "MONTEE";
+    var pct = climbing && last ? Math.round(Math.min(Math.max(last.build, 0), 1) * 100) : 0;
+    dr.firstChild.nodeValue = climbing ? "DROP  " + pct + " %" : "MONTEE";
     dr.lastChild.textContent = climbing ? "appuie pour lacher" : "appuie pour monter";
     dr.className = "huge " + (climbing ? "amber" : "pink");
+    dr.style.backgroundImage = climbing ? "linear-gradient(90deg, #ff3d9a " + pct + "%, #ffc633 " + pct + "%)" : "";
   }
   dr.addEventListener("click", function () {
     tappedAt = Date.now();
