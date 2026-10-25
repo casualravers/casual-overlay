@@ -451,6 +451,16 @@ def check_gui() -> None:
                 except Exception:
                     import traceback
                     out["a2w_error"] = traceback.format_exc()
+                # clic a la main sur une scene d'un AUTRE mode : le mode change apres coup, la touche doit etre surlignee (ambre) quand meme
+                import gl_gui as gg_hl
+                target = "Scene Old" if s.mode != "live" else "Scene Snap"
+                before = s.mode
+                c["scenes"]["apply"](target)
+                for _ in range(24):
+                    root.update()
+                    time.sleep(0.05)
+                lit = [w.cget("text") for w in walk(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text")[:1].isdigit() and str(w.cget("bg")).lower() == gg_hl.SCENE_COLOR.lower()]
+                out["hl_manual"] = (before, s.mode, target, lit)
                 c["close"]()
                 s.finished_event.set()
             root.after(700, check_scene_mode)
@@ -1138,6 +1148,9 @@ def check_gui() -> None:
     ss = out.get("scene_snap", ("", []))
     check(ss == ("snap", "0x39c9ff", 24),
           "scenes: une scene qui change de mode (Live -> Snap) charge son etat dans le panneau neuf", str(ss))
+    hl = out.get("hl_manual", ("", "", "", []))
+    check(hl[0] != hl[1] and len(hl[3]) == 1 and hl[3][0].split("  ", 1)[-1].startswith(hl[2]),
+          "scenes: un clic a la main sur une scene d'un autre mode change le mode ET surligne sa touche en ambre", str(hl))
     check(out.get("size_before") is not None and out.get("size_after") == out.get("size_before"),
           "VJ actif: la fenetre de reglages garde sa taille quand une scene change de mode (Live -> Snap)",
           str((out.get("size_before"), out.get("size_after"))))

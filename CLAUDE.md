@@ -534,7 +534,7 @@ visuel d'audio2wave, il ne le complete pas) :
   remplace) + **sets** (voir plus bas). Le rang d'une entree dans le set actif donne la touche F1..F9 (`scenes.KEYS` = 9
   premieres ; les suivantes n'ont pas de touche F mais ont leur bouton dans la barre).
 - **Changement de mode** (Live -> Snap...) : `request_mode` ne reconstruit QUE le panneau d'audio2wave (`swap_live_panel`, ~0,25 s) ; le preset est garde dans
-  `s.pending_live_overrides` et applique a la fin de `build_window` du panneau neuf (`after(150)`).
+  `s.pending_live_overrides` et applique a la fin de `build_window` du panneau neuf (`after(150)`). **Piege (vu en soiree)** : `apply_scene_dict` SORT apres avoir programme `request_mode` (le reste de la fonction, dont `refresh_scene_bar`, n'est pas execute) ; sans un `refresh_scene_bar()` avant ce `return`, la touche d'une scene d'un autre mode n'etait jamais surlignee en ambre (l'ancienne restait allumee). Test : « un clic a la main sur une scene d'un autre mode ... surligne sa touche ».
 - **Interface** : rangee ambre posee en ligne 0 de `root` (au-dessus de la page defilante : toujours visible), une touche par
   scene (active = ambre) dans une **bande defilante** (`Canvas` `proj_ui["strip"]`, posee EN DERNIER avec `expand` : les boutons du VJ posees avant ne sont jamais repoussees ; molette via `on_wheel`, fleches ◀ ▶ visibles seulement si tout ne tient pas, la touche active est recentree si elle sort de la bande, `proj_ui["strip_x"]` garde la position d'une reconstruction a l'autre ; plus de menu `+N`), « + Nouvelle scene » (champ de nom + Enregistrer / Annuler, Entree / Echap), clic droit = mettre a
   jour (capture l'etat actuel) / supprimer (confirmation). `refresh_scene_bar` reconstruit la rangee.
