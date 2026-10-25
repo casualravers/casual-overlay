@@ -3075,6 +3075,69 @@ def check_qrcode() -> None:
     except ValueError:
         raised = True
     check(raised and len(qr.encode("e" + chr(233) + "\u20ac")) >= 21, "qrcode: trop long = erreur claire ; accents et euro en UTF-8 acceptes")
+    gray, side = qr.to_gray(m)
+    grid = np.frombuffer(gray, dtype=np.uint8).reshape(side, side)
+    check(side == 37 + 8 and len(gray) == side * side and (grid[:4] == 255).all() and (grid[:, -4:] == 255).all()
+          and all((grid[4 + y, 4 + x] == 0) == m[y][x] for y in range(37) for x in range(37)),
+          "qrcode: image en niveaux de gris (marge blanche de 4 modules, sombre = 0, premiere ligne en haut)")
+
+
+def check_qr_projection() -> None:
+    print("QR code sur la projection (Renderer._draw_qr)")
+    from core import qrcode as qr
+    for key in ("qr_on", "qr_url", "qr_corner", "qr_size"):
+        check(key in gl.DEFAULT_PARAMS, f"reglage {key} dans la table")
+    pr = dict(gl.DEFAULT_PARAMS, qr_on=1.0, qr_url="https://exemple.fr/doodles")
+    check(gl.DEFAULT_PARAMS["qr_on"] == 0.0 and not any(k.startswith("qr_") for k in gl.capture_overlay(pr)) and not any(k.startswith("qr_") for k in gl.capture_background(pr))
+          and not any(k.startswith("qr_") for k in gl.PANIC_RESET), "qr: coupe par defaut, absent des presets overlay / fond et de la panique")
+    check(all(k in gl.OVERLAY_PRESET_EXCLUDED for k in ("qr_on", "qr_url", "qr_corner", "qr_size")), "qr: reglages d'installation (jamais dans une scene)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    params = dict(gl.DEFAULT_PARAMS, master=0.0, logo_glow=0.0, logo_pulse=0.0, logo_jitter=0.0)
+    st = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))
+    r.draw(fbo, size, st, params, 0.0)
+    base = read_target(ctx, fbo, size).copy()
+    url = "https://exemple.fr/doodles"
+    gray, modules = qr.to_gray(qr.encode(url))
+    grid = np.frombuffer(gray, dtype=np.uint8).reshape(modules, modules)
+    ppm = max(1, round(0.18 * size[1] / modules))
+    side = ppm * modules
+    gap = max(4, round(0.02 * size[1]))
+    want = np.kron(grid, np.ones((ppm, ppm), dtype=np.uint8))
+
+    def shot(**kw):
+        r.draw(fbo, size, st, {**params, "qr_url": url, **kw}, 0.0)
+        return read_target(ctx, fbo, size).copy()
+
+    img = shot(qr_on=1.0)
+    x0, y0 = size[0] - side - gap, size[1] - side - gap                       # bas droite (image lue de haut en bas)
+    got = img[y0:y0 + side, x0:x0 + side]
+    check(np.array_equal(got[:, :, 0], want) and np.array_equal(got[:, :, 1], want) and np.array_equal(got[:, :, 2], want),
+          "qr: dessine pixel pour pixel (noir / blanc, bon sens, modules entiers) dans le coin bas droit", f"{side} px, {ppm} px par module")
+    mask = np.ones(size[::-1], dtype=bool)
+    mask[y0:y0 + side, x0:x0 + side] = False
+    check(np.array_equal(img[mask], base[mask]), "qr: le reste de l'image est strictement intact")
+    for corner, (cx, cy) in {"bas gauche": (gap, size[1] - side - gap), "haut droite": (size[0] - side - gap, gap), "haut gauche": (gap, gap)}.items():
+        im = shot(qr_on=1.0, qr_corner=corner)
+        check(np.array_equal(im[cy:cy + side, cx:cx + side, 0], want), f"qr: coin {corner}")
+    effects = shot(qr_on=1.0, comp_sym=4, comp_pix=0.6, hue_master=120.0, comp_warp=0.5, strobe_on=1.0)
+    check(np.array_equal(effects[y0:y0 + side, x0:x0 + side, 0], want),
+          "qr: ni symetrie, pixelisation, teinte, deformation ni strobe ne le touchent (reste lisible)")
+    check(np.array_equal(shot(qr_on=0.0), base), "qr: coupe = image d'origine")
+    check(np.array_equal(shot(qr_on=1.0, qr_url=""), base) and np.array_equal(shot(qr_on=1.0, qr_url="x" * 214), base),
+          "qr: adresse vide ou trop longue = rien n'est dessine, pas d'erreur")
+    big = shot(qr_on=1.0, qr_size=0.5)
+    check((big != base).any() and (big[:, :, 0] != base[:, :, 0]).sum() > (img[:, :, 0] != base[:, :, 0]).sum(), "qr: la taille se regle")
+    texture_before = r._qr[1]
+    shot(qr_on=1.0)
+    check(r._qr[1] is texture_before or r._qr[0] == url, "qr: texture gardee tant que l'adresse ne change pas")
 
 
 def check_remote_page() -> None:
@@ -8444,6 +8507,7 @@ def main() -> None:
     check_cells()
     check_noise()
     check_doodles()
+    check_qr_projection()
     check_icons()
     check_audio2wave_interne()
     check_masters()
