@@ -523,7 +523,7 @@ def install(c):
                 scene_msg.set(f"Memoire {i + 1} '{slot['name']}' rappelee")
 
             for i in range(scenes.MASTER_SLOTS):
-                b = button(f, slot_label(i), lambda k=i: slot_click(k), row=0 if i < 2 else 1, column=0 if i % 2 == 0 else 3, columnspan=3,
+                b = button(f, slot_label(i), lambda k=i: slot_click(k), row=i // 2, column=0 if i % 2 == 0 else 3, columnspan=3,
                            sticky="ew", padx=6, pady=(3, 0))
                 b.bind("<Button-3>", lambda e, k=i: save_slot(k), add="+")
                 slot_btns.append(b)
@@ -533,7 +533,7 @@ def install(c):
                 armed["on"] = not armed["on"]
                 arm.configure(text="Sauver : choisis" if armed["on"] else "Sauver")
 
-            arm = button(f, "Sauver", arm_toggle, row=2, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            arm = button(f, "Sauver", arm_toggle, row=(scenes.MASTER_SLOTS + 1) // 2, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
             Tooltip(arm, "Clique ici puis sur une memoire pour y enregistrer les masters actuels (teinte, fond, overlay, composition, strobe...).")
 
         new_tab("Memoires", fill_5)

@@ -451,6 +451,16 @@ def check_gui() -> None:
                 except Exception:
                     import traceback
                     out["a2w_error"] = traceback.format_exc()
+                # clic a la main sur une scene d'un AUTRE mode : le mode change apres coup, la touche doit etre surlignee (ambre) quand meme
+                import gl_gui as gg_hl
+                target = "Scene Old" if s.mode != "live" else "Scene Snap"
+                before = s.mode
+                c["scenes"]["apply"](target)
+                for _ in range(24):
+                    root.update()
+                    time.sleep(0.05)
+                lit = [w.cget("text") for w in walk(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text")[:1].isdigit() and str(w.cget("bg")).lower() == gg_hl.SCENE_COLOR.lower()]
+                out["hl_manual"] = (before, s.mode, target, lit)
                 c["close"]()
                 s.finished_event.set()
             root.after(700, check_scene_mode)
@@ -1138,6 +1148,9 @@ def check_gui() -> None:
     ss = out.get("scene_snap", ("", []))
     check(ss == ("snap", "0x39c9ff", 24),
           "scenes: une scene qui change de mode (Live -> Snap) charge son etat dans le panneau neuf", str(ss))
+    hl = out.get("hl_manual", ("", "", "", []))
+    check(hl[0] != hl[1] and len(hl[3]) == 1 and hl[3][0].split("  ", 1)[-1].startswith(hl[2]),
+          "scenes: un clic a la main sur une scene d'un autre mode change le mode ET surligne sa touche en ambre", str(hl))
     check(out.get("size_before") is not None and out.get("size_after") == out.get("size_before"),
           "VJ actif: la fenetre de reglages garde sa taille quand une scene change de mode (Live -> Snap)",
           str((out.get("size_before"), out.get("size_after"))))
@@ -2722,7 +2735,7 @@ def check_remote_auth() -> None:
         ("lock", {}, {"cmd": "lock"}), ("strobe", {"down": True}, {"cmd": "strobe", "down": True}), ("build", {"action": "drop"}, {"cmd": "build", "action": "drop"}),
         ("master", {"key": "react_master", "value": 1.5}, {"cmd": "master", "key": "react_master", "value": 1.5}),
         ("master", {"key": "bg_master", "value": 7}, {"cmd": "master", "key": "bg_master", "value": 1.0}),
-        ("memory", {"slot": 4}, {"cmd": "memory", "slot": 4}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
+        ("memory", {"slot": 10}, {"cmd": "memory", "slot": 10}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
         ("auto", {"key": "strobe_auto", "value": 0}, {"cmd": "auto", "key": "strobe_auto", "value": False}), ("preview", {"on": True}, {"cmd": "preview", "on": True}),
     ]
     bad_all = True
@@ -2733,7 +2746,7 @@ def check_remote_auth() -> None:
     check(bad_all, "telecommande: chaque commande valide est normalisee (texte nettoye, master ramene dans sa plage)")
     refused = [("nope", {}), ("scene", {"index": -1}), ("scene", {"index": "3"}), ("scene", {"index": True}), ("scene", {"index": 1, "x": 1}), ("scene", []),
                ("vj", {"action": "panic"}), ("strobe", {"down": "yes"}), ("master", {"key": "gpu_cap", "value": 1}), ("master", {"key": "tempo", "value": "1"}),
-               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 5}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
+               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 11}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
                ("auto", {"key": "auto_phase", "value": 2}), ("lock", {"x": 1}), ("build", {"action": "panic"}), ("preview", {"on": "1"})]
     wrong = []
     for name, body in refused:
@@ -5915,14 +5928,21 @@ def check_masters() -> None:
     from core import scenes as _sc
     mpath = Path(_tf2.mkdtemp(prefix="casual_overlay_masters_")) / "masters.json"
     mb = _sc.MasterBook(lambda: mpath)
-    check(mb.slots() == [None] * 4 and mb.get(2) is None, "memoires de masters: quatre emplacements vides au depart")
+    check(mb.slots() == [None] * 10 and mb.get(2) is None and _sc.MASTER_SLOTS == 10 and mb.get(9) is None and mb.get(10) is None,
+          "memoires de masters: dix emplacements vides au depart")
     mb.save(1, "calme", dict(d, hue_master=120.0, comp_sym=4.0, build=0.9, phase_tempo=0.5))
     got_slot = mb.get(1)
     check(got_slot["name"] == "calme" and got_slot["values"]["hue_master"] == 120.0 and got_slot["values"]["comp_sym"] == 4.0
-          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(9, "x", d),
+          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(10, "x", d),
           "memoires de masters: enregistrement, rappel, sans etats du moment, emplacement hors plage refuse")
     mpath.write_text("{ pas du json", encoding="utf-8")
-    check(mb.slots() == [None] * 4, "memoires de masters: fichier illisible = emplacements vides")
+    check(mb.slots() == [None] * 10, "memoires de masters: fichier illisible = emplacements vides")
+    old = mpath.parent / "old_masters.json"                                         # ancien fichier a quatre emplacements : lu tel quel, les six autres vides
+    import json as _json2
+    old.write_text(_json2.dumps({"version": 1, "slots": [{"name": "a", "values": {"hue_master": 90.0}}, None, None, {"name": "d", "values": {}}]}), encoding="utf-8")
+    mo = _sc.MasterBook(lambda: old)
+    check(len(mo.slots()) == 10 and mo.get(0)["name"] == "a" and mo.get(3)["name"] == "d" and mo.get(9) is None and mo.save(9, "dix", {"hue_master": 5.0})
+          and mo.get(9)["name"] == "dix" and mo.get(0)["name"] == "a", "memoires de masters: un fichier a quatre emplacements se lit, le dixieme s'enregistre")
     phases = {}
     for tempo in (1.0, 0.5, 0.0, 2.0):
         rr = gl.Renderer(ctx, size, None)
