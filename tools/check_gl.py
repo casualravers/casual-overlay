@@ -1242,7 +1242,7 @@ def check_gui() -> None:
           str(out.get("x_sched")))
     check(out.get("x_grid_vj") == (True,) * 6,
           "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
-    check(out.get("x_phase_build") == (True,) * 5, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe",
+    check(out.get("x_phase_build") == (True,) * 6, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe ; une montee lancee a la main n'est jamais annulee par les phases",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
@@ -1370,7 +1370,7 @@ def check_gui() -> None:
           "Full Randomizer (GUI): nom deja pris ou 'default' refuse, annuler n'ecrit rien, un seul champ rempli = seulement celui-la, "
           "pas de preset de fond sans fond genere", str(out.get("r_keep_err")))
     rm = out.get("r_modes", (0, [], [], False, False))
-    check(rm[0] == 1 and rm[1] == ["live", "ridge"] and sorted(rm[2]) == ["live", "ridge", "snap"] and rm[3] and rm[4],
+    check(rm[0] == 1 and rm[1] == ["live", "ridge", "sphere"] and sorted(rm[2]) == ["live", "ridge", "snap", "sphere"] and rm[3] and rm[4],
           "Full Randomizer (GUI): cases des modes audio2wave de la config aleatoire ; sans mode coche, la config aleatoire reste un fond genere (aucun changement de mode)",
           str(out.get("r_modes")))
     check(out.get("r_vj") == (True, True, True, True),
@@ -4298,8 +4298,20 @@ def gui_expand_steps(c, s, out) -> None:
     phase_at("groove")
     pump(0.2)
     cancelled = params["build"] == 0.0                                                    # la montee retombe sans drop : annulee
+    # montee MANUELLE apres une montee automatique lachee a la main : les phases ne doivent pas l'annuler (le drapeau auto restait vrai)
+    phase_at("build")
+    pump(0.25)
+    vjc["drop"]()
+    phase_at("groove")
+    vjc["build"]()
+    pump(0.25)
+    phase_at(None)
+    phase_at("groove")
+    pump(0.2)
+    manual_kept = params["build"] > 0.0
+    vjc["drop"]()
     s.status["phase_info"], params["strobe_auto"] = None, 0.0
-    out["x_phase_build"] = (off_quiet, started, dropped, running_again, cancelled)
+    out["x_phase_build"] = (off_quiet, started, dropped, running_again, cancelled, manual_kept)
     # palette de commandes
     pc = c["palette"]
     labels_ = [lab for lab, _kw, _fn in pc.items()]
@@ -6287,7 +6299,19 @@ def check_randomizer() -> None:
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
     stores = {m: gl_gui.mode_store(live, m).all() for m in rz.A2W_MODES}
     check(all(isinstance(v, dict) and "default" in v for v in stores.values()),
-          "presets des trois modes audio2wave lisibles (config aleatoire du fond)", str({m: len(v) for m, v in stores.items()}))
+          "presets des modes audio2wave lisibles (config aleatoire du fond)", str({m: len(v) for m, v in stores.items()}))
+    import preset_registry
+    check(set(rz.A2W_MODES) == set(preset_registry.MODES),
+          "Full Randomizer: tous les modes d'audio2wave sont tirables (A2W_MODES = preset_registry.MODES : un nouveau mode s'y ajoute)",
+          str((rz.A2W_MODES, tuple(preset_registry.MODES))))
+    sphere_rng = __import__("random").Random(3)
+    sphere_modes = set()
+    for _ in range(40):
+        sphere_scene, _info, _rec = rz.draw_scene(sphere_rng, {"bg_sources": ["params"], "modes": ["sphere"]},
+                                                  rz.Context(a2w_modes={"sphere": {"fil": {"style": "wire"}}}))
+        if sphere_scene["bg"] == "live":
+            sphere_modes.add(sphere_scene["mode"])
+    check(sphere_modes == {"sphere"}, "Full Randomizer: la config aleatoire peut tirer le mode Sphere (scene audio2wave en mode sphere)", str(sphere_modes))
     import build_portable
     check("core" in build_portable.APP_DIRS, "version portable: le dossier core/ (randomizer, scenes, reglages...) est embarque")
 
@@ -6424,7 +6448,7 @@ def gui_random_steps(c, s, out) -> None:
     for _ in range(14):
         rd["draw"]()
     out["r_modes"] = (len(snap_box), modes_off, modes_on, s.mode == mode_before == "live", rd["state"]["scene"] is not None)
-    book.set_vj(random={**book.vj()["random"], "bg_sources": ["preset", "params", "video"], "modes": ["live", "snap", "ridge"]})
+    book.set_vj(random={**book.vj()["random"], "bg_sources": ["preset", "params", "video"], "modes": ["live", "snap", "ridge", "sphere"]})
     # categories, dossiers
     sc["switch_set"]("Alea")
     root.update()

@@ -239,6 +239,7 @@ def install(c):
             return
         build_ui["t0"] = time.monotonic()
         params["build"] = 0.0
+        rhythm_ui["auto_build"] = False                   # une montee lancee a la main n'est jamais annulee par les detecteurs (les appels automatiques le reposent apres)
         scene_msg.set(f"Montee sur {float(params.get('build_time', 16.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
         build_tick()
 
@@ -247,6 +248,7 @@ def install(c):
         was = build_ui["t0"] is not None
         build_ui["t0"] = None
         params["build"] = 0.0
+        rhythm_ui["auto_build"] = False
         if was:
             s.commands.put("flash")
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1

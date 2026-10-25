@@ -938,17 +938,17 @@ def install(c):
         # ---- fond
         fr = line("FOND")
         for key, label, tip in (("preset", "preset de fond", "Un preset de fond genere (section PRESETS FOND)."),
-                                ("a2w", "preset audio2wave", "Un preset du mode audio2wave courant (Live / Snap / Ridge) : le mode ne change pas."),
+                                ("a2w", "preset audio2wave", "Un preset du mode audio2wave courant (Live / Snap / Ridge / Sphere) : le mode ne change pas."),
                                 ("video", "video de la banque FOND", "Une video de la banque FOND, en fond video."),
                                 ("params", "config aleatoire", "Un fond entierement nouveau : soit un fond genere aux reglages tires au hasard (palette, couleurs, "
                                                                "teinte, angle, vitesse...), soit un visuel audio2wave dans un mode et un preset de ce mode "
                                                                "tires au hasard (modes ci-dessous).")):
             check(fr, label, key in rs["bg_sources"], member("bg_sources", key), tip)
         fr = line("  modes a2w")
-        for key, label in (("live", "Live"), ("snap", "Snap"), ("ridge", "Ridge")):
+        for key, label in (("live", "Live"), ("snap", "Snap"), ("ridge", "Ridge"), ("sphere", "Sphere")):
             check(fr, label, key in rs["modes"], member("modes", key),
                   "Modes audio2wave que la config aleatoire du fond peut tirer. Changer de mode reconstruit la fenetre (environ 1 s, "
-                  "masque en partie par le flash) ; Ridge demande une entree audio.")
+                  "masque en partie par le flash) ; Ridge demande une entree audio ; Sphere demande numpy et moderngl (sinon il n'est pas tire).")
         # ---- overlay
         fr = line("OVERLAY")
         for key, label, tip in (("overlay_preset", "preset overlay", "Un des presets overlay enregistres."),
