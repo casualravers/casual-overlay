@@ -2777,6 +2777,8 @@ def check_remote_auth() -> None:
     check(st["v"] == 1 and st["bpm"] == 128 and len(st["set"]["scenes"][1]["n"]) == rs.MAX_NAME and "\x07" not in js and "gpu_cap" not in js and '"x"' not in js
           and set(st) == {"v", "set", "vj", "phase", "bpm", "voyants", "masters", "autos", "text", "projection", "msg", "build", "preview", "memories"},
           "etat telecommande: cles du contrat, nettoyage, aucune cle etrangere", js[:120])
+    th3 = rs.build_state(scenes=[(0, "A", "a.jpg"), (1, "B")])["set"]["scenes"]
+    check(th3[0]["t"] == "a.jpg" and th3[1]["t"] == "", "etat telecommande: jeton de vignette par scene (vide si pas d'apercu)", str(th3))
     check(rs.to_json(rs.build_state(set_name="Club")) == rs.to_json(rs.build_state(set_name="Club")) and len(js) < rs.MAX_BYTES, "etat telecommande: stable et petit")
     big = rs.build_state(scenes=[(i, "n" * 80) for i in range(400)], msg="m" * 900, text="t" * 900)
     check(len(rs.to_json(big)) < rs.MAX_BYTES, "etat telecommande: meme avec 400 scenes et de longs textes, moins de 8 Ko", str(len(rs.to_json(big))))
@@ -2811,7 +2813,9 @@ def check_remote_server() -> None:
 
     acc = ra.Access()
     acc.activate()
-    srv = rem.RemoteServer(acc, lambda: dict(state), command, tmp, "127.0.0.1", 0, allowed_hosts={"127.0.0.1"})
+    jpeg = b"\xff\xd8fake\xff\xd9"
+    srv = rem.RemoteServer(acc, lambda: dict(state), command, tmp, "127.0.0.1", 0, allowed_hosts={"127.0.0.1"},
+                           thumb_fn=lambda i: jpeg if i == 3 else None)
     ok, msg = srv.start()
     check(ok and srv.port > 0 and srv.running(), "serveur telecommande: demarre sur une adresse locale", str(msg))
     if not ok:
@@ -2849,6 +2853,12 @@ def check_remote_server() -> None:
     auth = {"Authorization": "Bearer " + session}
     s, h, b = req("GET", "/api/state", headers=auth)
     check(s == 200 and _json.loads(b)["v"] == 1, "serveur telecommande: l'etat est lu avec le jeton de session")
+    check(req("GET", "/thumb/3.jpg")[0] == 401 and req("GET", "/thumb/3.jpg", headers={"Authorization": "Bearer faux"})[0] == 401,
+          "serveur telecommande: la vignette d'une scene demande le jeton de session")
+    s, h, b = req("GET", "/thumb/3.jpg", headers=auth)
+    check(s == 200 and b == jpeg and h.get("content-type") == "image/jpeg" and req("GET", "/thumb/4.jpg", headers=auth)[0] == 404
+          and req("GET", "/thumb/../x.jpg", headers=auth)[0] == 404 and req("GET", "/thumb/3.png", headers=auth)[0] == 404,
+          "serveur telecommande: vignette en JPEG, 404 pour une scene sans apercu et pour tout chemin hors forme", str((s, h.get("content-type"))))
     got.clear()
     s, h, b = req("POST", "/api/scene", {"index": 2}, auth)
     check(s == 200 and got == [{"cmd": "scene", "index": 2}], "serveur telecommande: une commande valide arrive normalisee au pont", str((s, got)))

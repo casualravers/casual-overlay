@@ -12,6 +12,7 @@ pas envoyer d'en-tete `Authorization`), au format SSE standard.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -25,6 +26,7 @@ SSE_POLL_S = 0.1
 HEADER_TIMEOUT_S = 10.0
 SSE_WRITE_TIMEOUT_S = 5.0
 DEFAULT_PORT = 8765
+THUMB_RE = re.compile(r"^/thumb/(\d{1,4})\.jpg$")            # vignette d'une scene du set actif (rang)
 
 # Pages servies : table fixe (aucun chemin libre, donc aucune traversee de dossier possible).
 STATIC = {
@@ -34,7 +36,7 @@ STATIC = {
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
     "/icon.svg": ("icon.svg", "image/svg+xml"),
 }
-CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; "
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 
@@ -83,8 +85,9 @@ class RemoteServer:
     `preview_fn()` -> octets JPEG ou None ; `log(texte)` : journal (jamais de secret)."""
 
     def __init__(self, access, state_fn, command_fn, static_dir, host: str, port: int = DEFAULT_PORT, *, allowed_hosts=None,
-                 preview_fn=None, log=None, peer_ok=remote_auth.is_private) -> None:
+                 preview_fn=None, log=None, peer_ok=remote_auth.is_private, thumb_fn=None) -> None:
         self.access, self.state_fn, self.command_fn = access, state_fn, command_fn
+        self.thumb_fn = thumb_fn                      # rang de scene -> octets JPEG ou None
         self.static_dir = Path(static_dir)
         self.host, self.port = host, int(port)
         self.allowed_hosts = set(allowed_hosts) if allowed_hosts else {host}
@@ -263,6 +266,13 @@ def _make_handler(remote: RemoteServer):
                             self._send(200, data, "image/jpeg")
                         else:
                             self._error(404, "pas d'apercu")
+                elif THUMB_RE.match(path):
+                    if self._authorized():
+                        data = remote.thumb_fn(int(THUMB_RE.match(path).group(1))) if remote.thumb_fn else None
+                        if data:
+                            self._send(200, data, "image/jpeg")
+                        else:
+                            self._error(404, "pas de vignette")
                 else:
                     self._error(404, "introuvable")
             except (OSError, ConnectionError):

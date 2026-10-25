@@ -20,6 +20,7 @@ from pathlib import Path
 
 import audio2wave_gl as gl
 from core import qrcode, remote_auth, remote_state, sessionlog
+from core import scenes as scenes_mod
 from engine import remote as rem
 
 PAGE_DIR = Path(__file__).resolve().parent / "remote"
@@ -42,7 +43,7 @@ def install(c):
     Tooltip = c.Tooltip
     box = c.remote_box
     st: dict = {"access": remote_auth.Access(), "server": None, "snapshot": {"v": remote_state.VERSION}, "published": 0.0, "strobe_held": False,
-                "strobe_until": 0.0, "preview_on": False, "preview_at": 0.0, "preview_note": "", "dialog": None, "msg": "", "last_label": None}
+                "strobe_until": 0.0, "preview_on": False, "preview_at": 0.0, "preview_note": "", "dialog": None, "msg": "", "last_label": None, "thumbs": {}}
     preview_final = Path(tempfile.gettempdir()) / f"casual_remote_preview_{os.getpid()}.jpg"
     preview_new = preview_final.with_name(preview_final.stem + ".new.jpg")
     if getattr(s, "remote_requests", None) is None:
@@ -63,9 +64,21 @@ def install(c):
             out.append(str(slot.get("name", "")) if slot else "")
         return out
 
+    def thumb_bytes(index: int):
+        """Vignette de la scene de rang `index` (appelee par le fil HTTP) : seul un nom de fichier simple de PREVIEW_DIR est lu."""
+        name = st["thumbs"].get(index)
+        if not name or Path(name).name != name:
+            return None
+        try:
+            data = (scenes_mod.PREVIEW_DIR / name).read_bytes()
+        except OSError:
+            return None
+        return data if len(data) < 300_000 and data[-2:] == b"\xff\xd9" else None
+
     # ---- etat publie
     def snapshot() -> dict:
         rows = scene_book.rows()
+        st["thumbs"] = {r["index"]: str(r["scene"].get("preview") or "") for r in rows}
         active = c.current_index(rows)
         try:
             voyants = c.vj_voyants()
@@ -75,7 +88,7 @@ def install(c):
         autos = {k: float(params.get(k, 0.0)) >= 0.5 for k in remote_auth.AUTO_KEYS}
         proj = c.projection
         return remote_state.build_state(
-            set_name=scene_book.active_set_name(), scenes=[(r["index"], r["name"]) for r in rows], active=active,
+            set_name=scene_book.active_set_name(), scenes=[(r["index"], r["name"], st["thumbs"][r["index"]]) for r in rows], active=active,
             vj_running=bool(c.vj["running"]), vj_remaining=c.vj_remaining_text() if c.vj["running"] else "", locked=bool(getattr(s, "scene_lock", False)),
             phase=s.status.get("phase_info"), bpm=c.detected_bpm(), voyants=voyants, masters=masters, autos=autos,
             text=params.get("text_content", ""), projection_open=bool(proj is not None and proj.running()), msg=scene_msg.get(),
@@ -227,7 +240,7 @@ def install(c):
             port = rem.DEFAULT_PORT
         st["access"].activate()
         server = rem.RemoteServer(st["access"], lambda: st["snapshot"], command_in, PAGE_DIR, host, port, allowed_hosts={host},
-                                  preview_fn=preview_bytes, log=sessionlog.event)
+                                  preview_fn=preview_bytes, log=sessionlog.event, thumb_fn=thumb_bytes)
         ok, message = server.start()
         if not ok:
             st["access"].deactivate()

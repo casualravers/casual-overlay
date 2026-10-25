@@ -38,9 +38,9 @@ def _num(value, digits: int = 3) -> float:
 def build_state(*, set_name="", scenes=(), active=None, vj_running=False, vj_remaining="", locked=False, phase=None, bpm=None,
                 voyants=None, masters=None, autos=None, text="", projection_open=False, msg="", build=0.0, preview_on=False,
                 preview_note="", memories=()) -> dict:
-    """Etat complet. `scenes` : suite de (rang, nom) ; `phase` : dict du `PhaseTracker.snapshot()` ou None ; `voyants` : textes deja formes
+    """Etat complet. `scenes` : suite de (rang, nom[, jeton de vignette : nom du fichier d'apercu, "" = aucune]) ; `phase` : dict du `PhaseTracker.snapshot()` ou None ; `voyants` : textes deja formes
     (`phase_why`, `strobe`, `sources`) ; `masters` : cle -> valeur ; `autos` : cle -> bool."""
-    rows = [{"i": int(i), "n": clean(n, MAX_NAME)} for i, n in list(scenes)[:MAX_SCENES]]
+    rows = [{"i": int(t[0]), "n": clean(t[1], MAX_NAME), "t": clean(t[2], 40) if len(t) > 2 else ""} for t in list(scenes)[:MAX_SCENES]]
     ph = None
     if phase:
         ph = {"name": clean(phase.get("name"), 20), "label": clean(phase.get("label"), 20)}
