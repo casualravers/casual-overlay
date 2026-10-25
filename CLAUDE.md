@@ -481,6 +481,16 @@ la projection**. Desactive par defaut.
 - `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
   injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
   sauvegarde, case de la GUI.
+### Mosaique de doodles du logo (`mosaic_*`, section du bas de l'onglet « Cellules »)
+
+Le logo (image, texte ou video) garde sa **forme** mais est reconstruit avec les doodles recus du public (voir *Doodles du site*). Comme la fonte et les cellules, tout est dans `logo_at()` de `scene.frag` (`logo_mosaic()`), donc dans la couche logo : contour, aura, effets par couche et fonte suivent.
+- **Vignettes** (`engine/render.py`) : `Renderer.add_doodle` appelle `mosaic_tile(rgba)` (boite de l'alpha, recadrage carre centre, 96 x 96 px, rgba premultiplie) et garde les **64 dernieres** dans `Renderer.mosaic_tiles` **meme apres la sortie de l'ecran du doodle** ; elles sont ecrites dans un atlas de 8 x 8 (`_mosaic_atlas`, texture unite 4, recree seulement quand un doodle arrive). La liste vit dans le Renderer : elle repart de zero a chaque ouverture de la projection (limite connue ; precharger les derniers fichiers du bucket a l'activation est possible mais n'est pas fait).
+- **Shader** : grille posee sur le logo (`10 x mosaic_size` cases en hauteur, isotrope), une vignette par case (hachage `chash3`), 3 % de joint de chaque cote (le joint et les parties transparentes d'une vignette laissent voir la couleur d'origine du logo, `rgb = m.rgb * a_logo + c.rgb * (1 - m.a)`) ; l'alpha du logo n'est pas touche (la forme reste). Chaque case change de vignette toutes les ~4 s, decalee des autres (`era = floor(u_mosaic_t * 0.25 + hash * 8)`), `_mosaic_t` integre le temps. `textureLod` obligatoire (bloc conditionnel). Un doodle affiche a l'ecran passe par la meme passe que le logo : `_draw_doodles` met `u_mosaic` a 0 (un doodle garde ses couleurs).
+- **Reglages** (portee `look` : presets overlay et scenes) : `mosaic_on` (0), `mosaic_amount` (1), `mosaic_size` (1, 0,4 a 3). Rien n'est dessine tant qu'aucun doodle n'est arrive (`u_mosaic_n` = 0). PANIQUE coupe `mosaic_on`. Pas dans le Randomizer ni dans la securite GPU (un seul echantillon de texture par pixel du logo).
+- **Voyant** : `s.status["mosaic"]` (nombre de vignettes) alimente le texte a cote de la case (« 12 doodles dans la mosaique » / « aucun doodle recu pour l'instant »), relu par `update_meter`. Le grisage (`gui_gates`) des curseurs de la mosaique et celui des cellules sont separes (les lignes de la section mosaique ne dependent pas de la case Cellules).
+- **Limite visuelle** : un logo a traits fins (le PNG du depot) est plus fin que les cases ; on voit des fragments de couleur, pas des images reconnaissables. Un texte epais ou un logo plein est bien meilleur.
+- `check_gl.py` (`check_mosaic`) : vignette, coupee / vide / part a 0 = image d'origine, forme du logo gardee, couleurs des vignettes presentes, rien hors du logo, renouvellement au cours du temps, taille reglable, 64 vignettes au plus.
+
 ### Noise : un hasard unique et prereglé (`noise_amount`, `noise_fx`)
 
 **Un seul noise, non parametrable** (`NoiseDrive`, audio2wave_gl.py) : une valeur continue au hasard (`noise_value`, noise de

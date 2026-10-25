@@ -215,6 +215,25 @@ def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple
 
 
 HOLO_DOWNSCALE = 4      # le champ du halo holographique est calcule a 1/4 de la resolution de l'ecran
+MOSAIC_GRID = 8         # atlas de la mosaique : 8 x 8 vignettes
+MOSAIC_MAX = MOSAIC_GRID * MOSAIC_GRID
+MOSAIC_TILE = 96        # cote d'une vignette (px)
+
+
+def mosaic_tile(rgba):
+    """Vignette carree (MOSAIC_TILE x MOSAIC_TILE, rgba premultiplie) d'un doodle : on garde la partie utile (boite de l'alpha) puis on
+    recadre en carre sur le centre ("cover"). Rend None si l'image est entierement transparente."""
+    alpha = rgba[:, :, 3]
+    ys, xs = np.nonzero(alpha > 8)
+    if len(xs) == 0:
+        return None
+    img = rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = img.shape[:2]
+    side = min(h, w)
+    y0, x0 = (h - side) // 2, (w - side) // 2
+    img = np.ascontiguousarray(img[y0:y0 + side, x0:x0 + side])
+    small = PIL_Image.fromarray(img, "RGBA").resize((MOSAIC_TILE, MOSAIC_TILE), PIL_Image.LANCZOS)
+    return np.clip(np.asarray(small, dtype=np.uint8), 0, 255).copy()
 
 
 class Renderer:
@@ -277,6 +296,10 @@ class Renderer:
         self._doodle_id = 0
         self.screen_size = (1, 1)                  # taille du dernier rendu (pour le rapport d'aspect des doodles)
         self._doodle_rng = random.Random()
+        self.mosaic_tiles: list = []               # vignettes des derniers doodles recus (les plus anciennes partent au-dela de 64)
+        self._mosaic_tex = None                    # atlas des vignettes (cree au premier besoin)
+        self._mosaic_dirty = False
+        self._mosaic_t = 0.0                       # temps integre du renouvellement des vignettes
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
@@ -428,6 +451,11 @@ class Renderer:
         """Pose un doodle (tableau uint8 RGBA premultiplie, premiere ligne = haut) a un endroit tire au hasard, entierement dans le cadre.
         A appeler depuis le fil GL. Au-dela de 5 medias le plus ancien part."""
         h, w = rgba.shape[:2]
+        tile = mosaic_tile(rgba)                    # la mosaique du logo se nourrit de tous les doodles recus, meme ceux qui ont quitte l'ecran
+        if tile is not None:
+            self.mosaic_tiles.append(tile)
+            del self.mosaic_tiles[:-MOSAIC_MAX]
+            self._mosaic_dirty = True
         tex = self.ctx.texture((w, h), 4, data=rgba.tobytes())
         tex.build_mipmaps()
         tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
@@ -439,6 +467,23 @@ class Renderer:
         rect = doodles.place(self._doodle_rng, w / h, sw / max(sh, 1))
         for gone in self.wall.add(ident, rect, now):
             self._release_doodle(gone)
+
+    def _mosaic_atlas(self):
+        """Atlas 8 x 8 des vignettes (cree au premier besoin, reecrit quand un doodle arrive)."""
+        side = MOSAIC_GRID * MOSAIC_TILE
+        if self._mosaic_tex is None:
+            self._mosaic_tex = self.ctx.texture((side, side), 4, data=bytes(side * side * 4))
+            self._mosaic_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._mosaic_tex.repeat_x = self._mosaic_tex.repeat_y = False
+            self._mosaic_dirty = True
+        if self._mosaic_dirty:
+            atlas = np.zeros((side, side, 4), dtype=np.uint8)
+            for i, tile in enumerate(self.mosaic_tiles):
+                r, c = divmod(i, MOSAIC_GRID)
+                atlas[r * MOSAIC_TILE:(r + 1) * MOSAIC_TILE, c * MOSAIC_TILE:(c + 1) * MOSAIC_TILE] = tile
+            self._mosaic_tex.write(atlas.tobytes())
+            self._mosaic_dirty = False
+        return self._mosaic_tex
 
     def _release_doodle(self, ident) -> None:
         tex = self.doodle_tex.pop(ident, None)
@@ -465,6 +510,7 @@ class Renderer:
         self._set(sp, "u_pass", 1.0)
         self._set(sp, "u_logo_on", 1.0)
         self._set(sp, "u_logo_straight", 0.0)
+        self._set(sp, "u_mosaic", 0.0)                                           # la mosaique est celle du logo : un doodle garde ses couleurs
         try:
             for ident, rect, a, scale, rot in visible:
                 x, y, w, h = (float(v) for v in rect)
@@ -609,6 +655,17 @@ class Renderer:
         self._set(sp, "u_cell_flat", min(max(float(p["cell_flat"]), 0.0), 1.0))
         self._set(sp, "u_cell_ink", hex_to_rgb(p["cell_ink"], DEFAULT_PARAMS["cell_ink"]))
         self._set(sp, "u_cell_t", self._cell_t)
+        # Mosaique du logo : vignettes des doodles recus (rien a montrer tant qu'aucun n'est arrive).
+        self._mosaic_t += dt
+        n_tiles = len(self.mosaic_tiles)
+        mosaic_on = float(p["mosaic_on"]) >= 0.5 and n_tiles > 0
+        self._set(sp, "u_mosaic", min(max(float(p["mosaic_amount"]), 0.0), 1.0) if mosaic_on else 0.0)
+        self._set(sp, "u_mosaic_n", float(n_tiles))
+        self._set(sp, "u_mosaic_scale", max(float(p["mosaic_size"]), 0.1))
+        self._set(sp, "u_mosaic_t", self._mosaic_t)
+        self._set(sp, "u_mosaic_tex", 4)
+        if mosaic_on:
+            self._mosaic_atlas().use(4)
         react = max(float(p["bg_react"]), 0.0)
         self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_au[0]) * 1.5)
         self._bg_flip_t += dt * float(p["bg_flip"])

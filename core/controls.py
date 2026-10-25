@@ -79,7 +79,7 @@ PANIC_RESET = {
     "comp_sym": 0, "comp_rot": 0.0, "comp_pix": 0.0, "comp_trail": 0.0, "comp_warp": 0.0,
     "hue_master": 0.0, "hue_cycle": 0.0, "hue_spectrum": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
     "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
-    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0, "bpm_auto": 0.0, "drop_auto": 0.0,
+    "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0, "mosaic_on": 0.0, "bpm_auto": 0.0, "drop_auto": 0.0,
 }
 
 

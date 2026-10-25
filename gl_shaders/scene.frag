@@ -50,6 +50,14 @@ uniform float u_cell_flat;     // 0 = couleurs d'origine, 1 = aplat de la couleu
 uniform vec3  u_cell_ink;      // couleur du contour des cellules
 uniform float u_cell_t;        // temps integre cote CPU (derive des graines)
 
+// Mosaique de doodles : le logo (sa forme, son alpha) est reconstruit avec les medias recus du public. Un atlas de 8 x 8 vignettes
+// (rgba premultiplie), une vignette par case de la grille posee sur le logo ; chaque case en change de temps en temps, a son rythme.
+uniform sampler2D u_mosaic_tex;
+uniform float u_mosaic;        // 0 = coupe / logo intact .. 1 = entierement en vignettes
+uniform float u_mosaic_n;      // nombre de vignettes valides dans l'atlas (0 = rien a montrer)
+uniform float u_mosaic_scale;  // finesse de la grille
+uniform float u_mosaic_t;      // temps integre cote CPU (renouvellement des vignettes)
+
 in vec2 v_uv;
 out vec4 f_color;
 
@@ -200,6 +208,25 @@ vec4 logo_cells(vec2 q, vec4 c) {
     return mix(c, vec4(rgb * a, a), D);
 }
 
+// Le logo `c` (premultiplie) garde sa forme mais se remplit de vignettes. Les parties transparentes d'une vignette et le joint entre
+// deux vignettes laissent voir la couleur d'origine du logo. textureLod : jamais de derivees dans un bloc conditionnel.
+vec4 logo_mosaic(vec2 q, vec4 c) {
+    float ar = (u_logo_rect.z * u_res.x) / max(u_logo_rect.w * u_res.y, 1.0);
+    vec2 v = q * vec2(ar, 1.0) * (10.0 * u_mosaic_scale);
+    vec2 id = floor(v);
+    vec2 f = fract(v);
+    vec3 hh = chash3(id);
+    float era = floor(u_mosaic_t * 0.25 + hh.y * 8.0);                     // chaque case change de vignette toutes les ~4 s, decalee des autres
+    float pick = chash3(id + vec2(era * 1.7, era * 3.1)).x;
+    float idx = min(floor(pick * u_mosaic_n), u_mosaic_n - 1.0);
+    vec2 tile = vec2(mod(idx, 8.0), floor(idx / 8.0));
+    vec2 g = (f - 0.5) / 0.94 + 0.5;                                        // 3 % de joint de chaque cote
+    float on = step(0.0, g.x) * step(g.x, 1.0) * step(0.0, g.y) * step(g.y, 1.0);
+    vec4 m = textureLod(u_mosaic_tex, (tile + clamp(g, 0.0, 1.0) * 0.98 + 0.01) / 8.0, 0.0) * on;
+    vec3 rgb = m.rgb * c.a + c.rgb * (1.0 - m.a);
+    return vec4(mix(c.rgb, rgb, u_mosaic), c.a);
+}
+
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
 vec4 logo_at(vec2 p) {
     vec2 d = p - u_logo_rect.xy;
@@ -219,6 +246,9 @@ vec4 logo_at(vec2 p) {
     c.rgb *= mix(1.0, c.a, u_logo_straight);
     if (u_cell > 0.001 && inside > 0.5) {
         c = logo_cells(q, c);
+    }
+    if (u_mosaic > 0.001 && u_mosaic_n > 0.5 && inside > 0.5) {
+        c = logo_mosaic(q, c);
     }
     if (u_melt > 0.001 && inside > 0.5) {
         float w = 0.07 + 0.22 * u_melt_edge;

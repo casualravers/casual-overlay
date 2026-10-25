@@ -153,6 +153,9 @@ TABLE: tuple[Param, ...] = (
     _p("cell_flat", 0.85, 0.0, 1.0, doc="0 = couleurs d'origine, 1 = aplat de la couleur au centre de la cellule."),
     _p("cell_ink", "#14103a", doc="Contour des cellules."),
     _p("cell_react", 0.0, 0.0, 2.0, doc="0 = pas audioreactif ; > 0 : derive acceleree par les basses."),
+    _p("mosaic_on", 0.0, 0.0, 1.0, doc="Mosaique : le logo est reconstruit avec les doodles recus du public (interrupteur)."),
+    _p("mosaic_amount", 1.0, 0.0, 1.0, doc="Mosaique : part du logo remplacee par les vignettes (0 = logo d'origine)."),
+    _p("mosaic_size", 1.0, 0.4, 3.0, doc="Mosaique : finesse des vignettes (grand = beaucoup de petites vignettes)."),
     # Fond : live (spectre ffmpeg), pattern (motif genere), video (fichier lu en boucle)
     _p("bg_mode", "live", choices=("live", "pattern", "video"), scope="bg", keep=True, doc="Source du fond."),
     _p("bg_video", "", scope="bg", doc="Fichier video / animation du fond video ('' = aucun)."),
