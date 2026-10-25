@@ -2735,7 +2735,7 @@ def check_remote_auth() -> None:
         ("lock", {}, {"cmd": "lock"}), ("strobe", {"down": True}, {"cmd": "strobe", "down": True}), ("build", {"action": "drop"}, {"cmd": "build", "action": "drop"}),
         ("master", {"key": "react_master", "value": 1.5}, {"cmd": "master", "key": "react_master", "value": 1.5}),
         ("master", {"key": "bg_master", "value": 7}, {"cmd": "master", "key": "bg_master", "value": 1.0}),
-        ("memory", {"slot": 4}, {"cmd": "memory", "slot": 4}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
+        ("memory", {"slot": 10}, {"cmd": "memory", "slot": 10}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
         ("auto", {"key": "strobe_auto", "value": 0}, {"cmd": "auto", "key": "strobe_auto", "value": False}), ("preview", {"on": True}, {"cmd": "preview", "on": True}),
     ]
     bad_all = True
@@ -2746,7 +2746,7 @@ def check_remote_auth() -> None:
     check(bad_all, "telecommande: chaque commande valide est normalisee (texte nettoye, master ramene dans sa plage)")
     refused = [("nope", {}), ("scene", {"index": -1}), ("scene", {"index": "3"}), ("scene", {"index": True}), ("scene", {"index": 1, "x": 1}), ("scene", []),
                ("vj", {"action": "panic"}), ("strobe", {"down": "yes"}), ("master", {"key": "gpu_cap", "value": 1}), ("master", {"key": "tempo", "value": "1"}),
-               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 5}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
+               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 11}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
                ("auto", {"key": "auto_phase", "value": 2}), ("lock", {"x": 1}), ("build", {"action": "panic"}), ("preview", {"on": "1"})]
     wrong = []
     for name, body in refused:
@@ -5928,14 +5928,21 @@ def check_masters() -> None:
     from core import scenes as _sc
     mpath = Path(_tf2.mkdtemp(prefix="casual_overlay_masters_")) / "masters.json"
     mb = _sc.MasterBook(lambda: mpath)
-    check(mb.slots() == [None] * 4 and mb.get(2) is None, "memoires de masters: quatre emplacements vides au depart")
+    check(mb.slots() == [None] * 10 and mb.get(2) is None and _sc.MASTER_SLOTS == 10 and mb.get(9) is None and mb.get(10) is None,
+          "memoires de masters: dix emplacements vides au depart")
     mb.save(1, "calme", dict(d, hue_master=120.0, comp_sym=4.0, build=0.9, phase_tempo=0.5))
     got_slot = mb.get(1)
     check(got_slot["name"] == "calme" and got_slot["values"]["hue_master"] == 120.0 and got_slot["values"]["comp_sym"] == 4.0
-          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(9, "x", d),
+          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(10, "x", d),
           "memoires de masters: enregistrement, rappel, sans etats du moment, emplacement hors plage refuse")
     mpath.write_text("{ pas du json", encoding="utf-8")
-    check(mb.slots() == [None] * 4, "memoires de masters: fichier illisible = emplacements vides")
+    check(mb.slots() == [None] * 10, "memoires de masters: fichier illisible = emplacements vides")
+    old = mpath.parent / "old_masters.json"                                         # ancien fichier a quatre emplacements : lu tel quel, les six autres vides
+    import json as _json2
+    old.write_text(_json2.dumps({"version": 1, "slots": [{"name": "a", "values": {"hue_master": 90.0}}, None, None, {"name": "d", "values": {}}]}), encoding="utf-8")
+    mo = _sc.MasterBook(lambda: old)
+    check(len(mo.slots()) == 10 and mo.get(0)["name"] == "a" and mo.get(3)["name"] == "d" and mo.get(9) is None and mo.save(9, "dix", {"hue_master": 5.0})
+          and mo.get(9)["name"] == "dix" and mo.get(0)["name"] == "a", "memoires de masters: un fichier a quatre emplacements se lit, le dixieme s'enregistre")
     phases = {}
     for tempo in (1.0, 0.5, 0.0, 2.0):
         rr = gl.Renderer(ctx, size, None)
