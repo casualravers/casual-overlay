@@ -254,9 +254,9 @@ void main() {
     if (u_trail > 0.001) {                                  // trainee : l'image precedente (finale) s'estompe de u_trail par image
         col = max(col, texture(u_prev, gl_FragCoord.xy / u_res).rgb * u_trail);
     }
-    // Le strobe ne blanchit que les parties sombres de l'image (luminance sous le seuil, bord adouci) ; seuil a 1 = toute l'image.
+    // Le strobe ne blanchit que les parties sombres de l'image (luminance sous le seuil, transition large et douce : pas de cassure nette) ; seuil a 1 = toute l'image.
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
-    float dark_k = u_strobe_dark >= 0.999 ? 1.0 : 1.0 - smoothstep(u_strobe_dark - 0.1, u_strobe_dark, lum);
+    float dark_k = u_strobe_dark >= 0.999 ? 1.0 : 1.0 - smoothstep(max(u_strobe_dark - 0.45, 0.0), u_strobe_dark, lum);
     col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe * dark_k));
     //        // flash de transition du VJ
 

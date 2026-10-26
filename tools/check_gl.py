@@ -4438,6 +4438,11 @@ def gui_expand_steps(c, s, out) -> None:
     phase_at("groove")
     pump(0.2)
     manual_kept = params["build"] > 0.0
+    # montee manuelle pendant que les detecteurs voient un pic / un drop : seul le bouton Drop la relache
+    phase_at("build")
+    phase_at("peak")
+    pump(0.25)
+    manual_kept = manual_kept and params["build"] > 0.0
     vjc["drop"]()
     s.status["phase_info"], params["strobe_auto"] = None, 0.0
     out["x_phase_build"] = (off_quiet, started, dropped, running_again, cancelled, manual_kept)
