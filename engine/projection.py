@@ -18,7 +18,8 @@ from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_te
 from engine.deps import PIL_Image, glfw, moderngl
 from engine.session import Session
 from engine.video import HEX_DIGITS, BgVideoManager, LogoVideo
-from engine.window import Window, fullscreen_blocked, monitor_contains, pick_monitor, resolve_fullscreen
+from engine.window import (Window, fullscreen_blocked, fullscreen_misplaced, is_zoomed, monitor_contains, pick_monitor, resolve_fullscreen, window_monitor_name,
+                           window_rect)
 from pathlib import Path
 
 
@@ -202,9 +203,11 @@ def _gl_main(s: Session) -> None:
         if not glfw.init():
             print("Initialisation de glfw impossible.", file=sys.stderr)
             sys.exit(1)
-        avoid = getattr(s, "gui_point", None)
+        avoid = window_monitor_name(getattr(s, "gui_hwnd", None)) or getattr(s, "gui_point", None)
         monitor = pick_monitor(args.monitor, avoid)
         window = Window(monitor, s.win_size, args.fullscreen, shared=monitor_contains(monitor, avoid))
+        sessionlog.event(f"Projection : moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {avoid} ; "
+                         f"{len(glfw.get_monitors())} moniteur(s) : {[tuple(glfw.get_monitor_pos(m)) for m in glfw.get_monitors()]}")
         ctx = moderngl.create_context()
         mode = glfw.get_video_mode(monitor)
         wx, wy = glfw.get_window_pos(window.handle)
@@ -250,7 +253,37 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                    f" | logo {''.join(str(int(v)) for v in params['fxl_on'])} (separes du fond)"))
 
     def gui_pt():
-        return getattr(s, "gui_point", None)
+        """Ou est la fenetre de reglages : son moniteur relu maintenant (elle a pu etre deplacee depuis l'ouverture), sinon la valeur du lancement."""
+        name = window_monitor_name(getattr(s, "gui_hwnd", None))
+        return name or getattr(s, "gui_point", None)
+
+    fs_watch = {"t0": None, "logged": False, "fixes": 0}
+
+    def watch_fullscreen(now: float) -> None:
+        """Apres une ouverture en plein ecran, pendant 3 s : relit ce que WINDOWS dit (moniteur de la fenetre de rendu et de celle des reglages) ; si le
+        plein ecran a atterri sur l'ecran des reglages alors qu'un autre existe, il est renvoye sur l'autre. Une trace est ecrite dans le journal."""
+        t0 = fs_watch["t0"]
+        if t0 is None:
+            return
+        if not window.fullscreen or now - t0 > 3.0:
+            fs_watch["t0"] = None
+            return
+        if now - t0 < 0.3:
+            return
+        gl_hwnd, gui_hwnd = window.hwnd(), getattr(s, "gui_hwnd", None)
+        where, gui = window_monitor_name(gl_hwnd), window_monitor_name(gui_hwnd)
+        if not fs_watch["logged"]:
+            fs_watch["logged"] = True
+            sessionlog.event(f"Plein ecran verifie : fenetre de rendu {window_rect(gl_hwnd)} sur {where} ; reglages {window_rect(gui_hwnd)} sur {gui} "
+                             f"(maximisee : {is_zoomed(gui_hwnd)})")
+        if fullscreen_misplaced(where, gui, args.monitor) and fs_watch["fixes"] < 3:
+            others = [m for m in glfw.get_monitors() if not monitor_contains(m, gui)]
+            if others:
+                fs_watch["fixes"] += 1
+                window.retarget(others[0], gui)
+                window._place()
+                fs_watch["t0"], fs_watch["logged"] = now, False
+                sessionlog.event(f"Plein ecran corrige : il etait sur l'ecran des reglages ({gui}), renvoye sur le moniteur en ({window.mx},{window.my})")
 
     def act(name: str) -> None:
         """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""
@@ -260,6 +293,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             if not window.fullscreen:
                 window.retarget(pick_monitor(args.monitor, gui_pt()), gui_pt())     # un projecteur branche depuis le lancement est pris en compte
             window.toggle_fullscreen()
+            fs_watch.update(t0=time.monotonic() if window.fullscreen else None, logged=False, fixes=0)
+            sessionlog.event(f"Plein ecran (touche / bascule) : {'ouvert' if window.fullscreen else 'ferme'} sur le moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {gui_pt()}")
         elif name.startswith("fullscreen="):      # etat explicite (case « Plein ecran » de la GUI, preset qui la coche)
             want = name.endswith("1")
             if want and not window.fullscreen:
@@ -269,9 +304,13 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 if fullscreen_blocked(on_gui, window.is_primary, args.monitor, getattr(args, "fullscreen_request", None)):
                     s.status["msg"] = "Plein ecran refuse sur l'ecran des reglages : projette sur un autre ecran (ou --fullscreen)"
                     print(s.status["msg"], file=sys.stderr)
+                    sessionlog.event(f"Plein ecran refuse : moniteur vise en ({window.mx},{window.my}) {window.mw}x{window.mh} = celui des reglages ({gui_pt()})")
                     return
             if window.fullscreen != want:
                 window.toggle_fullscreen()
+                fs_watch.update(t0=time.monotonic() if window.fullscreen else None, logged=False, fixes=0)
+                sessionlog.event(f"Plein ecran {'ouvert' if window.fullscreen else 'ferme'} sur le moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {gui_pt()} ; "
+                                 f"{len(glfw.get_monitors())} moniteur(s) : {[tuple(glfw.get_monitor_pos(m)) for m in glfw.get_monitors()]}")
         elif name == "hud":
             renderer.hud = not renderer.hud
         elif name == "bg":
@@ -431,6 +470,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             except queue.Empty:
                 break
         now = time.monotonic()
+        watch_fullscreen(now)
         max_gap = max(max_gap, now - prev_frame_t)
         prev_frame_t = now
         if args.max_seconds is not None and now - t0 >= args.max_seconds:

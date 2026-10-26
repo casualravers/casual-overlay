@@ -123,6 +123,17 @@ def build_strobe_hz(build: float) -> float:
     return lo + (hi - lo) * b * b
 
 
+STROBE_FLASH_S = 0.07                 # duree d'un eclair (1 -> 0 en 70 ms)
+BUILD_FLASH_DUTY = 0.20               # part de blanc moyenne (en rapport cyclique) qu'un eclair de la montee ne depasse jamais
+
+
+def build_flash_s(hz: float) -> float:
+    """Duree d'un eclair de la montee a la cadence `hz` : 70 ms tant que c'est lent, puis de plus en plus court, de sorte que la part de blanc moyenne
+    (un eclair decroit lineairement : moyenne = duree x cadence / 2) reste sous `BUILD_FLASH_DUTY`. Avant, a 10 eclairs par seconde, les 70 ms
+    laissaient l'image presque blanche en fin de montee (35 % de blanc en moyenne, plus la teinte et la reactivite qui montent aussi)."""
+    return min(STROBE_FLASH_S, 2.0 * BUILD_FLASH_DUTY / max(float(hz), 0.1))
+
+
 def tap_bpm(taps: list[float], max_gap: float = 2.0, keep: int = 6) -> float | None:
     """BPM d'une suite d'appuis (instants en secondes) : moyenne des derniers intervalles ; un trou de plus de `max_gap`
     secondes recommence la serie. None tant qu'il y a moins de deux appuis valides. Pure."""

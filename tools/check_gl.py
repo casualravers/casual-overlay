@@ -2017,6 +2017,54 @@ def check_text() -> None:
           "--monitor / --fullscreen explicites l'emportent")
     check(gl.resolve_fullscreen(True) is True and gl.resolve_fullscreen(False) is False,
           "--fullscreen / --no-fullscreen l'emportent")
+    # moniteur de la fenetre de reglages repere par son NOM de peripherique (juste meme si un ecran est mis a l'echelle : les coordonnees de Tk ne
+    # sont alors pas celles de glfw) ; faux glfw avec deux moniteurs, le second au-dessus du premier
+    from engine import window as eng_window
+
+    class _Size:
+        def __init__(self, w, h):
+            self.size = type("S", (), {"width": w, "height": h})()
+
+    class _FakeGlfw:
+        pos = {"m0": (0, 0), "m1": (0, -1080)}
+        names = {"m0": "\\\\.\\DISPLAY1", "m1": "\\\\.\\DISPLAY4"}
+        get_monitor_pos = staticmethod(lambda m: _FakeGlfw.pos[m])
+        get_video_mode = staticmethod(lambda m: _Size(1920, 1080))
+        get_win32_adapter = staticmethod(lambda m: _FakeGlfw.names[m])
+        get_monitors = staticmethod(lambda: ["m0", "m1"])
+        get_primary_monitor = staticmethod(lambda: "m0")
+
+    real_glfw, real_addr = eng_window.glfw, eng_window._addr
+    eng_window.glfw, eng_window._addr = _FakeGlfw, lambda m: 0 if m == "m0" else 1
+    try:
+        check(eng_window.monitor_contains("m0", "\\\\.\\DISPLAY1") and not eng_window.monitor_contains("m1", "\\\\.\\DISPLAY1")
+              and not eng_window.monitor_contains("m0", "") and not eng_window.monitor_contains("m0", None),
+              "moniteur repere par son nom : seul le bon le contient (nom vide ou absent = aucun)")
+        check(eng_window.pick_monitor(None, "\\\\.\\DISPLAY1") == "m1" and eng_window.pick_monitor(None, "\\\\.\\DISPLAY4") == "m0",
+              "projection : jamais le moniteur des reglages (repere par son nom), l'autre est choisi")
+        check(eng_window.pick_monitor(None, (960, 540)) == "m1" and eng_window.pick_monitor(None, (960, -500)) == "m0",
+              "projection : un point (x, y) marche toujours (reglages sur l'ecran du haut ou du bas)")
+        check(eng_window.pick_monitor(None, "\\\\.\\DISPLAY9") == "m0" or eng_window.pick_monitor(None, "\\\\.\\DISPLAY9") == "m1",
+              "nom inconnu : un moniteur est quand meme choisi")
+    finally:
+        eng_window.glfw, eng_window._addr = real_glfw, real_addr
+    if sys.platform == "win32":
+        import tkinter as _tk_fs
+        try:
+            _r = _tk_fs.Tk()
+            _r.update()
+            _hwnd = eng_window.toplevel_hwnd(_r.winfo_id())
+            _name = eng_window.window_monitor_name(_hwnd)
+            _r.destroy()
+            check(bool(_hwnd) and isinstance(_name, str) and _name.startswith("\\\\.\\DISPLAY"),
+                  "Windows : le moniteur d'une vraie fenetre Tk est donne par son nom de peripherique", str(_name))
+        except _tk_fs.TclError as exc:
+            check(True, f"fenetre Tk indisponible ici ({exc}) : test du nom de moniteur ignore")
+    check(eng_window.window_monitor_name(None) is None, "pas de fenetre : pas de nom de moniteur")
+    mis = eng_window.fullscreen_misplaced
+    check(mis("D1", "D1", None) is True and mis("D4", "D1", None) is False and mis("D1", "D1", 0) is False
+          and mis(None, "D1", None) is False and mis("D1", None, None) is False and mis("", "", None) is False,
+          "plein ecran verifie apres coup : corrige seulement s'il est (selon Windows) sur l'ecran des reglages, sans --monitor, noms connus")
     check(gl.hide_cursor(True, True) is False and gl.hide_cursor(True, False) is True
           and gl.hide_cursor(False, False) is False,
           "curseur masque uniquement en plein ecran hors moniteur principal")
@@ -6040,6 +6088,29 @@ def check_masters() -> None:
     hz = [cc_.build_strobe_hz(b_ / 10) for b_ in range(0, 11)]
     check(hz[0] == 0.5 and hz[10] == 16.0 and all(a_ < b_ for a_, b_ in zip(hz, hz[1:])) and hz[3] < 2.0 and hz[5] < 5.0,
           "montee: cadence des eclairs lente au depart (0,5 Hz, moins de 2 Hz a 30 %, moins de 5 Hz a mi-montee), 16 Hz a 100 %", str([round(h_, 1) for h_ in hz]))
+    # duree des eclairs de la montee : plus la cadence monte, plus ils sont courts (part de blanc moyenne <= 20 %)
+    fl = [cc_.build_flash_s(h_) for h_ in (0.5, 2.0, 5.0, 10.0, 16.0)]
+    check(fl[0] == fl[1] == cc_.STROBE_FLASH_S and all(a_ >= b_ for a_, b_ in zip(fl, fl[1:])) and abs(fl[3] - 0.04) < 1e-9
+          and all(0.5 * f_ * h_ <= cc_.BUILD_FLASH_DUTY + 1e-9 for f_, h_ in zip(fl, (0.5, 2.0, 5.0, 10.0, 16.0))),
+          "montee: les eclairs raccourcissent quand la cadence monte (70 ms jusqu'a ~6 Hz, 40 ms a 10 Hz) : jamais plus de 20 % de blanc en moyenne", str(fl))
+    bf = gl.Renderer(ctx, size, None)
+    pb = dict(d, strobe_on=0.0, build=1.0, strobe_max_hz=20.0, strobe_max_s=600.0)
+    bf._strobe(pb, quiet)                                               # premier eclair de la montee
+    bf._strobe_last -= 0.05                                             # 50 ms plus tard (la cadence de 16 Hz n'a pas relance d'eclair : 62 ms)
+    after_build = bf._strobe(pb, quiet)
+    mf = gl.Renderer(ctx, size, None)
+    mf._strobe(dict(d, strobe_on=0.0, strobe_hits=1), quiet)           # eclair manuel (bouton)
+    mf._strobe_last -= 0.05
+    after_manual = mf._strobe(dict(d, strobe_on=0.0, strobe_hits=1), quiet)
+    check(after_build == 0.0 and after_manual > 0.2, "montee: a 16 Hz un eclair est retombe en 50 ms ; un eclair du bouton dure toujours 70 ms",
+          f"{after_build:.2f} {after_manual:.2f}")
+    # seuil sombre : le reglage « Sombre » s'applique a tous les eclairs, le strobe auto peut etre plus restrictif jamais moins
+    dk = gl.Renderer(ctx, size, None)
+    check(dk._dark_threshold(dict(d, strobe_dark=1.0)) == 1.0 and abs(dk._dark_threshold(dict(d, strobe_dark=0.3)) - 0.3) < 1e-9,
+          "strobe sombre: bouton et montee suivent le reglage (100 % = toute l'image)")
+    dk._strobe_auto_now, dk._strobe_auto_dark = True, 0.5
+    check(abs(dk._dark_threshold(dict(d, strobe_dark=1.0)) - 0.5) < 1e-9 and abs(dk._dark_threshold(dict(d, strobe_dark=0.3)) - 0.3) < 1e-9,
+          "strobe sombre: un eclair du strobe auto garde son seuil (accent de groove, 50 %) mais ne depasse jamais le reglage de l'utilisateur")
     built = render(loud, build=1.0)
     time.sleep(0.15)                                                    # l'eclair du strobe de la montee doit etre retombe
     check(not np.array_equal(built, render(loud)), "montee: l'image change (reactivite et eclairs)")
