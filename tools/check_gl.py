@@ -6088,6 +6088,29 @@ def check_masters() -> None:
     hz = [cc_.build_strobe_hz(b_ / 10) for b_ in range(0, 11)]
     check(hz[0] == 0.5 and hz[10] == 16.0 and all(a_ < b_ for a_, b_ in zip(hz, hz[1:])) and hz[3] < 2.0 and hz[5] < 5.0,
           "montee: cadence des eclairs lente au depart (0,5 Hz, moins de 2 Hz a 30 %, moins de 5 Hz a mi-montee), 16 Hz a 100 %", str([round(h_, 1) for h_ in hz]))
+    # duree des eclairs de la montee : plus la cadence monte, plus ils sont courts (part de blanc moyenne <= 20 %)
+    fl = [cc_.build_flash_s(h_) for h_ in (0.5, 2.0, 5.0, 10.0, 16.0)]
+    check(fl[0] == fl[1] == cc_.STROBE_FLASH_S and all(a_ >= b_ for a_, b_ in zip(fl, fl[1:])) and abs(fl[3] - 0.04) < 1e-9
+          and all(0.5 * f_ * h_ <= cc_.BUILD_FLASH_DUTY + 1e-9 for f_, h_ in zip(fl, (0.5, 2.0, 5.0, 10.0, 16.0))),
+          "montee: les eclairs raccourcissent quand la cadence monte (70 ms jusqu'a ~6 Hz, 40 ms a 10 Hz) : jamais plus de 20 % de blanc en moyenne", str(fl))
+    bf = gl.Renderer(ctx, size, None)
+    pb = dict(d, strobe_on=0.0, build=1.0, strobe_max_hz=20.0, strobe_max_s=600.0)
+    bf._strobe(pb, quiet)                                               # premier eclair de la montee
+    bf._strobe_last -= 0.05                                             # 50 ms plus tard (la cadence de 16 Hz n'a pas relance d'eclair : 62 ms)
+    after_build = bf._strobe(pb, quiet)
+    mf = gl.Renderer(ctx, size, None)
+    mf._strobe(dict(d, strobe_on=0.0, strobe_hits=1), quiet)           # eclair manuel (bouton)
+    mf._strobe_last -= 0.05
+    after_manual = mf._strobe(dict(d, strobe_on=0.0, strobe_hits=1), quiet)
+    check(after_build == 0.0 and after_manual > 0.2, "montee: a 16 Hz un eclair est retombe en 50 ms ; un eclair du bouton dure toujours 70 ms",
+          f"{after_build:.2f} {after_manual:.2f}")
+    # seuil sombre : le reglage « Sombre » s'applique a tous les eclairs, le strobe auto peut etre plus restrictif jamais moins
+    dk = gl.Renderer(ctx, size, None)
+    check(dk._dark_threshold(dict(d, strobe_dark=1.0)) == 1.0 and abs(dk._dark_threshold(dict(d, strobe_dark=0.3)) - 0.3) < 1e-9,
+          "strobe sombre: bouton et montee suivent le reglage (100 % = toute l'image)")
+    dk._strobe_auto_now, dk._strobe_auto_dark = True, 0.5
+    check(abs(dk._dark_threshold(dict(d, strobe_dark=1.0)) - 0.5) < 1e-9 and abs(dk._dark_threshold(dict(d, strobe_dark=0.3)) - 0.3) < 1e-9,
+          "strobe sombre: un eclair du strobe auto garde son seuil (accent de groove, 50 %) mais ne depasse jamais le reglage de l'utilisateur")
     built = render(loud, build=1.0)
     time.sleep(0.15)                                                    # l'eclair du strobe de la montee doit etre retombe
     check(not np.array_equal(built, render(loud)), "montee: l'image change (reactivite et eclairs)")

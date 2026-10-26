@@ -422,7 +422,11 @@ def install(c):
             drop = button(f, "Drop", do_drop, row=1, column=3, sticky="w", padx=6, pady=(3, 0))
             Tooltip(drop, "Relache la montee d'un coup : flash blanc, tout retombe aux reglages normaux.")
             sinfo = tk.Label(f, text="strobe auto : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
-            sinfo.grid(row=3, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
+            slider(f, (3, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100,
+                   "Les eclairs ne blanchissent que les parties SOMBRES de l'image : seuil de luminosite (100 % = toute l'image, plus bas = seulement ce qui est plus "
+                   "sombre que ce seuil, les parties claires ne bougent pas). S'applique a tous les eclairs : le bouton, ceux de la montee et le strobe auto "
+                   "(dont l'accent discret de groove est deja limite a 50 %). Double-clic sur le nom : retour a 100 %.")
+            sinfo.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
             vj_ui["strobe_info"] = sinfo
             Tooltip(sinfo, "Ce que fait le strobe auto : la raison de son dernier eclair (accent de groove, kick au pic, drop, montee...).")
 

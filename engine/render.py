@@ -16,7 +16,7 @@ from core import qrcode
 from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
-from core.controls import STROBE_COOLDOWN_S, StrobeLimiter, _unit, build_strobe_hz, effective_tempo, spectral_hue
+from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.video import LogoVideo
@@ -259,6 +259,7 @@ class Renderer:
         self.strobe_limiter = StrobeLimiter()
         self.strobe_brain = StrobeBrain()                                           # strobe auto : decide seul quand eclairer
         self._strobe_hits, self._strobe_auto_now, self._strobe_auto_dark = 0, False, 1.0
+        self._strobe_len = STROBE_FLASH_S                                           # duree du dernier eclair (plus courte pour ceux de la montee a cadence elevee)
         self.strobe_fired = 0                                                       # eclairs acceptes (compteur : la mesure de latence le lit)
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
@@ -435,11 +436,15 @@ class Renderer:
             fire = fire or auto_fire
         build = _unit(p.get("build", 0.0))
         timed = True
+        build_fire = False
         if build > 0.0 and not fire:                                  # montee : eclairs automatiques de 0,5 a 16 Hz (lents au debut), le premier tout de suite
             fire = now - self._strobe_last >= 1.0 / build_strobe_hz(build)
             timed = not fire                                          # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
+            build_fire = fire
         if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"]), timed):
             self._strobe_last = now
+            # un eclair de la montee raccourcit quand la cadence monte : sinon, a 10 eclairs par seconde, l'image restait presque blanche
+            self._strobe_len = build_flash_s(min(build_strobe_hz(build), float(p["strobe_max_hz"]))) if build_fire else STROBE_FLASH_S
             self.strobe_fired += 1
             self._strobe_auto_now = bool(auto_fire and not manual_fire and float(p.get("strobe_auto", 0.0)) >= 0.5)
             self._strobe_auto_dark = auto_dark
@@ -447,7 +452,14 @@ class Renderer:
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
-        return max(0.0, 1.0 - (now - self._strobe_last) / 0.07)
+        return max(0.0, 1.0 - (now - self._strobe_last) / self._strobe_len)
+
+    def _dark_threshold(self, p: dict) -> float:
+        """Seuil de luminosite du strobe : il ne blanchit que les parties plus sombres que ce seuil (1 = toute l'image). Le reglage « Sombre » de
+        l'onglet Live s'applique a TOUS les eclairs (bouton, montee, strobe auto) ; un eclair du strobe auto peut etre plus restrictif (accent discret
+        de groove : 50 %), jamais moins que le reglage."""
+        user = min(max(float(p.get("strobe_dark", 1.0)), 0.05), 1.0)
+        return min(user, self._strobe_auto_dark) if self._strobe_auto_now else user
 
     # ---- Doodles du site : par-dessus tout, apres la trainee et le post-traitement (ni symetrie, ni teinte, ni PANIQUE n'y touchent)
     def add_doodle(self, rgba, now: float) -> None:
@@ -804,7 +816,7 @@ class Renderer:
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", self._strobe(p, state))
-        self._set(pp, "u_strobe_dark", self._strobe_auto_dark if self._strobe_auto_now else float(p.get("strobe_dark", 1.0)))     # un eclair du strobe auto a son propre seuil
+        self._set(pp, "u_strobe_dark", self._dark_threshold(p))
         self._set(pp, "u_hue", math.radians(hue_deg))
         self._set(pp, "u_bg_level", bg_level)
         # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)
