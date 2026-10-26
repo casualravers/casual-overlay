@@ -16,10 +16,60 @@ def _addr(monitor) -> int:
     return ctypes.cast(monitor, ctypes.c_void_p).value or 0
 
 
+def _adapter(monitor) -> str:
+    """Nom du peripherique Windows d'un moniteur glfw (`\\\\.\\DISPLAY2`), "" si l'information manque."""
+    try:
+        name = glfw.get_win32_adapter(monitor)
+        return name.decode("utf-8", "replace") if isinstance(name, bytes) else str(name or "")
+    except Exception:
+        return ""
+
+
+def toplevel_hwnd(widget_id: int) -> int | None:
+    """Fenetre de premier niveau (HWND) qui porte le widget Tk `widget_id` (`winfo_id()`), None hors Windows."""
+    if sys.platform != "win32":
+        return None
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetAncestor.restype = ctypes.c_void_p
+        user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        return user32.GetAncestor(ctypes.c_void_p(widget_id), 2) or None          # GA_ROOT
+    except Exception:
+        return None
+
+
+def window_monitor_name(hwnd) -> str | None:
+    """Nom du peripherique (`\\\\.\\DISPLAY2`) du moniteur qui porte la fenetre `hwnd`, ou None (hors Windows, fenetre inconnue). Passe par
+    Windows lui-meme : les coordonnees d'une fenetre Tk ne sont pas celles de glfw des qu'un ecran a une mise a l'echelle differente de 100 %
+    (processus non DPI-aware), la comparaison de rectangles se trompait alors d'ecran."""
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        from ctypes import wintypes
+
+        class MonitorInfoEx(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD), ("szDevice", ctypes.c_wchar * 32)]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromWindow.restype = wintypes.HMONITOR
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        hmon = user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)                      # MONITOR_DEFAULTTONEAREST
+        info = MonitorInfoEx()
+        info.cbSize = ctypes.sizeof(MonitorInfoEx)
+        if hmon and user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            return info.szDevice or None
+    except Exception:
+        pass
+    return None
+
+
 def monitor_contains(monitor, point) -> bool:
-    """Le point (x, y) du bureau est-il sur ce moniteur ?"""
+    """Le moniteur porte-t-il `point` ? `point` = (x, y) du bureau, ou le nom de peripherique d'un moniteur (`window_monitor_name`)."""
     if point is None:
         return False
+    if isinstance(point, str):
+        return bool(point) and _adapter(monitor) == point
     mx, my = glfw.get_monitor_pos(monitor)
     mode = glfw.get_video_mode(monitor)
     return mx <= point[0] < mx + mode.size.width and my <= point[1] < my + mode.size.height

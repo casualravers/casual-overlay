@@ -18,7 +18,7 @@ from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_te
 from engine.deps import PIL_Image, glfw, moderngl
 from engine.session import Session
 from engine.video import HEX_DIGITS, BgVideoManager, LogoVideo
-from engine.window import Window, fullscreen_blocked, monitor_contains, pick_monitor, resolve_fullscreen
+from engine.window import Window, fullscreen_blocked, monitor_contains, pick_monitor, resolve_fullscreen, window_monitor_name
 from pathlib import Path
 
 
@@ -202,9 +202,11 @@ def _gl_main(s: Session) -> None:
         if not glfw.init():
             print("Initialisation de glfw impossible.", file=sys.stderr)
             sys.exit(1)
-        avoid = getattr(s, "gui_point", None)
+        avoid = window_monitor_name(getattr(s, "gui_hwnd", None)) or getattr(s, "gui_point", None)
         monitor = pick_monitor(args.monitor, avoid)
         window = Window(monitor, s.win_size, args.fullscreen, shared=monitor_contains(monitor, avoid))
+        sessionlog.event(f"Projection : moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {avoid} ; "
+                         f"{len(glfw.get_monitors())} moniteur(s) : {[tuple(glfw.get_monitor_pos(m)) for m in glfw.get_monitors()]}")
         ctx = moderngl.create_context()
         mode = glfw.get_video_mode(monitor)
         wx, wy = glfw.get_window_pos(window.handle)
@@ -250,7 +252,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                    f" | logo {''.join(str(int(v)) for v in params['fxl_on'])} (separes du fond)"))
 
     def gui_pt():
-        return getattr(s, "gui_point", None)
+        """Ou est la fenetre de reglages : son moniteur relu maintenant (elle a pu etre deplacee depuis l'ouverture), sinon la valeur du lancement."""
+        name = window_monitor_name(getattr(s, "gui_hwnd", None))
+        return name or getattr(s, "gui_point", None)
 
     def act(name: str) -> None:
         """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""
@@ -260,6 +264,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             if not window.fullscreen:
                 window.retarget(pick_monitor(args.monitor, gui_pt()), gui_pt())     # un projecteur branche depuis le lancement est pris en compte
             window.toggle_fullscreen()
+            sessionlog.event(f"Plein ecran (touche / bascule) : {'ouvert' if window.fullscreen else 'ferme'} sur le moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {gui_pt()}")
         elif name.startswith("fullscreen="):      # etat explicite (case « Plein ecran » de la GUI, preset qui la coche)
             want = name.endswith("1")
             if want and not window.fullscreen:
@@ -269,9 +274,12 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 if fullscreen_blocked(on_gui, window.is_primary, args.monitor, getattr(args, "fullscreen_request", None)):
                     s.status["msg"] = "Plein ecran refuse sur l'ecran des reglages : projette sur un autre ecran (ou --fullscreen)"
                     print(s.status["msg"], file=sys.stderr)
+                    sessionlog.event(f"Plein ecran refuse : moniteur vise en ({window.mx},{window.my}) {window.mw}x{window.mh} = celui des reglages ({gui_pt()})")
                     return
             if window.fullscreen != want:
                 window.toggle_fullscreen()
+                sessionlog.event(f"Plein ecran {'ouvert' if window.fullscreen else 'ferme'} sur le moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {gui_pt()} ; "
+                                 f"{len(glfw.get_monitors())} moniteur(s) : {[tuple(glfw.get_monitor_pos(m)) for m in glfw.get_monitors()]}")
         elif name == "hud":
             renderer.hud = not renderer.hud
         elif name == "bg":

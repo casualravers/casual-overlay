@@ -2017,6 +2017,50 @@ def check_text() -> None:
           "--monitor / --fullscreen explicites l'emportent")
     check(gl.resolve_fullscreen(True) is True and gl.resolve_fullscreen(False) is False,
           "--fullscreen / --no-fullscreen l'emportent")
+    # moniteur de la fenetre de reglages repere par son NOM de peripherique (juste meme si un ecran est mis a l'echelle : les coordonnees de Tk ne
+    # sont alors pas celles de glfw) ; faux glfw avec deux moniteurs, le second au-dessus du premier
+    from engine import window as eng_window
+
+    class _Size:
+        def __init__(self, w, h):
+            self.size = type("S", (), {"width": w, "height": h})()
+
+    class _FakeGlfw:
+        pos = {"m0": (0, 0), "m1": (0, -1080)}
+        names = {"m0": "\\\\.\\DISPLAY1", "m1": "\\\\.\\DISPLAY4"}
+        get_monitor_pos = staticmethod(lambda m: _FakeGlfw.pos[m])
+        get_video_mode = staticmethod(lambda m: _Size(1920, 1080))
+        get_win32_adapter = staticmethod(lambda m: _FakeGlfw.names[m])
+        get_monitors = staticmethod(lambda: ["m0", "m1"])
+        get_primary_monitor = staticmethod(lambda: "m0")
+
+    real_glfw, real_addr = eng_window.glfw, eng_window._addr
+    eng_window.glfw, eng_window._addr = _FakeGlfw, lambda m: 0 if m == "m0" else 1
+    try:
+        check(eng_window.monitor_contains("m0", "\\\\.\\DISPLAY1") and not eng_window.monitor_contains("m1", "\\\\.\\DISPLAY1")
+              and not eng_window.monitor_contains("m0", "") and not eng_window.monitor_contains("m0", None),
+              "moniteur repere par son nom : seul le bon le contient (nom vide ou absent = aucun)")
+        check(eng_window.pick_monitor(None, "\\\\.\\DISPLAY1") == "m1" and eng_window.pick_monitor(None, "\\\\.\\DISPLAY4") == "m0",
+              "projection : jamais le moniteur des reglages (repere par son nom), l'autre est choisi")
+        check(eng_window.pick_monitor(None, (960, 540)) == "m1" and eng_window.pick_monitor(None, (960, -500)) == "m0",
+              "projection : un point (x, y) marche toujours (reglages sur l'ecran du haut ou du bas)")
+        check(eng_window.pick_monitor(None, "\\\\.\\DISPLAY9") == "m0" or eng_window.pick_monitor(None, "\\\\.\\DISPLAY9") == "m1",
+              "nom inconnu : un moniteur est quand meme choisi")
+    finally:
+        eng_window.glfw, eng_window._addr = real_glfw, real_addr
+    if sys.platform == "win32":
+        import tkinter as _tk_fs
+        try:
+            _r = _tk_fs.Tk()
+            _r.update()
+            _hwnd = eng_window.toplevel_hwnd(_r.winfo_id())
+            _name = eng_window.window_monitor_name(_hwnd)
+            _r.destroy()
+            check(bool(_hwnd) and isinstance(_name, str) and _name.startswith("\\\\.\\DISPLAY"),
+                  "Windows : le moniteur d'une vraie fenetre Tk est donne par son nom de peripherique", str(_name))
+        except _tk_fs.TclError as exc:
+            check(True, f"fenetre Tk indisponible ici ({exc}) : test du nom de moniteur ignore")
+    check(eng_window.window_monitor_name(None) is None, "pas de fenetre : pas de nom de moniteur")
     check(gl.hide_cursor(True, True) is False and gl.hide_cursor(True, False) is True
           and gl.hide_cursor(False, False) is False,
           "curseur masque uniquement en plein ecran hors moniteur principal")

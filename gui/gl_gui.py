@@ -44,6 +44,7 @@ from tkinter import colorchooser, ttk
 
 import audio2wave_gl as gl
 from engine import diagnostics
+from engine import window as window_engine
 import skin
 import theme
 import gui_fond
@@ -905,7 +906,16 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     ROW_PADX, ROW_PADY, SECTION_GAP = 6, 2, 5
 
     projection = getattr(s, "projection", None)           # avec --gui : la fenetre de rendu s'ouvre au bouton
-    s.gui_point_fn = lambda: (root.winfo_rootx() + root.winfo_width() // 2, root.winfo_rooty() + root.winfo_height() // 2)
+    def gui_point():
+        """Ou est la fenetre de reglages (appelee par le fil Tk) : le NOM de son moniteur quand Windows le donne (juste meme si un ecran est mis a
+        l'echelle : les coordonnees de Tk ne sont alors pas celles de glfw), sinon un point (x, y) du bureau. Garde aussi son HWND : le fil GL
+        relit le moniteur au moment du plein ecran (la fenetre a pu etre deplacee)."""
+        hwnd = window_engine.toplevel_hwnd(root.winfo_id())
+        s.gui_hwnd = hwnd
+        return window_engine.window_monitor_name(hwnd) or (root.winfo_rootx() + root.winfo_width() // 2, root.winfo_rooty() + root.winfo_height() // 2)
+
+    s.gui_point_fn = gui_point
+    s.gui_hwnd = window_engine.toplevel_hwnd(root.winfo_id())      # connu des l'ouverture (une projection lancee par --projeter n'attend pas un clic)
     proj_ui: dict = {"btn": None}
 
     def send(name: str) -> None:
