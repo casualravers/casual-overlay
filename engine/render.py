@@ -12,6 +12,7 @@ from pathlib import Path
 
 from core import sessionlog
 from core import doodles
+from core import qrcode
 from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
@@ -277,6 +278,8 @@ class Renderer:
         self._doodle_id = 0
         self.screen_size = (1, 1)                  # taille du dernier rendu (pour le rapport d'aspect des doodles)
         self._doodle_rng = random.Random()
+        self._qr = ("", None, 0)                   # QR de la projection : (adresse, texture, cote en modules marge comprise)
+        self._qr_prog = self._qr_vao = None
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
@@ -478,6 +481,57 @@ class Renderer:
             self._set(sp, "u_logo_cs", (1.0, 0.0))                      # le logo, lui, reste droit
             self.ctx.disable(moderngl.BLEND)
         return True
+
+    # ---- QR code permanent dans un coin : dessine en tout dernier, droit, sans aucun effet (il doit rester lisible par un telephone)
+    _QR_VERT = ("#version 330\nin vec2 in_pos; out vec2 uv;\n"
+                "void main() { uv = vec2(in_pos.x * 0.5 + 0.5, 0.5 - in_pos.y * 0.5); gl_Position = vec4(in_pos, 0.0, 1.0); }\n")
+    _QR_FRAG = ("#version 330\nuniform sampler2D u_tex; in vec2 uv; out vec4 o;\n"
+                "void main() { o = vec4(vec3(texture(u_tex, uv).r), 1.0); }\n")
+
+    def _qr_texture(self, url: str):
+        """Texture du QR de `url` (en cache tant que l'adresse ne change pas) ; None si l'adresse est vide ou trop longue."""
+        if url == self._qr[0]:
+            return self._qr[1], self._qr[2]
+        old = self._qr[1]
+        if old is not None:
+            old.release()
+        tex, side = None, 0
+        if url:
+            try:
+                data, side = qrcode.to_gray(qrcode.encode(url))
+                tex = self.ctx.texture((side, side), 1, data=data)
+                tex.filter = (moderngl.NEAREST, moderngl.NEAREST)      # modules nets, jamais flous
+                tex.repeat_x = tex.repeat_y = False
+            except ValueError:
+                tex, side = None, 0
+        self._qr = (url, tex, side)
+        return tex, side
+
+    def _draw_qr(self, target, size: tuple[int, int], p: dict) -> None:
+        if float(p.get("qr_on", 0.0)) < 0.5:
+            return
+        tex, modules = self._qr_texture(str(p.get("qr_url", "")).strip())
+        if tex is None:
+            return
+        width, height = size
+        ppm = max(1, round(float(p["qr_size"]) * height / modules))            # pixels par module : entier, les bords restent nets
+        side = ppm * modules
+        if side > min(width, height):
+            return
+        gap = max(4, round(0.02 * height))
+        corner = str(p.get("qr_corner", "bas droite"))
+        x = gap if "gauche" in corner else width - side - gap
+        y = gap if corner.startswith("bas") else height - side - gap          # origine GL en bas a gauche
+        if self._qr_prog is None:
+            self._qr_prog = self.ctx.program(vertex_shader=self._QR_VERT, fragment_shader=self._QR_FRAG)
+            self._qr_vao = self.ctx.vertex_array(self._qr_prog, [(self.vbo, "2f", "in_pos")])
+        target.use()
+        target.viewport = (x, y, side, side)
+        tex.use(0)
+        self._qr_prog["u_tex"].value = 0
+        self.ctx.disable(moderngl.BLEND)
+        self._qr_vao.render(moderngl.TRIANGLE_STRIP)
+        target.viewport = (0, 0, width, height)
 
     @staticmethod
     def _set(prog, name: str, value) -> None:
@@ -744,6 +798,7 @@ class Renderer:
         if dest is not target:
             self.ctx.copy_framebuffer(target, dest)
             self._fb_i = 1 - self._fb_i
+        self._draw_qr(target, size, p)
 
 
 def hex_to_rgb(text: str, fallback: str = DEFAULT_PARAMS["logo_glow_color"]) -> tuple[float, float, float]:

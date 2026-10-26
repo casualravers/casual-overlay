@@ -278,6 +278,20 @@ def encode(text: str, mask: int | None = None) -> list[list[bool]]:
     return best.mod
 
 
+def to_gray(matrix: list[list[bool]], quiet: int = 4) -> tuple[bytes, int]:
+    """Image en niveaux de gris du QR (module sombre = 0, clair et marge blanche = 255), un octet par pixel, `quiet` modules de marge
+    (4 = la norme : en dessous, certains lecteurs ratent le code). Rend (octets, cote en pixels) ; premiere ligne = haut."""
+    n = len(matrix)
+    side = n + 2 * quiet
+    out = bytearray(b"\xff" * (side * side))
+    for y, row in enumerate(matrix):
+        base = (y + quiet) * side + quiet
+        for x, dark in enumerate(row):
+            if dark:
+                out[base + x] = 0
+    return bytes(out), side
+
+
 def to_text(matrix: list[list[bool]], quiet: int = 4) -> str:
     """Dessin en caracteres (deux caracteres par module) : pratique pour verifier a l'oeil ou dans un terminal."""
     n = len(matrix)

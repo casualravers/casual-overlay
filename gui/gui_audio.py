@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import audio2wave_gl as gl
+from core import params_schema
 from engine import diagnostics
 import tkinter as tk
 
@@ -104,7 +105,35 @@ def install(c):
     Tooltip(doodle_check, "Recupere les doodles deposes sur le site (config : ~/.audio2wave/depot.json) et les affiche par-dessus la projection. "
                           "Seuls les fichiers apparus apres l'activation sont montres. Jamais enregistre dans un preset ni une scene.")
 
-    remote_box = tk.Frame(tab_aff)                   # la ligne de la telecommande telephone (remplie par gui_remote)
+    qr_row = tk.Frame(tab_aff)                       # QR code permanent dans un coin de la projection (pour que le public rejoigne le site)
+    qr_row.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    qr_var = tk.IntVar(value=int(float(params.get("qr_on", 0.0)) >= 0.5))
+    qr_url_var = tk.StringVar(value=str(params.get("qr_url", "")))
+    qr_corner_var = tk.StringVar(value=str(params.get("qr_corner", "bas droite")))
+    bind_param("qr_on", qr_var, float)
+    bind_param("qr_url", qr_url_var, lambda v: str(v).strip())
+    bind_param("qr_corner", qr_corner_var, str)
+    qr_check = tk.Checkbutton(qr_row, text="QR sur la projection", variable=qr_var)
+    qr_check.pack(side="left")
+    qr_entry = tk.Entry(qr_row, textvariable=qr_url_var, width=24)
+    qr_entry.pack(side="left", padx=(6, 0))
+    qr_menu = tk.OptionMenu(qr_row, qr_corner_var, *params_schema.BY_KEY["qr_corner"].choices)
+    a2w.style_option_menu(qr_menu)
+    qr_menu.pack(side="left", padx=(6, 0))
+    Tooltip(qr_check, "Affiche en permanence un QR code dans un coin de la projection (par-dessus tout, droit, sans effet : un telephone doit pouvoir le lire). "
+                      "Colle l'adresse du site a droite ; le menu choisit le coin. Sauve avec les reglages, jamais dans un preset ni une scene.")
+
+    def qr_check_url(*_a) -> None:
+        url = qr_url_var.get().strip()
+        if qr_var.get() and not url:
+            s.status["msg"] = "QR : colle l'adresse du site dans le champ"
+        elif len(url.encode("utf-8")) > 213:
+            s.status["msg"] = "QR : adresse trop longue (213 octets au plus), le code n'est pas affiche"
+
+    qr_var.trace_add("write", qr_check_url)
+    qr_url_var.trace_add("write", qr_check_url)
+
+    remote_box = tk.Frame(tab_aff)                 # la ligne de la telecommande telephone (remplie par gui_remote)
     remote_box.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
     shortcuts_label = tk.Label(frame, text=" (i) ", fg=a2w.GUI_ACCENT, font=a2w.GUI_FONT, cursor="question_arrow")

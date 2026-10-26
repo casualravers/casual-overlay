@@ -481,6 +481,11 @@ la projection**. Desactive par defaut.
 - `check_gl.py` (`check_doodles`) : logique pure, fil avec faux reseau et horloge injectee, **vrai serveur HTTP local** (en-tetes, corps, 404, serveur
   injoignable), rendu hors ecran (taille, ratio, position, sens, alpha premultiplie, fondu, limite de 5, expiration, panique), reglage hors presets /
   sauvegarde, case de la GUI.
+- **QR code permanent** (case **QR sur la projection**, onglet *Affichage*, a cote de « Recuperer les medias » ; champ d'adresse + menu du coin) : pour que le public trouve le site et depose ses medias sans qu'on l'explique. Reglages `qr_on` (0), `qr_url`, `qr_corner`
+  (`bas droite` par defaut, `bas gauche`, `haut droite`, `haut gauche`), `qr_size` (0,18 = cote en fraction de la hauteur, sans curseur) : portee `device` (sauves avec P et l'auto-sauvegarde, **jamais** dans un preset, une scene ou la PANIQUE ; une installation, pas un look).
+  `Renderer._draw_qr` est appele **tout a la fin de `draw`**, apres la composition et la trainee : le QR est droit, opaque (noir sur blanc, marge de 4 modules comme la norme), sans symetrie, pixelisation, teinte, strobe ni deformation, donc toujours lisible par un telephone.
+  Taille = nombre ENTIER de pixels par module (bords nets, `NEAREST`), marge de 2 % de la hauteur ; adresse vide ou trop longue (213 octets) = rien dessine, la GUI le dit dans le statut. La texture est gardee tant que l'adresse ne change pas (`core.qrcode.to_gray` fait l'image).
+  `check_gl.py` : `check_qrcode` (image), `check_qr_projection` (pixel pour pixel dans les quatre coins, reste de l'image intact, aucun effet ne le touche, coupe / vide / trop long, taille).
 ### Noise : un hasard unique et prereglé (`noise_amount`, `noise_fx`)
 
 **Un seul noise, non parametrable** (`NoiseDrive`, audio2wave_gl.py) : une valeur continue au hasard (`noise_value`, noise de
