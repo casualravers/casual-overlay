@@ -33,6 +33,7 @@ MASTER_KEYS = ("react_master", "fx_master", "overlay_master", "bg_master", "temp
 AUTO_KEYS = ("auto_phase", "strobe_auto", "bpm_auto")
 VJ_ACTIONS = ("toggle", "next", "back")
 BUILD_ACTIONS = ("start", "drop")
+RANDOM_ACTIONS = ("toggle", "draw")           # Full Randomizer : l'activer / le quitter, ou tirer une scene tout de suite
 MEMORY_SLOTS = 10
 MAX_SCENE_INDEX = 999
 
@@ -159,6 +160,10 @@ def _strobe(body):
     return {"down": _flag(body, "down")}
 
 
+def _random(body):
+    return {"action": _choice(body, "action", RANDOM_ACTIONS)}
+
+
 def _build(body):
     return {"action": _choice(body, "action", BUILD_ACTIONS)}
 
@@ -198,7 +203,7 @@ def _none(body):
 
 # nom -> validateur. C'est LA liste blanche : le serveur refuse tout autre nom (404) et le pont n'execute que ces commandes.
 COMMANDS = {
-    "scene": _scene, "vj": _vj, "lock": _none, "save": _none, "strobe": _strobe, "build": _build, "master": _master, "memory": _memory,
+    "scene": _scene, "vj": _vj, "lock": _none, "save": _none, "strobe": _strobe, "build": _build, "random": _random, "master": _master, "memory": _memory,
     "one": _none, "text": _text, "auto": _auto, "preview": _preview,
 }
 

@@ -125,6 +125,7 @@
     $("vj-toggle").className = "big " + (st.vj.running ? "amber" : "green");
     $("lock").textContent = st.vj.locked ? "Verrou ●" : "Verrou";
     $("lock").className = "big amber" + (st.vj.locked ? " lit" : "");
+    $("rnd-mode").className = "big amber" + (st.vj.random ? " lit" : "");
     $("remaining").textContent = st.vj.running ? st.vj.remaining : (st.vj.locked ? "scene verrouillee" : "VJ en pause");
     Object.keys(st.masters).forEach(function (k) {
       var el = $("m-" + k);
@@ -191,6 +192,8 @@
   tap("vj-back", function () { api("/api/vj", { action: "back" }); });
   tap("lock", function () { api("/api/lock"); });
   tap("save-scene", function () { api("/api/save"); });
+  tap("rnd-mode", function () { api("/api/random", { action: "toggle" }); });
+  tap("rnd-draw", function () { api("/api/random", { action: "draw" }); });
   tap("one", function () { api("/api/one"); });
   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach(function (n) { tap("mem-" + n, function () { api("/api/memory", { slot: n }); }); });
   tap("send-text", function () { api("/api/text", { text: $("text").value }); });

@@ -90,6 +90,7 @@ def install(c):
         return remote_state.build_state(
             set_name=scene_book.active_set_name(), scenes=[(r["index"], r["name"], st["thumbs"][r["index"]]) for r in rows], active=active,
             vj_running=bool(c.vj["running"]), vj_remaining=c.vj_remaining_text() if c.vj["running"] else "", locked=bool(getattr(s, "scene_lock", False)),
+            randomizer=scene_book.vj()["order"] == "alea",
             phase=s.status.get("phase_info"), bpm=c.detected_bpm(), voyants=voyants, masters=masters, autos=autos,
             text=params.get("text_content", ""), projection_open=bool(proj is not None and proj.running()), msg=scene_msg.get(),
             build=params.get("build", 0.0), preview_on=st["preview_on"], preview_note=st["preview_note"], memories=memory_names())
@@ -98,7 +99,7 @@ def install(c):
     def command_in(cmd: dict):
         """Appelee par le fil HTTP : refus immediat quand la scene est verrouillee (le telephone le voit tout de suite), sinon mise en file."""
         locked = bool(getattr(s, "scene_lock", False))
-        if locked and (cmd["cmd"] == "scene" or (cmd["cmd"] == "vj" and cmd["action"] in ("next", "back"))):
+        if locked and (cmd["cmd"] in ("scene", "random") or (cmd["cmd"] == "vj" and cmd["action"] in ("next", "back"))):
             return "Scene verrouillee : deverrouille d'abord (bouton Verrou)"
         requests.put(cmd)
         return None
@@ -120,6 +121,20 @@ def install(c):
             {"toggle": c.vj_toggle, "next": c.vj_advance, "back": c.back_scene}[cmd["action"]]()
         elif name == "lock":
             c.toggle_scene_lock()
+        elif name == "random":
+            if cmd["action"] == "draw":
+                c.random_draw_now()
+            elif scene_book.vj()["order"] == "alea":           # quitter le Full Randomizer : retour a l'ordre normal (le VJ continue s'il a assez de scenes)
+                scene_book.set_vj(order="seq")
+                if c.vj["running"] and sum(1 for r in scene_book.rows() if not r["skip"]) < 2:
+                    c.vj_toggle()
+                scene_msg.set("Telecommande : Full Randomizer arrete")
+            else:                                              # l'activer : ordre alea, VJ lance, premier tirage tout de suite
+                scene_book.set_vj(order="alea")
+                if not c.vj["running"]:
+                    c.vj_toggle()
+                c.random_draw_now()
+                scene_msg.set("Telecommande : Full Randomizer lance")
         elif name == "save":
             known = scene_book.names()
             current = str(getattr(s, "active_scene", "") or "")
