@@ -233,12 +233,13 @@ def install(c):
                 vj_ui.pop("build", None)
         after(50, build_tick)
 
-    def start_build() -> None:
+    def start_build(auto: bool = False) -> None:
         if build_ui["t0"] is not None:                    # deuxieme appui = drop
             do_drop()
             return
         build_ui["t0"] = time.monotonic()
         params["build"] = 0.0
+        rhythm_ui["manual_build"] = not auto              # montee lancee a la main : seul le bouton Drop la relache
         rhythm_ui["auto_build"] = False                   # une montee lancee a la main n'est jamais annulee par les detecteurs (les appels automatiques le reposent apres)
         scene_msg.set(f"Montee sur {float(params.get('build_time', 16.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
         build_tick()
@@ -246,6 +247,7 @@ def install(c):
     def do_drop() -> None:
         """Relache d'un coup : flash blanc et tout retombe aux reglages normaux."""
         was = build_ui["t0"] is not None
+        rhythm_ui["manual_build"] = False
         build_ui["t0"] = None
         params["build"] = 0.0
         rhythm_ui["auto_build"] = False
@@ -797,6 +799,8 @@ def install(c):
     def handle_drop(why: str = "drop (retour des basses)") -> None:
         """Un drop vient d'etre detecte (retour des basses apres une cassure, ou passage de la montee au pic)."""
         auto = auto_on()
+        if build_ui["t0"] is not None and rhythm_ui.get("manual_build"):
+            return                                           # montee lancee a la main : les detecteurs ne la relachent pas
         recent = time.monotonic() - rhythm_ui.get("t_drop", -99.0) < 4.0       # deux detecteurs voient le meme drop : un seul flash
         if auto and build_ui["t0"] is not None:
             params["strobe_why"] = why
@@ -831,7 +835,7 @@ def install(c):
         if int(r.builds) != rhythm_ui["builds"]:
             rhythm_ui["builds"] = int(r.builds)
             if auto_on() and build_ui["t0"] is None:
-                start_build()
+                start_build(auto=True)
                 rhythm_ui["auto_build"] = True
                 rhythm_ui["auto_src"] = "rhythm"
                 scene_msg.set("Cassure detectee : montee automatique")
@@ -869,7 +873,7 @@ def install(c):
         if name == prev or not auto_on():
             return
         if name == "build" and build_ui["t0"] is None:
-            start_build()
+            start_build(auto=True)
             rhythm_ui["auto_build"] = True
             rhythm_ui["auto_src"] = "phase"
             scene_msg.set("Montee detectee (l'energie monte) : montee automatique")
