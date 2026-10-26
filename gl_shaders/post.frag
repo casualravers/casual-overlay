@@ -37,6 +37,9 @@ uniform float u_hue;          // teinte globale (radians) : rotation de couleur 
 uniform float u_strobe;      // eclair blanc court du strobe (1 -> 0 en 70 ms)
 uniform float u_strobe_dark;    // seuil de luminosite : le strobe ne touche que les parties plus sombres (1 = tout)
 uniform float u_bg_level;     // master du fond : 0 = noir (logo seul), 1 = normal
+uniform float u_trans;          // transition de scene : progression 0 -> 1 (-1 = aucune)
+uniform float u_trans_kind;     // 0 = fondu enchaine, 1 = zoom avec aberration
+uniform sampler2D u_trans_tex;  // image finale d'avant le changement de scene
 uniform float u_flash;        // transition du VJ : 1 -> 0 en ~0,5 s (flash blanc + bandes de glitch)
 
 // Intensite effective de chaque effet (interrupteur x intensite x intensite globale), une fois par
@@ -259,6 +262,20 @@ void main() {
     float dark_k = u_strobe_dark >= 0.999 ? 1.0 : 1.0 - smoothstep(max(u_strobe_dark - 0.45, 0.0), u_strobe_dark, lum);
     col = mix(col, vec3(1.0), max(u_flash * 0.8, u_strobe * dark_k));
     //        // flash de transition du VJ
+    if (u_trans >= 0.0) {                                   // transition de scene : l'ancienne image se dissout dans la nouvelle
+        float k = u_trans * u_trans * (3.0 - 2.0 * u_trans);
+        vec2 tuv = gl_FragCoord.xy / u_res;
+        vec3 old;
+        if (u_trans_kind > 0.5) {                           // zoom : l'ancienne image fonce vers nous, se separe en couleurs et s'efface
+            vec2 d = tuv - 0.5;
+            float z = 1.0 - 0.45 * k;
+            float ab = 0.035 * k;
+            old = vec3(texture(u_trans_tex, 0.5 + d * (z - ab)).r, texture(u_trans_tex, 0.5 + d * z).g, texture(u_trans_tex, 0.5 + d * (z + ab)).b);
+        } else {
+            old = texture(u_trans_tex, tuv).rgb;
+        }
+        col = mix(old, col, k);
+    }
 
     // HUD : barres bass / mid / high / rms / beat en bas a gauche + 5 pastilles d'effets.
     if (u_hud > 0.5) {

@@ -271,6 +271,11 @@ class Renderer:
         self.fb_tex: list = []                  # trainee : deux images finales hors ecran (on lit l'une, on ecrit l'autre, puis on echange)
         self.fb_fbo: list = []
         self._fb_i = 0
+        self._trans_pending = ""                  # transition de scene demandee (style), prise a la prochaine image
+        self._trans_t0 = -10.0                    # debut de la transition en cours (time.monotonic)
+        self._trans_len = 1.0
+        self._trans_kind = 0.0
+        self.trans_tex = self.trans_fbo = None    # image finale d'avant le changement de scene, figee
         self.flash_t = -10.0              # instant (time.monotonic) du dernier flash de transition du VJ
         self.noise_out = (0.0, 0.0)      # (houle, coup) x force, pour l'indicateur de la GUI
         self._melt_t = 0.0          # cycles de fonte ecoules (partie entiere = cycles complets)
@@ -375,7 +380,7 @@ class Renderer:
     def _ensure_scene(self, size: tuple[int, int]) -> None:
         if self.scene_tex is not None and self.scene_tex.size == size:
             return
-        for old in (self.scene_tex, self.layer_tex, self.holo_tex, *self.fb_tex):
+        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.trans_tex, *self.fb_tex):
             if old is not None:
                 old.release()
         self._prev_ok = False
@@ -398,6 +403,15 @@ class Renderer:
             tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
             tex.repeat_x = tex.repeat_y = False
         self.fb_fbo = [self.ctx.framebuffer(color_attachments=[tex]) for tex in self.fb_tex]
+        self.trans_tex = self.ctx.texture(size, 4)
+        self.trans_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.trans_tex.repeat_x = self.trans_tex.repeat_y = False
+        self.trans_fbo = self.ctx.framebuffer(color_attachments=[self.trans_tex])
+        self._trans_t0 = -10.0
+
+    def start_transition(self, kind: str = "fade") -> None:
+        """Changement de scene : la prochaine image fige l'image finale d'avant et la fond dans la nouvelle (ignore si `trans_time` = 0)."""
+        self._trans_pending = kind
 
     def _strobe(self, p: dict, state: dict) -> float:
         """Eclair blanc court du strobe : 1 -> 0 en 70 ms. Declenche a chaque appui, puis (arme / maintenu) en cadence fixe ou
@@ -849,18 +863,33 @@ class Renderer:
         self.layer_tex.use(1)
         self.holo_tex.use(2)
         dest = target
-        if trail > 0.001:
+        tlen = max(float(p["trans_time"]), 0.0)
+        tracking = tlen > 0.001                                      # transition active : l'image finale passe par une texture (on garde la precedente)
+        had_prev = self._prev_ok
+        if trail > 0.001 or tracking:
             # Trainee : on ecrit l'image dans l'une de deux textures hors ecran (l'ecran est multi-echantillonne : on ne peut pas le lire
             # en texture), on lit l'autre (l'image d'avant), puis on recopie l'image finale sur la cible et on echange.
             read_i = 1 - self._fb_i
             if not self._prev_ok:
                 self.fb_fbo[read_i].clear(0.0, 0.0, 0.0, 1.0)            # la trainee repart d'une image noire
                 self._prev_ok = True
+            if self._trans_pending:
+                if tracking and had_prev:
+                    self.ctx.copy_framebuffer(self.trans_fbo, self.fb_fbo[read_i])          # l'image finale d'avant, figee
+                    self._trans_t0, self._trans_len = time.monotonic(), tlen
+                    self._trans_kind = 1.0 if self._trans_pending == "zoom" else 0.0
+                self._trans_pending = ""
             self.fb_tex[read_i].use(3)
             dest = self.fb_fbo[self._fb_i]
         else:
             self._prev_ok = False
+            self._trans_pending = ""
             self.fb_tex[0].use(3)
+        prog_ = (time.monotonic() - self._trans_t0) / max(self._trans_len, 0.05)
+        self._set(pp, "u_trans", prog_ if (tracking and 0.0 <= prog_ < 1.0) else -1.0)
+        self._set(pp, "u_trans_kind", self._trans_kind)
+        self._set(pp, "u_trans_tex", 5)
+        self.trans_tex.use(5)
         dest.viewport = (0, 0, width, height)
         dest.use()
         self.post_vao.render(moderngl.TRIANGLE_STRIP)
