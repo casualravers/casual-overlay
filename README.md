@@ -220,6 +220,12 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
   cellules separees), rayon des cellules (petit = bulles isolees, grand = elles se touchent), taille des
   cellules, vitesse, aplat (couleurs d'origine ou couleur du centre de la cellule), couleur du contour, reaction
   audio. Coupee par defaut et non audioreactive. Limite : les cellules restent dans le rectangle du logo.
+- **Mosaique de doodles** (onglet *Cellules*, section du bas) : le logo garde sa forme mais est **reconstruit avec les medias
+  deposes par le public** (les 64 derniers recus, y compris ceux qui ne sont plus a l'ecran) ; chaque case de la grille change
+  de vignette de temps en temps, a son rythme. Demande la case « Recuperer les medias » (onglet *Affichage*) : sans doodle recu, le logo
+  reste intact (l'onglet indique le nombre de doodles disponibles). Reglages : part de mosaique, taille des vignettes. Coupee par defaut,
+  coupee par la PANIQUE. Limites : la liste repart de zero a chaque ouverture de la projection, et un logo a traits fins (comme celui du
+  depot) montre des fragments de couleur plutot que des images reconnaissables : un texte epais ou un logo plein donne un meilleur rendu.
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
 - **Analyse audio et affichage** : entree d'analyse, plein ecran, barres debug, recharger les
@@ -262,6 +268,12 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 ## Ameliorations futures
 
 Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
+
+- **Fenetres de participation (doodles)** : au lieu d'un flux continu, le QR de la projection ne s'allume qu'a des moments choisis (une
+  cassure, une montee) et le site n'accepte les depots que pendant ce temps. Cree un rendez-vous pour le public, et sert aussi de levier de
+  moderation et de charge GPU. Risques : frustre ceux qui deposent hors fenetre, et demande au VJ d'y penser pendant un set. A decider
+  d'apres les chiffres reels d'une soiree (repartition des depots dans le temps, rafales). Voir aussi : demarrage a froid (rejouer des doodles
+  de soirees passees en debut de soiree, a moderer d'abord).
 
 - **Sources audio par couche, suite** : les niveaux 1 a 3 et la source « Auto » (tableau phase x couche, avec voyants) sont faits (Auto est le defaut). Reste : l'inversion entre couches (le fond s'eclaire quand le logo se calme) et un autre micro pour une couche.
 - **Mode VJ plus riche** : la base est faite (enchainement toutes les N secondes, dans l'ordre, au hasard ou Full Randomizer, flash a

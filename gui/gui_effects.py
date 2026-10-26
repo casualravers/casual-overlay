@@ -228,6 +228,24 @@ def install(c):
     param_slider(zone_cell, "Reaction audio", "cell_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: derive acceleree par les basses, cellules gonflees au kick.")
 
+    # ---- MOSAIQUE de doodles (meme onglet : le logo se recompose aussi, avec les medias du public)
+    add_separator(zone_cell, "Mosaique de doodles (logo)")
+    mosaic_var = tk.IntVar(value=int(float(params["mosaic_on"]) >= 0.5))
+    bind_param("mosaic_on", mosaic_var, float)
+    mosaic_row = tk.Frame(tab_cell)
+    mosaic_row.grid(row=zone_cell.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    mosaic_check = tk.Checkbutton(mosaic_row, text="Mosaique", variable=mosaic_var)
+    mosaic_check.pack(side="left")
+    mosaic_label = tk.Label(mosaic_row, text="", fg=a2w.GUI_MUTED_FG, font=a2w.GUI_FONT_SMALL)
+    mosaic_label.pack(side="left", padx=(8, 0))
+    Tooltip(mosaic_check, "Le logo garde sa forme mais est reconstruit avec les doodles recus du public (les 64 derniers, y compris ceux qui "
+                          "ne sont plus a l'ecran) : chaque case change de vignette de temps en temps. Demande la case « Recuperer les medias » "
+                          "(onglet Affichage) : sans doodle recu, le logo reste intact. Coupee par defaut.")
+    param_slider(zone_cell, "Part de mosaique", "mosaic_amount", 0.0, 1.0, 0.02,
+                 "0 = logo d'origine, 1 = entierement en vignettes.")
+    param_slider(zone_cell, "Taille des vignettes", "mosaic_size", 0.4, 3.0, 0.05,
+                 "Grand = beaucoup de petites vignettes, petit = quelques grosses.")
+
     # ---- NOISE : un seul hasard, prereglé ; on choisit sa force et sur quoi il agit
     add_separator(zone_noise, "Noise (hasard)")
     param_slider(zone_noise, "Intensite", "noise_amount", 0.0, 1.0, 0.05,
@@ -254,4 +272,4 @@ def install(c):
         noise_bars[name] = noise_meter.create_rectangle(52, y0, 52, y0 + 10, fill=color, width=0)
 
     import types
-    return types.SimpleNamespace(cell_row=cell_row, cell_var=cell_var, fx_int_vars=fx_int_vars, fx_on_vars=fx_on_vars, fxl_int_vars=fxl_int_vars, fxl_on_vars=fxl_on_vars, holo_box=holo_box, holo_var=holo_var, link_var=link_var, logo_fx_box=logo_fx_box, master_var=master_var, melt_row=melt_row, melt_var=melt_var, noise_bars=noise_bars, noise_fx_vars=noise_fx_vars, noise_meter=noise_meter, sens_var=sens_var)
+    return types.SimpleNamespace(cell_row=cell_row, cell_var=cell_var, fx_int_vars=fx_int_vars, fx_on_vars=fx_on_vars, fxl_int_vars=fxl_int_vars, fxl_on_vars=fxl_on_vars, holo_box=holo_box, holo_var=holo_var, link_var=link_var, logo_fx_box=logo_fx_box, master_var=master_var, melt_row=melt_row, melt_var=melt_var, mosaic_row=mosaic_row, mosaic_var=mosaic_var, mosaic_label=mosaic_label, noise_bars=noise_bars, noise_fx_vars=noise_fx_vars, noise_meter=noise_meter, sens_var=sens_var)

@@ -580,12 +580,16 @@ def check_gui() -> None:
             tab_m, tab_c = c["tabs"][4], c["tabs"][5]
             c["melt_var"].set(0)
             c["cell_var"].set(0)
+            c["mosaic_var"].set(0)
             out["g_fx_off"] = (scales(tab_m), scales(tab_c))
+            c["cell_var"].set(1)                                            # cellules seules : les curseurs de la mosaique restent gris
+            out["g_cell_only"] = scales(tab_c)
             c["melt_var"].set(1)
-            c["cell_var"].set(1)
+            c["mosaic_var"].set(1)
             out["g_fx_on"] = (scales(tab_m), scales(tab_c))
             c["melt_var"].set(0)
             c["cell_var"].set(0)
+            c["mosaic_var"].set(0)
             out["g_pal"] = {}
             for pal in ("classic", "duo", "test"):
                 c["palette_var"].set(pal)
@@ -1422,6 +1426,7 @@ def check_gui() -> None:
           and lv["g_live_line"].get("Forme") == on, "Live, analyzer en ligne: l'espace entre barres est grise, le reste actif")
     check(out.get("g_holo_off") == off and out.get("g_holo_on") == on, "halo coupe: ses curseurs sont grises, rallumes avec la case",
           f"{out.get('g_holo_off')} {out.get('g_holo_on')}")
+    check(out.get("g_cell_only") == {"normal", "disabled"}, "mosaique coupee, cellules cochees: seuls les curseurs de la mosaique restent grises", str(out.get("g_cell_only")))
     check(out.get("g_fx_off") == (off, off) and out.get("g_fx_on") == (on, on),
           "fonte et cellules coupees: leurs curseurs sont grises, actifs une fois cochees", f"{out.get('g_fx_off')} {out.get('g_fx_on')}")
     gp = out.get("g_pal", {})
@@ -5272,6 +5277,73 @@ def check_vj_flash() -> None:
     check(gl.Renderer.__init__ is not None and r.flash_t < 0 or True, "flash: etat")
 
 
+def check_mosaic() -> None:
+    print("Mosaique de doodles du logo")
+    from engine import render as eng_render
+    d = gl.DEFAULT_PARAMS
+    check(d["mosaic_on"] == 0.0 and 0.0 < d["mosaic_amount"] <= 1.0, "par defaut: coupee")
+    pr = dict(d, mosaic_on=1.0)
+    check("mosaic_on" in gl.capture_overlay(pr) and "mosaic_on" not in gl.capture_background(pr) and gl.PANIC_RESET.get("mosaic_on") == 0.0,
+          "reglage de look (presets overlay et scenes), coupe par la panique")
+    # vignette : boite de l'alpha, puis carre centre
+    wide = np.zeros((40, 100, 4), np.uint8)
+    wide[10:30, 20:80] = (255, 0, 0, 255)                                   # 60 x 20 rouge, marge transparente
+    tile = eng_render.mosaic_tile(wide)
+    check(tile.shape == (eng_render.MOSAIC_TILE, eng_render.MOSAIC_TILE, 4) and (tile[:, :, 3] > 250).all() and tile[:, :, 0].min() > 250 and tile[:, :, 1].max() < 5,
+          "vignette: marge transparente retiree, recadree en carre, couleurs gardees")
+    check(eng_render.mosaic_tile(np.zeros((10, 10, 4), np.uint8)) is None, "vignette: image entierement transparente = ignoree")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(bytes([20, 20, 20]) * (size[0] * size[1]))
+    logo = np.zeros((64, 64, 4), np.uint8)
+    logo[:, :32] = (255, 255, 255, 255)                                      # moitie gauche blanche, moitie droite transparente
+    r.set_logo(logo, "x")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.5, logo_opacity=1.0, logo_glow=0.0,
+                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_on=0.0)
+
+    def render(t=1.0, **kw):
+        r.draw(fbo, size, quiet, dict(base, **kw), t)
+        return read_target(ctx, fbo, size).astype(int)
+
+    off = render(mosaic_on=0.0)
+    check(np.array_equal(render(mosaic_on=1.0), off), "aucun doodle recu: le logo reste intact")
+    for rgb in ((255, 0, 0), (0, 255, 0), (0, 0, 255)):                      # trois doodles unis (pose directement : pas de doodle a l'ecran)
+        r.mosaic_tiles.append(eng_render.mosaic_tile(np.full((30, 30, 4), (*rgb, 255), np.uint8)))
+    r._mosaic_dirty = True
+    check(np.array_equal(render(mosaic_on=0.0), off) and np.array_equal(render(mosaic_on=1.0, mosaic_amount=0.0), off),
+          "coupee ou part a 0: logo d'origine")
+    on = render(mosaic_on=1.0)
+    cover = np.abs(on - render(mosaic_on=0.0, logo_opacity=0.0)).max(axis=2) > 25
+    shape = np.abs(off - render(mosaic_on=0.0, logo_opacity=0.0)).max(axis=2) > 25
+    ys, xs = np.nonzero(shape)
+    check(np.array_equal(cover, shape), "la forme du logo est gardee (la moitie transparente reste vide)")
+    inside = on[shape]
+    pure = lambda c: (np.abs(inside - np.array(c)).max(axis=1) < 40).sum()
+    check(pure((255, 0, 0)) > 200 and pure((0, 255, 0)) > 200 and pure((0, 0, 255)) > 200,
+          "le logo est rempli par les vignettes (rouge, vert et bleu presents)", f"{pure((255, 0, 0))} {pure((0, 255, 0))} {pure((0, 0, 255))}")
+    box = np.zeros(size[::-1], bool)
+    box[max(ys.min() - 3, 0):ys.max() + 4, max(xs.min() - 3, 0):xs.max() + 4] = True       # marge de 3 px : le bord anti-aliase du logo depend du pilote
+    outside = np.abs(on - off).max(axis=2) > 0
+    outside[box] = False
+    check(not outside.any(), "rien ne deborde du logo",
+          f"{int(outside.sum())} px hors de la boite {box.sum()} ; ecart max {int(np.abs(on - off).max())} ; premiers {np.argwhere(outside)[:3].tolist()}")
+    later = render(t=12.0, mosaic_on=1.0)
+    check(np.abs(later - on)[shape].max() > 100, "les cases changent de vignette avec le temps")
+    check(np.abs(render(t=12.0, mosaic_on=1.0, mosaic_size=2.5) - later)[shape].max() > 100, "la taille des vignettes se regle")
+    # le pool garde les 64 dernieres vignettes
+    for i in range(70):
+        r.add_doodle(np.full((20, 20, 4), (i, 0, 0, 255), np.uint8), gl.time.monotonic())
+    check(len(r.mosaic_tiles) == eng_render.MOSAIC_MAX, "64 vignettes au plus (les plus anciennes partent)", str(len(r.mosaic_tiles)))
+    r.wall.items.clear()
+
+
 def check_cells() -> None:
     print("Cellules organiques du logo")
     d = gl.DEFAULT_PARAMS
@@ -8527,6 +8599,7 @@ def main() -> None:
     check_cells()
     check_noise()
     check_doodles()
+    check_mosaic()
     check_qr_projection()
     check_icons()
     check_audio2wave_interne()
