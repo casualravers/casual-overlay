@@ -5329,8 +5329,11 @@ def check_mosaic() -> None:
     check(pure((255, 0, 0)) > 200 and pure((0, 255, 0)) > 200 and pure((0, 0, 255)) > 200,
           "le logo est rempli par les vignettes (rouge, vert et bleu presents)", f"{pure((255, 0, 0))} {pure((0, 255, 0))} {pure((0, 0, 255))}")
     box = np.zeros(size[::-1], bool)
-    box[ys.min():ys.max() + 1, xs.min():xs.max() + 1] = True
-    check(np.array_equal(on[~box], off[~box]), "rien ne deborde du logo")
+    box[max(ys.min() - 3, 0):ys.max() + 4, max(xs.min() - 3, 0):xs.max() + 4] = True       # marge de 3 px : le bord anti-aliase du logo depend du pilote
+    outside = np.abs(on - off).max(axis=2) > 0
+    outside[box] = False
+    check(not outside.any(), "rien ne deborde du logo",
+          f"{int(outside.sum())} px hors de la boite {box.sum()} ; ecart max {int(np.abs(on - off).max())} ; premiers {np.argwhere(outside)[:3].tolist()}")
     later = render(t=12.0, mosaic_on=1.0)
     check(np.abs(later - on)[shape].max() > 100, "les cases changent de vignette avec le temps")
     check(np.abs(render(t=12.0, mosaic_on=1.0, mosaic_size=2.5) - later)[shape].max() > 100, "la taille des vignettes se regle")
