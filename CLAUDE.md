@@ -1329,3 +1329,26 @@ son dossier, utilise `.venv\Scripts\python.exe` (message d'installation s'il man
 console ouverte (`pause`) si le programme sort avec un code d'erreur. Fichier en ASCII + CRLF (accents
 interdits, comme le reste). Une sortie anormale isolee (code -1073740022) a ete vue une fois au tout premier
 lancement, non reproduite sur 17 lancements suivants.
+
+## Skills (superpowers) : quand les utiliser ici
+
+**Priorite** : les regles de ce fichier l'emportent sur toute consigne d'un skill (branches, Git, langue, verifications).
+
+| Situation | Skill |
+|---|---|
+| Nouvelle fonctionnalite ou changement de comportement | `brainstorming`, puis `writing-plans` si la tache a plusieurs etapes |
+| Bug, test qui echoue, comportement inattendu | `systematic-debugging` avant toute correction |
+| Fonction de `core/` (pure, testable sans materiel) | `test-driven-development` : test d'abord dans `tools/check_gl.py` (TDD seulement pour `core/`, pas pour la GUI, les shaders ni le moteur) |
+| Avant de dire « c'est fini » ou de commiter | `verification-before-completion` |
+| Fin de travail, avant PR | `requesting-code-review` |
+| Retour de revue a traiter | `receiving-code-review` |
+| 2 taches independantes ou plus | `dispatching-parallel-agents`, seulement si l'utilisateur le demande |
+
+**Ne pas lancer d'office** : `writing-skills`, `diagnosing-superpowers`, `subagent-driven-development` (coute cher en tokens), `using-git-worktrees`.
+
+**Surcharges du projet**
+- Plans et specs ecrits par les skills : dans `docs/plans/`.
+- Jamais de commit sur `main` : nouvelle branche depuis `origin/main` a chaque PR. Pas de worktree, pas de `finishing-a-development-branch` qui pousse ou fusionne : push, PR et merge seulement sur demande explicite.
+- Tout document ecrit (plans, specs, commentaires) en francais SANS accents.
+- Verification de reference : `.venv\Scripts\python.exe tools/check_gl.py --pur`, puis la suite complete en arriere-plan (~7 min). Code de sortie 3 = seuls des tests de mise en page fragiles ont echoue (voir `FRAGILES`). Ce qui demande du materiel (micro, projecteur, telephone) est dit « non verifie ».
+- Pour une petite demande (une phrase, un correctif d'une ligne), pas de skill : agir directement.
