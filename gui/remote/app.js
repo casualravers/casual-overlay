@@ -191,7 +191,7 @@
   tap("vj-back", function () { api("/api/vj", { action: "back" }); });
   tap("lock", function () { api("/api/lock"); });
   tap("one", function () { api("/api/one"); });
-  [1, 2, 3, 4].forEach(function (n) { tap("mem-" + n, function () { api("/api/memory", { slot: n }); }); });
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach(function (n) { tap("mem-" + n, function () { api("/api/memory", { slot: n }); }); });
   tap("send-text", function () { api("/api/text", { text: $("text").value }); });
   ["auto_phase", "strobe_auto", "bpm_auto"].forEach(function (k) {
     $("a-" + k).addEventListener("change", function (e) { api("/api/auto", { key: k, value: e.target.checked }); });

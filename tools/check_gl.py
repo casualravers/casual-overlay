@@ -451,6 +451,16 @@ def check_gui() -> None:
                 except Exception:
                     import traceback
                     out["a2w_error"] = traceback.format_exc()
+                # clic a la main sur une scene d'un AUTRE mode : le mode change apres coup, la touche doit etre surlignee (ambre) quand meme
+                import gl_gui as gg_hl
+                target = "Scene Old" if s.mode != "live" else "Scene Snap"
+                before = s.mode
+                c["scenes"]["apply"](target)
+                for _ in range(24):
+                    root.update()
+                    time.sleep(0.05)
+                lit = [w.cget("text") for w in walk(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text")[:1].isdigit() and str(w.cget("bg")).lower() == gg_hl.SCENE_COLOR.lower()]
+                out["hl_manual"] = (before, s.mode, target, lit)
                 c["close"]()
                 s.finished_event.set()
             root.after(700, check_scene_mode)
@@ -1142,6 +1152,9 @@ def check_gui() -> None:
     ss = out.get("scene_snap", ("", []))
     check(ss == ("snap", "0x39c9ff", 24),
           "scenes: une scene qui change de mode (Live -> Snap) charge son etat dans le panneau neuf", str(ss))
+    hl = out.get("hl_manual", ("", "", "", []))
+    check(hl[0] != hl[1] and len(hl[3]) == 1 and hl[3][0].split("  ", 1)[-1].startswith(hl[2]),
+          "scenes: un clic a la main sur une scene d'un autre mode change le mode ET surligne sa touche en ambre", str(hl))
     check(out.get("size_before") is not None and out.get("size_after") == out.get("size_before"),
           "VJ actif: la fenetre de reglages garde sa taille quand une scene change de mode (Live -> Snap)",
           str((out.get("size_before"), out.get("size_after"))))
@@ -2727,7 +2740,7 @@ def check_remote_auth() -> None:
         ("lock", {}, {"cmd": "lock"}), ("strobe", {"down": True}, {"cmd": "strobe", "down": True}), ("build", {"action": "drop"}, {"cmd": "build", "action": "drop"}),
         ("master", {"key": "react_master", "value": 1.5}, {"cmd": "master", "key": "react_master", "value": 1.5}),
         ("master", {"key": "bg_master", "value": 7}, {"cmd": "master", "key": "bg_master", "value": 1.0}),
-        ("memory", {"slot": 4}, {"cmd": "memory", "slot": 4}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
+        ("memory", {"slot": 10}, {"cmd": "memory", "slot": 10}), ("one", {}, {"cmd": "one"}), ("text", {"text": "DJ\x00 X\nY"}, {"cmd": "text", "text": "DJ X\nY"}),
         ("auto", {"key": "strobe_auto", "value": 0}, {"cmd": "auto", "key": "strobe_auto", "value": False}), ("preview", {"on": True}, {"cmd": "preview", "on": True}),
     ]
     bad_all = True
@@ -2738,7 +2751,7 @@ def check_remote_auth() -> None:
     check(bad_all, "telecommande: chaque commande valide est normalisee (texte nettoye, master ramene dans sa plage)")
     refused = [("nope", {}), ("scene", {"index": -1}), ("scene", {"index": "3"}), ("scene", {"index": True}), ("scene", {"index": 1, "x": 1}), ("scene", []),
                ("vj", {"action": "panic"}), ("strobe", {"down": "yes"}), ("master", {"key": "gpu_cap", "value": 1}), ("master", {"key": "tempo", "value": "1"}),
-               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 5}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
+               ("master", {"key": "tempo", "value": float("nan")}), ("memory", {"slot": 0}), ("memory", {"slot": 11}), ("text", {"text": 5}), ("auto", {"key": "drop_auto", "value": 1}),
                ("auto", {"key": "auto_phase", "value": 2}), ("lock", {"x": 1}), ("build", {"action": "panic"}), ("preview", {"on": "1"})]
     wrong = []
     for name, body in refused:
@@ -3080,6 +3093,69 @@ def check_qrcode() -> None:
     except ValueError:
         raised = True
     check(raised and len(qr.encode("e" + chr(233) + "\u20ac")) >= 21, "qrcode: trop long = erreur claire ; accents et euro en UTF-8 acceptes")
+    gray, side = qr.to_gray(m)
+    grid = np.frombuffer(gray, dtype=np.uint8).reshape(side, side)
+    check(side == 37 + 8 and len(gray) == side * side and (grid[:4] == 255).all() and (grid[:, -4:] == 255).all()
+          and all((grid[4 + y, 4 + x] == 0) == m[y][x] for y in range(37) for x in range(37)),
+          "qrcode: image en niveaux de gris (marge blanche de 4 modules, sombre = 0, premiere ligne en haut)")
+
+
+def check_qr_projection() -> None:
+    print("QR code sur la projection (Renderer._draw_qr)")
+    from core import qrcode as qr
+    for key in ("qr_on", "qr_url", "qr_corner", "qr_size"):
+        check(key in gl.DEFAULT_PARAMS, f"reglage {key} dans la table")
+    pr = dict(gl.DEFAULT_PARAMS, qr_on=1.0, qr_url="https://exemple.fr/doodles")
+    check(gl.DEFAULT_PARAMS["qr_on"] == 0.0 and not any(k.startswith("qr_") for k in gl.capture_overlay(pr)) and not any(k.startswith("qr_") for k in gl.capture_background(pr))
+          and not any(k.startswith("qr_") for k in gl.PANIC_RESET), "qr: coupe par defaut, absent des presets overlay / fond et de la panique")
+    check(all(k in gl.OVERLAY_PRESET_EXCLUDED for k in ("qr_on", "qr_url", "qr_corner", "qr_size")), "qr: reglages d'installation (jamais dans une scene)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    params = dict(gl.DEFAULT_PARAMS, master=0.0, logo_glow=0.0, logo_pulse=0.0, logo_jitter=0.0)
+    st = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(bytes([0, 0, 255]) * (size[0] * size[1]))
+    r.draw(fbo, size, st, params, 0.0)
+    base = read_target(ctx, fbo, size).copy()
+    url = "https://exemple.fr/doodles"
+    gray, modules = qr.to_gray(qr.encode(url))
+    grid = np.frombuffer(gray, dtype=np.uint8).reshape(modules, modules)
+    ppm = max(1, round(0.18 * size[1] / modules))
+    side = ppm * modules
+    gap = max(4, round(0.02 * size[1]))
+    want = np.kron(grid, np.ones((ppm, ppm), dtype=np.uint8))
+
+    def shot(**kw):
+        r.draw(fbo, size, st, {**params, "qr_url": url, **kw}, 0.0)
+        return read_target(ctx, fbo, size).copy()
+
+    img = shot(qr_on=1.0)
+    x0, y0 = size[0] - side - gap, size[1] - side - gap                       # bas droite (image lue de haut en bas)
+    got = img[y0:y0 + side, x0:x0 + side]
+    check(np.array_equal(got[:, :, 0], want) and np.array_equal(got[:, :, 1], want) and np.array_equal(got[:, :, 2], want),
+          "qr: dessine pixel pour pixel (noir / blanc, bon sens, modules entiers) dans le coin bas droit", f"{side} px, {ppm} px par module")
+    mask = np.ones(size[::-1], dtype=bool)
+    mask[y0:y0 + side, x0:x0 + side] = False
+    check(np.array_equal(img[mask], base[mask]), "qr: le reste de l'image est strictement intact")
+    for corner, (cx, cy) in {"bas gauche": (gap, size[1] - side - gap), "haut droite": (size[0] - side - gap, gap), "haut gauche": (gap, gap)}.items():
+        im = shot(qr_on=1.0, qr_corner=corner)
+        check(np.array_equal(im[cy:cy + side, cx:cx + side, 0], want), f"qr: coin {corner}")
+    effects = shot(qr_on=1.0, comp_sym=4, comp_pix=0.6, hue_master=120.0, comp_warp=0.5, strobe_on=1.0)
+    check(np.array_equal(effects[y0:y0 + side, x0:x0 + side, 0], want),
+          "qr: ni symetrie, pixelisation, teinte, deformation ni strobe ne le touchent (reste lisible)")
+    check(np.array_equal(shot(qr_on=0.0), base), "qr: coupe = image d'origine")
+    check(np.array_equal(shot(qr_on=1.0, qr_url=""), base) and np.array_equal(shot(qr_on=1.0, qr_url="x" * 214), base),
+          "qr: adresse vide ou trop longue = rien n'est dessine, pas d'erreur")
+    big = shot(qr_on=1.0, qr_size=0.5)
+    check((big != base).any() and (big[:, :, 0] != base[:, :, 0]).sum() > (img[:, :, 0] != base[:, :, 0]).sum(), "qr: la taille se regle")
+    texture_before = r._qr[1]
+    shot(qr_on=1.0)
+    check(r._qr[1] is texture_before or r._qr[0] == url, "qr: texture gardee tant que l'adresse ne change pas")
 
 
 def check_remote_page() -> None:
@@ -5984,14 +6060,21 @@ def check_masters() -> None:
     from core import scenes as _sc
     mpath = Path(_tf2.mkdtemp(prefix="casual_overlay_masters_")) / "masters.json"
     mb = _sc.MasterBook(lambda: mpath)
-    check(mb.slots() == [None] * 4 and mb.get(2) is None, "memoires de masters: quatre emplacements vides au depart")
+    check(mb.slots() == [None] * 10 and mb.get(2) is None and _sc.MASTER_SLOTS == 10 and mb.get(9) is None and mb.get(10) is None,
+          "memoires de masters: dix emplacements vides au depart")
     mb.save(1, "calme", dict(d, hue_master=120.0, comp_sym=4.0, build=0.9, phase_tempo=0.5))
     got_slot = mb.get(1)
     check(got_slot["name"] == "calme" and got_slot["values"]["hue_master"] == 120.0 and got_slot["values"]["comp_sym"] == 4.0
-          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(9, "x", d),
+          and "build" not in got_slot["values"] and "phase_tempo" not in got_slot["values"] and mb.get(0) is None and not mb.save(10, "x", d),
           "memoires de masters: enregistrement, rappel, sans etats du moment, emplacement hors plage refuse")
     mpath.write_text("{ pas du json", encoding="utf-8")
-    check(mb.slots() == [None] * 4, "memoires de masters: fichier illisible = emplacements vides")
+    check(mb.slots() == [None] * 10, "memoires de masters: fichier illisible = emplacements vides")
+    old = mpath.parent / "old_masters.json"                                         # ancien fichier a quatre emplacements : lu tel quel, les six autres vides
+    import json as _json2
+    old.write_text(_json2.dumps({"version": 1, "slots": [{"name": "a", "values": {"hue_master": 90.0}}, None, None, {"name": "d", "values": {}}]}), encoding="utf-8")
+    mo = _sc.MasterBook(lambda: old)
+    check(len(mo.slots()) == 10 and mo.get(0)["name"] == "a" and mo.get(3)["name"] == "d" and mo.get(9) is None and mo.save(9, "dix", {"hue_master": 5.0})
+          and mo.get(9)["name"] == "dix" and mo.get(0)["name"] == "a", "memoires de masters: un fichier a quatre emplacements se lit, le dixieme s'enregistre")
     phases = {}
     for tempo in (1.0, 0.5, 0.0, 2.0):
         rr = gl.Renderer(ctx, size, None)
@@ -8514,6 +8597,7 @@ def main() -> None:
     check_noise()
     check_doodles()
     check_mosaic()
+    check_qr_projection()
     check_icons()
     check_audio2wave_interne()
     check_masters()
