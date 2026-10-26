@@ -1263,7 +1263,7 @@ def check_gui() -> None:
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
-    check(out.get("x_remote_bridge") == (True,) * 10, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
+    check(out.get("x_remote_bridge") == (True,) * 11, "telecommande (GUI): le pont execute les commandes du telephone dans le fil Tk (masters, auto, texte), refuse le changement de scene sous Verrou (409), publie l'etat, relache le strobe sans nouvelles, s'arrete proprement",
           str(out.get("x_remote_bridge")))
     check(out.get("x_tap") == (True, True, True), "tap tempo (GUI): quatre appuis a 120 BPM = tempo 100 %",
           str(out.get("x_tap")))
@@ -4256,7 +4256,7 @@ def gui_expand_steps(c, s, out) -> None:
     import http.client as _hc
     import json as _js
     rc_ = c.get("remote")
-    rem_ok = [rc_ is not None, False, False, False, False, False, False, False, False]
+    rem_ok = [rc_ is not None, False, False, False, False, False, False, False, False, False]
     if rc_ is not None:
         os.environ["CASUAL_REMOTE_HOST"], os.environ["CASUAL_REMOTE_PORT"] = "127.0.0.1", "0"
         saved_lock_ = s.scene_lock
@@ -4316,6 +4316,20 @@ def gui_expand_steps(c, s, out) -> None:
             code_, _b = rq_("POST", "/api/save", {}, sess_)
             pump_()
             rem_ok[8] = code_ == 200 and any(w in c["scenes"]["msg"].get() for w in ("enregistree", "Apercu")) and len(c["scene_book"].names()) >= n_scenes_
+            order_before_, vj_before_ = c["scene_book"].vj()["order"], bool(c["vj"]["state"]["running"])        # Full Randomizer depuis le telephone : activer lance le VJ, re-appuyer revient a l'ordre normal
+            rq_("POST", "/api/random", {"action": "toggle"}, sess_)
+            pump_(0.5)
+            on_ = c["scene_book"].vj()["order"] == "alea" and bool(c["vj"]["state"]["running"])
+            code_, body_ = rq_("GET", "/api/state", None, sess_)
+            shown_ = bool(_js.loads(body_).get("vj", {}).get("random")) if code_ == 200 else False
+            rq_("POST", "/api/random", {"action": "draw"}, sess_)
+            pump_(0.5)
+            rq_("POST", "/api/random", {"action": "toggle"}, sess_)
+            pump_(0.5)
+            rem_ok[9] = on_ and shown_ and c["scene_book"].vj()["order"] == "seq"
+            if bool(c["vj"]["state"]["running"]) != vj_before_:
+                c["vj"]["toggle"]()
+            c["scene_book"].set_vj(order=order_before_)
         finally:
             rc_.var.set(0)
             rc_.toggle()

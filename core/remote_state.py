@@ -35,7 +35,7 @@ def _num(value, digits: int = 3) -> float:
     return round(v, digits)
 
 
-def build_state(*, set_name="", scenes=(), active=None, vj_running=False, vj_remaining="", locked=False, phase=None, bpm=None,
+def build_state(*, set_name="", scenes=(), active=None, vj_running=False, vj_remaining="", locked=False, randomizer=False, phase=None, bpm=None,
                 voyants=None, masters=None, autos=None, text="", projection_open=False, msg="", build=0.0, preview_on=False,
                 preview_note="", memories=()) -> dict:
     """Etat complet. `scenes` : suite de (rang, nom[, jeton de vignette : nom du fichier d'apercu, "" = aucune]) ; `phase` : dict du `PhaseTracker.snapshot()` ou None ; `voyants` : textes deja formes
@@ -48,7 +48,7 @@ def build_state(*, set_name="", scenes=(), active=None, vj_running=False, vj_rem
     return {
         "v": VERSION,
         "set": {"name": clean(set_name, MAX_NAME), "scenes": rows, "active": None if active is None else int(active)},
-        "vj": {"running": bool(vj_running), "remaining": clean(vj_remaining, 30), "locked": bool(locked)},
+        "vj": {"running": bool(vj_running), "remaining": clean(vj_remaining, 30), "locked": bool(locked), "random": bool(randomizer)},
         "phase": ph,
         "bpm": None if not bpm else round(float(bpm)),
         "voyants": {"phase": clean(v.get("phase")), "strobe": clean(v.get("strobe")), "sources": clean(v.get("sources"))},
