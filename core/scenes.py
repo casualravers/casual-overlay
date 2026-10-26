@@ -25,8 +25,8 @@ from core import params as prm
 from core import randomizer
 
 SCENES_PATH = Path.home() / ".audio2wave" / "scenes.json"
-MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : quatre emplacements
-MASTER_SLOTS = 4
+MASTERS_PATH = Path.home() / ".audio2wave" / "masters.json"     # memoires de masters (reglages de salle) : dix emplacements
+MASTER_SLOTS = 10
 PREVIEW_DIR = Path.home() / ".audio2wave" / "previews"            # apercus des scenes (capture reduite de la projection)
 IMPORT_DIR = Path.home() / ".audio2wave" / "imported"        # medias extraits des archives de set importees (voir core/setpack.py)
 KEYS = 9                          # touches F1 a F9 : les 9 premieres entrees du set actif (pas de limite au-dela)

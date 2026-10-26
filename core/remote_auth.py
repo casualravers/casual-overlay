@@ -33,7 +33,7 @@ MASTER_KEYS = ("react_master", "fx_master", "overlay_master", "bg_master", "temp
 AUTO_KEYS = ("auto_phase", "strobe_auto", "bpm_auto")
 VJ_ACTIONS = ("toggle", "next", "back")
 BUILD_ACTIONS = ("start", "drop")
-MEMORY_SLOTS = 4
+MEMORY_SLOTS = 10
 MAX_SCENE_INDEX = 999
 
 

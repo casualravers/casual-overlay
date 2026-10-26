@@ -1842,6 +1842,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                     scene_msg.set(scene_msg.get() + " (videos audio2wave: scene Snap seulement)")
             if scene["mode"] != s.mode:
                 s.pending_live_overrides = overrides
+                refresh_scene_bar()                        # la touche de la scene est surlignee tout de suite (sinon elle ne l'etait jamais : on sort ici)
                 root.after(30, lambda: request_mode(scene["mode"]))      # reconstruit la fenetre, puis charge l'etat
                 return
             if overrides and not apply_live_overrides(overrides):
