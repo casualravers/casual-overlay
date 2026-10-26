@@ -14,7 +14,7 @@ import tkinter as tk
 
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
-    from gl_gui import SHORTCUTS_HELP, choice_dialog          # import tardif : gl_gui importe ce module
+    from gl_gui import choice_dialog          # import tardif : gl_gui importe ce module
     ROW_PADX = c.ROW_PADX
     ROW_PADY = c.ROW_PADY
     SECTION_GAP = c.SECTION_GAP
@@ -57,12 +57,10 @@ def install(c):
         audio_var.trace_add("write", on_audio_change)
 
     add_separator(zone_aff, "Affichage")
-    for row_buttons in ((("Plein ecran", "fullscreen"), ("Barres debug", "hud")),
-                        (("Recharger shaders", "reload"), ("Sauver reglages", "save"))):
-        frame = tk.Frame(tab_aff)
-        frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-        for text, cmd in row_buttons:
-            tk.Button(frame, text=text, command=lambda c=cmd: send(c)).pack(side="left", padx=(0, 6))
+    frame = tk.Frame(tab_aff)                        # barres debug (H) et rechargement des shaders (R) : touches de la fenetre de rendu seulement
+    frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    for text, cmd in (("Plein ecran", "fullscreen"), ("Sauver reglages", "save")):
+        tk.Button(frame, text=text, command=lambda c=cmd: send(c)).pack(side="left", padx=(0, 6))
 
     def diagnostic_report() -> str:
         """Rapport du diagnostic : verifications refaites maintenant, sauf OpenGL (resultat du demarrage : on n'ouvre pas un
@@ -135,10 +133,6 @@ def install(c):
 
     remote_box = tk.Frame(tab_aff)                 # la ligne de la telecommande telephone (remplie par gui_remote)
     remote_box.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-
-    shortcuts_label = tk.Label(frame, text=" (i) ", fg=a2w.GUI_ACCENT, font=a2w.GUI_FONT, cursor="question_arrow")
-    shortcuts_label.pack(side="left", padx=(8, 0))
-    Tooltip(shortcuts_label, SHORTCUTS_HELP)
 
     meter = tk.Canvas(tab_aff, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
     meter.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 2))
