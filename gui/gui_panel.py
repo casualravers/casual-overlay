@@ -944,6 +944,17 @@ def install(c):
                                                                "teinte, angle, vitesse...), soit un visuel audio2wave dans un mode et un preset de ce mode "
                                                                "tires au hasard (modes ci-dessous).")):
             check(fr, label, key in rs["bg_sources"], member("bg_sources", key), tip)
+        fr = line("  poids")                               # chances relatives de chaque type de fond (0 = jamais)
+        wcur = dict(rs["bg_weights"])
+        for key, label in (("preset", "preset fond"), ("a2w", "audio2wave"), ("video", "video"), ("params", "aleatoire")):
+            tk.Label(fr, text=label, bg=bg, fg=a2w.GUI_MUTED_FG).pack(side="left")
+            wv = tk.IntVar(value=int(wcur.get(key, 5)))
+            ws = tk.Scale(fr, from_=0, to=10, orient="horizontal", showvalue=True, variable=wv, length=70, width=10, sliderlength=14,
+                          bd=0, highlightthickness=0, bg=bg, fg=a2w.GUI_FG, troughcolor=a2w.GUI_PANEL_BG)
+            ws.pack(side="left", padx=(2, 10))
+            ws.bind("<ButtonRelease-1>", lambda e, key=key, wv=wv: set_random_option(bg_weights=dict(scene_book.vj()["random"]["bg_weights"], **{key: int(wv.get())})))
+            Tooltip(ws, "Chances relatives de ce type de fond au tirage (5 partout = chances egales, 0 = jamais, 10 = deux fois plus qu'un 5). "
+                        "Un type decoche ou sans rien a tirer est ignore.")
         fr = line("  modes a2w")
         for key, label in (("live", "Live"), ("snap", "Snap"), ("ridge", "Ridge"), ("sphere", "Sphere")):
             check(fr, label, key in rs["modes"], member("modes", key),
