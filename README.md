@@ -228,8 +228,8 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
   depot) montre des fragments de couleur plutot que des images reconnaissables : un texte epais ou un logo plein donne un meilleur rendu.
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
-- **Analyse audio et affichage** : entree d'analyse, plein ecran, barres debug, recharger les
-  shaders, sauver les reglages, mesures et statut.
+- **Analyse audio et affichage** : entree d'analyse, plein ecran, sauver les reglages
+  (barres debug et rechargement des shaders : touches H et R seulement), mesures et statut.
 
 **Automations** : chaque curseur du motif, du logo et des effets a une case `~` (il varie tout seul) et un
 bouton `∿` qui ouvre l'editeur de courbe d'audio2wave (sinus, triangle, carre, dents de scie, aleatoire,
