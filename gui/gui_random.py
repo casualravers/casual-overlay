@@ -187,7 +187,8 @@ def install(c):
         """Bouton « Tirer maintenant » : un tirage tout de suite (le VJ, s'il tourne, repart pour une duree pleine)."""
         if scene_locked():
             return
-        s.commands.put("flash")
+        if float(params.get("trans_time", 0.0)) <= 0.001:
+            s.commands.put("flash")                        # sans transition : l'ancien flash (avec une transition, `apply_scene_dict` s'en charge)
         random_draw()
         if vj["running"]:
             vj_arm()

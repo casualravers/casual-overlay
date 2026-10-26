@@ -96,6 +96,8 @@ TABLE: tuple[Param, ...] = (
     _p("strobe_auto", 1.0, 0.0, 1.0, scope="room", doc="Strobe auto : le strobe decide seul quand eclairer (phase du morceau, kicks, frappes aigues, grille du temps) ; coupe par la PANIQUE."),
     _p("strobe_mode", "manual", choices=("manual", "kick", "light"), scope="room", doc="Mode du strobe (light = leger : un kick sur N)."),
     _p("strobe_div", 4, 2, 16, scope="room", doc="Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre, soit un par mesure)."),
+    _p("trans_time", 0.8, 0.0, 3.0, scope="room", doc="Duree de la transition au changement de scene, en secondes (0 = pas de transition : l'ancien flash du VJ, rien a la main)."),
+    _p("trans_kind", "fade", choices=("fade", "zoom"), scope="room", doc="Style de la transition de scene : fondu enchaine (fade) ou zoom avec aberration (zoom)."),
     _p("strobe_dark", 1.0, 0.05, 1.0, scope="room", doc="Seuil de luminosite du strobe : il ne blanchit que les parties de l'image plus sombres que ce seuil (1 = toute l'image)."),
     _p("remote_on", 0.0, 0.0, 1.0, scope="state", doc="Telecommande telephone (case de l'onglet Affichage) : desactivee a chaque lancement, jamais sauvee, jamais dans un preset ni une scene."),
     _p("doodle_on", 0.0, 0.0, 1.0, scope="state", doc="Recuperation des doodles du site (case de l'onglet Affichage) : jamais sauvee, jamais dans un preset ni une scene."),

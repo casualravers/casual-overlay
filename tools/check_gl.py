@@ -893,7 +893,7 @@ def check_gui() -> None:
                 cmds = []
                 while not s.commands.empty():
                     cmds.append(s.commands.get_nowait())
-                out["vj_tick"] = (getattr(s, "active_scene", None), vst["running"], "flash" in cmds, 19.0 < vjc["remaining"]() <= 20.0)
+                out["vj_tick"] = (getattr(s, "active_scene", None), vst["running"], ("flash" in cmds or "scene_change" in cmds), 19.0 < vjc["remaining"]() <= 20.0)
                 names, seq = sbook.names(), []
                 for _ in range(3):
                     vjc["advance"]()
@@ -3923,7 +3923,7 @@ def gui_sets_steps(c, s, out) -> None:
     cmds = []
     while not s.commands.empty():
         cmds.append(s.commands.get_nowait())
-    out["set_switch_vj"] = (vst["running"], "flash" in cmds, s.active_scene is not None, book.active_set_name() == base_set)
+    out["set_switch_vj"] = (vst["running"], ("flash" in cmds or "scene_change" in cmds), s.active_scene is not None, book.active_set_name() == base_set)
     vst["running"] = False
     sc["switch_set"]("Soiree")
     out["set_switch_idle"] = (vst["running"], s.active_scene is None, book.active_set_name())
@@ -6005,6 +6005,32 @@ def check_masters() -> None:
     check(dk[h_ // 2, 8].max() < 120 and dk[h_ // 2, w_ - 8].max() < 215, "strobe sombre (seuil bas): rien ne blanchit si rien n'est assez sombre")
     dk = strobed_dark(1.0)
     check(dk[h_ // 2, 8].min() > 240 and dk[h_ // 2, w_ - 8].min() > 240, "strobe sombre (seuil 100 %): toute l'image blanchit")
+    # transition de scene : l'ancienne image (figee) se fond dans la nouvelle, fondu et zoom ; trans_time = 0 : coupe franche
+    def transition_run(kind, length):
+        tr = gl.Renderer(ctx, size, None)
+        tp = dict(base, holo_on=0.0, overlay_master=0.0, trans_time=length, trans_kind=kind)
+        img_a = np.zeros((size[1], size[0], 3), np.uint8)
+        img_a[:, :] = (200, 20, 20)
+        tr.video_tex.write(img_a.tobytes())
+        for _ in range(2):
+            tr.draw(fbo, size, quiet, tp, 0.0)
+        img_b = np.zeros((size[1], size[0], 3), np.uint8)
+        img_b[:, :] = (20, 20, 200)
+        tr.video_tex.write(img_b.tobytes())
+        tr.start_transition(kind)
+        tr.draw(fbo, size, quiet, tp, 0.0)
+        start = read_target(ctx, fbo, size).astype(int)[8, 8]
+        time.sleep(length + 0.15)
+        tr.draw(fbo, size, quiet, tp, 0.0)
+        end = read_target(ctx, fbo, size).astype(int)[8, 8]
+        return start, end
+
+    for kind_ in ("fade", "zoom"):
+        st_, en_ = transition_run(kind_, 0.4)
+        check(st_[0] > st_[2] + 60 and en_[2] > en_[0] + 60, f"transition ({kind_}): l'image d'avant s'affiche d'abord, la nouvelle la remplace a la fin",
+              f"{st_.tolist()} -> {en_.tolist()}")
+    st_, en_ = transition_run("fade", 0.0)
+    check(st_[2] > st_[0] + 60, "transition (duree 0): coupe franche, la nouvelle scene tout de suite", str(st_.tolist()))
     # teinte globale : rotation de couleur de toute l'image (fond et logo), les gris restent gris
     hr = gl.Renderer(ctx, size, None)
     hr.video_tex.write(np.tile(np.array([200, 30, 30], np.uint8), (size[1], size[0], 1)).tobytes())
@@ -6612,7 +6638,7 @@ def gui_random_steps(c, s, out) -> None:
     while not s.commands.empty():
         cmds.append(s.commands.get_nowait())
     scene = rd["state"]["scene"]
-    out["r_draw"] = ("flash" in cmds, s.active_scene, sc["msg"].get().startswith("Full Randomizer :"),
+    out["r_draw"] = (("flash" in cmds or "scene_change" in cmds), s.active_scene, sc["msg"].get().startswith("Full Randomizer :"),
                      scene is not None and params["bg_mode"] == scene["bg"], params["logo_source"] in ("image", "video"),
                      str(params.get("logo_path")).startswith(str(tmpd)) or str(params.get("logo_video")).startswith(str(tmpd)))
     # VJ : tourne meme avec un set vide, un tirage par changement, minuteur = duree du set

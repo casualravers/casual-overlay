@@ -185,8 +185,8 @@ def install(c):
     def replay_entry(entry: dict, flash: bool = True) -> None:
         paused = vj["running"]
         vj["running"] = False                              # comme un choix a la main : le VJ se met en pause
-        if flash:
-            s.commands.put("flash")
+        if flash and float(params.get("trans_time", 0.0)) <= 0.001:
+            s.commands.put("flash")                        # sans transition : l'ancien flash (avec une transition, `apply_scene_dict` s'en charge)
         history_ui["replay"] = True
         try:
             apply_scene_dict(entry["scene"], entry["media"], entry["index"], entry["a2w"], entry["bgv"])
@@ -491,6 +491,10 @@ def install(c):
             slider(f, 1, "breath_overlay", "Resp. overlay", 0, 100, 1, 100.0, "%", 0, "Respiration de l'overlay : sa presence oscille doucement (0 = aucune).")
             slider(f, 2, "breath_bg", "Resp. fond", 0, 100, 1, 100.0, "%", 0, "Respiration du fond, en opposition de phase avec l'overlay (0 = aucune).")
             slider(f, 3, "breath_period", "Periode", 2, 30, 1, 1.0, " s", 8, "Periode de la respiration, en secondes.")
+            slider(f, 5, "trans_time", "Transition", 0, 3, 0.1, 1.0, " s", 0.8, "Duree de la transition quand la scene change (VJ, touche, tirage) : l'ancienne image se fond dans la nouvelle. "
+                                                                          "0 = pas de transition (flash blanc quand c'est le VJ, rien a la main).", dec=1)
+            radios(f, "trans_kind", (("Fondu enchaine", "fade"), ("Zoom", "zoom")), row=3, col=0, span=6,
+                   tip="Style de la transition : fondu enchaine, ou zoom (l'ancienne image fonce vers l'ecran en separant ses couleurs).")
 
         new_tab("Auto", fill_4)
 

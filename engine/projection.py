@@ -346,6 +346,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             print(f"cellules du logo: {'on' if params['cell_on'] >= 0.5 else 'off'}")
         elif name == "flash":
             renderer.flash_t = time.monotonic()           # transition du VJ (demandee par la GUI)
+        elif name == "scene_change":
+            renderer.start_transition(str(params.get("trans_kind", "fade")))      # fondu / zoom depuis l'image d'avant (si trans_time > 0)
         elif name == "panic":
             changed = panic(params)                        # tout de suite, dans ce fil : pas d'attente de la GUI
             sessionlog.event("PANIQUE : " + (", ".join(changed) if changed else "rien a couper"))

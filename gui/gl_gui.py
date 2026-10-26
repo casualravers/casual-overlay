@@ -1660,7 +1660,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         rows = scene_book.rows()
         if scene_book.vj()["order"] == "alea":
-            s.commands.put("flash")
             vj_auto["on"] = True
             try:
                 random_draw()
@@ -1676,7 +1675,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         settings = scene_book.vj()
         index = scenes.next_entry_index(rows, current_index(rows), settings["order"], random)
-        s.commands.put("flash")
         vj_auto["on"] = True
         try:
             apply_entry_core(index)
@@ -1815,6 +1813,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                          bgv: str | None = None) -> None:
         """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire). `bgv` : video de fond propre a l'entree."""
         record_history(scene, media, index, a2w, bgv)
+        if float(params.get("trans_time", 0.0)) > 0.001:
+            s.commands.put("scene_change")                 # transition fondu / zoom depuis l'image d'avant
+        elif vj_auto["on"]:
+            s.commands.put("flash")                        # sans transition : l'ancien flash, seulement quand c'est le VJ qui change de scene
         sync_automation_now()
         note = ""
         if bgv:
