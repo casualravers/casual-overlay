@@ -18,7 +18,7 @@ from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_te
 from engine.deps import PIL_Image, glfw, moderngl
 from engine.session import Session
 from engine.video import HEX_DIGITS, BgVideoManager, LogoVideo
-from engine.window import Window, fullscreen_blocked, monitor_contains, pick_monitor, resolve_fullscreen
+from engine.window import Window, fullscreen_blocked, monitor_contains, pick_monitor, resolve_fullscreen, window_monitor_name
 from pathlib import Path
 
 
@@ -202,7 +202,7 @@ def _gl_main(s: Session) -> None:
         if not glfw.init():
             print("Initialisation de glfw impossible.", file=sys.stderr)
             sys.exit(1)
-        avoid = getattr(s, "gui_point", None)
+        avoid = window_monitor_name(getattr(s, "gui_hwnd", None)) or getattr(s, "gui_point", None)
         monitor = pick_monitor(args.monitor, avoid)
         window = Window(monitor, s.win_size, args.fullscreen, shared=monitor_contains(monitor, avoid))
         ctx = moderngl.create_context()
@@ -250,7 +250,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                    f" | logo {''.join(str(int(v)) for v in params['fxl_on'])} (separes du fond)"))
 
     def gui_pt():
-        return getattr(s, "gui_point", None)
+        """Ou est la fenetre de reglages : son moniteur relu maintenant (elle a pu etre deplacee depuis l'ouverture), sinon la valeur du lancement."""
+        name = window_monitor_name(getattr(s, "gui_hwnd", None))
+        return name or getattr(s, "gui_point", None)
 
     def act(name: str) -> None:
         """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""

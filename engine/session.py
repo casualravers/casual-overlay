@@ -91,7 +91,8 @@ class Session:
         self.proj_stop = threading.Event()                # fermeture de la projection seule (la GUI reste ouverte)
         self.projection: object | None = None         # avec --gui : la fenetre de rendu s'ouvre a la demande
         self.gui_point_fn = None           # GUI : point de la fenetre de reglages (fil Tk) ; `gui_point` en est la copie lue par le fil GL
-        self.gui_point: tuple[int, int] | None = None
+        self.gui_point: tuple[int, int] | str | None = None       # point (x, y) de la GUI, ou NOM de son moniteur (Windows : fiable meme si un ecran est mis a l'echelle)
+        self.gui_hwnd: int | None = None                          # fenetre de reglages (Windows) : permet de relire son moniteur depuis le fil GL, a jour si on la deplace
         self.renderer: Renderer | None = None
         self.window: Window | None = None
         self.mode = "live"                 # source du fond : "live" (ffmpeg), "snap" ou "ridge" (py_modes)
