@@ -198,7 +198,7 @@ def _none(body):
 
 # nom -> validateur. C'est LA liste blanche : le serveur refuse tout autre nom (404) et le pont n'execute que ces commandes.
 COMMANDS = {
-    "scene": _scene, "vj": _vj, "lock": _none, "strobe": _strobe, "build": _build, "master": _master, "memory": _memory,
+    "scene": _scene, "vj": _vj, "lock": _none, "save": _none, "strobe": _strobe, "build": _build, "master": _master, "memory": _memory,
     "one": _none, "text": _text, "auto": _auto, "preview": _preview,
 }
 

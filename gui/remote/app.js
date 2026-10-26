@@ -190,6 +190,7 @@
   tap("vj-next", function () { api("/api/vj", { action: "next" }); });
   tap("vj-back", function () { api("/api/vj", { action: "back" }); });
   tap("lock", function () { api("/api/lock"); });
+  tap("save-scene", function () { api("/api/save"); });
   tap("one", function () { api("/api/one"); });
   [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach(function (n) { tap("mem-" + n, function () { api("/api/memory", { slot: n }); }); });
   tap("send-text", function () { api("/api/text", { text: $("text").value }); });

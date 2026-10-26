@@ -120,6 +120,14 @@ def install(c):
             {"toggle": c.vj_toggle, "next": c.vj_advance, "back": c.back_scene}[cmd["action"]]()
         elif name == "lock":
             c.toggle_scene_lock()
+        elif name == "save":
+            known = scene_book.names()
+            current = str(getattr(s, "active_scene", "") or "")
+            if current in known:
+                name_ = current                                    # la scene en cours est mise a jour (comme le clic droit > Mettre a jour)
+            else:                                                  # tirage du Full Randomizer ou rien d'actif : nouvelle scene
+                name_ = scenes_mod.unique_name(time.strftime("Remote %Hh%M"), known)
+            c.capture_scene_now(name_)
         elif name == "strobe":
             if cmd["down"]:
                 if not st["strobe_held"]:

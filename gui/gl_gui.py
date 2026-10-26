@@ -2385,7 +2385,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         vj_advance=vj_advance,
         vj_toggle=vj_toggle))
     remote_ctl = gui_remote.install(types.SimpleNamespace(
-        a2w=a2w, Tooltip=Tooltip, apply_entry=apply_entry, back_scene=back_scene, current_index=current_index, detected_bpm=detected_bpm,
+        a2w=a2w, Tooltip=Tooltip, apply_entry=apply_entry, back_scene=back_scene, capture_scene_now=capture_scene_now, current_index=current_index, detected_bpm=detected_bpm,
         do_drop=do_drop, do_one=do_one, master_book=master_book, params=params, projection=projection, remote_box=remote_box, root=root, s=s,
         scene_book=scene_book, scene_msg=scene_msg, skin=skin, start_build=start_build, sync_master_panel=sync_master_panel, sync_widgets=sync_widgets,
         toggle_scene_lock=toggle_scene_lock, ui_every=ui_every, vj=vj, vj_advance=vj_advance, vj_remaining_text=vj_remaining_text,
