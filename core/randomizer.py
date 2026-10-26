@@ -20,6 +20,12 @@ applique la scene rendue avec le meme chemin que les scenes enregistrees ; « Ga
 - **Overlay toujours centre et statique** : tout tirage pose `logo_x` = `logo_y` = 0,5 et coupe l'automation de position (un overlay
   decentre ou qui se promene ne rend jamais bien), meme pour un preset qui le decale et meme avec le verrou des effets.
 - Jamais deux fois de suite le meme fond / media / preset overlay quand une alternative existe.
+- **Ponderation des types de fond** (`bg_weights`, 0 a 10 par source, 5 par defaut = chances egales ; 0 = jamais, comme decochee) : la source du fond
+  est tiree au prorata de ces poids (la meme source deux fois de suite compte moitie moins, sans etre interdite).
+- **Memoire du tirage** (`Context.memory`, dict que le tirage met a jour et que la GUI garde d'un tirage a l'autre) : plus de simple « pas le meme que
+  la derniere fois » (avec peu de choix, A B A B...). Dans chaque liste (presets de fond, presets audio2wave, videos, presets overlay, medias...)
+  un element est tire avec un poids qui grandit avec le nombre de tirages ecoules depuis son dernier passage (jamais vu = poids plein, vu il y a
+  peu = poids tres faible) : tout defile avant qu'un element ne revienne, sans ordre fixe.
 """
 from __future__ import annotations
 
@@ -47,6 +53,7 @@ DEFAULTS = {
     "categories_fond": [],       # sous-dossiers retenus dans chaque banque ([] = tous)
     "categories_overlay": [],
     "bg_sources": list(BG_SOURCES),
+    "bg_weights": {k: 5 for k in BG_SOURCES},     # chances relatives de chaque type de fond (0 = jamais)
     "overlay": list(OVERLAY_PARTS),
     "text": DEFAULT_TEXT,
     "modes": list(A2W_MODES),    # modes audio2wave que la config aleatoire du fond peut tirer
@@ -66,12 +73,17 @@ class Asset:
 
 def clean_settings(raw) -> dict:
     """Reglages du hasard valides, completes par les valeurs par defaut (jamais d'exception sur un fichier abime)."""
-    out = {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULTS.items()}
+    out = {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
     if not isinstance(raw, dict):
         return out
     for key in ("folders_fond", "folders_overlay", "categories_fond", "categories_overlay"):
         if isinstance(raw.get(key), list):
             out[key] = [str(x) for x in raw[key] if isinstance(x, str) and x.strip()][:50]
+    if isinstance(raw.get("bg_weights"), dict):
+        for key in BG_SOURCES:
+            val = raw["bg_weights"].get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool) and val == val:
+                out["bg_weights"][key] = int(min(max(round(val), 0), 10))
     for key, allowed in (("bg_sources", BG_SOURCES), ("overlay", OVERLAY_PARTS), ("modes", A2W_MODES)):
         if isinstance(raw.get(key), list):
             out[key] = [x for x in allowed if x in raw[key]]
@@ -173,6 +185,44 @@ def _pick(rng: random.Random, items: list, avoid=None, key=lambda x: x):
     return rng.choice(others or items)
 
 
+MEMORY_MAX = 200                 # tirages retenus par liste (largement plus que la plus grande banque utile)
+
+
+def _fresh(rng: random.Random, items: list, memory: dict | None, slot: str, avoid=None, key=lambda x: x):
+    """Un element tire au hasard avec une memoire : le poids d'un element grandit avec le nombre de tirages (de cette liste, `slot`) ecoules depuis
+    son dernier passage ((age / n) au carre, age plafonne a n ; jamais vu = 1). Jamais le dernier tire (`avoid` ou memoire) s'il y a une
+    alternative. Sans `memory` : comme `_pick`."""
+    if not items:
+        return None
+    if memory is None:
+        return _pick(rng, items, avoid, key)
+    hist = memory.setdefault(slot, [])
+    n = len(items)
+    last = hist[-1] if hist else None
+    pool = [x for x in items if key(x) != avoid and key(x) != last] or [x for x in items if key(x) != avoid] or list(items)
+    weights = []
+    for x in pool:
+        k = key(x)
+        age = n
+        for back in range(1, len(hist) + 1):
+            if hist[-back] == k:
+                age = back
+                break
+        weights.append((min(age, n) / n) ** 2 + 1e-6)
+    chosen = rng.choices(pool, weights=weights)[0]
+    hist.append(key(chosen))
+    del hist[:-MEMORY_MAX]
+    return chosen
+
+
+def _pick_weighted(rng: random.Random, names: list[str], weights: dict, last: str | None):
+    """Un nom tire au prorata de `weights` ; le meme que `last` compte moitie moins. Poids tous nuls : tirage egal."""
+    w = [max(float(weights.get(n, 5)), 0.0) * (0.5 if n == last and len(names) > 1 else 1.0) for n in names]
+    if sum(w) <= 0:
+        w = [1.0] * len(names)
+    return rng.choices(names, weights=w)[0]
+
+
 def random_background_params(rng: random.Random) -> dict:
     """Fond genere aux valeurs aleatoires, dans les plages des curseurs (jamais la palette banc de test)."""
     palette = rng.choice(("classic", "duo", "duo"))
@@ -260,6 +310,7 @@ class Context:
     mode: str = "live"                                        # mode audio2wave courant
     current_scene: dict | None = None                         # etat courant (capture_scene) : sert aux verrous
     last: dict = field(default_factory=dict)                  # enregistrement du tirage precedent
+    memory: dict = field(default_factory=dict)                # memoire des tirages (liste -> derniers elements tires), mise a jour par draw_scene
 
 
 def fond_saveable(scene: dict | None) -> bool:
@@ -303,14 +354,16 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
         a2w_choices = [(m, n) for m in settings["modes"] for n in sorted(ctx.a2w_modes.get(m) or {})]
         if gen_ok:
             options["params"] = [None]
-        options = {k: v for k, v in options.items() if v}
+        weights = settings["bg_weights"]
+        options = {k: v for k, v in options.items() if v and weights.get(k, 5) > 0}
         if not options:
             scene = {"bg": "live", "mode": ctx.mode, "live_overrides": None, "fond": None}
             notes.append("fond: aucune source disponible")
         else:
-            kind = _pick(rng, sorted(options), avoid=(last.get("bg") or "").split(":")[0] if len(options) > 1 else None)
+            kind = _pick_weighted(rng, sorted(options), weights, (last.get("bg") or "").split(":")[0] or None)
+            mem = ctx.memory
             if kind == "preset":
-                name = _pick(rng, options["preset"], avoid=(last.get("bg") or "")[7:] if last.get("bg", "").startswith("preset:") else None)
+                name = _fresh(rng, options["preset"], mem, "bg:preset", avoid=(last.get("bg") or "")[7:] if last.get("bg", "").startswith("preset:") else None)
                 preset = ctx.bg_presets[name]
                 if preset.get("bg_mode") == "live":                       # preset de fond « audio2wave » : on ne touche pas au panneau
                     scene = {"bg": "live", "mode": ctx.mode, "live_overrides": None, "fond": None}
@@ -319,12 +372,12 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
                 record["bg"] = f"preset:{name}"
                 notes.append(f"fond: preset {name}")
             elif kind == "a2w":
-                name = _pick(rng, options["a2w"], avoid=(last.get("bg") or "")[4:] if last.get("bg", "").startswith("a2w:") else None)
+                name = _fresh(rng, options["a2w"], mem, "bg:a2w", avoid=(last.get("bg") or "")[4:] if last.get("bg", "").startswith("a2w:") else None)
                 scene = {"bg": "live", "mode": ctx.mode, "live_overrides": dict(ctx.a2w_presets[name]), "fond": None}
                 record["bg"] = f"a2w:{name}"
                 notes.append(f"fond: audio2wave {name}")
             elif kind == "video":
-                asset = _pick(rng, options["video"], avoid=(last.get("bg") or "")[6:] if last.get("bg", "").startswith("video:") else None,
+                asset = _fresh(rng, options["video"], mem, "bg:video", avoid=(last.get("bg") or "")[6:] if last.get("bg", "").startswith("video:") else None,
                               key=lambda a: a.path)
                 fit = rng.choice(("cover", "cover", "stretch"))
                 scene = {"bg": "video", "mode": None, "live_overrides": None,
@@ -335,9 +388,9 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
             else:
                 # config aleatoire : un fond genere tout neuf, ou un visuel audio2wave (mode + preset de ce mode au hasard)
                 subs = ["gen"] + (["a2w"] if a2w_choices else [])
-                sub = _pick(rng, subs, avoid=(last.get("bg") or "").split(":")[1] if len(subs) > 1 and (last.get("bg") or "").startswith("params:") else None)
+                sub = _fresh(rng, subs, mem, "bg:params", avoid=(last.get("bg") or "").split(":")[1] if len(subs) > 1 and (last.get("bg") or "").startswith("params:") else None)
                 if sub == "a2w":
-                    mode, name = _pick(rng, a2w_choices, avoid=tuple((last.get("bg") or "").split(":")[2:4])
+                    mode, name = _fresh(rng, a2w_choices, mem, "bg:params:a2w", avoid=tuple((last.get("bg") or "").split(":")[2:4])
                                        if (last.get("bg") or "").startswith("params:a2w:") else None, key=tuple)
                     overrides = dict(ctx.a2w_modes[mode][name]) or None
                     scene = {"bg": "live", "mode": mode, "live_overrides": overrides, "fond": None}
@@ -357,10 +410,10 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
     else:
         parts = settings["overlay"]
         bases = (["preset"] if "overlay_preset" in parts and ctx.overlay_presets else []) + (["params"] if "params" in parts else [])
-        base = _pick(rng, bases, avoid=(last.get("overlay") or "").split(":")[0] if len(bases) > 1 else None)
+        base = _fresh(rng, bases, ctx.memory, "ov:base", avoid=(last.get("overlay") or "").split(":")[0] if len(bases) > 1 else None)
         fx: dict | None = None
         if base == "preset":
-            name = _pick(rng, sorted(ctx.overlay_presets), avoid=(last.get("overlay") or "")[7:]
+            name = _fresh(rng, sorted(ctx.overlay_presets), ctx.memory, "ov:preset", avoid=(last.get("overlay") or "")[7:]
                          if (last.get("overlay") or "").startswith("preset:") else None)
             overlay = dict(ctx.overlay_presets[name])
             record["overlay"] = f"preset:{name}"
@@ -385,7 +438,7 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
         # une video deja choisie pour le fond n'est pas aussi le logo (sauf si c'est la seule)
         assets = ([a for a in pool if a.path != record.get("bg_video")] or pool) if "media" in settings["overlay"] else []
         choices = [("asset", a) for a in assets] + ([("text", settings["text"])] if "text" in settings["overlay"] and settings["text"].strip() else [])
-        picked = _pick(rng, choices, avoid=last.get("media"), key=lambda c: c[1].path if c[0] == "asset" else "text") if choices else None
+        picked = _fresh(rng, choices, ctx.memory, "media", avoid=last.get("media"), key=lambda c: c[1].path if c[0] == "asset" else "text") if choices else None
         if picked is None:
             media = current_media                 # pas de media a tirer : celui d'avant reste (un preset remettrait le logo par defaut)
             if "media" in settings["overlay"] or "text" in settings["overlay"]:

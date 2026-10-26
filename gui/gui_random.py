@@ -111,7 +111,8 @@ def install(c):
         banks = random_bank()
         ctx = randomizer.Context(bank_fond=banks["fond"], bank_overlay=banks["overlay"], bg_presets=gl.BACKGROUND_BOOK.all(),
                                  overlay_presets=gl.OVERLAY_BOOK.all(), a2w_presets=a2w_presets, a2w_modes=a2w_modes, mode=s.mode,
-                                 current_scene=scenes.capture_scene("Full Randomizer", params, s.mode, None), last=rnd["last"])
+                                 current_scene=scenes.capture_scene("Full Randomizer", params, s.mode, None), last=rnd["last"],
+                                 memory=rnd.setdefault("memory", {}))
         return randomizer.draw_scene(rnd["rng"], settings, ctx)
 
     def random_draw() -> bool:

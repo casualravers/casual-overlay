@@ -6385,6 +6385,36 @@ def check_randomizer() -> None:
     check(dirty["folders_overlay"] == ["a", "b"] and dirty["folders_fond"] == [] and dirty["bg_sources"] == ["video"]
           and dirty["overlay"] == list(rz.OVERLAY_PARTS) and dirty["lock_bg"] is False and dirty["categories_overlay"] == [] and rz.clean_settings("abime") == rz.clean_settings(None),
           "reglages du hasard: valides, valeurs par defaut pour tout ce qui est abime", str(dirty))
+    # ponderation des types de fond et memoire du tirage
+    w_ = rz.clean_settings({"bg_weights": {"video": 99, "preset": -3, "a2w": "x", "params": 2.4, "inconnu": 5}})["bg_weights"]
+    check(w_ == {"preset": 0, "a2w": 5, "video": 10, "params": 2} and rz.clean_settings(None)["bg_weights"] == {k: 5 for k in rz.BG_SOURCES},
+          "hasard: poids des types de fond bornes (0 a 10), 5 par defaut, valeurs abimees ignorees", str(w_))
+    wctx = lambda: rz.Context(bg_presets={f"p{i}": {"bg_palette": "duo"} for i in range(6)}, a2w_presets={"s1": {"x": 1}, "s2": {"x": 2}},
+                              bank_fond=list(bank_fond))
+    def kinds_of(weights, n=300, seed=3):
+        r_, c_, out_ = rnd_mod.Random(seed), wctx(), []
+        for _ in range(n):
+            sc_, _i, rec_ = rz.draw_scene(r_, {"bg_sources": list(rz.BG_SOURCES), "bg_weights": weights, "overlay": []}, c_)
+            c_.last = rec_
+            out_.append(rec_["bg"].split(":")[0])
+        return out_
+    only_video = kinds_of({"preset": 0, "a2w": 0, "video": 5, "params": 0})
+    check(set(only_video) == {"video"}, "hasard: un poids a 0 exclut le type de fond", str(set(only_video)))
+    skew = kinds_of({"preset": 10, "a2w": 0, "video": 1, "params": 0})
+    check(skew.count("preset") > 4 * skew.count("video") > 0 and "a2w" not in skew and "params" not in skew,
+          "hasard: les types de fond sortent au prorata de leurs poids", f"{skew.count('preset')} preset / {skew.count('video')} video")
+    even = kinds_of({k: 5 for k in rz.BG_SOURCES})
+    check(all(even.count(k) > 40 for k in rz.BG_SOURCES), "hasard: poids egaux = les quatre types de fond sortent tous", str({k: even.count(k) for k in rz.BG_SOURCES}))
+    r_, c_, seq_ = rnd_mod.Random(11), wctx(), []
+    for _ in range(60):
+        sc_, _i, rec_ = rz.draw_scene(r_, {"bg_sources": ["preset"], "overlay": []}, c_)
+        c_.last = rec_
+        seq_.append(rec_["bg"])
+    check(len(set(seq_[:12])) == 6 and all(a_ != b_ for a_, b_ in zip(seq_, seq_[1:])) and all(len(set(seq_[i:i + 3])) == 3 for i in range(0, 58)),
+          "hasard: la memoire fait defiler tous les presets avant d'en repeter un (pas de A B A B)", " ".join(s_[7:] for s_ in seq_[:20]))
+    c0_ = wctx()
+    a_, b_ = rnd_mod.Random(5), rnd_mod.Random(5)
+    check(rz.draw_scene(a_, {"overlay": []}, wctx())[1] == rz.draw_scene(b_, {"overlay": []}, wctx())[1], "hasard: tirage deterministe a graine egale")
     # plages
     rng = rnd_mod.Random(7)
     ok_bg = all(0 <= v["bg_hue"] <= 1 and 0 <= v["bg_angle"] <= 180 and 0.4 <= v["bg_speed"] <= 1.8 and 50 <= v["bg_tile"] <= 150
