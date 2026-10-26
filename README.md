@@ -269,6 +269,11 @@ Les touches ci-dessous restent actives dans la fenetre video, et la GUI suit leu
 
 Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 
+- **Detection du kick et des phases a affiner avec de la vraie musique** : mieux avec une musique jouee par un telephone (plancher du kick abaisse,
+  bande 20-400 Hz, seuils des phases proportionnels a l'energie), mais pas encore parfait. Les seuils viennent de signaux synthetiques : relever des
+  enregistrements reels (telephone a differentes distances, sono, micro de PC), noter les kicks manques ou en trop et les mauvaises phases, puis recaler
+  (`WideRise`, `KICK_MIN`, `phase.thresholds`). Pistes : detecteur de kick sur un flux d'attaques multi-bandes, niveau de reference appris sur plusieurs
+  minutes, voyant de confiance de la detection.
 - **Fenetres de participation (doodles)** : au lieu d'un flux continu, le QR de la projection ne s'allume qu'a des moments choisis (une
   cassure, une montee) et le site n'accepte les depots que pendant ce temps. Cree un rendez-vous pour le public, et sert aussi de levier de
   moderation et de charge GPU. Risques : frustre ceux qui deposent hors fenetre, et demande au VJ d'y penser pendant un set. A decider
