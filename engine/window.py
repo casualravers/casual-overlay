@@ -64,6 +64,35 @@ def window_monitor_name(hwnd) -> str | None:
     return None
 
 
+def window_rect(hwnd) -> tuple[int, int, int, int] | None:
+    """Rectangle (gauche, haut, droite, bas) d'une fenetre Windows, vu par Windows (journal de diagnostic) ; None hors Windows."""
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        from ctypes import wintypes
+        r = wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(r))
+        return (r.left, r.top, r.right, r.bottom)
+    except Exception:
+        return None
+
+
+def is_zoomed(hwnd) -> bool:
+    """La fenetre Windows est-elle maximisee ?"""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        return bool(ctypes.windll.user32.IsZoomed(ctypes.c_void_p(hwnd)))
+    except Exception:
+        return False
+
+
+def fullscreen_misplaced(where: str | None, gui_name: str | None, monitor_index) -> bool:
+    """Le plein ecran est-il tombe, selon WINDOWS, sur le moniteur des reglages alors qu'on ne l'a pas demande (`--monitor`) ? Verifie apres coup :
+    quel que soit le calcul qui a choisi le moniteur, ce que Windows affiche fait foi."""
+    return monitor_index is None and bool(where) and bool(gui_name) and where == gui_name
+
+
 def monitor_contains(monitor, point) -> bool:
     """Le moniteur porte-t-il `point` ? `point` = (x, y) du bureau, ou le nom de peripherique d'un moniteur (`window_monitor_name`)."""
     if point is None:
@@ -150,6 +179,13 @@ class Window:
         glfw.make_context_current(self.handle)
         glfw.swap_interval(1)
         glfw.show_window(self.handle)
+
+    def hwnd(self) -> int | None:
+        """HWND de la fenetre glfw (Windows)."""
+        try:
+            return glfw.get_win32_window(self.handle) or None
+        except Exception:
+            return None
 
     def retarget(self, monitor, avoid=None) -> None:
         """Vise un autre moniteur (le projecteur branche apres le lancement, par exemple)."""

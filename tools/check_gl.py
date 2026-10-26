@@ -2061,6 +2061,10 @@ def check_text() -> None:
         except _tk_fs.TclError as exc:
             check(True, f"fenetre Tk indisponible ici ({exc}) : test du nom de moniteur ignore")
     check(eng_window.window_monitor_name(None) is None, "pas de fenetre : pas de nom de moniteur")
+    mis = eng_window.fullscreen_misplaced
+    check(mis("D1", "D1", None) is True and mis("D4", "D1", None) is False and mis("D1", "D1", 0) is False
+          and mis(None, "D1", None) is False and mis("D1", None, None) is False and mis("", "", None) is False,
+          "plein ecran verifie apres coup : corrige seulement s'il est (selon Windows) sur l'ecran des reglages, sans --monitor, noms connus")
     check(gl.hide_cursor(True, True) is False and gl.hide_cursor(True, False) is True
           and gl.hide_cursor(False, False) is False,
           "curseur masque uniquement en plein ecran hors moniteur principal")
