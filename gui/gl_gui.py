@@ -1256,6 +1256,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     load_overlay_preset = gui_fond_ctl.load_overlay_preset
     pattern_box = gui_fond_ctl.pattern_box
     save_overlay_preset = gui_fond_ctl.save_overlay_preset
+    sto_box = gui_fond_ctl.sto_box
     update_overlay_preset = gui_fond_ctl.update_overlay_preset
     cap = max(360, cap - tab_fond.winfo_reqheight())     # le choix du fond prend de la place au-dessus du panneau
     fit()
@@ -1375,10 +1376,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     gates.add(gui_gates.rows_after(tab_cell, mosaic_row), lambda: mosaic_var.get() == 1)
     palette_var = synced["bg_palette"]
     pal_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(pattern_box, lb, panels=False)]
-    gates.add(pal_rows("Couleurs 1 / 2", "Angle du degrade"), lambda: palette_var.get() == "duo")
-    gates.add(pal_rows("Teinte", "Vitesse", "Taille des carreaux", "Contraste du damier", "Cadence du damier",
-                       "Reaction a l'audio"), lambda: palette_var.get() != "test")
-    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var):
+    sto_field_var = synced["bg_sto_field"]
+    gates.add(pal_rows("Couleurs 1 / 2"), lambda: palette_var.get() in ("duo", "stochastique"))
+    gates.add(pal_rows("Angle du degrade"),             # stochastique : direction des vagues et du degrade (le bruit n'en a pas)
+              lambda: palette_var.get() == "duo" or (palette_var.get() == "stochastique" and sto_field_var.get() != "noise"))
+    gates.add(pal_rows("Teinte", "Vitesse", "Reaction a l'audio"), lambda: palette_var.get() != "test")
+    gates.add(pal_rows("Taille des carreaux", "Contraste du damier", "Cadence du damier"), lambda: palette_var.get() in ("classic", "duo"))
+    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 
@@ -2453,7 +2457,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "add_random5": add_random_scenes, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
                        "move_entry": move_entry_now, "move_to": move_entry_to, "apply_auto": lambda name: (vj_auto.__setitem__("on", True), apply_scene_core(name), vj_auto.__setitem__("on", False)), "undo": lambda: undo_now(), "redo": lambda: redo_now(), "panel_ops": panel_ops, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
-            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
+            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "sto_box": sto_box, "synced": synced,"bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,

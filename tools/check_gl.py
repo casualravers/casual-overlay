@@ -595,11 +595,26 @@ def check_gui() -> None:
             c["melt_var"].set(0)
             c["cell_var"].set(0)
             c["mosaic_var"].set(0)
-            out["g_pal"] = {}
-            for pal in ("classic", "duo", "test"):
+            out["g_pal"], out["sto_shown"] = {}, {}
+            c["bg_var"].set("pattern")
+            for pal in ("classic", "duo", "test", "stochastique"):
                 c["palette_var"].set(pal)
-                out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse")}
+                root.update_idletasks()
+                out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse",
+                                                                    "Taille des carreaux", "Contraste du damier", "Cadence du damier")}
+                out["sto_shown"][pal] = c["sto_box"].winfo_ismapped()
+            c["synced"]["bg_sto_field"].set("waves")
+            out["sto_angle_waves"] = row_states("Angle du degrade")
+            c["synced"]["bg_sto_field"].set("noise")
+            for w in gg.leaves(c["sto_box"]):
+                if w.winfo_class() == "Scale" and float(w.cget("to")) == 60.0:
+                    w.set(25)
+            c["synced"]["bg_sto_invert"].set(1)
+            root.update_idletasks()
+            out["sto_written"] = (params["bg_sto_size"], params["bg_sto_invert"])
+            c["synced"]["bg_sto_invert"].set(0)
             c["palette_var"].set("classic")
+            c["bg_var"].set("live")
             out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
             c["bg_var"].set("pattern")                   # pire cas: bloc motif ouvert + effets du logo delies
             c["link_var"].set(0)
@@ -1442,6 +1457,16 @@ def check_gui() -> None:
           and gp.get("duo", {}).get("Angle du degrade") == on and gp.get("test", {}).get("Teinte") == off
           and gp.get("test", {}).get("Vitesse") == off and gp.get("test", {}).get("Couleurs 1 / 2") == off,
           "palette du fond: couleurs et angle seulement en Duo ; en Banc de test tous les reglages du motif sont grises", str(gp))
+    gs = gp.get("stochastique", {})
+    check(gs.get("Couleurs 1 / 2") == on and gs.get("Teinte") == on and gs.get("Angle du degrade") == off
+          and out.get("sto_angle_waves") == on and all(gs.get(lb) == off for lb in ("Taille des carreaux", "Contraste du damier", "Cadence du damier"))
+          and all(gp.get(pl, {}).get("Taille des carreaux") == on for pl in ("classic", "duo")),
+          "palette stochastique: couleurs et teinte actives, damier grise, angle actif seulement pour les vagues et le degrade",
+          f"{gs} {out.get('sto_angle_waves')}")
+    check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True},
+          "palette stochastique: ses reglages ne s'affichent que pour elle", str(out.get("sto_shown")))
+    check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
+          str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
     check(out.get("cover") in ((True, True), (False, False)), "reconstruction de la fenetre: l'ancienne image est posee dessus pendant la construction (ou desactivee si la capture est impossible)", str(out.get("cover")))
     big, mid, small, back = (out.get(k, ()) for k in ("lay_big", "lay_mid", "lay_small", "lay_back"))
@@ -2427,6 +2452,143 @@ def check_melt() -> None:
 
     check(abs(after_frames(loud, melt_react=1.0) - after_frames(quiet, melt_react=1.0)).max() > 60,
           "melt_react > 0: le cycle s'accelere avec les basses")
+
+
+def check_bg_stochastic() -> None:
+    print("Fond genere : palette stochastique (halftone, points aleatoires)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    fbos: dict = {}
+
+    def fbo_for(sz):
+        if sz not in fbos:
+            fbos[sz] = ctx.framebuffer(color_attachments=[ctx.texture(sz, 4)])
+        return fbos[sz]
+
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="stochastique", bg_color1="#ff0000", bg_color2="#0000ff",
+                bg_speed=0.0, bg_react=0.0, bg_hue=0.0, bg_angle=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, bg_sto_size=20.0)
+
+    def render(state=quiet, t=1.0, size=(640, 360), rr=None, **kw):
+        """Image rendue (haut en premier, int). Sans `rr` : un Renderer neuf, une image a t = 0 puis l'image demandee."""
+        p = dict(base, **kw)
+        fbo = fbo_for(size)
+        if rr is None:
+            rr = gl.Renderer(ctx, size, None)
+            rr.draw(fbo, size, state, p, 0.0)
+        rr.draw(fbo, size, state, p, t)
+        return read_target(ctx, fbo, size).astype(int)
+
+    def lit(img):                 # part des pixels couverts par un point (rouge) plutot que par le fond (bleu)
+        return float((img[:, :, 0] > img[:, :, 2]).mean())
+
+    def blocks(img, n=40):        # couverture moyenne par blocs de n x n px
+        m = (img[:, :, 0] > img[:, :, 2]).astype(float)
+        h, w = (m.shape[0] // n) * n, (m.shape[1] // n) * n
+        return m[:h, :w].reshape(h // n, n, w // n, n).mean(axis=(1, 3))
+
+    a, b = render(), render()
+    check(abs(a - b).max() == 0, "stochastique: rendu deterministe (deux Renderer neufs, memes reglages)")
+    dens = [lit(render(bg_sto_density=d)) for d in (0.0, 0.2, 0.5, 0.8, 1.0)]
+    check(dens[0] < 0.02 and dens[1] < dens[2] < dens[3] and dens[4] > 0.45,
+          "stochastique: la densite fait la part de points allumes (0 = aucun, 1 = presque tout)", " ".join(f"{x:.3f}" for x in dens))
+
+    def clumps(regular):          # ecart de la couverture par blocs a sa moyenne locale (3 x 3 blocs) : grand = amas et vides
+        bl = blocks(render(bg_sto_field="gradient", bg_sto_regular=regular))
+        pad = np.pad(bl, 1, mode="edge")
+        local = sum(pad[i:i + bl.shape[0], j:j + bl.shape[1]] for i in range(3) for j in range(3)) / 9.0
+        return float((bl - local).std())
+
+    c1, c0 = clumps(1.0), clumps(0.0)
+    check(c1 < 0.7 * c0, "stochastique: regularite 1 = points repartis sans amas (bruit bleu), 0 = grain aleatoire",
+          f"ecart {c1:.3f} contre {c0:.3f}")
+    v0, v1 = render(bg_sto_field="gradient", bg_sto_vary=0.0), render(bg_sto_field="gradient", bg_sto_vary=1.0)
+    w = v0.shape[1]
+    edge = lambda img: lit(np.concatenate([img[:, : w // 8], img[:, -w // 8:]], axis=1))     # champ fort (aller-retour : bords)
+    light = lambda img: lit(img[:, int(w * 0.30):int(w * 0.40)])                          # champ faible (0,4 .. 0,2)
+    check(edge(v1) > edge(v0) + 0.05 and light(v1) < light(v0),
+          "stochastique: variation de taille = gros points ou le champ est fort, fins ou il est faible",
+          f"fort {edge(v0):.2f} -> {edge(v1):.2f}, faible {light(v0):.2f} -> {light(v1):.2f}")
+    inv = render(bg_sto_invert=1.0)
+    check(abs(inv[:, :, 0] - a[:, :, 2]).max() <= 2 and abs(inv[:, :, 2] - a[:, :, 0]).max() <= 2,
+          "stochastique: inversion = couleurs des points et du fond echangees")
+    check(a[:, :, 1].max() < 5 and render(bg_sto_rainbow=1.0)[:, :, 1].max() > 100,
+          "stochastique: arc-en-ciel 0 = deux couleurs seulement, 1 = la teinte des points varie")
+    hue = render(bg_hue=1.0 / 3.0)
+    check(hue[:, :, 2].max() < 5 and hue[:, :, 1].max() > 200, "stochastique: la teinte du fond tourne aussi les points (rouge -> vert, bleu -> rouge)")
+    fields = {f: render(bg_sto_field=f) for f in ("noise", "waves", "gradient")}
+    diffs = [abs(fields[x] - fields[y]).mean() for x, y in (("noise", "waves"), ("noise", "gradient"), ("waves", "gradient"))]
+    check(min(diffs) > 3, "stochastique: les trois champs (bruit, vagues, degrade) donnent trois images differentes",
+          " ".join(f"{x:.1f}" for x in diffs))
+    tiny = render(size=(1280, 720), bg_sto_size=3.0)
+    check(lit(tiny) > 0.05, "stochastique: points de 3 px en 1280 x 720 encore visibles", f"{lit(tiny):.3f}")
+    small, big = blocks(render()), blocks(render(size=(1280, 720)), 80)
+    check(abs(small - big).mean() < 0.03, "stochastique: meme dessin quelle que soit la resolution", f"ecart {abs(small - big).mean():.3f}")
+    rr = gl.Renderer(ctx, (640, 360), None)
+    still = render(rr=rr, t=0.0, bg_speed=1.0)
+    for i in range(1, 30):                       # dt est plafonne a 0,1 s par image : 1,5 s = 30 images
+        moved = render(rr=rr, t=0.05 * i, bg_speed=1.0)
+    check(abs(moved - still).mean() > 2, "stochastique: le champ derive au cours du temps", f"ecart {abs(moved - still).mean():.1f}")
+
+    # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
+    loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
+    calm = render(bg_react=1.0)
+    check(lit(render(dict(quiet, bass=1.0), bg_react=1.0)) > lit(calm) + 0.05, "stochastique: les basses ajoutent des points",
+          f"{lit(calm):.3f} -> {lit(render(dict(quiet, bass=1.0), bg_react=1.0)):.3f}")
+    check(abs(render(dict(quiet, beat=1.0, since_beat=0.0), bg_react=1.0) - calm).mean() > 2, "stochastique: le kick change l'image (contraste)")
+    check(abs(render(dict(quiet, beats=1), bg_react=1.0, bg_sto_field="waves") - render(bg_react=1.0, bg_sto_field="waves")).mean() > 2,
+          "stochastique: chaque kick fait sauter la phase des vagues")
+
+    def flicker(high, regular):   # part des blocs de 20 px qui changent en 1 s (vitesse 0 : seul le scintillement bouge)
+        rr_ = gl.Renderer(ctx, (640, 360), None)
+        st = dict(quiet, high=high)
+        first = render(st, rr=rr_, t=0.0, bg_react=1.0, bg_sto_regular=regular)
+        for i in range(1, 21):
+            last = render(st, rr=rr_, t=0.05 * i, bg_react=1.0, bg_sto_regular=regular)
+        return float((abs(blocks(last, 20) - blocks(first, 20)) > 0.01).mean())
+
+    fl = [flicker(1.0, 1.0), flicker(1.0, 0.0), flicker(0.0, 1.0)]
+    check(fl[0] > 0.10 and fl[1] > 0.10 and fl[2] == 0.0,
+          "stochastique: les aigus renouvellent des points (bruit bleu comme grain), rien sans aigus", " / ".join(f"{x:.2f}" for x in fl))
+    check(abs(render(loud, bg_react=0.0) - render(bg_react=0.0)).max() == 0, "stochastique: reaction 0 = image identique avec ou sans son")
+
+    def lit_at(regular, flick):   # part allumee la ou le degrade vaut ~0,2 (x = 0,38 .. 0,42), phase du scintillement posee a la main
+        rr_ = gl.Renderer(ctx, (640, 360), None)
+        rr_._sto_flick = flick
+        return lit(render(rr=rr_, t=0.0, bg_sto_field="gradient", bg_sto_regular=regular, bg_sto_size=6.0)[:, 243:269])   # ~1000 points
+
+    shares = [lit_at(1.0, 0.0), lit_at(0.5, 0.0), lit_at(0.5, 0.5), lit_at(0.7, 1.3), lit_at(0.0, 0.0)]
+    check(max(shares) - min(shares) < 0.05, "stochastique: la densite ne depend ni de la regularite ni de la phase du scintillement",
+          " ".join(f"{x:.3f}" for x in shares))
+
+    def longest(flags):           # plus longue suite de True
+        best = cur = 0
+        for f_ in flags:
+            cur = cur + 1 if f_ else 0
+            best = max(best, cur)
+        return best
+
+    # gros points (variation 1, basses fortes) : jamais coupes a plat par le bord du voisinage 3 x 3. Un bord coupe tombe sur une
+    # ligne de cellules (tous les s px) et y laisse un segment droit plus long que ce que font les arcs des disques ailleurs.
+    flat = []
+    for size_ in (30.0, 40.0, 50.0):
+        s_ = int(size_ * 360 / 720)
+        big = render(dict(quiet, bass=1.0), bg_react=1.0, bg_sto_vary=1.0, bg_sto_regular=0.0, bg_sto_size=size_, bg_sto_density=0.3)
+        m_ = big[:, :, 0] > big[:, :, 2]
+        lines = [m_[1:] != m_[:-1], (m_[:, 1:] != m_[:, :-1]).T]   # changements entre lignes voisines, puis entre colonnes voisines
+        on_cell = max(longest(ch[k]) for ch in lines for k in range(s_ - 1, len(ch), s_))
+        other = max(longest(ch[k]) for ch in lines for k in range(len(ch)) if k % s_ != s_ - 1)
+        flat.append((on_cell, other))
+    check(all(a_ <= b_ + 2 for a_, b_ in flat), "stochastique: les gros points restent ronds (pas de bord plat a la limite des cellules)",
+          f"segment droit le plus long sur une ligne de cellules / ailleurs : {flat}")
+    rt = gl.Renderer(ctx, (640, 360), None)
+    t0 = render(rr=rt, t=0.0, bg_speed=1.0, tempo=0.0)
+    for i in range(1, 21):
+        t1 = render(rr=rt, t=0.05 * i, bg_speed=1.0, tempo=0.0)
+    check(abs(t1 - t0).max() == 0, "stochastique: master du tempo a 0 = champ fige")
 
 
 def check_gates() -> None:
@@ -6430,10 +6592,20 @@ def check_randomizer() -> None:
     # plages
     rng = rnd_mod.Random(7)
     ok_bg = all(0 <= v["bg_hue"] <= 1 and 0 <= v["bg_angle"] <= 180 and 0.4 <= v["bg_speed"] <= 1.8 and 50 <= v["bg_tile"] <= 150
-                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo")
-                and (v["bg_palette"] != "duo" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
+                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo", "stochastique")
+                and (v["bg_palette"] == "classic" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
                 for v in (rz.random_background_params(rng) for _ in range(300)))
     check(ok_bg, "fond aleatoire: valeurs dans les plages des curseurs, jamais la palette banc de test")
+    vals = [rz.random_background_params(rnd_mod.Random(s)) for s in range(300)]
+    st = [v for v in vals if v["bg_palette"] == "stochastique"]
+    check(len(st) > 30 and all(5 <= v["bg_sto_size"] <= 30 and 0.4 <= v["bg_sto_regular"] <= 1 and 0 <= v["bg_sto_vary"] <= 0.8
+                               and 0.3 <= v["bg_sto_density"] <= 0.7 and v["bg_sto_invert"] in (0.0, 1.0) and 0 <= v["bg_sto_rainbow"] <= 0.6
+                               and v["bg_sto_field"] in ("noise", "waves", "gradient") for v in st)
+          and len({v["bg_sto_field"] for v in st}) == 3
+          and all(gl.coerce_params(v)[k] == v[k] for v in st for k in v),        # aucune valeur ramenee par la validation
+          "fond aleatoire: la palette stochastique est tiree, dans les plages", f"{len(st)} sur 300")
+    check(all(not any(k.startswith("bg_sto_") for k in v) for v in vals if v["bg_palette"] != "stochastique"),
+          "fond aleatoire: les reglages stochastiques ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
     costly = [sum(1 for k in ("holo_on", "melt_on", "cell_on") if fx[k] >= 0.5) for fx in fxs]
     check(max(costly) <= rz.MAX_COSTLY and set(costly) >= {0, 1, 2}, "effets aleatoires: au plus deux effets couteux a la fois",
@@ -7982,6 +8154,22 @@ def check_params_schema() -> None:
     import build_portable
     check((ROOT / "core" / "params_schema.py").is_file() and "core" in build_portable.APP_DIRS,
           "version portable: core/params_schema.py embarque")
+    d = gl.DEFAULT_PARAMS
+    check(d["bg_sto_field"] == "noise" and d["bg_sto_size"] == 10.0 and d["bg_sto_regular"] == 1.0 and d["bg_sto_vary"] == 0.0
+          and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
+          "stochastique: valeurs par defaut (tramage pur)")
+    sto = [k for k in d if k.startswith("bg_sto_")]
+    check(len(sto) == 7 and all(k in gl.BG_KEYS for k in sto), "stochastique: 7 reglages, tous du fond (presets de fond, scenes)")
+    v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
+    check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
+          "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
+    check(gl.coerce_params({"bg_palette": "duo"})["bg_sto_density"] == 0.5, "stochastique: un ancien preset sans ces cles prend les defauts")
+    from core import scenes as sc
+    sto_p = dict(gl.load_params(), bg_mode="pattern", bg_palette="stochastique", bg_sto_field="waves", bg_sto_size=17.0,
+                 bg_sto_regular=0.3, bg_sto_vary=0.6, bg_sto_density=0.7, bg_sto_invert=1.0, bg_sto_rainbow=0.4)
+    back = sc.scene_values(sc.capture_scene("S", sto_p, "live", None), dict(gl.load_params(), bg_mode="live"))
+    check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
+          "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
 
 
 def _in_range(p, value) -> bool:
@@ -8216,6 +8404,16 @@ def check_safeguards() -> None:
     same_v, dropped = sf.cap_values(heavy, calm, 1.2, 16.7, (640, 360))
     check(dropped == [], "securite GPU: a petite taille de rendu les memes effets coutent beaucoup moins (cout proportionnel aux pixels)")
     check(abs(sf.effects_cost({"cell_on": 1.0, "holo_on": 1.0}, full) - 10.0) < 1e-9 and sf.effects_cost({}, full) == 0.0, "securite GPU: cout estime des effets allumes")
+    sto_next = dict(heavy, bg_mode="pattern", bg_palette="stochastique", bg_sto_field="noise")
+    duo_now = dict(calm, bg_mode="pattern", bg_palette="duo")
+    check(sf.cap_values(dict(heavy, bg_mode="pattern", bg_palette="duo"), duo_now, 3.0, 16.7, full)[1] == []
+          and sf.cap_values(sto_next, duo_now, 3.0, 16.7, full)[1] == ["cellules"],
+          "securite GPU: passer a un fond stochastique compte son cout (les effets sautent a temps)")
+    check(sf.cap_values(sto_next, dict(duo_now, bg_palette="stochastique", bg_sto_field="noise"), 3.5, 16.7, full)[1] == [],
+          "securite GPU: un fond stochastique deja affiche (mesure incluse) n'est pas compte deux fois")
+    check(sf.background_cost({}, full) == 0.0 and sf.background_cost(dict(bg_mode="live", bg_palette="stochastique"), full) == 0.0
+          and sf.background_cost(sto_next, full) > sf.background_cost(dict(sto_next, bg_sto_field="waves"), full) > 0.0,
+          "securite GPU: cout du fond stochastique (bruit > vagues), nul hors du fond genere")
     # --- annuler / retablir
     udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
     ubook = sc_.SceneBook(lambda: udir / "scenes.json")
@@ -8763,6 +8961,7 @@ def main() -> None:
     check_logo_video()
     check_holo()
     check_melt()
+    check_bg_stochastic()
     check_cells()
     check_noise()
     check_doodles()

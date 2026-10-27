@@ -32,6 +32,10 @@ uniform float u_bg_react;      // reaction au kick (flash)
 uniform float u_bg_hue;        // rotation de teinte, 0..1
 uniform float u_bg_angle;      // direction du degrade duo, en degres
 uniform float u_beat;          // enveloppe du kick 1 -> 0
+// Palette stochastique (u_bg_palette = 3) : points ronds dont la densite dessine un champ qui bouge (halftone stochastique).
+uniform vec4  u_sto;           // x = taille des points (px pour 720 px de haut), y = regularite, z = variation de taille, w = densite
+uniform vec4  u_sto2;          // x = champ (0 bruit, 1 vagues, 2 degrade), y = inversion, z = arc-en-ciel, w = phase du scintillement
+uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (deja multiplies par la reaction)
 
 // Fonte acide du logo (dissolution sur place) : un champ de bruit local au logo est compare a un seuil
 // qui monte avec u_melt ; ce qui est sous le seuil disparait, et la lisiere ronge brille d'un acide.
@@ -86,8 +90,95 @@ vec3 test_pattern(vec2 p) {
     return min(vec3(r, g, b) + check, 255.0) / 255.0;
 }
 
+// Hachage sans trigonometrie (meme formule que chash, plus bas : la palette stochastique en fait ~45 par pixel).
+float sto_hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float sto_noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(sto_hash(i), sto_hash(i + vec2(1.0, 0.0)), f.x),
+               mix(sto_hash(i + vec2(0.0, 1.0)), sto_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// Champ de densite 0..1 en q (0..1, origine haut gauche), corrige du ratio de l'ecran ; derive avec u_bg_phase.x.
+float sto_field(vec2 q) {
+    float ar = u_res.x / max(u_res.y, 1.0);
+    vec2 v = vec2(q.x * ar, q.y);
+    float ph = u_bg_phase.x;
+    float a = radians(u_bg_angle);
+    vec2 dir = vec2(cos(a), sin(a));
+    float f;
+    if (u_sto2.x < 0.5) {                                   // bruit fluide : grandes taches qui derivent
+        vec2 drift = vec2(ph * 0.11, ph * 0.07);
+        f = 0.62 * sto_noise(v * 3.0 + drift) + 0.38 * sto_noise(v * 6.1 - drift * 1.3 + 11.0);
+        f = smoothstep(0.18, 0.82, f);
+    } else if (u_sto2.x < 1.5) {                            // vagues : bandes qui se propagent vers u_bg_angle
+        float d = dot(v - vec2(ar * 0.5, 0.5), dir);
+        f = 0.5 + 0.5 * sin(6.2831853 * (d * 3.0 - ph * 0.25 - u_sto_au.z * 0.25));     // chaque kick : un quart d'onde
+    } else {                                                // degrade aller-retour (sans couture), comme la palette duo
+        float t = dot(q - 0.5, dir) + 0.5 + ph * 0.1;
+        f = abs(fract(t) * 2.0 - 1.0);
+    }
+    f = 0.5 + (f - 0.5) * (1.0 + 0.8 * u_sto_au.y);         // kick : coup de contraste
+    return clamp(f + (u_sto.w + 0.25 * u_sto_au.x - 0.5) * 2.0, 0.0, 1.0);    // basses : densite en plus
+}
+
+// Grille jitteree : une cellule = un point, allume si le champ depasse son rang. Rang a faible discrepance (suite R2) = points
+// repartis sans amas (bruit bleu) ; rang blanc = grain aleatoire ; la regularite melange les deux. 3 x 3 cellules voisines.
+vec3 stochastic_pattern(vec2 p) {
+    float s = max(u_sto.x * u_res.y / 720.0, 2.0);
+    float grow = 1.0 + 0.3 * u_sto_au.x;                   // basses : points plus gros (la grille ne bouge pas)
+    vec2 px = p * u_res;
+    vec2 home = floor(px / s);
+    float reg = clamp(u_sto.y, 0.0, 1.0);
+    float jamp = mix(0.5, 0.3, reg);                       // decalage maximal du point dans sa cellule (en cellules)
+    // Rayon plafonne a ce que le voisinage 3 x 3 peut montrer : au-dela un gros point serait coupe a plat au bord du voisinage.
+    float rmax = (1.5 - jamp) * s - 1.0;
+    float reach = min(0.5 * s * grow * (1.0 + abs(u_sto.z)), rmax) + 1.0;     // rayon maximal (bord anti-crenele compris)
+    float cover = 0.0;
+    float fdot = 0.0;
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 c = home + vec2(float(i), float(j));
+            vec2 jit = jamp * (vec2(sto_hash(c + 1.7), sto_hash(c + 4.1)) * 2.0 - 1.0);
+            vec2 ctr = (c + 0.5 + jit) * s;
+            if (length(px - ctr) > reach) {                // ce point ne peut pas atteindre le pixel : pas de champ a calculer
+                continue;
+            }
+            float r2 = fract(c.x * 0.7548776662 + c.y * 0.5698402910);
+            float wh = sto_hash(c);
+            float epoch = floor(u_sto2.w + sto_hash(c + 7.3));    // aigus : chaque point change de rang a son tour
+            // r2 uniforme + decalage independant, modulo 1 = toujours uniforme : la densite ne depend ni de la regularite ni du
+            // scintillement (un melange mix(wh, r2, reg) donnait une loi triangulaire, densite fausse entre 0 et 1).
+            float rank = fract(r2 + (1.0 - reg) * wh + epoch * 0.6180340);
+            float f = sto_field(ctr / u_res);
+            if (f <= 0.0 || f < rank) {
+                continue;
+            }
+            float rad = min(0.5 * s * grow * (1.0 + u_sto.z * (f - 0.5) * 2.0), rmax);
+            float k = 1.0 - smoothstep(rad - 1.0, rad + 1.0, length(px - ctr));
+            if (k > cover) {
+                cover = k;
+                fdot = f;
+            }
+        }
+    }
+    vec3 dots = u_sto2.y > 0.5 ? u_bg_c2 : u_bg_c1;
+    vec3 ground = u_sto2.y > 0.5 ? u_bg_c1 : u_bg_c2;
+    vec3 col = mix(ground, hue_rotate(dots, fdot * u_sto2.z), cover);
+    return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
+}
+
 // p : position ecran, origine HAUT gauche.
 vec3 background_pattern(vec2 p) {
+    if (u_bg_palette > 2.5) {
+        return stochastic_pattern(p);
+    }
     if (u_bg_palette > 1.5) {
         return test_pattern(p);
     }

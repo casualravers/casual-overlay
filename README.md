@@ -193,7 +193,10 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
 - **Fond** (en tete de la partie LIVE : un choix *Audio2wave* / *Fond genere* / *Video*, et **un seul des trois est affiche a la fois** :
   le panneau d'audio2wave, les reglages du fond genere, ou ceux du **fond video**, avec les presets de fond) : *Audio2wave* (le mode de gauche : Live, Snap ou Ridge) ou *Fond genere* (degrades + damier animes par la
   carte graphique : palette Arc-en-ciel, Duo ou Banc de test (copie exacte du motif de test, sans reglage), couleurs, angle, teinte, vitesse, taille des
-  carreaux, contraste, cadence, reaction au kick ; effet immediat).
+  carreaux, contraste, cadence, reaction au kick ; effet immediat). Palette **Stochastique** : un tramage de points (couleur 1 sur couleur 2) dont la
+  densite dessine un champ qui bouge (bruit fluide, vagues ou degrade) ; reglages propres : taille des points, regularite (1 = sans amas ni trous,
+  0 = grain aleatoire), variation de taille, densite, arc-en-ciel, inversion. Le son la module : les basses ajoutent des points, le kick donne un coup
+  de contraste et fait avancer les vagues, les aigus font scintiller les points.
 - **Noise** : un seul hasard, prereglé, qui joue le role d'une musique imaginaire : des ondulations et des coups au hasard,
   meme sans son, sur les effets que tu coches (wobble, onde de choc, aberration, glitch, reaction du logo). Deux reglages :
   son *intensite* et les cases de ce sur quoi il agit (rien n'est coche par defaut). Un indicateur montre ce qu'il envoie.
