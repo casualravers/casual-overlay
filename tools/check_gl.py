@@ -8417,6 +8417,163 @@ def check_reaction_pure() -> None:
     check(n == 24 and 0 <= acc < 1, "pas par image: plafonnes a 24, l'exces est jete", str((n, acc)))
 
 
+def check_foudre_pure() -> None:
+    print("Foudre : arbre et machine d'etat (core/foudre.py)")
+    import math as _m
+    from core import foudre as fd
+
+    def finite(items) -> bool:
+        return all(_m.isfinite(v) for it in items for v in it)
+
+    # ---- arbre
+    t1 = fd.build_tree(1, 16 / 9)
+    check(t1 == fd.build_tree(1, 16 / 9) and t1 != fd.build_tree(2, 16 / 9), "arbre: deterministe pour une graine, different d'une graine a l'autre")
+    bad_cap, bad_frame, bad_nan, deep, asym, ok_children = 0, 0, 0, 0, 0, True
+    for seed in range(30):
+        for asp in (0.5, 16 / 9, 4.0):
+            tree = fd.build_tree(seed, asp)
+            bad_cap += len(tree) > fd.MAX_SEGMENTS
+            hx = 0.5 * asp + 1e-6
+            bad_frame += any(abs(s.x0) > hx or abs(s.x1) > hx or abs(s.y0) > 0.5 + 1e-6 or abs(s.y1) > 0.5 + 1e-6 for s in tree)
+            bad_nan += not all(_m.isfinite(v) for s in tree for v in (s.x0, s.y0, s.x1, s.y1, s.width))
+        tree = fd.build_tree(seed, 16 / 9)
+        deep += max(s.gen for s in tree) == fd.MAX_DEPTH - 1
+        tips = [(s.x1, s.y1) for s in tree if s.k == s.n - 1]
+        asym += _m.hypot(sum(x for x, _ in tips) / len(tips), sum(y for _, y in tips) / len(tips)) > 0.02
+        by_gen: dict = {}
+        for s in tree:
+            by_gen.setdefault(s.gen, []).append(s)
+        if not 5 <= len({s.branch for s in by_gen[0]}) <= 7:
+            ok_children = False
+        for g in range(1, fd.MAX_DEPTH):
+            verts = {(round(s.x1, 12), round(s.y1, 12)) for s in by_gen.get(g - 1, [])} | {(round(s.x0, 12), round(s.y0, 12)) for s in by_gen.get(g - 1, [])}
+            for s in by_gen.get(g, []):
+                if s.k == 0 and (round(s.x0, 12), round(s.y0, 12)) not in verts:
+                    ok_children = False
+    check(bad_cap == 0 and bad_nan == 0, "arbre: 300 segments au plus, aucun NaN (30 graines, 3 formats d'image)")
+    check(bad_frame == 0, "arbre: reach 1 -> tous les points dans le cadre, portrait et 4:1 compris")
+    check(deep >= 27, "arbre: les six generations sont presentes", f"{deep}/30")
+    check(asym >= 24, "arbre: etalement asymetrique (centre de masse des pointes decale)", f"{asym}/30")
+    check(ok_children, "arbre: 5 a 7 troncs, chaque branche repart d'un point de sa branche mere")
+    ext = lambda r: sum(max(_m.hypot(s.x1, s.y1) for s in fd.build_tree(sd, 16 / 9, r)) for sd in range(30)) / 30
+    check(ext(0.4) < ext(1.0) - 0.05, "arbre: la portee reglable agrandit l'etendue", f"{ext(0.4):.2f} < {ext(1.0):.2f}")
+    # ---- plafond par phase
+    pc = fd.phase_ceiling
+    check([pc("silence"), pc("ambient"), pc("groove"), pc("build"), pc("break"), pc("peak"), pc(None)] == [0.0, 0.0, 0.5, 0.7, 0.17, 1.0, 0.5]
+          and pc("groove", 0.9) == 0.9 and pc("silence", 0.4) == 0.4, "plafond: par phase, et la montee le releve (max des deux)")
+
+    def adv(L, secs, **kw):
+        """Avance de `secs` par pas de 0,1 s ; les kicks ne comptent qu'au premier pas."""
+        kicks = kw.pop("kicks", 0)
+        for i in range(max(int(round(secs / 0.1)), 1)):
+            L.update(0.1, kicks=kicks if i == 0 else 0, **kw)
+
+    # ---- accumulation
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    gens, charges = [], []
+    for _ in range(10):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
+        gens.append(L.gens)
+        charges.append(L.charge)
+    check(gens == [1, 2, 3, 4, 5, 6, 6, 6, 6, 6] and charges[:4] == sorted(charges[:4]) and 0.6 < charges[5] <= 1.0
+          and len(L.draw_list()) <= fd.MAX_SEGMENTS, "accumulation: une generation de plus par kick jusqu'a 6, charge croissante et bornee", f"{gens} {charges[5]:.2f}")
+    L = fd.Lightning(1)
+    for _ in range(8):
+        adv(L, 0.5, kicks=1, ceiling=0.5)
+    L0 = fd.Lightning(1)
+    for _ in range(8):
+        adv(L0, 0.5, kicks=1, ceiling=0.0)
+    check(L.gens == 3 and L0.empty, "plafond: 0,5 -> 3 generations au plus, 0 -> aucune decharge", f"{L.gens} {L0.empty}")
+    # ---- delai minimal entre deux poussees
+    L = fd.Lightning(1)
+    L.update(0.1, kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=50, ceiling=1.0)
+    g_before = L.gens
+    L.update(0.1, kicks=50, ceiling=1.0)
+    check(g_before == 1 and L.gens == 2, "kicks: 4 poussees par seconde au plus, une rafale de 50 = une seule poussee", f"{g_before} {L.gens}")
+    # ---- croissance
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    first = len(L.draw_list())
+    L.update(0.1)
+    L.update(0.1)
+    L.update(0.1)
+    trunk = sum(1 for s in fd.build_tree(L.tree_seed, 16 / 9, 1.0) if s.gen == 0)
+    full = len(L.draw_list())
+    L2 = fd.Lightning(1)
+    L2.update(0.0, kicks=1, ceiling=1.0, speed=0.0)
+    adv(L2, 0.5, speed=0.0)
+    check(first == 0 and full == trunk and L2.gens == 1 and not L2.draw_list(),
+          "croissance: rien au depart, tronc entier apres 0,3 s, tempo 0 = croissance figee", f"{first} {full}/{trunk} {len(L2.draw_list())}")
+    # ---- decroissance
+    L = fd.Lightning(1)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    c0 = L.charge
+    adv(L, 2.5)
+    half = L.charge
+    adv(L, 2.0)
+    check(abs(half - c0 / 2) < 0.02 * c0 + 0.01 and L.empty, "decroissance: demi-vie de 2,5 s, arbre efface apres 4 s sans kick", f"{c0:.2f} {half:.2f} {L.empty}")
+    L = fd.Lightning(1)
+    for _ in range(6):
+        adv(L, 0.3, kicks=1, ceiling=1.0)
+    widths_full = [it[4] for it in L.draw_list()]
+    guard = 0
+    while L.charge > 0.3 and guard < 100:
+        adv(L, 0.1)
+        guard += 1
+    widths_late = [it[4] for it in L.draw_list()]
+    check(min(widths_full) < 0.0025 and widths_late and min(widths_late) > 0.0025 and not L.empty,
+          "decroissance: les fines branches s'eteignent avant les troncs", f"{min(widths_full):.4f} {min(widths_late) if widths_late else None}")
+    # ---- bouton maintenu
+    L = fd.Lightning(1)
+    adv(L, 0.1, hold=True)
+    g1 = L.gens
+    adv(L, 2.0, hold=True)
+    full_hold = (L.gens, L.charge)
+    adv(L, 0.1, hold=False)
+    check(g1 == 1 and full_hold == (6, 1.0) and L.charge < 1.0, "maintenu: charge au maximum, une generation toute les 0,25 s, decroit au relachement", f"{g1} {full_hold} {L.charge:.2f}")
+    # ---- drop et clear
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.drop()
+    ok_state = (L.gens, L.charge) == (6, 1.0)
+    adv(L, 1.0)
+    total = len(fd.build_tree(L.tree_seed, 16 / 9, 1.0))
+    check(ok_state and len(L.draw_list()) == total, "drop: pleine profondeur et tout l'arbre visible en 1 s", f"{len(L.draw_list())}/{total}")
+    seed_before = L.tree_seed
+    L.clear()
+    was_empty = L.empty
+    L.update(0.1, kicks=1, ceiling=1.0)
+    check(was_empty and L.tree_seed != seed_before, "clear: vide, et l'arbre suivant est different")
+    # ---- basses et aigus
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.drop()
+    adv(L, 1.0)
+    a = L.draw_list(high=1.0, t=0.0)
+    b = L.draw_list(high=1.0, t=0.37)
+    n = L.draw_list(high=0.0, t=0.0)
+    n2 = L.draw_list(high=0.0, t=0.37)
+    fine = [i for i, it in enumerate(a) if it[4] < 0.002]
+    thick = [i for i, it in enumerate(a) if it[4] > 0.005]
+    wide = L.draw_list(bass=1.0)
+    flat = L.draw_list(bass=0.0)
+    check(len(a) == len(b) == len(n) and any(a[i][5] != b[i][5] for i in fine) and all(a[i][5] == b[i][5] for i in thick) and n == n2,
+          "aigus: les fines branches scintillent, les troncs non, rien sans aigus")
+    check(all(w[4] > f[4] * 1.29 for w, f in zip(wide, flat)) and all(0.0 <= it[5] <= 1.0 for it in a + wide) and finite(a + wide),
+          "basses: les branches s'epaississent ; intensites dans [0, 1], rien de non fini")
+    # ---- robustesse
+    L = fd.Lightning(1)
+    L.update(float("inf"), kicks=1, ceiling=1.0)
+    L.update(-1.0, kicks=1, ceiling=1.0)
+    L.update(float("nan"), kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=-5, ceiling=7.0)
+    check(finite(L.draw_list()) and 0.0 <= L.charge <= 1.0 and L.gens <= fd.MAX_DEPTH, "robustesse: dt infini / negatif / NaN, kicks negatifs, plafond hors plage")
+
+
 def _in_range(p, value) -> bool:
     vals = value if isinstance(value, list) else [value]
     for v in vals:
@@ -9190,7 +9347,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure")
 
 
 def main() -> None:
@@ -9211,6 +9368,7 @@ def main() -> None:
     check_melt()
     check_bg_stochastic()
     check_reaction_pure()
+    check_foudre_pure()
     check_reaction_sim()
     check_bg_labyrinthe()
     check_cells()
