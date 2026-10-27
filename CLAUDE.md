@@ -1406,7 +1406,7 @@ lancement, non reproduite sur 17 lancements suivants.
 - Pour une petite demande (une phrase, un correctif d'une ligne), pas de skill : agir directement.
 
 **Idees et board (spec-driven)**
-- Une idee = une issue GitHub (modele `.github/ISSUE_TEMPLATE/idee.yml`, label `idee` + un theme : `visuel`, `audio`, `gui`, `vj`). Le board GitHub Project suit le cycle : Vrac -> A specifier -> Spec a valider -> Pret -> En cours -> Fait.
+- Une idee = une issue GitHub (modele `.github/ISSUE_TEMPLATE/idee.yml`, label `idee` + un theme : `visuel`, `audio`, `gui`, `vj`). Le board GitHub Project suit le cycle : Vrac -> A specifier -> Spec a valider -> Pret -> En cours -> A tester -> Fait. « A tester » = code fini et merge, l'utilisateur doit le verifier en vrai (projecteur, micro, telephone) ; il ferme l'issue (colonne Fait) quand c'est valide, sinon il dit ce qui cloche et la carte repart en « En cours ».
 - Quand l'utilisateur dit « prends l'idee #N » : lire l'issue, brainstorming, spec dans `docs/plans/`, lien de la spec dans l'issue, carte en « Spec a valider ». Rien ne passe en « Pret » sans son accord sur la spec ; la PR ferme l'issue (`Closes #N`).
 - Petite demande (label `sans-spec`) : pas de spec, de « Vrac » directement a « En cours ».
 - Tri du vrac sur demande : doublons fusionnes, regroupement par theme, effort grossier, idees qui touchent les memes fichiers signalees.
