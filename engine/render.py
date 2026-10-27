@@ -750,6 +750,7 @@ class Renderer:
         react = max(float(p["bg_react"]), 0.0)
         self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_au[0]) * 1.5)
         self._bg_flip_t += dt * float(p["bg_flip"])
+        self._sto_flick += dt * react * float(bg_au[1]) * 6.0     # aigus : renouvellements de rang par seconde et par point
         flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0)
         self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
         self._bg_clock += dt                       # horloge reelle: la palette "test" tourne a 30 images/s fixes
@@ -757,7 +758,8 @@ class Renderer:
         self._set(sp, "u_sto", (float(p["bg_sto_size"]), float(p["bg_sto_regular"]), float(p["bg_sto_vary"]), float(p["bg_sto_density"])))
         self._set(sp, "u_sto2", ({"waves": 1.0, "gradient": 2.0}.get(p["bg_sto_field"], 0.0), float(p["bg_sto_invert"]),
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
-        self._set(sp, "u_sto_au", (0.0, 0.0, 0.0, 0.0))
+        self._set(sp, "u_sto_au", (react * float(bg_au[0]), react * float(bg_au[2]),
+                                   float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0, 0.0))
         self._set(sp, "u_bg_frame", float(int(self._bg_clock * 30.0)))
         self._set(sp, "u_bg_c1", hex_to_rgb(p["bg_color1"], DEFAULT_PARAMS["bg_color1"]))
         self._set(sp, "u_bg_c2", hex_to_rgb(p["bg_color2"], DEFAULT_PARAMS["bg_color2"]))

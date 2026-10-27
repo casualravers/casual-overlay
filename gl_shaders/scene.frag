@@ -119,18 +119,20 @@ float sto_field(vec2 q) {
         f = smoothstep(0.18, 0.82, f);
     } else if (u_sto2.x < 1.5) {                            // vagues : bandes qui se propagent vers u_bg_angle
         float d = dot(v - vec2(ar * 0.5, 0.5), dir);
-        f = 0.5 + 0.5 * sin(6.2831853 * (d * 3.0 - ph * 0.25));
+        f = 0.5 + 0.5 * sin(6.2831853 * (d * 3.0 - ph * 0.25 - u_sto_au.z * 0.25));     // chaque kick : un quart d'onde
     } else {                                                // degrade aller-retour (sans couture), comme la palette duo
         float t = dot(q - 0.5, dir) + 0.5 + ph * 0.1;
         f = abs(fract(t) * 2.0 - 1.0);
     }
-    return clamp(f + (u_sto.w - 0.5) * 2.0, 0.0, 1.0);
+    f = 0.5 + (f - 0.5) * (1.0 + 0.8 * u_sto_au.y);         // kick : coup de contraste
+    return clamp(f + (u_sto.w + 0.25 * u_sto_au.x - 0.5) * 2.0, 0.0, 1.0);    // basses : densite en plus
 }
 
 // Grille jitteree : une cellule = un point, allume si le champ depasse son rang. Rang a faible discrepance (suite R2) = points
 // repartis sans amas (bruit bleu) ; rang blanc = grain aleatoire ; la regularite melange les deux. 3 x 3 cellules voisines.
 vec3 stochastic_pattern(vec2 p) {
     float s = max(u_sto.x * u_res.y / 720.0, 2.0);
+    float grow = 1.0 + 0.3 * u_sto_au.x;                   // basses : points plus gros (la grille ne bouge pas)
     vec2 px = p * u_res;
     vec2 home = floor(px / s);
     float reg = clamp(u_sto.y, 0.0, 1.0);
@@ -140,15 +142,16 @@ vec3 stochastic_pattern(vec2 p) {
         for (int i = -1; i <= 1; i++) {
             vec2 c = home + vec2(float(i), float(j));
             float r2 = fract(c.x * 0.7548776662 + c.y * 0.5698402910);
-            float wh = sto_hash(c + floor(u_sto2.w + sto_hash(c + 7.3)) * 13.1);
-            float rank = mix(wh, r2, reg);
+            float wh = sto_hash(c);
+            float epoch = floor(u_sto2.w + sto_hash(c + 7.3));    // aigus : chaque point change de rang a son tour
+            float rank = fract(mix(wh, r2, reg) + epoch * 0.6180340);
             vec2 jit = mix(0.5, 0.3, reg) * (vec2(sto_hash(c + 1.7), sto_hash(c + 4.1)) * 2.0 - 1.0);
             vec2 ctr = (c + 0.5 + jit) * s;
             float f = sto_field(ctr / u_res);
             if (f <= 0.0 || f < rank) {
                 continue;
             }
-            float rad = 0.5 * s * (1.0 + u_sto.z * (f - 0.5) * 2.0);
+            float rad = 0.5 * s * grow * (1.0 + u_sto.z * (f - 0.5) * 2.0);
             float k = 1.0 - smoothstep(rad - 1.0, rad + 1.0, length(px - ctr));
             if (k > cover) {
                 cover = k;

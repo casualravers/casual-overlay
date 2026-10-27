@@ -2501,6 +2501,33 @@ def check_bg_stochastic() -> None:
         moved = render(rr=rr, t=0.05 * i, bg_speed=1.0)
     check(abs(moved - still).mean() > 2, "stochastique: le champ derive au cours du temps", f"ecart {abs(moved - still).mean():.1f}")
 
+    # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
+    loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
+    calm = render(bg_react=1.0)
+    check(lit(render(dict(quiet, bass=1.0), bg_react=1.0)) > lit(calm) + 0.05, "stochastique: les basses ajoutent des points",
+          f"{lit(calm):.3f} -> {lit(render(dict(quiet, bass=1.0), bg_react=1.0)):.3f}")
+    check(abs(render(dict(quiet, beat=1.0, since_beat=0.0), bg_react=1.0) - calm).mean() > 2, "stochastique: le kick change l'image (contraste)")
+    check(abs(render(dict(quiet, beats=1), bg_react=1.0, bg_sto_field="waves") - render(bg_react=1.0, bg_sto_field="waves")).mean() > 2,
+          "stochastique: chaque kick fait sauter la phase des vagues")
+
+    def flicker(high, regular):   # part des blocs de 20 px qui changent en 1 s (vitesse 0 : seul le scintillement bouge)
+        rr_ = gl.Renderer(ctx, (640, 360), None)
+        st = dict(quiet, high=high)
+        first = render(st, rr=rr_, t=0.0, bg_react=1.0, bg_sto_regular=regular)
+        for i in range(1, 21):
+            last = render(st, rr=rr_, t=0.05 * i, bg_react=1.0, bg_sto_regular=regular)
+        return float((abs(blocks(last, 20) - blocks(first, 20)) > 0.01).mean())
+
+    fl = [flicker(1.0, 1.0), flicker(1.0, 0.0), flicker(0.0, 1.0)]
+    check(fl[0] > 0.10 and fl[1] > 0.10 and fl[2] == 0.0,
+          "stochastique: les aigus renouvellent des points (bruit bleu comme grain), rien sans aigus", " / ".join(f"{x:.2f}" for x in fl))
+    check(abs(render(loud, bg_react=0.0) - render(bg_react=0.0)).max() == 0, "stochastique: reaction 0 = image identique avec ou sans son")
+    rt = gl.Renderer(ctx, (640, 360), None)
+    t0 = render(rr=rt, t=0.0, bg_speed=1.0, tempo=0.0)
+    for i in range(1, 21):
+        t1 = render(rr=rt, t=0.05 * i, bg_speed=1.0, tempo=0.0)
+    check(abs(t1 - t0).max() == 0, "stochastique: master du tempo a 0 = champ fige")
+
 
 def check_gates() -> None:
     print("Reglages incompatibles grises (modes d'audio2wave)")
