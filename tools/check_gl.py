@@ -8153,6 +8153,39 @@ def check_params_schema() -> None:
     back = sc.scene_values(sc.capture_scene("S", sto_p, "live", None), dict(gl.load_params(), bg_mode="live"))
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
+    rd_keys = [k for k in d if k.startswith("bg_rd_")]
+    check(len(rd_keys) == 7 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+          and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14",
+          "labyrinthe: 7 reglages du fond, valeurs par defaut")
+    v = gl.coerce_params({"bg_palette": "labyrinthe", "bg_rd_scale": 9.0, "bg_rd_offset": -1.0})
+    check(v["bg_palette"] == "labyrinthe" and v["bg_rd_scale"] == 2.0 and v["bg_rd_offset"] == 0.0,
+          "labyrinthe: palette acceptee, reglages bornes")
+    rd_p = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe", bg_rd_shape=0.2, bg_rd_scale=1.4, bg_rd_offset=0.02,
+                bg_rd_color1="#112233", bg_rd_color2="#445566", bg_rd_color3="#778899", bg_rd_ground="#000000")
+    back = sc.scene_values(sc.capture_scene("L", rd_p, "live", None), dict(gl.DEFAULT_PARAMS, bg_mode="live"))
+    check(all(back[k] == rd_p[k] for k in rd_keys) and back["bg_palette"] == "labyrinthe",
+          "labyrinthe: une scene capturee avec cette palette la rejoue entierement")
+
+
+def check_reaction_pure() -> None:
+    print("Reaction-diffusion : logique pure (core/reaction.py)")
+    from core import reaction as rc
+    check(rc.feed_kill(0) == rc.SPOTS and rc.feed_kill(1) == rc.MAZE and rc.feed_kill(-3) == rc.SPOTS
+          and all(abs(a - (b + c) / 2) < 1e-12 for a, b, c in zip(rc.feed_kill(0.5), rc.SPOTS, rc.MAZE)),
+          "forme: taches a 0, labyrinthe a 1, bornee, interpolee")
+    check(rc.grid_size(1) == (384, 216) and rc.grid_size(2) == (192, 108) and rc.grid_size(9) == (192, 108) and rc.grid_size(0.5) == (768, 432),
+          "grille: fixe, independante de la fenetre, bornee")
+    s1 = rc.initial_seeds(1)
+    check(s1 == rc.initial_seeds(1) and s1 != rc.initial_seeds(2) and len(s1) == 40 and all(0 <= x < 1 and 0 <= y < 1 for x, y in s1),
+          "germes initiaux: 40, deterministes, dans le cadre")
+    k5 = rc.kick_seeds(5)
+    check(len(k5) == 3 and k5 == rc.kick_seeds(5) and k5 != rc.kick_seeds(6) and all(0 <= x < 1 and 0 <= y < 1 for x, y in k5),
+          "germes du kick: 3, deterministes, differents d'un kick a l'autre")
+    n, acc = rc.steps_for(0.0, 1 / 60, 1.0, 0.0)
+    check(n == 10 and abs(acc) < 1e-9 and rc.steps_for(0.5, 0.0, 1.0, 0.0) == (0, 0.5) and rc.steps_for(0.0, 1.0, 0.0, 1.0)[0] == 0,
+          "pas par image: 600 par seconde, reste garde, vitesse 0 = fige", str((n, acc)))
+    n, acc = rc.steps_for(0.0, 0.1, 4.0, 1.0)
+    check(n == 24 and 0 <= acc < 1, "pas par image: plafonnes a 24, l'exces est jete", str((n, acc)))
 
 
 def _in_range(p, value) -> bool:
@@ -8397,6 +8430,9 @@ def check_safeguards() -> None:
     check(sf.background_cost({}, full) == 0.0 and sf.background_cost(dict(bg_mode="live", bg_palette="stochastique"), full) == 0.0
           and sf.background_cost(sto_next, full) > sf.background_cost(dict(sto_next, bg_sto_field="waves"), full) > 0.0,
           "securite GPU: cout du fond stochastique (bruit > vagues), nul hors du fond genere")
+    check(sf.background_cost(dict(bg_mode="pattern", bg_palette="labyrinthe"), full) > 0.0
+          and sf.background_cost(dict(bg_mode="live", bg_palette="labyrinthe"), full) == 0.0,
+          "securite GPU: cout du fond labyrinthe compte, nul hors du fond genere")
     # --- annuler / retablir
     udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
     ubook = sc_.SceneBook(lambda: udir / "scenes.json")
@@ -8925,7 +8961,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout")
+         "check_stage_layout", "check_reaction_pure")
 
 
 def main() -> None:
@@ -8945,6 +8981,7 @@ def main() -> None:
     check_holo()
     check_melt()
     check_bg_stochastic()
+    check_reaction_pure()
     check_cells()
     check_noise()
     check_doodles()

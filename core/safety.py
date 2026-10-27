@@ -12,6 +12,7 @@ EFFECT_COST_MS = (("cell_on", "cellules", 6.7), ("holo_on", "halo", 3.3), ("melt
 # Surcout du fond genere en palette stochastique, en ms a 1080p (mesure a 1280 x 720 : bruit +2,3 ms, vagues +1,3 ms, x 2,25 pour 1080p ;
 # le degrade, non mesure, est compte comme les vagues). Le fond n'est jamais coupe : il compte seulement dans l'estimation.
 BG_STO_COST_MS = {"noise": 5.2, "waves": 2.9, "gradient": 2.9}
+BG_RD_COST_MS = 1.0             # palette labyrinthe (reaction-diffusion) : simulation a grille fixe + trois lectures par pixel
 REF_PIXELS = 1920 * 1080
 HIGH = 0.90                                    # part du budget d'une image qu'on accepte de remplir (comme PerfGuard.HIGH)
 BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field")
@@ -29,8 +30,12 @@ def effects_cost(values: dict, render_size: tuple[int, int] | None = None) -> fl
 
 
 def background_cost(values: dict, render_size: tuple[int, int] | None = None) -> float:
-    """Surcout estime (ms par image) du fond de `values` : seul le fond genere en palette stochastique en a un notable."""
-    if values.get("bg_mode") != "pattern" or values.get("bg_palette") != "stochastique":
+    """Surcout estime (ms par image) du fond de `values` : seuls les fonds generes stochastique et labyrinthe en ont un notable."""
+    if values.get("bg_mode") != "pattern":
+        return 0.0
+    if values.get("bg_palette") == "labyrinthe":
+        return BG_RD_COST_MS * _scale(render_size)
+    if values.get("bg_palette") != "stochastique":
         return 0.0
     return BG_STO_COST_MS.get(values.get("bg_sto_field", "noise"), BG_STO_COST_MS["noise"]) * _scale(render_size)
 
