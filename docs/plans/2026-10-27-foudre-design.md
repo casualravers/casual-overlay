@@ -47,8 +47,8 @@ Un interrupteur **Strobe / Foudre** dans l'onglet *Live* choisit lequel des deux
 
 - Nouvelle passe : les segments (rubans fins, largeur decroissante, extremites adoucies) sont dessines en additif dans une texture hors ecran RGBA16F de resolution reduite (1/2), recreee au redimensionnement.
 - Coeur blanc + halo de la couleur choisie ; le halo vient du flou par mipmaps de cette texture (technique du halo holographique).
-- Compose dans `post.frag` au meme endroit que `u_strobe` (apres la composition des couches, symetrie / pixelisation comprises, avant la teinte globale), en addition : jamais de fond blanchi.
-- Aucune passe, aucune texture ni cout quand le mode est Strobe ou que la charge est nulle. Les segments sont envoyes en un seul tampon (VBO) reecrit quand l'arbre change, pas a chaque image.
+- Compose dans `post.frag` juste avant le melange du strobe, donc apres la teinte globale et la trainee (la couleur choisie ne tourne pas avec la teinte) et dans l'espace `cuv` (symetrie / pixelisation s'y appliquent), en addition douce (`1 - (1 - col)(1 - ajout)`, ajout plafonne a 0,9) : jamais de fond blanchi.
+- Aucune passe, aucune texture lue ni cout quand le mode est Strobe ou que la foudre est vide. Les segments (300 au plus, quelques milliers de sommets) sont reecrits dans un seul tampon a chaque image tant que la foudre est visible : le front de croissance et le scintillement changent a chaque image.
 
 ## Reglages (`core/params_schema.py`)
 
@@ -56,6 +56,7 @@ Un interrupteur **Strobe / Foudre** dans l'onglet *Live* choisit lequel des deux
 - `foudre_amount` : intensite, 0,7 (0 a 1.5), portee `room`.
 - `foudre_reach` : portee, 1,0 (0,4 a 1,5 ; 1 = jusqu'au bord), portee `room`.
 - `foudre_color` : halo, `#3a7bff`, portee `room`.
+- `foudre_drop` et `foudre_clear` : compteurs d'evenements, portee `state` (comme `strobe_hits`) ; le Drop (bouton ou detecte) incremente `foudre_drop` (decharge a pleine profondeur), la PANIQUE incremente `foudre_clear` (vide la foudre).
 - La PANIQUE coupe `strobe_auto` comme avant et vide la foudre en cours ; elle ne change pas `strobe_kind`.
 
 ## Interface (onglet *Live*, bloc du strobe de `gui/gui_vj.py`)
@@ -68,7 +69,7 @@ Un interrupteur **Strobe / Foudre** dans l'onglet *Live* choisit lequel des deux
 
 - Aucun flash plein ecran : lumiere locale, luminosite plafonnee, jamais de blanc sur toute l'image.
 - Le limiteur existant (`StrobeLimiter`) s'applique aux departs de decharge (10 par seconde au plus) ; en pratique 4 departs par seconde au plus par la charge elle-meme.
-- Securite GPU (`core/safety.py`) : cout estime de la passe ajoute a `background_cost`-like `foudre_cost` (borne, ~1 ms) ; si la charge GPU est haute la scene suivante en mode Foudre reste inchangee (le cout est faible) mais le rapport de charge le nomme.
+- Securite GPU (`core/safety.py`) : rien a ajouter. Le cout de la foudre est constant (il ne depend pas de la scene) : il est deja dans le temps GPU mesure (`gpu_ms`), et `cap_values` ne compare que la difference entre deux scenes. On le mesure une fois et on l'ecrit dans CLAUDE.md.
 
 ## Verifications (`tools/check_gl.py`)
 
