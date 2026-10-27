@@ -472,6 +472,11 @@ def check_gui() -> None:
         out["swap_keeps_overlay"] = out.get("swap_keeps_overlay", True) and (c["notebook"], c["scene_bar"], c["right_cv"]) == first_[:3]
         out["swap_new_panel"] = out.get("swap_new_panel", False) or (out["builds"] > 1 and c["live_host"] is not first_[3])
         if out["builds"] > 1:
+            if "stage" not in out:                    # panneau reconstruit sans bascule demandee par le test (ex. tirage qui change de mode)
+                hist_ = [h.get("name") if isinstance(h, dict) else h for h in list(getattr(s, "scene_history", []))[-3:]]
+                out.setdefault("unexpected_swaps", []).append((s.mode, getattr(s, "active_scene", None), hist_,
+                                                               [k for k in out if k != "unexpected_swaps"][-3:]))
+                return
             mode_stage(c)
             return
 
@@ -1386,6 +1391,8 @@ def check_gui() -> None:
     check(out.get("r_keep_err") == (True, True, True, True, True, 1),
           "Full Randomizer (GUI): nom deja pris ou 'default' refuse, annuler n'ecrit rien, un seul champ rempli = seulement celui-la, "
           "pas de preset de fond sans fond genere", str(out.get("r_keep_err")))
+    check(not out.get("unexpected_swaps"), "GUI: aucun changement de mode audio2wave inattendu avant les bascules du test (sinon c['live_host'] est perime)",
+          str(out.get("unexpected_swaps")))
     rm = out.get("r_modes", (0, [], [], False, False))
     check(rm[0] == 1 and rm[1] == ["live", "ridge", "sphere"] and sorted(rm[2]) == ["live", "ridge", "snap", "sphere"] and rm[3] and rm[4],
           "Full Randomizer (GUI): cases des modes audio2wave de la config aleatoire ; sans mode coche, la config aleatoire reste un fond genere (aucun changement de mode)",
@@ -4317,6 +4324,10 @@ def gui_expand_steps(c, s, out) -> None:
             pump_()
             rem_ok[8] = code_ == 200 and any(w in c["scenes"]["msg"].get() for w in ("enregistree", "Apercu")) and len(c["scene_book"].names()) >= n_scenes_
             order_before_, vj_before_ = c["scene_book"].vj()["order"], bool(c["vj"]["state"]["running"])        # Full Randomizer depuis le telephone : activer lance le VJ, re-appuyer revient a l'ordre normal
+            random_before_ = dict(c["scene_book"].vj()["random"])
+            # aucun mode audio2wave dans les tirages (reglages par defaut = les quatre) : un tirage Snap / Ridge / Sphere reconstruirait le panneau
+            # d'audio2wave pendant les etapes suivantes (c["live_host"] perime, cascade d'echecs une fois sur deux)
+            c["scene_book"].set_vj(random={**random_before_, "modes": []})
             rq_("POST", "/api/random", {"action": "toggle"}, sess_)
             pump_(0.5)
             on_ = c["scene_book"].vj()["order"] == "alea" and bool(c["vj"]["state"]["running"])
@@ -4329,7 +4340,7 @@ def gui_expand_steps(c, s, out) -> None:
             rem_ok[9] = on_ and shown_ and c["scene_book"].vj()["order"] == "seq"
             if bool(c["vj"]["state"]["running"]) != vj_before_:
                 c["vj"]["toggle"]()
-            c["scene_book"].set_vj(order=order_before_)
+            c["scene_book"].set_vj(order=order_before_, random=random_before_)
         finally:
             rc_.var.set(0)
             rc_.toggle()
@@ -5286,11 +5297,12 @@ def gui_bgvideo_steps(c, s, out) -> None:
     vid = d / "dossier avec espace" / "fond video.mp4"
     vid.parent.mkdir()
     make_test_video(vid, "160x120", 1)
+    live_host = lambda: c["panel"]["frame"]     # cadre du panneau relu a chaque fois (un changement de mode le remplace)
     states = {}
     for mode in ("live", "pattern", "video"):
         c["bg_var"].set(mode)
         root.update()
-        states[mode] = (c["live_host"].winfo_ismapped(), c["pattern_box"].winfo_ismapped(), c["bgvid_box"].winfo_ismapped(),
+        states[mode] = (live_host().winfo_ismapped(), c["pattern_box"].winfo_ismapped(), c["bgvid_box"].winfo_ismapped(),
                         params["bg_mode"])
     out["bgv_modes"] = states
     # fichier tape sans Entree, puis capture de la scene
@@ -5306,7 +5318,7 @@ def gui_bgvideo_steps(c, s, out) -> None:
     sc["apply"]("Fond Video")
     root.update()
     out["bgv_apply"] = (params["bg_mode"], params["bg_video"] == str(vid), c["bg_var"].get(), c["bgv_var"].get() == str(vid),
-                        c["bgvid_box"].winfo_ismapped(), c["live_host"].winfo_ismapped())
+                        c["bgvid_box"].winfo_ismapped(), live_host().winfo_ismapped())
     # depot d'un fichier sur le bloc (chemin avec espace) et refus d'un fichier qui n'est pas une video
     c["bg_var"].set("live")
     params["bg_video"] = ""
@@ -6637,9 +6649,13 @@ def gui_random_steps(c, s, out) -> None:
     (tmpd / "loops" / "v.mp4").write_bytes(b"x")
     base_set = book.active_set_name()
     sc["create_set"]("Alea")
+    # Aucun mode audio2wave dans la config aleatoire : un tirage qui tombe sur Snap / Ridge / Sphere programme un changement de mode
+    # (`after(30, request_mode)`) qui detruit le panneau d'audio2wave au prochain `root.update()` des etapes suivantes (c["live_host"]
+    # perime, mode_stage rappelee sans etape : une cascade d'echecs, une fois sur deux). Les cases des modes sont testees plus bas.
     book.set_vj(order="alea", seconds=20, random={"folders_overlay": [str(tmpd)], "folders_fond": [str(tmpd / "loops")],
-                                                  "bg_sources": ["preset", "params", "video"]})
+                                                  "bg_sources": ["preset", "params", "video"], "modes": []})
     rd["state"]["rng"] = rnd_mod.Random(5)
+    rd["state"]["memory"] = {}                     # la memoire des tirages d'avant (rng non graine) changerait les tirages d'une execution a l'autre
     rd["state"]["last"] = {}
     rd["state"]["scene"] = None
     sc["switch_set"]("Alea")                       # reconstruit la barre et le panneau avec les nouveaux reglages
@@ -6739,6 +6755,7 @@ def gui_random_steps(c, s, out) -> None:
     out["r_lock"] = (params["bg_mode"] == mode_before, params["bg_hue"] == hue_before)
     book.set_vj(random={**book.vj()["random"], "lock_bg": False})
     # config aleatoire du fond : cases des modes audio2wave ; avec le seul mode courant, aucun changement de mode (pas de reconstruction)
+    book.set_vj(random={**book.vj()["random"], "modes": ["live", "snap", "ridge", "sphere"]})     # cases toutes cochees (defaut)
     sc["switch_set"]("Alea")
     root.update()
     snap_box = widgets("Checkbutton", "Snap")
