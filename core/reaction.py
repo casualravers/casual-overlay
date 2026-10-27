@@ -8,9 +8,9 @@ from __future__ import annotations
 import math
 import random
 
-# (F, K) : taches qui se repoussent et se divisent jusqu'a remplir l'ecran. La valeur classique (0,0367 ; 0,0649) donnait des taches
-# stables qui ne se divisaient pas (29 taches, 2 % de l'ecran apres 12000 pas) : on part du quart du chemin vers MAZE (mesure).
-SPOTS = (0.0348, 0.0629)
+# (F, K) : taches qui se repoussent et se divisent jusqu'a remplir l'ecran (valeur classique ; mesure en RG32F : 238 taches, aucun contact,
+# motif toujours actif apres 12000 pas). En RG16F elle semblait ne jamais se diviser : c'etait un artefact d'arrondi (voir engine/reaction.py).
+SPOTS = (0.0367, 0.0649)
 MAZE = (0.0290, 0.0570)         # (F, K) : taches soudees en lignes sinueuses (labyrinthe)
 BASE_GRID = (384, 216)          # grille de simulation a l'echelle 1 (independante de la fenetre)
 STEPS_PER_S = 600.0             # pas de simulation par seconde a vitesse 1

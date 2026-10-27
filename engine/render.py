@@ -258,6 +258,7 @@ class Renderer:
         self.rd: ReactionDiffusion | None = None   # palette labyrinthe : simulation creee au premier besoin
         self._rd_acc = 0.0                         # reste de l'accumulateur de pas de simulation
         self._rd_beats: int | None = None          # compteur de kicks deja semes
+        self._rd_pending: list = []                # germes des kicks en attente d'un pas (motif fige : tempo ou vitesse a 0)
         self._rd_active = False                    # palette active a l'image precedente
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
@@ -597,17 +598,17 @@ class Renderer:
             self.rd.ensure(float(p["bg_rd_scale"]))
             if not self._rd_active:                    # activation : repart d'un etat seme propre
                 self.rd.reset(self.rd.seed)
-                self._rd_acc, self._rd_beats = 0.0, beats
+                self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
             bass = react * float(bg_au[0])
-            seeds: list = []
             if kicks_on and self._rd_beats is not None:
                 for k in range(self._rd_beats + 1, beats + 1):
-                    seeds += reaction.kick_seeds(k)
+                    self._rd_pending += reaction.kick_seeds(k)
+                self._rd_pending = self._rd_pending[-4:]          # au plus 4 germes en attente (les plus recents)
             self._rd_beats = beats
             n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass)
-            if seeds and n == 0:
-                n = 1                                  # un kick sur une image sans pas : les germes passent quand meme
-            self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), seeds[:4])
+            if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes attendent le prochain pas
+                self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending)
+                self._rd_pending = []
             self.rd.watch(t)
             self.rd.texture.use(6)
             w, h = self.rd.size

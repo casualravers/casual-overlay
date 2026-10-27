@@ -8253,6 +8253,15 @@ def check_reaction_sim() -> None:
     _l, maze = rd_components(sim(1.0, 2000).read_v() > 0.25)
     check(np.mean(maze) > 3 * np.mean(sizes), "forme 1 : les taches se soudent en lignes (composantes bien plus grandes)",
           f"aire moyenne {np.mean(maze):.0f} contre {np.mean(sizes):.0f}")
+    still_alive = {}
+    for s in (0.0, 0.6, 1.0):                    # le motif vit en continu : il ne se fige pas en un point fixe (piege du demi-flottant)
+        r_ = sim(s, 10000)
+        m0 = r_.read_v() > 0.25
+        for _ in range(100):
+            r_.step(20, s)
+        still_alive[s] = int(((r_.read_v() > 0.25) != m0).sum())
+    check(all(n_ > 300 for n_ in still_alive.values()), "le motif se reorganise encore apres 10000 pas (il ne se fige pas)",
+          f"cellules changees entre 10000 et 12000 pas : {still_alive}")
     frozen = sim(0.6, 400)
     v0 = frozen.read_v().copy()
     frozen.step(0, 0.6)
@@ -8331,6 +8340,9 @@ def check_bg_labyrinthe() -> None:
     _rt, t2 = run(rr=rt, frames=20, tempo=0.0)
     check(abs(t2 - t1).max() == 0 and abs(run(rr=r1, frames=20)[1] - a).mean() > 1,
           "labyrinthe: master du tempo a 0 = motif fige ; vitesse 1 = il evolue")
+    rk0, k1 = run(tempo=0.0, bg_react=1.0)
+    _rk0, k2 = run(rr=rk0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_react=1.0)
+    check(abs(k2 - k1).max() == 0, "labyrinthe: tempo a 0 = fige meme quand des kicks arrivent (les germes attendent)")
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0)
     _r, calm = run(state=quiet, bg_react=0.0)
     _r, noisy = run(state=lambda i: dict(loud, beats=i // 5), bg_react=0.0)

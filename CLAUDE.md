@@ -384,10 +384,11 @@ les basses).
   repoussent (jamais collees) et se soudent en lignes sinueuses, en trois couches colorees decalees (le look du pull montre par l'utilisateur).
   **Simulation Gray-Scott sur le GPU** : `engine/reaction.py` (`ReactionDiffusion`, possedee par le `Renderer`, creee au premier besoin) +
   `gl_shaders/rd_step.frag` (laplacien 3 x 3, Du 1, Dv 0,5, dt 1) ; logique pure dans `core/reaction.py` (`feed_kill`, `grid_size`, germes,
-  `steps_for`). Etat RG16F (repli RG32F) en ping-pong sur une **grille fixe** de 384 x 216 (/ `bg_rd_scale`), bords en boucle, independante de la
-  fenetre ; changer d'echelle recopie l'etat (bilineaire, numpy). `bg_rd_shape` interpole (F, K) de **taches (0,0348 ; 0,0629)** a **labyrinthe
-  (0,0290 ; 0,0570)** : la valeur classique des taches (0,0367 ; 0,0649) donnait des taches stables qui ne remplissaient jamais l'ecran (2 %), d'ou
-  le point de depart resserre (mesure). Etat initial : 40 germes (graine fixe), refait a chaque activation de la palette et a chaque nouveau
+  `steps_for`). Etat **RG32F** (repli RG16F) en ping-pong sur une **grille fixe** de 384 x 216 (/ `bg_rd_scale`), bords en boucle, independante de la
+  fenetre ; changer d'echelle recopie l'etat (bilineaire, numpy). **Piege du demi-flottant** : en RG16F un increment `F x (1 - U)` plus petit que le
+  demi-ulp pres de 1 est perdu, et le motif se figeait en un point fixe d'arrondi apres ~15 s (vu en revue, test « se reorganise encore apres
+  10000 pas ») ; il faussait aussi le reglage des taches. `bg_rd_shape` interpole (F, K) de **taches (0,0367 ; 0,0649)** a **labyrinthe
+  (0,0290 ; 0,0570)** (valeurs classiques ; en RG32F : 238 taches regulieres, aucun contact, motif toujours actif). Etat initial : 40 germes (graine fixe), refait a chaque activation de la palette et a chaque nouveau
   Renderer (ouverture de la projection). Garde-fou : toutes les 2 s, moyenne de V (mipmaps 1 x 1) ; motif eteint = ressemee. Pas par image :
   600 / s x `bg_speed` x (1 + basses), plafond 24 (exces jete), `dt` deja multiplie par le tempo (tempo 0 = fige). Rendu (`scene.frag`,
   `labyrinth_pattern`, palette 4, texture unite 6) : V lu trois fois a 120 degres d'ecart (`bg_rd_offset`), seuil 0,25 anti-crenele, couches

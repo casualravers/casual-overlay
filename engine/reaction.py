@@ -34,7 +34,9 @@ class ReactionDiffusion:
         for obj in (*self.fbo, *self.tex):
             obj.release()
         self.tex, self.fbo = [], []
-        for dtype in ("f2", "f4"):                         # RG16F, repli RG32F si le format 16 bits n'est pas rendable
+        # RG32F d'abord : en RG16F un increment F x (1 - U) plus petit que le demi-ulp pres de 1 est perdu et le motif se fige en un
+        # point fixe d'arrondi apres ~15 s (mesure). La grille est petite (384 x 216 x 8 octets) : le cout est negligeable. Repli RG16F.
+        for dtype in ("f4", "f2"):
             try:
                 tex = [self.ctx.texture(size, 2, dtype=dtype) for _ in range(2)]
                 fbo = [self.ctx.framebuffer(color_attachments=[t]) for t in tex]
