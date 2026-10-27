@@ -6550,10 +6550,20 @@ def check_randomizer() -> None:
     # plages
     rng = rnd_mod.Random(7)
     ok_bg = all(0 <= v["bg_hue"] <= 1 and 0 <= v["bg_angle"] <= 180 and 0.4 <= v["bg_speed"] <= 1.8 and 50 <= v["bg_tile"] <= 150
-                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo")
-                and (v["bg_palette"] != "duo" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
+                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo", "stochastique")
+                and (v["bg_palette"] == "classic" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
                 for v in (rz.random_background_params(rng) for _ in range(300)))
     check(ok_bg, "fond aleatoire: valeurs dans les plages des curseurs, jamais la palette banc de test")
+    vals = [rz.random_background_params(rnd_mod.Random(s)) for s in range(300)]
+    st = [v for v in vals if v["bg_palette"] == "stochastique"]
+    check(len(st) > 30 and all(5 <= v["bg_sto_size"] <= 30 and 0.4 <= v["bg_sto_regular"] <= 1 and 0 <= v["bg_sto_vary"] <= 0.8
+                               and 0.3 <= v["bg_sto_density"] <= 0.7 and v["bg_sto_invert"] in (0.0, 1.0) and 0 <= v["bg_sto_rainbow"] <= 0.6
+                               and v["bg_sto_field"] in ("noise", "waves", "gradient") for v in st)
+          and len({v["bg_sto_field"] for v in st}) == 3
+          and all(gl.coerce_params(v)[k] == v[k] for v in st for k in v),        # aucune valeur ramenee par la validation
+          "fond aleatoire: la palette stochastique est tiree, dans les plages", f"{len(st)} sur 300")
+    check(all(not any(k.startswith("bg_sto_") for k in v) for v in vals if v["bg_palette"] != "stochastique"),
+          "fond aleatoire: les reglages stochastiques ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
     costly = [sum(1 for k in ("holo_on", "melt_on", "cell_on") if fx[k] >= 0.5) for fx in fxs]
     check(max(costly) <= rz.MAX_COSTLY and set(costly) >= {0, 1, 2}, "effets aleatoires: au plus deux effets couteux a la fois",
