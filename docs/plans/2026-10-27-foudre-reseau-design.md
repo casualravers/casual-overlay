@@ -1,6 +1,6 @@
 # Foudre v2 : un reseau vivant (spec)
 
-Date : 2026-10-27. Statut : spec a relire, pas encore planifiee ni developpee. Remplace le **modele** de `2026-10-27-foudre-design.md` (arbre fixe revele par generations) ; l'interrupteur Strobe / Foudre, les reglages, les branchements et la securite de cette premiere spec restent.
+Date : 2026-10-27. Statut : implemente (voir CLAUDE.md, section Foudre) ; reste a regler a l'oeil.
 
 ## Pourquoi
 

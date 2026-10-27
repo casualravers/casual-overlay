@@ -8858,9 +8858,9 @@ def check_foudre_pure() -> None:
     check(L.empty and L.segments() == [], "clear: vide")
     # ---- voyant de l'interface
     from core import explain
-    check(explain.foudre_info_text(None).startswith("foudre :") and "repos" in explain.foudre_info_text((0, 0.0))
-          and explain.foudre_info_text((3, 0.52)) == "foudre : profondeur 3/6, charge 52 %" and explain.foudre_info_text((9, 7.0)).endswith("100 %"),
-          "voyant: profondeur et charge de la foudre, repos, valeurs hors plage bornees")
+    check(explain.foudre_info_text(None).startswith("foudre :") and "repos" in explain.foudre_info_text({"segments": 0})
+          and explain.foudre_info_text({"segments": 312, "tips": 14, "pulses": 2}) == "foudre : 312 segments, 14 pointes, pouls 2",
+          "voyant: segments, pointes et pouls de la foudre, repos")
     # ---- reglages et panique
     from core import params_schema as ps
     from core.controls import panic
