@@ -8572,6 +8572,23 @@ def check_foudre_pure() -> None:
     L.update(float("nan"), kicks=1, ceiling=1.0)
     L.update(0.1, kicks=-5, ceiling=7.0)
     check(finite(L.draw_list()) and 0.0 <= L.charge <= 1.0 and L.gens <= fd.MAX_DEPTH, "robustesse: dt infini / negatif / NaN, kicks negatifs, plafond hors plage")
+    # ---- reglages et panique
+    from core import params_schema as ps
+    from core.controls import panic
+    by_key = {p.key: p for p in ps.TABLE}
+    want = {"strobe_kind": "strobe", "foudre_amount": 0.7, "foudre_reach": 1.0, "foudre_color": "#3a7bff", "foudre_drop": 0, "foudre_clear": 0}
+    check(all(k in by_key and by_key[k].default == v for k, v in want.items())
+          and by_key["strobe_kind"].choices == ("strobe", "foudre")
+          and (by_key["foudre_amount"].lo, by_key["foudre_amount"].hi) == (0.0, 1.5) and (by_key["foudre_reach"].lo, by_key["foudre_reach"].hi) == (0.4, 1.5),
+          "reglages: strobe_kind, foudre_amount / reach / color et leurs defauts dans le schema")
+    check(all(k in ps.ROOM_KEYS and k in ps.OVERLAY_PRESET_EXCLUDED for k in want) and all(k in ps.TRANSIENT_KEYS for k in ("foudre_drop", "foudre_clear"))
+          and not any(k in ps.TRANSIENT_KEYS for k in ("strobe_kind", "foudre_amount", "foudre_reach", "foudre_color")),
+          "reglages: reglages de salle (ni presets ni scenes), compteurs d'etat seulement pour foudre_drop / foudre_clear")
+    check(ps.validate("foudre_amount", 9.0) == (True, 1.5) and ps.validate("foudre_reach", 0.0) == (True, 0.4) and ps.validate("strobe_kind", "plasma") == (False, None),
+          "reglages: valeurs hors plage ramenees, enum inconnu refuse")
+    pp = {"strobe_kind": "foudre", "foudre_clear": 3}
+    panic(pp)
+    check(pp["foudre_clear"] == 4 and pp["strobe_kind"] == "foudre", "panique: vide la foudre (compteur +1) sans changer strobe_kind")
 
 
 def _in_range(p, value) -> bool:
