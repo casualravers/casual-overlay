@@ -264,6 +264,8 @@ void main() {
         vec3 core = textureLod(u_foudre_tex, cuv, 0.0).rgb;
         float halo = dot(textureLod(u_foudre_tex, cuv, 2.0).rgb, vec3(0.333)) * 2.0 + dot(textureLod(u_foudre_tex, cuv, 4.0).rgb, vec3(0.333)) * 4.0;
         vec3 add = min((core + u_foudre_color * halo) * u_foudre, vec3(0.9));
+        float bl = dot(col, vec3(0.299, 0.587, 0.114));
+        add *= 0.35 + 1.1 * mix(vec3(bl), col, 0.6);                              // la lumiere s'incruste : elle prend la luminosite et la teinte du fond sous elle (plus claire sur du clair, nuancee par ses couleurs)
         col = max(col, min(1.0 - (1.0 - col) * (1.0 - add), vec3(0.9)));          // la foudre ne pousse jamais un pixel au-dela de 0,9 (la trainee la reinjecte : sans plafond, elle tendrait vers le blanc)
     }
     // Le strobe ne blanchit que les parties sombres de l'image (luminance sous le seuil, transition large et douce : pas de cassure nette) ; seuil a 1 = toute l'image.

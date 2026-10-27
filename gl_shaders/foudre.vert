@@ -30,6 +30,8 @@ void main() {
     }
     float alive = smoothstep(0.0, 0.08, in_vig);                           // une branche qui meurt s'eteint doucement
     float scint = 1.0 - 0.3 * in_fine * (1.0 - u_high * (0.5 + 0.5 * sin(40.0 * u_time + 13.0 * float(gl_VertexID / 6))));
+    float rad = smoothstep(0.0, 0.6, length(in_ctr));                       // 0 au centre .. 1 vers la peripherie
+    float calm = 1.0 - 0.6 * (1.0 - in_fine) * (1.0 - rad);                // les grosses sections s'adoucissent vers le centre
     v_int = min(1.0, (0.12 + 0.55 * in_vig + 0.8 * pulse) * alive * (1.0 + 0.25 * u_bass) * scint * in_cov);
     gl_Position = vec4(pos.x / (0.5 * u_aspect), pos.y / 0.5, 0.0, 1.0);
 }

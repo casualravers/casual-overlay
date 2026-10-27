@@ -28,7 +28,7 @@ HOLD_PUSH_S = 0.5           # bouton maintenu : un pouls toutes les 0,5 s
 MAX_DT = 0.1
 KIN = 12                    # une branche qui partage un ancetre a moins de KIN generations n'est ni evitee ni soudee
 
-PULSE_SPEED = 0.45          # vitesse de l'onde, en distance de chemin par seconde (a tempo 1)
+PULSE_SPEED = 0.30          # vitesse de l'onde, en distance de chemin par seconde (a tempo 1)
 MAX_PULSES = 8
 DROP_ENERGY = 1.5           # energie de la grande onde du Drop
 DROP_SPROUTS = 24           # pousses nees d'un coup au Drop
