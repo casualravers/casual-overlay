@@ -16,7 +16,7 @@ from core import qrcode
 from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
-from core.foudre import MAX_SEGMENTS, Lightning, phase_ceiling
+from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceiling
 from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
 from core import reaction
@@ -325,7 +325,7 @@ class Renderer:
         self._new_kicks, self._fired_seen = 0, 0   # kicks vus a cette image, eclairs du strobe deja traduits en decharges
         self._drop_seen = self._clear_seen = None  # compteurs foudre_drop / foudre_clear deja vus (None : pas encore lus)
         self.foudre_tex = self.foudre_fbo = self.foudre_prog = self.foudre_vao = None
-        self.foudre_vbo = ctx.buffer(reserve=MAX_SEGMENTS * 6 * 4 * 4)       # 6 sommets par segment, 4 flottants par sommet
+        self.foudre_vbo = ctx.buffer(reserve=MAX_SEGMENTS * 6 * 9 * 4)       # 6 sommets par segment, 9 flottants par sommet
         self.reload_shaders()
 
     def set_logo(self, logo_rgba, path: str = "", kind: str = "image") -> None:
@@ -388,7 +388,7 @@ class Renderer:
         except Exception as exc:
             raise ShaderError(str(exc)) from exc
         self.scene_prog, self.post_prog, self.holo_prog, self.foudre_prog = scene, post, holo, foudre
-        self.foudre_vao = self.ctx.vertex_array(foudre, [(self.foudre_vbo, "2f 1f 1f", "in_pos", "in_across", "in_int")])
+        self.foudre_vao = self.ctx.vertex_array(foudre, [(self.foudre_vbo, "2f 2f 1f 1f 1f 1f 1f", "in_ctr", "in_off", "in_across", "in_vig", "in_dist", "in_fine", "in_cov")])
         self.scene_vao = self.ctx.vertex_array(scene, [(self.vbo, "2f", "in_pos")])
         self.post_vao = self.ctx.vertex_array(post, [(self.vbo, "2f", "in_pos")])
         self.holo_vao = self.ctx.vertex_array(holo, [(self.vbo, "2f", "in_pos")])
@@ -499,26 +499,37 @@ class Renderer:
         user = min(max(float(p.get("strobe_dark", 1.0)), 0.05), 1.0)
         return min(user, self._strobe_auto_dark) if self._strobe_auto_now else user
 
-    def _draw_bolt(self, p: dict, items: list, size: tuple[int, int]) -> bool:
-        """Foudre : ecrit les segments (x0, y0, x1, y1, largeur, intensite) en rubans additifs dans la texture demi-resolution, puis ses
-        mipmaps (halo). Rend faux s'il n'y a rien a composer. Le framebuffer de sortie est a rebinder par l'appelant."""
-        if not items:
+    def _draw_bolt(self, p: dict, size: tuple[int, int], bass: float, high: float, t: float) -> bool:
+        """Foudre : ecrit le reseau (segments de `bolt.segments()`) en rubans additifs dans la texture demi-resolution, puis ses mipmaps (halo).
+        L'intensite (vigueur, ondes, basses, aigus) est calculee par le shader de sommets : ici seulement la geometrie et ses attributs.
+        Rend faux s'il n'y a rien a composer. Le framebuffer de sortie est a rebinder par l'appelant."""
+        segs = self.bolt.segments()
+        if not segs:
             return False
-        arr = np.asarray(items, dtype="f4")[:MAX_SEGMENTS]
+        arr = np.asarray(segs, dtype="f4")[:MAX_SEGMENTS]
         n = len(arr)
         a, b = arr[:, 0:2], arr[:, 2:4]
         d = b - a
         tan = d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
         nrm = np.stack([-tan[:, 1], tan[:, 0]], axis=1)
-        half = np.maximum(arr[:, 4:5] * 0.5, 1.0 / max(self.foudre_tex.size[1], 1))        # au moins un texel de demi-largeur (energie gardee au prorata)
-        inten = arr[:, 5:6] * np.minimum(arr[:, 4:5] * 0.5 / half, 1.0)
-        a, b = a - tan * half, b + tan * half
-        corners = np.stack([a + nrm * half, a - nrm * half, b + nrm * half, a - nrm * half, b - nrm * half, b + nrm * half], axis=1)    # (n, 6, 2)
+        half = np.maximum(arr[:, 4:5] * 0.5, 1.0 / max(self.foudre_tex.size[1], 1))        # au moins un texel de demi-largeur
+        cov = np.clip(arr[:, 4:5] * 0.5 / half, 0.35, 1.0)                                  # couverture : un ruban elargi garde de l'intensite (plancher : les brindilles restent visibles)
+        fine = 1.0 - np.minimum(1.0, arr[:, 4:5] / W_TRUNK)
+        ctr = np.stack([a, a, b, a, b, b], axis=1)                                          # (n, 6, 2) : deux triangles par segment, bouts prolonges d'une demi-largeur
+        off = np.stack([(nrm - tan) * half, (-nrm - tan) * half, (nrm + tan) * half, (-nrm - tan) * half, (-nrm + tan) * half, (nrm + tan) * half], axis=1)
         across = np.broadcast_to(np.array([1, -1, 1, -1, -1, 1], dtype="f4")[None, :, None], (n, 6, 1))
-        verts = np.concatenate([corners, across, np.broadcast_to(inten[:, None, :], (n, 6, 1))], axis=2).astype("f4")
+        attrs = [np.broadcast_to(v[:, None, :], (n, 6, 1)) for v in (arr[:, 5:6], arr[:, 6:7], fine, cov)]      # vigueur, distance de chemin, finesse, couverture
+        verts = np.concatenate([ctr, off, across] + attrs, axis=2).astype("f4")           # 9 flottants par sommet
         self.foudre_vbo.write(verts.tobytes())
-        self._set(self.foudre_prog, "u_aspect", size[0] / max(size[1], 1))
-        self._set(self.foudre_prog, "u_color", hex_to_rgb(str(p["foudre_color"])))
+        prog = self.foudre_prog
+        self._set(prog, "u_aspect", size[0] / max(size[1], 1))
+        self._set(prog, "u_color", hex_to_rgb(str(p["foudre_color"])))
+        self._set(prog, "u_time", float(t))
+        self._set(prog, "u_bass", float(bass))
+        self._set(prog, "u_high", float(high))
+        if "u_pulse" in prog:
+            waves = (self.bolt.pulses() + [(0.0, 0.0)] * MAX_PULSES)[:MAX_PULSES]
+            prog["u_pulse"].write(np.array(waves, dtype="f4").tobytes())
         self.foudre_fbo.viewport = (0, 0) + tuple(self.foudre_tex.size)
         self.foudre_fbo.use()
         self.foudre_fbo.clear(0.0, 0.0, 0.0, 0.0)
@@ -916,11 +927,11 @@ class Renderer:
             if drops != self._drop_seen:
                 self.bolt.drop()
             hold = float(p["strobe_on"]) >= 0.5 and p["strobe_mode"] == "manual"
-            self.bolt.update(raw_dt, kicks, phase_ceiling(phase_name, build), hold, tempo)
+            self.bolt.update(raw_dt, kicks, phase_ceiling(phase_name, build), hold, tempo, high)
             self.bolt.configure(width / max(height, 1), float(p["foudre_reach"]))
-            bolt_on = self._draw_bolt(p, self.bolt.draw_list(bass, high, t), size)
+            bolt_on = self._draw_bolt(p, size, bass, high, t)
         else:
-            self.bolt.update(raw_dt)                  # hors mode Foudre : une decharge en cours s'eteint seule
+            self.bolt.update(raw_dt, ceiling=0.0)     # hors mode Foudre : le reseau en cours s'eteint seul
         self._fired_seen, self._drop_seen, self._clear_seen = self.strobe_fired, drops, clears
 
         # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.

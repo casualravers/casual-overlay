@@ -32,7 +32,7 @@ PULSE_SPEED = 1.6           # vitesse de l'onde, en distance de chemin par secon
 MAX_PULSES = 4
 DROP_ENERGY = 1.5           # energie de la grande onde du Drop
 DROP_SPROUTS = 24           # pousses nees d'un coup au Drop
-DECAY = 0.14                # perte de vigueur par seconde d'un tronc ; les fines s'eteignent jusqu'a 3,5 fois plus vite
+DECAY = 0.14                # perte de vigueur par seconde d'un tronc ; les fines s'eteignent jusqu'a 5 fois plus vite
 QUIET_DECAY = 1.5           # x ce facteur quand l'energie est tombee (silence, ambiance)
 W_FINE = 0.0012             # largeur d'une brindille, en hauteurs d'image
 W_TRUNK = 0.0065            # largeur d'un tronc
@@ -180,7 +180,8 @@ class Lightning:
         return abs(x) <= 0.5 * self.aspect * self.reach and abs(y) <= 0.5 * self.reach
 
     def _room(self) -> bool:
-        return self.n_alive + len(self.joins) < MAX_SEGMENTS
+        """Place pour une branche de plus : le plafond de densite suit l'energie (pic : MAX_SEGMENTS, groove : un tiers, cassure : moins)."""
+        return self.n_alive + len(self.joins) < int(MAX_SEGMENTS * (0.12 + 0.88 * self.energy ** 2))
 
     def _importance(self, i: int) -> float:
         return min(1.0, math.sqrt(self.desc[i] / DESC_REF))
@@ -300,7 +301,7 @@ class Lightning:
             if not self.alive[i]:
                 continue
             imp = self._importance(i)
-            self.vig[i] -= rate * (1.0 + 2.5 * (1.0 - imp)) * dt
+            self.vig[i] -= rate * (1.0 + 4.0 * (1.0 - imp)) * dt
             self.w[i] += (W_FINE + (W_TRUNK - W_FINE) * imp - self.w[i]) * k
             if self.dist[i] > top:
                 top = self.dist[i]
