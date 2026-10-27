@@ -8637,6 +8637,47 @@ def check_foudre_render() -> None:
     check(im.max() <= 231, "foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
 
 
+def check_textcycle() -> None:
+    """Textes en rotation du logo : liste, boucle, fondu, repli sans kick, signature du logo, Randomizer a plusieurs textes."""
+    import random
+    from core import textcycle as tcy, randomizer as rz
+    check(tcy.texts_of("A", "") == ["A"] and tcy.texts_of("A", "B\n\n  C\\nD") == ["A", "B", "C\nD"],
+          "textes: le principal puis une ligne par texte, lignes vides ignorees, \\n = retour a la ligne")
+    check([tcy.text_at("A", "B\nC", i) for i in range(5)] == ["A", "B", "C", "A", "B"], "textes: l'indice boucle")
+    cy, now, beats, seen, fades = tcy.TextCycle(), 0.0, 0, [], []
+    for step in range(400):                                    # 20 s, un kick tous les 0,5 s (120 BPM) : une mesure = 2 s, 1 mesure par texte
+        now = step * 0.05
+        beats = int(now / 0.5)
+        idx, fade = cy.update(now, beats, 3, 1)
+        if not seen or seen[-1] != idx:
+            seen.append(idx)
+        fades.append(fade)
+    check(seen[:7] == [0, 1, 2, 0, 1, 2, 0] and 0.0 <= min(fades) and max(fades) == 1.0 and min(fades) < 0.3,
+          "textes: ordre 0 1 2 0 1 2, en boucle, avec un fondu qui descend puis remonte", f"{seen[:8]} {min(fades):.2f}")
+    check(sum(1 for i, f in enumerate(fades) if f == 1.0) > 0.7 * len(fades), "textes: le logo est presque toujours pleinement visible (le fondu est bref)")
+    cy2 = tcy.TextCycle()
+    last = 0
+    for step in range(300):                                    # aucun kick : le repli au temps change quand meme (au moins 8 s)
+        last = cy2.update(step * 0.1, 0, 2, 1)[0] or last
+    check(last == 1, "textes: sans kick, le texte change quand meme (repli au temps)")
+    check(tcy.TextCycle().update(5.0, 100, 1, 1) == (0, 1.0), "textes: un seul texte = pas de rotation, pas de fondu")
+    cy3 = tcy.TextCycle()
+    cy3.update(0.0, 0, 3, 4)
+    cy3.index = 2
+    check(cy3.update(0.1, 0, 2, 4)[0] < 2, "textes: la liste qui raccourcit ne laisse pas un indice hors liste")
+    from engine import projection as proj
+    sig = lambda i: proj.logo_signature({"logo_source": "text", "text_content": "A", "logo_texts": "B\nC", "text_idx": i})
+    check(sig(0)[1] == "A" and sig(1)[1] == "B" and sig(2)[1] == "C" and sig(3)[1] == "A", "textes: la signature du logo suit l'indice courant")
+    check(proj.logo_signature({"logo_source": "text", "text_content": "A", "text_idx": 4})[1] == "A", "textes: sans liste, toujours le texte principal")
+    check(rz.texts_list("A | B||  C ") == ["A", "B", "C"] and rz.texts_list("") == [] and rz.texts_list("X") == ["X"],
+          "randomizer: plusieurs textes separes par |")
+    got = set()
+    for seed in range(60):
+        scene, _info, _rec = rz.draw_scene(random.Random(seed), rz.clean_settings({"bg_sources": [], "overlay": ["text"], "text": "UN | DEUX | TROIS"}), rz.Context(memory={}))
+        got.add(scene["overlay"].get("text_content"))
+    check(got == {"UN", "DEUX", "TROIS"}, "randomizer: les textes saisis sont tous tires, un par scene", str(got))
+
+
 def check_reaction_pure() -> None:
     print("Reaction-diffusion : logique pure (core/reaction.py)")
     from core import reaction as rc
@@ -9676,7 +9717,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle")
 
 
 def main() -> None:
@@ -9698,6 +9739,7 @@ def main() -> None:
     check_bg_stochastic()
     check_reaction_pure()
     check_foudre_pure()
+    check_textcycle()
     check_reaction_sim()
     check_bg_labyrinthe()
     check_foudre_render()

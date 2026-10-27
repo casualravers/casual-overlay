@@ -752,7 +752,7 @@ class Renderer:
         self._breath_t += dt / max(float(p["breath_period"]), 1.0)
         wave = 0.5 + 0.5 * math.sin(2.0 * math.pi * self._breath_t)
         breath = 0.5 * _unit(p["phase_breath"])                         # respiration de la phase (ambiance / cassure), en plus de celle des reglages
-        ov = _unit(p["overlay_master"]) * _unit(p["phase_overlay"]) * (1.0 - max(_unit(p["breath_overlay"]), breath) * wave)      # presence de l'overlay (0 = efface)
+        ov = _unit(p["overlay_master"]) * _unit(p["phase_overlay"]) * _unit(p.get("text_fade", 1.0)) * (1.0 - max(_unit(p["breath_overlay"]), breath) * wave)      # presence de l'overlay (0 = efface)
         bg_level = _unit(p["bg_master"]) * _unit(p["phase_bg"]) * (1.0 - max(_unit(p["breath_bg"]), breath) * (1.0 - wave))
         self._hue_phase = (self._hue_phase + dt * (float(p["hue_cycle"]) + float(p["phase_hue"]))) % 360.0
         spec = _unit(p["hue_spectrum"])
