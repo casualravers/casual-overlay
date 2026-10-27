@@ -7,7 +7,7 @@ uniform float u_aspect;
 uniform float u_time;
 uniform float u_bass;
 uniform float u_high;
-uniform vec2 u_pulse[4];
+uniform vec2 u_pulse[8];
 
 in vec2 in_ctr;         // extremite du segment
 in vec2 in_off;         // decalage du coin par rapport a l'extremite (demi-largeur, bouts prolonges)
@@ -24,8 +24,8 @@ void main() {
     v_across = in_across;
     vec2 pos = in_ctr + in_off * (1.0 + 0.3 * u_bass);
     float pulse = 0.0;
-    for (int k = 0; k < 4; k++) {
-        float d = (in_dist - u_pulse[k].x) / 0.06;
+    for (int k = 0; k < 8; k++) {
+        float d = (in_dist - u_pulse[k].x) / 0.07;
         pulse += u_pulse[k].y * exp(-d * d);
     }
     float alive = smoothstep(0.0, 0.08, in_vig);                           // une branche qui meurt s'eteint doucement
