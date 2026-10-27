@@ -136,13 +136,16 @@ vec3 stochastic_pattern(vec2 p) {
     vec2 px = p * u_res;
     vec2 home = floor(px / s);
     float reg = clamp(u_sto.y, 0.0, 1.0);
-    float reach = 0.5 * s * grow * (1.0 + abs(u_sto.z)) + 1.0;    // rayon maximal d'un point (bord anti-crenele compris)
+    float jamp = mix(0.5, 0.3, reg);                       // decalage maximal du point dans sa cellule (en cellules)
+    // Rayon plafonne a ce que le voisinage 3 x 3 peut montrer : au-dela un gros point serait coupe a plat au bord du voisinage.
+    float rmax = (1.5 - jamp) * s - 1.0;
+    float reach = min(0.5 * s * grow * (1.0 + abs(u_sto.z)), rmax) + 1.0;     // rayon maximal (bord anti-crenele compris)
     float cover = 0.0;
     float fdot = 0.0;
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             vec2 c = home + vec2(float(i), float(j));
-            vec2 jit = mix(0.5, 0.3, reg) * (vec2(sto_hash(c + 1.7), sto_hash(c + 4.1)) * 2.0 - 1.0);
+            vec2 jit = jamp * (vec2(sto_hash(c + 1.7), sto_hash(c + 4.1)) * 2.0 - 1.0);
             vec2 ctr = (c + 0.5 + jit) * s;
             if (length(px - ctr) > reach) {                // ce point ne peut pas atteindre le pixel : pas de champ a calculer
                 continue;
@@ -150,12 +153,14 @@ vec3 stochastic_pattern(vec2 p) {
             float r2 = fract(c.x * 0.7548776662 + c.y * 0.5698402910);
             float wh = sto_hash(c);
             float epoch = floor(u_sto2.w + sto_hash(c + 7.3));    // aigus : chaque point change de rang a son tour
-            float rank = fract(mix(wh, r2, reg) + epoch * 0.6180340);
+            // r2 uniforme + decalage independant, modulo 1 = toujours uniforme : la densite ne depend ni de la regularite ni du
+            // scintillement (un melange mix(wh, r2, reg) donnait une loi triangulaire, densite fausse entre 0 et 1).
+            float rank = fract(r2 + (1.0 - reg) * wh + epoch * 0.6180340);
             float f = sto_field(ctr / u_res);
             if (f <= 0.0 || f < rank) {
                 continue;
             }
-            float rad = 0.5 * s * grow * (1.0 + u_sto.z * (f - 0.5) * 2.0);
+            float rad = min(0.5 * s * grow * (1.0 + u_sto.z * (f - 0.5) * 2.0), rmax);
             float k = 1.0 - smoothstep(rad - 1.0, rad + 1.0, length(px - ctr));
             if (k > cover) {
                 cover = k;

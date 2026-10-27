@@ -2547,6 +2547,36 @@ def check_bg_stochastic() -> None:
     check(fl[0] > 0.10 and fl[1] > 0.10 and fl[2] == 0.0,
           "stochastique: les aigus renouvellent des points (bruit bleu comme grain), rien sans aigus", " / ".join(f"{x:.2f}" for x in fl))
     check(abs(render(loud, bg_react=0.0) - render(bg_react=0.0)).max() == 0, "stochastique: reaction 0 = image identique avec ou sans son")
+
+    def lit_at(regular, flick):   # part allumee la ou le degrade vaut ~0,2 (x = 0,38 .. 0,42), phase du scintillement posee a la main
+        rr_ = gl.Renderer(ctx, (640, 360), None)
+        rr_._sto_flick = flick
+        return lit(render(rr=rr_, t=0.0, bg_sto_field="gradient", bg_sto_regular=regular, bg_sto_size=6.0)[:, 243:269])   # ~1000 points
+
+    shares = [lit_at(1.0, 0.0), lit_at(0.5, 0.0), lit_at(0.5, 0.5), lit_at(0.7, 1.3), lit_at(0.0, 0.0)]
+    check(max(shares) - min(shares) < 0.05, "stochastique: la densite ne depend ni de la regularite ni de la phase du scintillement",
+          " ".join(f"{x:.3f}" for x in shares))
+
+    def longest(flags):           # plus longue suite de True
+        best = cur = 0
+        for f_ in flags:
+            cur = cur + 1 if f_ else 0
+            best = max(best, cur)
+        return best
+
+    # gros points (variation 1, basses fortes) : jamais coupes a plat par le bord du voisinage 3 x 3. Un bord coupe tombe sur une
+    # ligne de cellules (tous les s px) et y laisse un segment droit plus long que ce que font les arcs des disques ailleurs.
+    flat = []
+    for size_ in (30.0, 40.0, 50.0):
+        s_ = int(size_ * 360 / 720)
+        big = render(dict(quiet, bass=1.0), bg_react=1.0, bg_sto_vary=1.0, bg_sto_regular=0.0, bg_sto_size=size_, bg_sto_density=0.3)
+        m_ = big[:, :, 0] > big[:, :, 2]
+        lines = [m_[1:] != m_[:-1], (m_[:, 1:] != m_[:, :-1]).T]   # changements entre lignes voisines, puis entre colonnes voisines
+        on_cell = max(longest(ch[k]) for ch in lines for k in range(s_ - 1, len(ch), s_))
+        other = max(longest(ch[k]) for ch in lines for k in range(len(ch)) if k % s_ != s_ - 1)
+        flat.append((on_cell, other))
+    check(all(a_ <= b_ + 2 for a_, b_ in flat), "stochastique: les gros points restent ronds (pas de bord plat a la limite des cellules)",
+          f"segment droit le plus long sur une ligne de cellules / ailleurs : {flat}")
     rt = gl.Renderer(ctx, (640, 360), None)
     t0 = render(rr=rt, t=0.0, bg_speed=1.0, tempo=0.0)
     for i in range(1, 21):
@@ -8357,6 +8387,16 @@ def check_safeguards() -> None:
     same_v, dropped = sf.cap_values(heavy, calm, 1.2, 16.7, (640, 360))
     check(dropped == [], "securite GPU: a petite taille de rendu les memes effets coutent beaucoup moins (cout proportionnel aux pixels)")
     check(abs(sf.effects_cost({"cell_on": 1.0, "holo_on": 1.0}, full) - 10.0) < 1e-9 and sf.effects_cost({}, full) == 0.0, "securite GPU: cout estime des effets allumes")
+    sto_next = dict(heavy, bg_mode="pattern", bg_palette="stochastique", bg_sto_field="noise")
+    duo_now = dict(calm, bg_mode="pattern", bg_palette="duo")
+    check(sf.cap_values(dict(heavy, bg_mode="pattern", bg_palette="duo"), duo_now, 3.0, 16.7, full)[1] == []
+          and sf.cap_values(sto_next, duo_now, 3.0, 16.7, full)[1] == ["cellules"],
+          "securite GPU: passer a un fond stochastique compte son cout (les effets sautent a temps)")
+    check(sf.cap_values(sto_next, dict(duo_now, bg_palette="stochastique", bg_sto_field="noise"), 3.5, 16.7, full)[1] == [],
+          "securite GPU: un fond stochastique deja affiche (mesure incluse) n'est pas compte deux fois")
+    check(sf.background_cost({}, full) == 0.0 and sf.background_cost(dict(bg_mode="live", bg_palette="stochastique"), full) == 0.0
+          and sf.background_cost(sto_next, full) > sf.background_cost(dict(sto_next, bg_sto_field="waves"), full) > 0.0,
+          "securite GPU: cout du fond stochastique (bruit > vagues), nul hors du fond genere")
     # --- annuler / retablir
     udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
     ubook = sc_.SceneBook(lambda: udir / "scenes.json")

@@ -362,8 +362,10 @@ les basses).
 - **Palette `stochastique`** (halftone stochastique ; spec et plan : `docs/plans/2026-10-27-fond-stochastique-*.md`) : `stochastic_pattern()` de
   `scene.frag`, `u_bg_palette` = 3. **Grille jitteree** : une cellule de `bg_sto_size` px (pour 720 px de haut) porte un point, allume si le champ
   (evalue au centre du point) depasse son **rang** ; rang = suite R2 (`fract(c.x * 0,7549 + c.y * 0,5698)`, faible discrepance : points sans amas,
-  esprit bruit bleu) melangee a un hachage blanc par `bg_sto_regular` (0 = grain aleatoire brut), decalage du point dans sa cellule 0,3 a 0,5 ;
-  3 x 3 cellules voisines par pixel, et **une voisine hors de portee du pixel ne calcule pas le champ** (-40 % de temps GPU, image identique).
+  esprit bruit bleu) + `(1 - bg_sto_regular) x hachage blanc`, modulo 1 (0 = grain aleatoire brut). **Le rang reste uniforme** quelle que soit la
+  regularite (un `mix` des deux donnait une loi triangulaire : densite fausse entre 0 et 1, et qui pulsait avec les aigus). Decalage du point dans sa
+  cellule 0,3 a 0,5 ; 3 x 3 cellules voisines par pixel, **rayon plafonne** a ce que ce voisinage montre (`(1,5 - decalage) x s - 1`, sinon les gros
+  points etaient coupes a plat), et **une voisine hors de portee du pixel ne calcule pas le champ** (-40 % de temps GPU, image identique).
   Champs (`bg_sto_field`) : `noise` (2 octaves de bruit de valeur, hachage sans `sin`), `waves` (bandes vers `bg_angle`), `gradient` (aller-retour
   comme Duo) ; ils derivent avec `_bg_scroll`. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
   `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ) ; `bg_hue` et `bg_speed`
@@ -372,7 +374,10 @@ les basses).
   change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,
   visible seulement pour cette palette). Le Full Randomizer la tire une fois sur quatre. **Cout mesure** (Radeon integre, fenetre 1280 x 720 ; la
   scene est rendue a la taille de la fenetre, pas a `--render-size`) : Duo 1,75 ms, stochastique bruit 4,0 ms, vagues 3,1 ms, donc ~+5 ms (bruit)
-  et ~+3 ms (vagues) en 1080p plein ecran ; pas dans `core/safety.py`. Limite : approximation du bruit bleu (plan B : texture void-and-cluster).
+  et ~+3 ms (vagues) en 1080p plein ecran ; **compte par la securite GPU du VJ** (`core.safety.background_cost`, `BG_STO_COST_MS` : le fond n'est
+  jamais coupe, mais les effets de la scene suivante sautent a temps, et un fond deja affiche n'est pas compte deux fois). Limite : approximation du
+  bruit bleu (plan B : texture void-and-cluster). Ce n'est PAS un motif de reaction-diffusion (taches qui ne se touchent jamais et se soudent en
+  lignes, type motif de Turing) : les points sont independants et se touchent quand la densite monte ; la reaction-diffusion est une autre palette.
   `check_gl.py` : `check_bg_stochastic` (pixels : densite, regularite mesuree par blocs, variation, inversion, arc-en-ciel, teinte, champs,
   resolution, derive, son, reaction 0) ; schema, scene rejouee, GUI et Randomizer dans leurs verifications.
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
