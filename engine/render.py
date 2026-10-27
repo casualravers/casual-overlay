@@ -16,6 +16,7 @@ from core import qrcode
 from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
+from core.foudre import MAX_SEGMENTS, Lightning, phase_ceiling
 from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
 from core import reaction
@@ -320,6 +321,9 @@ class Renderer:
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
+        self.bolt = Lightning(1)                   # mode Foudre du strobe (core/foudre.py) : arbre de lumiere declenche par les kicks
+        self.foudre_tex = self.foudre_fbo = self.foudre_prog = self.foudre_vao = None
+        self.foudre_vbo = ctx.buffer(reserve=MAX_SEGMENTS * 6 * 4 * 4)       # 6 sommets par segment, 4 flottants par sommet
         self.reload_shaders()
 
     def set_logo(self, logo_rgba, path: str = "", kind: str = "image") -> None:
@@ -378,9 +382,11 @@ class Renderer:
             scene = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("scene.frag"))
             post = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("post.frag"))
             holo = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("holo.frag"))
+            foudre = self.ctx.program(vertex_shader=self._read("foudre.vert"), fragment_shader=self._read("foudre.frag"))
         except Exception as exc:
             raise ShaderError(str(exc)) from exc
-        self.scene_prog, self.post_prog, self.holo_prog = scene, post, holo
+        self.scene_prog, self.post_prog, self.holo_prog, self.foudre_prog = scene, post, holo, foudre
+        self.foudre_vao = self.ctx.vertex_array(foudre, [(self.foudre_vbo, "2f 1f 1f", "in_pos", "in_across", "in_int")])
         self.scene_vao = self.ctx.vertex_array(scene, [(self.vbo, "2f", "in_pos")])
         self.post_vao = self.ctx.vertex_array(post, [(self.vbo, "2f", "in_pos")])
         self.holo_vao = self.ctx.vertex_array(holo, [(self.vbo, "2f", "in_pos")])
@@ -388,7 +394,7 @@ class Renderer:
     def _ensure_scene(self, size: tuple[int, int]) -> None:
         if self.scene_tex is not None and self.scene_tex.size == size:
             return
-        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.trans_tex, *self.fb_tex):
+        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.foudre_tex, self.trans_tex, *self.fb_tex):
             if old is not None:
                 old.release()
         self._prev_ok = False
@@ -406,7 +412,12 @@ class Renderer:
         self.holo_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.holo_tex.repeat_x = self.holo_tex.repeat_y = False
         self.holo_fbo = self.ctx.framebuffer(color_attachments=[self.holo_tex])
-        self.fb_tex = [self.ctx.texture(size, 4) for _ in range(2)]
+        # Foudre : rubans additifs a demi-resolution, flottants demi-precision, mipmaps reconstruites a chaque image ou elle est visible (halo).
+        self.foudre_tex = self.ctx.texture((max(size[0] // 2, 1), max(size[1] // 2, 1)), 4, dtype="f2")
+        self.foudre_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        self.foudre_tex.repeat_x = self.foudre_tex.repeat_y = False
+        self.foudre_fbo = self.ctx.framebuffer(color_attachments=[self.foudre_tex])
+        self.fb_tex =[self.ctx.texture(size, 4) for _ in range(2)]
         for tex in self.fb_tex:
             tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
             tex.repeat_x = tex.repeat_y = False
@@ -482,6 +493,36 @@ class Renderer:
         de groove : 50 %), jamais moins que le reglage."""
         user = min(max(float(p.get("strobe_dark", 1.0)), 0.05), 1.0)
         return min(user, self._strobe_auto_dark) if self._strobe_auto_now else user
+
+    def _draw_bolt(self, p: dict, items: list, size: tuple[int, int]) -> bool:
+        """Foudre : ecrit les segments (x0, y0, x1, y1, largeur, intensite) en rubans additifs dans la texture demi-resolution, puis ses
+        mipmaps (halo). Rend faux s'il n'y a rien a composer. Le framebuffer de sortie est a rebinder par l'appelant."""
+        if not items:
+            return False
+        arr = np.asarray(items, dtype="f4")[:MAX_SEGMENTS]
+        n = len(arr)
+        a, b = arr[:, 0:2], arr[:, 2:4]
+        d = b - a
+        tan = d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+        nrm = np.stack([-tan[:, 1], tan[:, 0]], axis=1)
+        half = np.maximum(arr[:, 4:5] * 0.5, 1.0 / max(self.foudre_tex.size[1], 1))        # au moins un texel de demi-largeur (energie gardee au prorata)
+        inten = arr[:, 5:6] * np.minimum(arr[:, 4:5] * 0.5 / half, 1.0)
+        a, b = a - tan * half, b + tan * half
+        corners = np.stack([a + nrm * half, a - nrm * half, b + nrm * half, a - nrm * half, b - nrm * half, b + nrm * half], axis=1)    # (n, 6, 2)
+        across = np.broadcast_to(np.array([1, -1, 1, -1, -1, 1], dtype="f4")[None, :, None], (n, 6, 1))
+        verts = np.concatenate([corners, across, np.broadcast_to(inten[:, None, :], (n, 6, 1))], axis=2).astype("f4")
+        self.foudre_vbo.write(verts.tobytes())
+        self._set(self.foudre_prog, "u_aspect", size[0] / max(size[1], 1))
+        self._set(self.foudre_prog, "u_color", hex_to_rgb(str(p["foudre_color"])))
+        self.foudre_fbo.viewport = (0, 0) + tuple(self.foudre_tex.size)
+        self.foudre_fbo.use()
+        self.foudre_fbo.clear(0.0, 0.0, 0.0, 0.0)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE
+        self.foudre_vao.render(moderngl.TRIANGLES, vertices=n * 6)
+        self.ctx.disable(moderngl.BLEND)
+        self.foudre_tex.build_mipmaps()
+        return True
 
     # ---- Doodles du site : par-dessus tout, apres la trainee et le post-traitement (ni symetrie, ni teinte, ni PANIQUE n'y touchent)
     def add_doodle(self, rgba, now: float) -> None:
@@ -854,6 +895,12 @@ class Renderer:
             # Sans mipmaps construites, le filtre a mipmaps rendrait la texture incomplete (noire).
             self.layer_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
 
+        # Foudre (mode du strobe) : les rubans de l'arbre dans une texture demi-resolution, composee par post.frag.
+        bolt_on = False
+        if p["strobe_kind"] == "foudre":
+            self.bolt.configure(width / max(height, 1), float(p["foudre_reach"]))
+            bolt_on = self._draw_bolt(p, self.bolt.draw_list(bass, high, t), size)
+
         # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.
         fx_bg, fx_logo = layer_effects(p)
         # Decorreles, les ondes du logo partent de son centre (origine GL = bas gauche) et son glitch
@@ -879,6 +926,9 @@ class Renderer:
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", self._strobe(p, state))
         self._set(pp, "u_strobe_dark", self._dark_threshold(p))
+        self._set(pp, "u_foudre", _unit(p["foudre_amount"], 0.0, 1.5) if bolt_on else 0.0)
+        self._set(pp, "u_foudre_tex", 7)
+        self._set(pp, "u_foudre_color", hex_to_rgb(str(p["foudre_color"])))
         self._set(pp, "u_hue", math.radians(hue_deg))
         self._set(pp, "u_bg_level", bg_level)
         # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)
@@ -910,6 +960,8 @@ class Renderer:
         self.scene_tex.use(0)
         self.layer_tex.use(1)
         self.holo_tex.use(2)
+        if bolt_on:
+            self.foudre_tex.use(7)
         dest = target
         tlen = max(float(p["trans_time"]), 0.0)
         tracking = tlen > 0.001                                      # transition active : l'image finale passe par une texture (on garde la precedente)

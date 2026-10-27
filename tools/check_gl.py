@@ -8396,6 +8396,104 @@ def check_bg_labyrinthe() -> None:
     check(np.array_equal(rw.rd.read_v(), v_before), "labyrinthe: une fenetre redimensionnee ne touche pas a la simulation")
 
 
+def check_foudre_render() -> None:
+    print("Foudre : rendu (passe GL des segments, composition dans post.frag)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    fbos: dict = {}
+
+    def fbo_for(sz):
+        if sz not in fbos:
+            fbos[sz] = ctx.framebuffer(color_attachments=[ctx.texture(sz, 4)])
+        return fbos[sz]
+
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    # fond noir (bg_master 0) : ce qui reste a l'image est la foudre seule ; rien ne bouge sans elle
+    base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="classic", bg_master=0.0, bg_speed=0.0, bg_flip=0.0, bg_checker=0.0, bg_react=0.0,
+                bg_hue=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, strobe_auto=0.0, trans_time=0.0)
+    clock: dict = {}
+
+    def frame(rr, size, p, n=1, advance=True):
+        """`n` images de 0,05 s ; la machine de la foudre avance du meme pas (la Task 4 la fera avancer par `draw`)."""
+        fbo = fbo_for(size)
+        for _ in range(n):
+            if advance:
+                rr.bolt.update(0.05)
+            t0 = clock.get(id(rr), 0.0)
+            rr.draw(fbo, size, quiet, p, t0)
+            clock[id(rr)] = t0 + 0.05
+        return read_target(ctx, fbo, size).astype(int)
+
+    def push(rr):
+        rr.bolt.update(0.0, kicks=1, ceiling=1.0)
+
+    def lit(img) -> int:
+        return int((img.sum(axis=2) > 90).sum())
+
+    size = (640, 360)
+    ref = frame(gl.Renderer(ctx, size, None), size, dict(base, strobe_kind="strobe"), 8)
+    check(ref.max() == 0, "foudre: reference sans foudre = fond noir")
+    rr = gl.Renderer(ctx, size, None)
+    empty = frame(rr, size, dict(base, strobe_kind="foudre"), 8)
+    check(abs(empty - ref).max() == 0, "foudre: mode Foudre sans decharge = image inchangee")
+    rr = gl.Renderer(ctx, size, None)
+    push(rr)
+    img = frame(rr, size, dict(base, strobe_kind="foudre"), 9)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    rad = np.hypot((xx - size[0] / 2) / size[1], (yy - size[1] / 2) / size[1])
+    add = img.sum(axis=2)
+    check(lit(img) > 200 and add[rad < 0.1].mean() > add[(rad > 0.40) & (rad < 0.50)].mean(),
+          "foudre: apres un kick des pixels s'allument, le centre est plus lumineux que la peripherie", f"{lit(img)}")
+    check((img.min(axis=2) > 250).mean() < 0.02, "foudre: aucun flash plein ecran (moins de 2 % de pixels blancs)")
+    rs = gl.Renderer(ctx, size, None)
+    push(rs)
+    still = frame(rs, size, dict(base, strobe_kind="strobe"), 9)
+    check(abs(still - ref).max() == 0, "foudre: en mode Strobe, une decharge en cours ne s'affiche pas")
+    sums = {}
+    for col in ("#ff0000", "#00ff00"):
+        rc = gl.Renderer(ctx, size, None)
+        push(rc)
+        im = frame(rc, size, dict(base, strobe_kind="foudre", foudre_color=col), 9)
+        sums[col] = im.reshape(-1, 3).sum(axis=0)
+    check(sums["#ff0000"][0] > 1.2 * sums["#ff0000"][1] and sums["#00ff00"][1] > 1.2 * sums["#00ff00"][0],
+          "foudre: le halo prend la couleur choisie (coeur blanc)", f"{sums}")
+    # ---- profondeur : plus de lumiere a chaque kick, puis un plafond
+    rd = gl.Renderer(ctx, size, None)
+    counts = []
+    for _k in range(7):
+        push(rd)
+        counts.append(lit(frame(rd, size, dict(base, strobe_kind="foudre"), 10)))
+    check(counts[5] > 1.8 * counts[0] and all(counts[i + 1] >= 0.85 * counts[i] for i in range(5)) and abs(counts[6] - counts[5]) < 0.25 * counts[5],
+          "foudre: de plus en plus de lumiere a chaque kick, puis plafond", f"{counts}")
+    # ---- le logo n'est jamais assombri
+    logo = np.zeros((64, 64, 4), dtype=np.uint8)
+    logo[:] = (200, 0, 0, 255)
+    p_logo = dict(base, strobe_kind="foudre", logo_x=0.5, logo_y=0.5)
+    r0 = gl.Renderer(ctx, size, logo)
+    base_logo = frame(r0, size, dict(p_logo, strobe_kind="strobe"), 9)
+    r1 = gl.Renderer(ctx, size, logo)
+    push(r1)
+    with_bolt = frame(r1, size, p_logo, 9)
+    on_logo = base_logo[:, :, 0] > 100
+    check(on_logo.sum() > 100 and (with_bolt - base_logo).min() >= -1 and (with_bolt - base_logo)[on_logo].max() >= 0,
+          "foudre: s'ajoute sur le logo sans jamais l'assombrir", f"{on_logo.sum()}")
+    # ---- formats extremes et redimensionnement
+    rz = gl.Renderer(ctx, size, None)
+    push(rz)
+    ok = True
+    try:
+        for sz in ((640, 360), (320, 180), (640, 360), (360, 640), (800, 200)):
+            im = frame(rz, sz, dict(base, strobe_kind="foudre"), 4)
+            ok = ok and lit(im) > 20 and bool(np.isfinite(im).all())
+    except Exception as exc:
+        ok = False
+        print("   ", exc)
+    check(ok, "foudre: redimensionnement, portrait et 4:1 sans exception, la foudre reste visible")
+
+
 def check_reaction_pure() -> None:
     print("Reaction-diffusion : logique pure (core/reaction.py)")
     from core import reaction as rc
@@ -9388,6 +9486,7 @@ def main() -> None:
     check_foudre_pure()
     check_reaction_sim()
     check_bg_labyrinthe()
+    check_foudre_render()
     check_cells()
     check_noise()
     check_doodles()

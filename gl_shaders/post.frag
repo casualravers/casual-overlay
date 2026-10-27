@@ -36,6 +36,9 @@ uniform sampler2D u_prev;     // image finale precedente
 uniform float u_hue;          // teinte globale (radians) : rotation de couleur appliquee a tout (fond et logo)
 uniform float u_strobe;      // eclair blanc court du strobe (1 -> 0 en 70 ms)
 uniform float u_strobe_dark;    // seuil de luminosite : le strobe ne touche que les parties plus sombres (1 = tout)
+uniform float u_foudre;       // foudre : intensite (0 = coupee, la texture n'est alors pas lue)
+uniform sampler2D u_foudre_tex;   // foudre : rubans additifs a demi-resolution, mipmaps construites (halo)
+uniform vec3 u_foudre_color;  // couleur du halo (le coeur est blanc)
 uniform float u_bg_level;     // master du fond : 0 = noir (logo seul), 1 = normal
 uniform float u_trans;          // transition de scene : progression 0 -> 1 (-1 = aucune)
 uniform float u_trans_kind;     // 0 = fondu enchaine, 1 = zoom avec aberration
@@ -256,6 +259,12 @@ void main() {
     }
     if (u_trail > 0.001) {                                  // trainee : l'image precedente (finale) s'estompe de u_trail par image
         col = max(col, texture(u_prev, gl_FragCoord.xy / u_res).rgb * u_trail);
+    }
+    if (u_foudre > 0.001) {                                 // foudre : coeur blanc + halo tire des mipmaps, ajout doux plafonne (jamais de blanc plein ecran)
+        vec3 core = textureLod(u_foudre_tex, cuv, 0.0).rgb;
+        float halo = dot(textureLod(u_foudre_tex, cuv, 2.0).rgb, vec3(0.333)) * 2.0 + dot(textureLod(u_foudre_tex, cuv, 4.0).rgb, vec3(0.333)) * 4.0;
+        vec3 add = min((core + u_foudre_color * halo) * u_foudre, vec3(0.9));
+        col = 1.0 - (1.0 - col) * (1.0 - add);
     }
     // Le strobe ne blanchit que les parties sombres de l'image (luminance sous le seuil, transition large et douce : pas de cassure nette) ; seuil a 1 = toute l'image.
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
