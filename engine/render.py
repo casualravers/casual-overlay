@@ -908,11 +908,11 @@ class Renderer:
         drops, clears = int(p["foudre_drop"]), int(p["foudre_clear"])
         if self._drop_seen is None:
             self._drop_seen, self._clear_seen = drops, clears
+        if clears != self._clear_seen:                # la panique vide la foudre dans les deux modes (sinon l'arbre reapparaitrait au retour en mode Foudre)
+            self.bolt.clear()
         if p["strobe_kind"] == "foudre":
             fired = self.strobe_fired - self._fired_seen
             kicks = 0 if float(p["react_master"]) <= 0.001 else self._new_kicks + fired
-            if clears != self._clear_seen:
-                self.bolt.clear()
             if drops != self._drop_seen:
                 self.bolt.drop()
             hold = float(p["strobe_on"]) >= 0.5 and p["strobe_mode"] == "manual"

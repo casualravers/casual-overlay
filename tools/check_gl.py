@@ -1268,6 +1268,7 @@ def check_gui() -> None:
           "memoires de masters (GUI): une memoire enregistree se rappelle d'un clic (teinte, symetrie), sans les etats du moment", str(out.get("x_memory")))
     check(out.get("x_history") == (True,) * 4 and out.get("x_history_lock") == (True, True, True) and out.get("x_lock_bar_off") is True,
           "historique (GUI): chaque scene jouee est notee, Retour rejoue la precedente, le verrou l'interdit", str((out.get("x_history"), out.get("x_history_lock"))))
+    check(out.get("x_drop_foudre") == (True, True), "foudre (GUI): le Drop declenche la grande decharge et n'envoie pas le flash blanc plein ecran", str(out.get("x_drop_foudre")))
     check(out.get("x_foudre_ui") == (True,) * 11, "foudre (GUI): interrupteur Strobe / Foudre au-dessus du bouton, reglages de la foudre actifs ou grises selon le mode, curseurs et couleur ecrivent les reglages",
           str(out.get("x_foudre_ui")))
     check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc, decharge de la foudre", str(out.get("x_build")))
@@ -4427,6 +4428,19 @@ def gui_expand_steps(c, s, out) -> None:
     out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty(), params["foudre_drop"] == drops0 + 1)
     while not s.commands.empty():
         s.commands.get_nowait()
+    # mode Foudre : le Drop ne lance pas le flash blanc plein ecran (la grande decharge le remplace)
+    params["strobe_kind"] = "foudre"
+    vjc["build"]()
+    for _ in range(4):
+        root.update()
+        time.sleep(0.05)
+    drops1 = params["foudre_drop"]
+    vjc["drop"]()
+    sent = []
+    while not s.commands.empty():
+        sent.append(s.commands.get_nowait())
+    out["x_drop_foudre"] = (params["foudre_drop"] == drops1 + 1, "flash" not in sent)
+    params["strobe_kind"] = "strobe"
     sil = next((w for w in walk_(mpanel) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Phases auto"), None)
     start_ = params["auto_phase"]
     sil.invoke() if sil is not None else None
@@ -8576,6 +8590,10 @@ def check_foudre_render() -> None:
     for i in range(130):
         rr.draw(fbo, size, dict(quiet, beats=7), ps, 3.3 + 0.05 * i)
     check(rr.bolt.empty, "foudre: repasser en mode Strobe la laisse s'eteindre seule")
+    rr, im, _ = drive(fp, beats=lambda i: min(i // 10, 6), frames=80, phase="peak", at={62: {"strobe_kind": "strobe", "foudre_clear": 1}, 68: {"strobe_kind": "foudre"}})
+    check(rr.bolt.empty and im.max() == 0, "foudre: la panique donnee en mode Strobe vide aussi la foudre (rien ne reapparait au retour)")
+    rr, im, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual", comp_trail=0.97), beats=lambda i: 0, frames=80)
+    check(im.max() <= 231 and (im.min(axis=2) > 200).mean() < 0.05,"foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
 
 
 def check_reaction_pure() -> None:
@@ -8717,6 +8735,25 @@ def check_foudre_pure() -> None:
     full_hold = (L.gens, L.charge)
     adv(L, 0.1, hold=False)
     check(g1 == 1 and full_hold == (6, 1.0) and L.charge < 1.0, "maintenu: charge au maximum, une generation toute les 0,25 s, decroit au relachement", f"{g1} {full_hold} {L.charge:.2f}")
+    # ---- le tempo qui baisse ne fait jamais rentrer l'arbre (croissance integree image par image)
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    adv(L, 0.3)
+    grown = len(L.draw_list())
+    adv(L, 0.5, speed=0.2)
+    slow = len(L.draw_list())
+    adv(L, 0.5, speed=0.0)
+    check(grown == slow == len(L.draw_list()) and grown > 0, "croissance: un tempo qui baisse (puis tombe a 0) ne fait pas rentrer l'arbre", f"{grown} {slow}")
+    # ---- bouton maintenu : charge tenue, aucune pulsation
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    adv(L, 3.0, hold=True)
+    seen = []
+    for _ in range(10):
+        adv(L, 0.1, hold=True)
+        seen.append(L.draw_list()[0][5])
+    check(max(seen) - min(seen) < 0.01, "maintenu: l'arbre ne pulse pas (pas d'eclat relance toutes les 0,25 s)", f"{min(seen):.3f} {max(seen):.3f}")
     # ---- drop et clear
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)

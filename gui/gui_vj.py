@@ -271,7 +271,8 @@ def install(c):
         params["build"] = 0.0
         rhythm_ui["auto_build"] = False
         if was:
-            s.commands.put("flash")
+            if params.get("strobe_kind") != "foudre":                              # mode Foudre : la grande decharge remplace le flash blanc plein ecran
+                s.commands.put("flash")
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
             params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1          # mode Foudre : grande decharge a pleine profondeur
         btn = vj_ui.get("build")
@@ -869,7 +870,8 @@ def install(c):
             do_drop()                                        # relache la montee : flash + eclair
             rhythm_ui["t_drop"] = time.monotonic()
         elif auto and not recent:
-            s.commands.put("flash")
+            if params.get("strobe_kind") != "foudre":
+                s.commands.put("flash")
             params["strobe_why"] = why
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
             params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1

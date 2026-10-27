@@ -137,7 +137,8 @@ class Lightning:
         self.charge = 0.0
         self.now = 0.0
         self.since_push = 1e9
-        self.born = [0.0] * MAX_DEPTH
+        self.since_flash = 1e9                  # depuis le dernier eclat (une poussee du bouton maintenu n'en relance pas : pas de pulsation)
+        self.grow = [0.0] * MAX_DEPTH           # progression de la croissance de chaque generation (integree : un tempo qui change ne fait pas rentrer l'arbre)
         self._tree: list[Seg] = []
         self._key = None
 
@@ -154,36 +155,41 @@ class Lightning:
         self.aspect, self.reach = _unit(aspect, 0.1, 20.0), _unit(reach, 0.05, 3.0)
 
     def clear(self) -> None:
-        self.gens, self.charge, self.since_push = 0, 0.0, 1e9
+        self.gens, self.charge, self.since_push, self.since_flash = 0, 0.0, 1e9, 1e9
         self.episode += 1
 
     def drop(self) -> None:
         """Grande decharge : pleine profondeur, charge au maximum, les generations partent l'une apres l'autre."""
-        self.gens, self.charge, self.since_push = MAX_DEPTH, 1.0, 0.0
-        self.born = [self.now + g * 0.12 for g in range(MAX_DEPTH)]
+        self.gens, self.charge, self.since_push, self.since_flash = MAX_DEPTH, 1.0, 0.0, 0.0
+        self.grow = [-g * 0.12 / GROW_S for g in range(MAX_DEPTH)]
 
-    def _push(self, ceiling: float) -> None:
+    def _push(self, ceiling: float, flash: bool = True) -> None:
         cap = min(MAX_DEPTH, max(1, round(ceiling * MAX_DEPTH)))
         if self.gens < cap:
-            self.born[self.gens] = self.now
+            self.grow[self.gens] = 0.0
             self.gens += 1
         self.charge = min(1.0, self.charge + GAIN * max(ceiling - self.charge, 0.0))
         self.since_push = 0.0
+        if flash:
+            self.since_flash = 0.0
 
     def update(self, dt: float, kicks: int = 0, ceiling: float = DEFAULT_CEILING, hold: bool = False, speed: float = 1.0) -> None:
         """Avance de `dt` secondes (borne a 0,1 s). `kicks` = nouveaux kicks depuis le dernier appel (une rafale = une poussee)."""
         dt = min(dt, MAX_DT) if dt == dt and dt > 0.0 else 0.0
-        self.speed = _unit(speed, 0.0, 4.0)
+        speed = _unit(speed, 0.0, 4.0)
         ceiling = 1.0 if hold else _unit(ceiling)
         self.now += dt
         self.since_push += dt
+        self.since_flash += dt
+        for g in range(self.gens):
+            self.grow[g] += dt * speed / GROW_S
         if not hold:
             self.charge *= 0.5 ** (dt / HALF_LIFE_S)
             if self.gens and (self.since_push > CLEAR_S or self.charge < 0.02):
                 self.clear()
         if hold:
             if self.since_push >= GROW_S:
-                self._push(1.0)
+                self._push(1.0, flash=False)
             self.charge = 1.0
         elif kicks > 0 and ceiling > 0.0 and self.since_push >= MIN_PUSH_S:
             self._push(ceiling)
@@ -200,8 +206,7 @@ class Lightning:
         if not self.gens:
             return []
         bass, high = _unit(bass), _unit(high)
-        speed = getattr(self, "speed", 1.0)
-        flash = max(0.0, 1.0 - self.since_push / FLASH_S) ** 2
+        flash = max(0.0, 1.0 - self.since_flash / FLASH_S) ** 2
         level = 0.25 + 0.5 * self.charge
         level += (1.0 - level) * flash
         out = []
@@ -209,7 +214,7 @@ class Lightning:
             if s.gen >= self.gens:
                 continue
             fade = _unit((self.charge - FADE_STEP * s.gen) / FADE_SPAN)
-            frac = _unit((self.now - self.born[s.gen]) * speed / GROW_S) * s.n - s.k
+            frac = _unit(self.grow[s.gen]) * s.n - s.k
             if fade <= 0.0 or frac <= 0.0:
                 continue
             f = min(frac, 1.0)
