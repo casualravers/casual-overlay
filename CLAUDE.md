@@ -359,6 +359,22 @@ les basses).
   **defaut du flux de test** : `x*255` y est calcule en uint16 et deborde pour x > 257, d'ou un degrade coupe
   en bandes ; c'est ce qui la distingue d'Arc-en-ciel (version "propre" du meme visuel). `check_gl.py` compare
   8 images au flux de test, ecart 0.
+- **Palette `stochastique`** (halftone stochastique ; spec et plan : `docs/plans/2026-10-27-fond-stochastique-*.md`) : `stochastic_pattern()` de
+  `scene.frag`, `u_bg_palette` = 3. **Grille jitteree** : une cellule de `bg_sto_size` px (pour 720 px de haut) porte un point, allume si le champ
+  (evalue au centre du point) depasse son **rang** ; rang = suite R2 (`fract(c.x * 0,7549 + c.y * 0,5698)`, faible discrepance : points sans amas,
+  esprit bruit bleu) melangee a un hachage blanc par `bg_sto_regular` (0 = grain aleatoire brut), decalage du point dans sa cellule 0,3 a 0,5 ;
+  3 x 3 cellules voisines par pixel, et **une voisine hors de portee du pixel ne calcule pas le champ** (-40 % de temps GPU, image identique).
+  Champs (`bg_sto_field`) : `noise` (2 octaves de bruit de valeur, hachage sans `sin`), `waves` (bandes vers `bg_angle`), `gradient` (aller-retour
+  comme Duo) ; ils derivent avec `_bg_scroll`. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
+  `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ) ; `bg_hue` et `bg_speed`
+  s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
+  kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
+  change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,
+  visible seulement pour cette palette). Le Full Randomizer la tire une fois sur quatre. **Cout mesure** (Radeon integre, fenetre 1280 x 720 ; la
+  scene est rendue a la taille de la fenetre, pas a `--render-size`) : Duo 1,75 ms, stochastique bruit 4,0 ms, vagues 3,1 ms, donc ~+5 ms (bruit)
+  et ~+3 ms (vagues) en 1080p plein ecran ; pas dans `core/safety.py`. Limite : approximation du bruit bleu (plan B : texture void-and-cluster).
+  `check_gl.py` : `check_bg_stochastic` (pixels : densite, regularite mesuree par blocs, variation, inversion, arc-en-ciel, teinte, champs,
+  resolution, derive, son, reaction 0) ; schema, scene rejouee, GUI et Randomizer dans leurs verifications.
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
   (`dt * vitesse`), pas calculees par `vitesse * temps` : changer la vitesse dans la GUI ne
   fait jamais sauter le motif.
