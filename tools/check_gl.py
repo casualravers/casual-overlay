@@ -8437,7 +8437,7 @@ def check_bg_labyrinthe() -> None:
 
 
 def check_foudre_render() -> None:
-    print("Foudre : rendu (passe GL des segments, composition dans post.frag)")
+    print("Foudre : rendu du reseau (passe GL, intensite dans le shader de sommets, composition dans post.frag)")
     try:
         ctx = gl.moderngl.create_standalone_context()
     except Exception as exc:
@@ -8456,12 +8456,10 @@ def check_foudre_render() -> None:
                 bg_hue=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, strobe_auto=0.0, trans_time=0.0)
     clock: dict = {}
 
-    def frame(rr, size, p, n=1, advance=False):
-        """`n` images de 0,05 s ; `draw` fait avancer la machine de la foudre (`advance` : l'avancer en plus, a la main)."""
+    def frame(rr, size, p, n=1):
+        """`n` images de 0,05 s ; `draw` fait avancer le reseau."""
         fbo = fbo_for(size)
         for _ in range(n):
-            if advance:
-                rr.bolt.update(0.05)
             t0 = clock.get(id(rr), 0.0)
             rr.draw(fbo, size, quiet, p, t0)
             clock[id(rr)] = t0 + 0.05
@@ -8474,24 +8472,24 @@ def check_foudre_render() -> None:
         return int((img.sum(axis=2) > 90).sum())
 
     size = (640, 360)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    rad = np.hypot((xx - size[0] / 2) / size[1], (yy - size[1] / 2) / size[1])
     ref = frame(gl.Renderer(ctx, size, None), size, dict(base, strobe_kind="strobe"), 8)
     check(ref.max() == 0, "foudre: reference sans foudre = fond noir")
     rr = gl.Renderer(ctx, size, None)
     empty = frame(rr, size, dict(base, strobe_kind="foudre"), 8)
-    check(abs(empty - ref).max() == 0, "foudre: mode Foudre sans decharge = image inchangee")
+    check(abs(empty - ref).max() == 0, "foudre: mode Foudre sans reseau = image inchangee")
     rr = gl.Renderer(ctx, size, None)
     push(rr)
-    img = frame(rr, size, dict(base, strobe_kind="foudre"), 9)
-    yy, xx = np.mgrid[0:size[1], 0:size[0]]
-    rad = np.hypot((xx - size[0] / 2) / size[1], (yy - size[1] / 2) / size[1])
+    img = frame(rr, size, dict(base, strobe_kind="foudre"), 12)
     add = img.sum(axis=2)
-    check(lit(img) > 200 and add[rad < 0.1].mean() > add[(rad > 0.40) & (rad < 0.50)].mean(),
-          "foudre: apres un kick des pixels s'allument, le centre est plus lumineux que la peripherie", f"{lit(img)}")
+    check(lit(img) > 600 and add[rad < 0.1].mean() > add[(rad > 0.40) & (rad < 0.50)].mean(),
+          "foudre: apres un kick un reseau dense s'allume, le centre est plus lumineux que la peripherie", f"{lit(img)}")
     check((img.min(axis=2) > 250).mean() < 0.02, "foudre: aucun flash plein ecran (moins de 2 % de pixels blancs)")
     rs = gl.Renderer(ctx, size, None)
     push(rs)
     still = frame(rs, size, dict(base, strobe_kind="strobe"), 9)
-    check(abs(still - ref).max() == 0, "foudre: en mode Strobe, une decharge en cours ne s'affiche pas")
+    check(abs(still - ref).max() == 0, "foudre: en mode Strobe, un reseau en cours ne s'affiche pas")
     sums = {}
     for col in ("#ff0000", "#00ff00"):
         rc = gl.Renderer(ctx, size, None)
@@ -8500,14 +8498,39 @@ def check_foudre_render() -> None:
         sums[col] = im.reshape(-1, 3).sum(axis=0)
     check(sums["#ff0000"][0] > 1.2 * sums["#ff0000"][1] and sums["#00ff00"][1] > 1.2 * sums["#00ff00"][0],
           "foudre: le halo prend la couleur choisie (coeur blanc)", f"{sums}")
-    # ---- profondeur : plus de lumiere a chaque kick, puis un plafond
+    # ---- le reseau se densifie kick apres kick
     rd = gl.Renderer(ctx, size, None)
     counts = []
-    for _k in range(7):
+    for _k in range(5):
         push(rd)
         counts.append(lit(frame(rd, size, dict(base, strobe_kind="foudre"), 10)))
-    check(counts[5] > 1.8 * counts[0] and all(counts[i + 1] >= 0.85 * counts[i] for i in range(5)) and abs(counts[6] - counts[5]) < 0.25 * counts[5],
-          "foudre: de plus en plus de lumiere a chaque kick, puis plafond", f"{counts}")
+    check(counts[4] > 2 * counts[0] and all(counts[i + 1] >= 0.9 * counts[i] for i in range(4)), "foudre: de plus en plus de lumiere a chaque kick", f"{counts}")
+    # ---- pouls : une bande lumineuse part du centre et gagne la peripherie
+    rp = gl.Renderer(ctx, size, None)
+    pp = dict(base, strobe_kind="foudre")
+    for _k in range(6):
+        push(rp)
+        frame(rp, size, pp, 10)
+    quiet_img = frame(rp, size, pp, 10)                                      # 0,5 s sans kick : les ondes precedentes sont finies (le reseau est encore la)
+    import copy as _copy
+    b0 = _copy.deepcopy(rp.bolt)                                             # meme etat, meme hasard : seule l'onde differe
+    rp.bolt.pulse_list = []
+    img0 = frame(rp, size, pp, 1)
+    bumps = {}
+    md = rp.bolt.max_dist
+    for r_ in (0.2 * md, 0.8 * md):
+        rp.bolt = _copy.deepcopy(b0)
+        rp.bolt.pulse_list = [[r_, 1.0]]                                     # une onde placee a la main (le shader lit les ondes du reseau)
+        bumps[r_] = np.clip(frame(rp, size, pp, 1) - img0, 0, None).sum(axis=2)
+
+    def peak_radius(d) -> float:
+        return float((rad * d).sum() / max(d.sum(), 1))              # rayon moyen de la lumiere ajoutee par l'onde
+
+    early, late = bumps[0.2 * md], bumps[0.8 * md]
+    r_early, r_late = peak_radius(early), peak_radius(late)
+    check(early.sum() > 0 and late.sum() > 0 and r_late > r_early + 0.08, "foudre: le pouls gagne la peripherie (le rayon de la bande lumineuse augmente)", f"{r_early:.2f} -> {r_late:.2f}")
+    # ---- evolution : le reseau change d'une seconde a l'autre sous musique soutenue
+    # (les images sont lues par drive ci-dessous)
     # ---- le logo n'est jamais assombri
     logo = np.zeros((64, 64, 4), dtype=np.uint8)
     logo[:] = (200, 0, 0, 255)
@@ -8531,15 +8554,16 @@ def check_foudre_render() -> None:
     except Exception as exc:
         ok = False
         print("   ", exc)
-    check(ok, "foudre: redimensionnement, portrait et 4:1 sans exception, la foudre reste visible")
+    check(ok, "foudre: redimensionnement, portrait et 4:1 sans exception, le reseau reste visible")
 
-    # ---- branchement : les kicks, la phase, le strobe, la montee, le drop et la panique pilotent la foudre par l'etat et les reglages
-    def drive(p, frames=65, beats=lambda i: i // 10, phase=None, extra=None, at=None, sz=size):
-        """Rend `frames` images de 0,05 s ; `beats(i)` = compteur de kicks a l'image i, `phase` = nom de phase, `at[i]` = reglages changes a l'image i."""
+    # ---- branchement : les kicks, la phase, le strobe, la montee, le drop et la panique pilotent le reseau par l'etat et les reglages
+    def drive(p, frames=65, beats=lambda i: i // 10, phase=None, extra=None, at=None, sz=size, grab=()):
+        """Rend `frames` images de 0,05 s ; `beats(i)` = compteur de kicks a l'image i, `phase` = nom de phase, `at[i]` = reglages changes a l'image i,
+        `grab` = images a garder. Rend (Renderer, derniere image, plus grande part de pixels blancs, images gardees)."""
         rr = gl.Renderer(ctx, sz, None)
         fbo = fbo_for(sz)
         pp = dict(p)
-        whites = 0.0
+        whites, grabbed = 0.0, {}
         for i in range(frames):
             if at and i in at:
                 pp.update(at[i])
@@ -8549,51 +8573,60 @@ def check_foudre_render() -> None:
             if extra:
                 st.update(extra)
             rr.draw(fbo, sz, st, pp, 0.05 * i)
-            whites = max(whites, float((read_target(ctx, fbo, sz).min(axis=2) > 250).mean())) if i % 8 == 0 else whites
-        return rr, read_target(ctx, fbo, sz).astype(int), whites
+            if i % 8 == 0 or i in grab:
+                im_ = read_target(ctx, fbo, sz)
+                whites = max(whites, float((im_.min(axis=2) > 250).mean()))
+                if i in grab:
+                    grabbed[i] = im_.astype(int)
+        return rr, read_target(ctx, fbo, sz).astype(int), whites, grabbed
 
+    segs = lambda rr_: rr_.bolt.stats()["segments"]
     fp = dict(base, strobe_kind="foudre", auto_phase=1.0)
-    rr, im, wh = drive(fp, phase="peak")
-    check(rr.bolt.gens == 6 and wh < 0.02, "foudre: au pic, 6 kicks de suite = 6 generations, pas de blanc plein ecran", f"{rr.bolt.gens} {wh:.3f}")
-    rr, _im, _ = drive(fp, phase="groove")
-    check(rr.bolt.gens == 3, "foudre: en groove le plafond est de 3 generations", f"{rr.bolt.gens}")
+    rr, im, wh, gr = drive(fp, frames=110, phase="peak", grab=(60, 100))
+    n_peak = segs(rr)
+    check(n_peak > 400 and wh < 0.02, "foudre: au pic le reseau est dense, pas de blanc plein ecran", f"{n_peak} {wh:.3f}")
+    check(float((abs(gr[60] - gr[100]).sum(axis=2) > 60).mean()) > 0.02, "foudre: le reseau evolue d'une seconde a l'autre sous musique soutenue (plus de 2 % de pixels changent)")
+    rr, _im, _, _ = drive(fp, frames=110, phase="groove")
+    n_groove = segs(rr)
+    check(0 < n_groove < n_peak, "foudre: en groove le reseau est moins dense qu'au pic", f"{n_groove} < {n_peak}")
     check(all(drive(fp, phase=ph)[0].bolt.empty for ph in ("silence", "ambient")), "foudre: rien en silence ni en ambiance")
-    rr, _im, _ = drive(dict(fp, auto_phase=0.0), phase="peak")
-    check(rr.bolt.gens == 3, "foudre: Phases auto coupees = plafond moyen (3 generations)", f"{rr.bolt.gens}")
+    rr, _im, _, _ = drive(dict(fp, auto_phase=0.0), frames=110, phase="peak")
+    check(segs(rr) == n_groove, "foudre: Phases auto coupees = plafond moyen (comme le groove)", f"{segs(rr)} {n_groove}")
     check(drive(dict(fp, react_master=0.0), phase="peak")[0].bolt.empty, "foudre: reactivite a 0 = les kicks ne declenchent rien")
-    rr, im, _ = drive(dict(fp, strobe_kind="strobe"), phase="peak")
+    rr, im, _, _ = drive(dict(fp, strobe_kind="strobe"), phase="peak")
     check(rr.bolt.empty and im.max() == 0, "strobe: les memes kicks ne declenchent rien en mode Strobe")
-    rr, _im, _ = drive(dict(fp, strobe_hits=1), beats=lambda i: 0, frames=12, phase="peak")
-    check(rr.bolt.gens == 1, "foudre: un appui sur le bouton Strobe declenche une decharge", f"{rr.bolt.gens}")
-    rr, _im, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual"), beats=lambda i: 0, frames=40)
-    check(rr.bolt.gens == 6 and rr.bolt.charge == 1.0, "foudre: bouton maintenu = charge au maximum, profondeur 6 sans kick", f"{rr.bolt.gens} {rr.bolt.charge}")
-    rr, _im, _ = drive(dict(fp, build=0.9), phase="groove")
-    check(rr.bolt.gens == 5, "foudre: une montee a 90 % releve le plafond (5 generations)", f"{rr.bolt.gens}")
-    rr, im, wh = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}})
-    check(rr.bolt.gens == 6 and lit(im) > 2000 and wh < 0.02, "foudre: un Drop donne une grande decharge a pleine profondeur", f"{rr.bolt.gens} {lit(im)} {wh:.3f}")
-    rr, im, _ = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}, 30: {"foudre_clear": 1}})
-    check(rr.bolt.empty and im.max() == 0, "foudre: la panique vide la foudre")
-    rr, _im, _ = drive(fp, beats=lambda i: 0 if i < 5 else 50, frames=12, phase="peak")
-    check(rr.bolt.gens == 1, "foudre: une rafale de 50 kicks en une image = une seule poussee", f"{rr.bolt.gens}")
-    rr, im, _ = drive(dict(fp, tempo=0.0), phase="peak")
-    check(im.max() == 0 and not rr.bolt.empty, "foudre: tempo a 0 = croissance figee, aucune exception")
+    rr, _im, _, _ = drive(dict(fp, strobe_hits=1), beats=lambda i: 0, frames=12, phase="peak")
+    check(not rr.bolt.empty, "foudre: un appui sur le bouton Strobe fait naitre le reseau")
+    rr, _im, _, gr = drive(dict(fp, strobe_on=1.0, strobe_mode="manual"), beats=lambda i: 0, frames=60, grab=tuple(range(40, 51)))
+    lum = [float(g.sum()) for g in gr.values()]
+    check(segs(rr) > 400 and (max(lum) - min(lum)) / max(lum) < 0.35, "foudre: bouton maintenu = reseau dense, luminosite sans pulsation globale", f"{segs(rr)} {(max(lum) - min(lum)) / max(lum):.2f}")
+    rr, _im, _, _ = drive(dict(fp, build=0.9), frames=110, phase="groove")
+    check(segs(rr) > n_groove, "foudre: une montee a 90 % releve le plafond (plus dense qu'en groove)", f"{segs(rr)} > {n_groove}")
+    rr, im, wh, _ = drive(fp, beats=lambda i: 0, frames=8, at={5: {"foudre_drop": 1}})
+    check(max((e for _r, e in rr.bolt.pulses()), default=0) >= 1.5 and not rr.bolt.empty and wh < 0.02, "foudre: un Drop lance la grande onde sans flash blanc", f"{rr.bolt.pulses()} {wh:.3f}")
+    rr, im, _, _ = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}, 30: {"foudre_clear": 1}})
+    check(rr.bolt.empty and im.max() == 0, "foudre: la panique vide le reseau")
+    rr, _im, _, _ = drive(fp, beats=lambda i: 0 if i < 5 else 50, frames=12, phase="peak")
+    check(rr.bolt.stats()["pushes"] == 1, "foudre: une rafale de 50 kicks en une image = une seule poussee", f"{rr.bolt.stats()['pushes']}")
+    rr, im, _, _ = drive(dict(fp, tempo=0.0), phase="peak")
+    check(lit(im) < 0.2 * lit(drive(fp, phase="peak")[1]) and not rr.bolt.empty, "foudre: tempo a 0 = croissance figee (presque rien ne pousse), aucune exception", f"{lit(im)}")
     rr = gl.Renderer(ctx, size, None)
     fbo = fbo_for(size)
     ok = True
     for i in range(6):
         rr.draw(fbo, size, dict(quiet, beats=i, phase={"name": "peak", "since": 5.0}), fp, 7.0 * i)       # fenetre gelee : 7 s entre deux images
         im = read_target(ctx, fbo, size)
-        ok = ok and rr.bolt.gens <= 6 and bool(np.isfinite(rr.bolt.charge))
+        ok = ok and segs(rr) <= 2400 and all(bool(np.isfinite(v)) for s_ in rr.bolt.segments() for v in s_)
     check(ok, "foudre: des images tres espacees (fenetre gelee) ne donnent ni saut ni valeur infinie")
-    rr, _im, _ = drive(fp, phase="peak")
+    rr, _im, _, _ = drive(fp, phase="peak")
     ps = dict(fp, strobe_kind="strobe")
-    for i in range(130):
+    for i in range(170):
         rr.draw(fbo, size, dict(quiet, beats=7), ps, 3.3 + 0.05 * i)
-    check(rr.bolt.empty, "foudre: repasser en mode Strobe la laisse s'eteindre seule")
-    rr, im, _ = drive(fp, beats=lambda i: min(i // 10, 6), frames=80, phase="peak", at={62: {"strobe_kind": "strobe", "foudre_clear": 1}, 68: {"strobe_kind": "foudre"}})
-    check(rr.bolt.empty and im.max() == 0, "foudre: la panique donnee en mode Strobe vide aussi la foudre (rien ne reapparait au retour)")
-    rr, im, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual", comp_trail=0.97), beats=lambda i: 0, frames=80)
-    check(im.max() <= 231 and (im.min(axis=2) > 200).mean() < 0.05,"foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
+    check(rr.bolt.empty, "foudre: repasser en mode Strobe laisse le reseau s'eteindre seul (8 s au plus)")
+    rr, im, _, _ = drive(fp, beats=lambda i: min(i // 10, 6), frames=80, phase="peak", at={62: {"strobe_kind": "strobe", "foudre_clear": 1}, 68: {"strobe_kind": "foudre"}})
+    check(rr.bolt.empty and im.max() == 0, "foudre: la panique donnee en mode Strobe vide aussi le reseau (rien ne reapparait au retour)")
+    rr, im, _, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual", comp_trail=0.97), beats=lambda i: 0, frames=80)
+    check(im.max() <= 231, "foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
 
 
 def check_reaction_pure() -> None:
@@ -8618,49 +8651,9 @@ def check_reaction_pure() -> None:
 
 
 def check_foudre_pure() -> None:
-    print("Foudre : arbre et machine d'etat (core/foudre.py)")
+    print("Foudre : reseau vivant (core/foudre.py)")
     import math as _m
     from core import foudre as fd
-
-    def finite(items) -> bool:
-        return all(_m.isfinite(v) for it in items for v in it)
-
-    # ---- arbre
-    t1 = fd.build_tree(1, 16 / 9)
-    check(t1 == fd.build_tree(1, 16 / 9) and t1 != fd.build_tree(2, 16 / 9), "arbre: deterministe pour une graine, different d'une graine a l'autre")
-    bad_cap, bad_frame, bad_nan, deep, asym, ok_children = 0, 0, 0, 0, 0, True
-    for seed in range(30):
-        for asp in (0.5, 16 / 9, 4.0):
-            tree = fd.build_tree(seed, asp)
-            bad_cap += len(tree) > fd.MAX_SEGMENTS
-            hx = 0.5 * asp + 1e-6
-            bad_frame += any(abs(s.x0) > hx or abs(s.x1) > hx or abs(s.y0) > 0.5 + 1e-6 or abs(s.y1) > 0.5 + 1e-6 for s in tree)
-            bad_nan += not all(_m.isfinite(v) for s in tree for v in (s.x0, s.y0, s.x1, s.y1, s.width))
-        tree = fd.build_tree(seed, 16 / 9)
-        deep += max(s.gen for s in tree) == fd.MAX_DEPTH - 1
-        tips = [(s.x1, s.y1) for s in tree if s.k == s.n - 1]
-        asym += _m.hypot(sum(x for x, _ in tips) / len(tips), sum(y for _, y in tips) / len(tips)) > 0.02
-        by_gen: dict = {}
-        for s in tree:
-            by_gen.setdefault(s.gen, []).append(s)
-        if not 5 <= len({s.branch for s in by_gen[0]}) <= 7:
-            ok_children = False
-        for g in range(1, fd.MAX_DEPTH):
-            verts = {(round(s.x1, 12), round(s.y1, 12)) for s in by_gen.get(g - 1, [])} | {(round(s.x0, 12), round(s.y0, 12)) for s in by_gen.get(g - 1, [])}
-            for s in by_gen.get(g, []):
-                if s.k == 0 and (round(s.x0, 12), round(s.y0, 12)) not in verts:
-                    ok_children = False
-    check(bad_cap == 0 and bad_nan == 0, "arbre: 300 segments au plus, aucun NaN (30 graines, 3 formats d'image)")
-    check(bad_frame == 0, "arbre: reach 1 -> tous les points dans le cadre, portrait et 4:1 compris")
-    check(deep >= 27, "arbre: les six generations sont presentes", f"{deep}/30")
-    check(asym >= 24, "arbre: etalement asymetrique (centre de masse des pointes decale)", f"{asym}/30")
-    check(ok_children, "arbre: 5 a 7 troncs, chaque branche repart d'un point de sa branche mere")
-    ext = lambda r: sum(max(_m.hypot(s.x1, s.y1) for s in fd.build_tree(sd, 16 / 9, r)) for sd in range(30)) / 30
-    check(ext(0.4) < ext(1.0) - 0.05, "arbre: la portee reglable agrandit l'etendue", f"{ext(0.4):.2f} < {ext(1.0):.2f}")
-    # ---- plafond par phase
-    pc = fd.phase_ceiling
-    check([pc("silence"), pc("ambient"), pc("groove"), pc("build"), pc("break"), pc("peak"), pc(None)] == [0.0, 0.0, 0.5, 0.7, 0.17, 1.0, 0.5]
-          and pc("groove", 0.9) == 0.9 and pc("silence", 0.4) == 0.4, "plafond: par phase, et la montee le releve (max des deux)")
 
     def adv(L, secs, **kw):
         """Avance de `secs` par pas de 0,1 s ; les kicks ne comptent qu'au premier pas."""
@@ -8668,134 +8661,220 @@ def check_foudre_pure() -> None:
         for i in range(max(int(round(secs / 0.1)), 1)):
             L.update(0.1, kicks=kicks if i == 0 else 0, **kw)
 
-    # ---- accumulation
+    def run(seed=1, secs=3.0, ceiling=1.0, aspect=16 / 9, reach=1.0, every=0.5, **kw):
+        """Reseau mene `secs` secondes avec un kick toutes les `every` secondes."""
+        L = fd.Lightning(seed)
+        L.configure(aspect, reach)
+        t = 0.0
+        while t < secs - 1e-9:
+            adv(L, every, kicks=1, ceiling=ceiling, **kw)
+            t += every
+        return L
+
+    def finite(L) -> bool:
+        return all(_m.isfinite(v) for s in L.segments() for v in s)
+
+    # ---- plafond par phase (inchange)
+    pc = fd.phase_ceiling
+    check([pc("silence"), pc("ambient"), pc("groove"), pc("build"), pc("break"), pc("peak"), pc(None)] == [0.0, 0.0, 0.5, 0.7, 0.17, 1.0, 0.5]
+          and pc("groove", 0.9) == 0.9 and pc("silence", 0.4) == 0.4, "plafond: par phase, et la montee le releve (max des deux)")
+    # ---- naissance
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
-    gens, charges = [], []
-    for _ in range(10):
-        adv(L, 0.5, kicks=1, ceiling=1.0)
-        gens.append(L.gens)
-        charges.append(L.charge)
-    check(gens == [1, 2, 3, 4, 5, 6, 6, 6, 6, 6] and charges[:4] == sorted(charges[:4]) and 0.6 < charges[5] <= 1.0
-          and len(L.draw_list()) <= fd.MAX_SEGMENTS, "accumulation: une generation de plus par kick jusqu'a 6, charge croissante et bornee", f"{gens} {charges[5]:.2f}")
-    L = fd.Lightning(1)
-    for _ in range(8):
-        adv(L, 0.5, kicks=1, ceiling=0.5)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    st = L.stats()
     L0 = fd.Lightning(1)
-    for _ in range(8):
-        adv(L0, 0.5, kicks=1, ceiling=0.0)
-    check(L.gens == 3 and L0.empty, "plafond: 0,5 -> 3 generations au plus, 0 -> aucune decharge", f"{L.gens} {L0.empty}")
-    # ---- delai minimal entre deux poussees
+    L0.update(0.1, kicks=1, ceiling=0.0)
+    check(6 <= st["tips"] <= 8 and not L.empty and L0.empty, "reseau: un premier kick cree 6 a 8 troncs depuis le centre, plafond 0 = rien", f"{st}")
+    # ---- determinisme
+    a, b, c = run(1).segments(), run(1).segments(), run(2).segments()
+    check(a == b and a != c and len(a) > 0, "reseau: deterministe pour une graine, different d'une graine a l'autre")
+    # ---- croissance et plafonds
     L = fd.Lightning(1)
-    L.update(0.1, kicks=1, ceiling=1.0)
-    L.update(0.1, kicks=1, ceiling=1.0)
-    L.update(0.1, kicks=50, ceiling=1.0)
-    g_before = L.gens
-    L.update(0.1, kicks=50, ceiling=1.0)
-    check(g_before == 1 and L.gens == 2, "kicks: 4 poussees par seconde au plus, une rafale de 50 = une seule poussee", f"{g_before} {L.gens}")
-    # ---- croissance
+    L.configure(16 / 9, 1.0)
+    counts = []
+    for _s in range(4):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
+        counts.append(L.stats()["segments"])
+    check(counts == sorted(counts) and counts[0] > 50 and counts[-1] >= 2 * counts[0], "croissance: de plus en plus de segments demi-seconde apres demi-seconde sous les kicks", f"{counts}")
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    worst = (0, 0)
+    for _s in range(120):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
+        st = L.stats()
+        worst = (max(worst[0], st["segments"]), max(worst[1], st["tips"]))
+    check(worst[0] <= fd.MAX_SEGMENTS and worst[1] <= fd.MAX_TIPS and worst[0] > 400, "plafonds: 60 s de pic restent sous 1200 segments et 100 pointes, sans rester vide", f"{worst}")
+    # ---- ramifications et soudures
+    stats = [run(sd, secs=20.0).stats() for sd in range(1, 6)]
+    check(all(s["forks"] > 10 for s in stats), "reseau: de vraies bifurcations", f"{[s['forks'] for s in stats]}")
+    check(sum(s["joins"] > 5 for s in stats) >= 4, "reseau: les pointes se soudent aux branches voisines (boucles, alveoles)", f"{[s['joins'] for s in stats]}")
+    # ---- cadre, portee
+    bad = 0
+    for asp in (0.5, 16 / 9, 4.0):
+        for sd in (1, 2, 3):
+            L = run(sd, secs=10.0, aspect=asp)
+            hx = 0.5 * asp + 1e-6
+            bad += any(abs(s[0]) > hx or abs(s[2]) > hx or abs(s[1]) > 0.5 + 1e-6 or abs(s[3]) > 0.5 + 1e-6 for s in L.segments())
+    check(bad == 0, "reseau: reach 1 -> aucun segment hors du cadre, portrait et 4:1 compris")
+    far = lambda r: sum(max(_m.hypot(s[2], s[3]) for s in run(sd, secs=10.0, reach=r).segments()) for sd in range(1, 6)) / 5
+    check(far(0.4) < far(1.0) - 0.1, "reseau: la portee reglable limite l'etendue", f"{far(0.4):.2f} < {far(1.0):.2f}")
+    # ---- asymetrie
+    asym = 0
+    for sd in range(1, 6):
+        segs = run(sd, secs=10.0).segments()
+        asym += _m.hypot(sum(s[2] for s in segs) / len(segs), sum(s[3] for s in segs) / len(segs)) > 0.02
+    check(asym >= 4, "reseau: etalement asymetrique (centre de masse decale)", f"{asym}/5")
+    check(finite(run(1, secs=10.0)), "reseau: aucune valeur non finie")
+    # ---- pouls : une onde part de la racine et avance en distance de chemin
+    import time as _time
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
     L.update(0.0, kicks=1, ceiling=1.0)
-    first = len(L.draw_list())
-    L.update(0.1)
-    L.update(0.1)
-    L.update(0.1)
-    trunk = sum(1 for s in fd.build_tree(L.tree_seed, 16 / 9, 1.0) if s.gen == 0)
-    full = len(L.draw_list())
+    p0 = L.pulses()
+    L.update(0.1, ceiling=1.0)
+    p1 = L.pulses()
     L2 = fd.Lightning(1)
-    L2.update(0.0, kicks=1, ceiling=1.0, speed=0.0)
-    adv(L2, 0.5, speed=0.0)
-    check(first == 0 and full == trunk and L2.gens == 1 and not L2.draw_list(),
-          "croissance: rien au depart, tronc entier apres 0,3 s, tempo 0 = croissance figee", f"{first} {full}/{trunk} {len(L2.draw_list())}")
-    # ---- decroissance
-    L = fd.Lightning(1)
+    L2.update(0.0, kicks=1, ceiling=1.0)
+    L2.update(0.1, ceiling=1.0, speed=0.5)
+    most = 0
+    L3 = fd.Lightning(1)
+    for _i in range(40):
+        L3.update(0.1, kicks=1 if _i % 3 == 0 else 0, ceiling=1.0)
+        most = max(most, len(L3.pulses()))
+    adv(L, 3.0, ceiling=1.0)
+    check(len(p0) == 1 and p0[0][0] == 0.0 and abs(p1[0][0] - fd.PULSE_SPEED * 0.1) < 0.05 * fd.PULSE_SPEED * 0.1 + 1e-9 and abs(L2.pulses()[0][0] - fd.PULSE_SPEED * 0.05) < 0.005
+          and most <= fd.MAX_PULSES and L.pulses() == [], "pouls: part de 0, avance de PULSE_SPEED x tempo, au plus 4 en meme temps, disparait au bout du reseau", f"{p0} {p1} {most}")
+    # ---- le pouls renforce les noeuds dans l'ordre : la racine d'abord, les extremites ensuite
+    L = run(1, secs=6.0)
+    adv(L, 1.0, ceiling=0.0)
+    own = lambda: {i: L.vig[i] for i in range(len(L.x)) if L.alive[i]}                 # vigueur propre de chaque noeud (la vigueur affichee est le max des descendants)
+    before = own()
     L.update(0.0, kicks=1, ceiling=1.0)
-    c0 = L.charge
-    adv(L, 2.5)
-    half = L.charge
-    adv(L, 2.0)
-    check(abs(half - c0 / 2) < 0.02 * c0 + 0.01 and L.empty, "decroissance: demi-vie de 2,5 s, arbre efface apres 4 s sans kick", f"{c0:.2f} {half:.2f} {L.empty}")
-    L = fd.Lightning(1)
-    for _ in range(6):
-        adv(L, 0.3, kicks=1, ceiling=1.0)
-    widths_full = [it[4] for it in L.draw_list()]
-    guard = 0
-    while L.charge > 0.3 and guard < 100:
-        adv(L, 0.1)
-        guard += 1
-    widths_late = [it[4] for it in L.draw_list()]
-    check(min(widths_full) < 0.0025 and widths_late and min(widths_late) > 0.0025 and not L.empty,
-          "decroissance: les fines branches s'eteignent avant les troncs", f"{min(widths_full):.4f} {min(widths_late) if widths_late else None}")
-    # ---- bouton maintenu
-    L = fd.Lightning(1)
-    adv(L, 0.1, hold=True)
-    g1 = L.gens
-    adv(L, 2.0, hold=True)
-    full_hold = (L.gens, L.charge)
-    adv(L, 0.1, hold=False)
-    check(g1 == 1 and full_hold == (6, 1.0) and L.charge < 1.0, "maintenu: charge au maximum, une generation toute les 0,25 s, decroit au relachement", f"{g1} {full_hold} {L.charge:.2f}")
-    # ---- le tempo qui baisse ne fait jamais rentrer l'arbre (croissance integree image par image)
+    L.update(0.1, ceiling=1.0)
+    up1 = [L.dist[i] for i, v in own().items() if i in before and v > before[i] + 1e-6]
+    after1 = own()
+    adv(L, 0.4, ceiling=1.0)
+    up2 = [L.dist[i] for i, v in own().items() if i in after1 and v > after1[i] + 1e-6]
+    check(len(up1) > 5 and max(up1) < 0.35 and up2 and max(up2) > max(up1) + 0.2,
+          "pouls: renforce d'abord les noeuds proches de la racine, puis les lointains", f"{len(up1)} {max(up1, default=0):.2f} {max(up2, default=0):.2f}")
+    # ---- consolidation : les routes tres utilisees s'epaississent petit a petit (modele des tuyaux)
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
-    L.update(0.0, kicks=1, ceiling=1.0)
-    adv(L, 0.3)
-    grown = len(L.draw_list())
-    adv(L, 0.5, speed=0.2)
-    slow = len(L.draw_list())
-    adv(L, 0.5, speed=0.0)
-    check(grown == slow == len(L.draw_list()) and grown > 0, "croissance: un tempo qui baisse (puis tombe a 0) ne fait pas rentrer l'arbre", f"{grown} {slow}")
-    # ---- bouton maintenu : charge tenue, aucune pulsation
+    ws = []
+    for _k in range(6):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
+        segs = L.segments()
+        ws.append(max(s[4] for s in segs if s[6] < 3 * fd.STEP))                      # le plus gros segment contre la racine
+    segs = L.segments()
+    far = sorted(segs, key=lambda s: -s[6])[:10]
+    root_w = max(s[4] for s in segs if s[6] < 3 * fd.STEP)
+    adv(L, 1.0, ceiling=1.0, speed=0.0)
+    root_w2 = max(s[4] for s in L.segments() if s[6] < 3 * fd.STEP)
+    check(ws == sorted(ws) and ws[-1] > 1.5 * ws[0] and max(ws) <= fd.W_TRUNK + 1e-12 and root_w >= 2 * sum(s[4] for s in far) / 10 and root_w2 >= root_w - 1e-12,
+          "consolidation: le tronc s'epaissit de kick en kick (jamais plus que W_TRUNK), plus gros que les pointes, un tempo a 0 ne l'amincit pas", f"{[round(w, 4) for w in ws]} {root_w:.4f}")
+    # ---- evolution sous musique soutenue : des routes s'effacent, d'autres naissent
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    snaps = {}
+    for sec in range(1, 15):
+        for _k in range(2):
+            adv(L, 0.5, kicks=1, ceiling=0.6)
+        if sec in (3, 8, 14):
+            snaps[sec] = {s[:4] for s in L.segments()}
+    check(len(snaps[3] - snaps[14]) >= 10 and len(snaps[14] - snaps[8]) >= 10, "evolution: sous musique soutenue des routes s'effacent et d'autres naissent",
+          f"{len(snaps[3] - snaps[14])} {len(snaps[14] - snaps[8])}")
+    # ---- effacement sans kick : les fines partent avant les troncs, le reseau est vide en 8 s, jamais de segment pendu
+    L = run(1, secs=6.0)
+    t_fine = t_empty = None
+    hanging = False
+    for i in range(1, 100):
+        adv(L, 0.1, ceiling=0.0)
+        segs = L.segments()
+        orphans = {s[:2] for s in segs} - {s[2:4] for s in segs}                    # departs qui ne sont l'arrivee d'aucun segment : la racine seule
+        hanging = hanging or len(orphans) > 1
+        if t_fine is None and not any(s[4] < 2 * fd.W_FINE for s in segs):
+            t_fine = i * 0.1
+        if t_empty is None and L.empty:
+            t_empty = i * 0.1
+            break
+    check(t_fine is not None and t_empty is not None and t_fine < t_empty <= 8.0 and not hanging, "effacement: sans kick les fines partent avant les troncs, reseau vide en 8 s au plus, jamais de segment pendu", f"{t_fine} {t_empty}")
+    # ---- bouton maintenu : dense, sans pulsation
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
     adv(L, 3.0, hold=True)
-    seen = []
-    for _ in range(10):
+    dense = L.stats()["segments"]
+    means = []
+    for _i in range(10):
         adv(L, 0.1, hold=True)
-        seen.append(L.draw_list()[0][5])
-    check(max(seen) - min(seen) < 0.01, "maintenu: l'arbre ne pulse pas (pas d'eclat relance toutes les 0,25 s)", f"{min(seen):.3f} {max(seen):.3f}")
-    # ---- drop et clear
+        segs = L.segments()
+        means.append(sum(s[5] for s in segs) / max(len(segs), 1))
+    adv(L, 3.0)
+    check(dense > 250 and max(means) - min(means) < 0.25 and L.stats()["segments"] < dense, "maintenu: reseau dense sans pulsation de l'ensemble, il decroit au relachement", f"{dense} {max(means) - min(means):.3f}")
+    # ---- drop : grande onde, pousses en masse, vigueurs au maximum ; sur un reseau vide il en cree un
+    L = run(1, secs=1.0)
+    n0 = L.stats()["segments"]
+    L.drop()
+    pe = max((e for _r, e in L.pulses()), default=0)
+    check(pe >= 1.5 and L.stats()["segments"] >= n0 + 15 and min(s[5] for s in L.segments()) > 0.99, "drop: onde d'energie 1,5, pousses en masse, toutes les vigueurs au maximum", f"{pe} {n0}->{L.stats()['segments']}")
+    L = fd.Lightning(1)
+    L.drop()
+    check(not L.empty and L.pulses(), "drop: sur un reseau vide, il en cree un")
+    # ---- l'energie regle la densite ; plafond 0 = rien ; tempo 0 = plus de croissance
+    hi, lo = run(1, secs=25.0, ceiling=1.0).stats()["segments"], run(1, secs=25.0, ceiling=0.5).stats()["segments"]
+    check(hi >= 1.15 * lo and run(1, secs=5.0, ceiling=0.0).empty, "energie: plafond 1 plus dense que 0,5 apres 25 s, plafond 0 = rien", f"{hi} {lo}")
+    L = run(1, secs=6.0)
+    snap = {s[:4] for s in L.segments()}
+    pul = L.pulses()
+    adv(L, 0.3, ceiling=1.0, speed=0.0)
+    check({s[:4] for s in L.segments()} <= snap and L.pulses() == pul, "tempo: a 0 rien ne pousse et les ondes sont figees")
+    # ---- listes bornees : les noeuds elagues sont retires (sinon fuite et cout qui grandit sans fin)
+    L = fd.Lightning(5)
+    L.configure(16 / 9, 1.0)
+    for i in range(2400):                                                   # 2 minutes de pic a 20 images/s
+        L.update(0.05, kicks=1 if i % 10 == 0 else 0, ceiling=1.0)
+    st = L.stats()
+    check(len(L.x) <= 2 * L.n_alive + 300 and len(L.x) == len(L.parent) == len(L.alive),
+          "foudre: les listes de noeuds restent bornees apres 2 min de pic", f"{len(L.x)} noeuds en liste pour {L.n_alive} vivants")
+    L._compact()                                                            # etat compact garanti pour verifier les index
+    ok_graph = all(L.alive) and all(p < i for i, p in enumerate(L.parent)) and all(0 <= t < len(L.x) for t in L.tips) \
+        and all(0 <= a < len(L.x) and 0 <= b < len(L.x) for a, b in L.joins) \
+        and all(i in L.grid.get(L._cell(L.x[i], L.y[i]), ()) for i in range(len(L.x)))
+    check(ok_graph and st["segments"] > 100, "foudre: apres compactage le graphe est coherent (parents, pointes, soudures, grille)")
+
+    # ---- cout : le calcul reste sous le budget d'une image (garde contre un calcul quadratique)
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
-    L.drop()
-    ok_state = (L.gens, L.charge) == (6, 1.0)
-    adv(L, 1.0)
-    total = len(fd.build_tree(L.tree_seed, 16 / 9, 1.0))
-    check(ok_state and len(L.draw_list()) == total, "drop: pleine profondeur et tout l'arbre visible en 1 s", f"{len(L.draw_list())}/{total}")
-    seed_before = L.tree_seed
-    L.clear()
-    was_empty = L.empty
+    t0 = _time.perf_counter()
+    for i in range(600):
+        L.update(0.016, kicks=1 if i % 30 == 0 else 0, ceiling=1.0, high=0.5)
+        L.segments()
+    ms = (_time.perf_counter() - t0) / 600 * 1000
+    print(f"    cout moyen d'une image (update + segments) : {ms:.2f} ms")
+    check(ms < 20.0, "cout: moins de 20 ms par image en moyenne au pic", f"{ms:.2f} ms")
+
+    # ---- une poussee au plus toutes les 0,25 s
+    L = fd.Lightning(1)
     L.update(0.1, kicks=1, ceiling=1.0)
-    check(was_empty and L.tree_seed != seed_before, "clear: vide, et l'arbre suivant est different")
-    # ---- basses et aigus
-    L = fd.Lightning(1)
-    L.configure(16 / 9, 1.0)
-    L.drop()
-    adv(L, 1.0)
-    a = L.draw_list(high=1.0, t=0.0)
-    b = L.draw_list(high=1.0, t=0.37)
-    n = L.draw_list(high=0.0, t=0.0)
-    n2 = L.draw_list(high=0.0, t=0.37)
-    fine = [i for i, it in enumerate(a) if it[4] < 0.002]
-    thick = [i for i, it in enumerate(a) if it[4] > 0.005]
-    wide = L.draw_list(bass=1.0)
-    flat = L.draw_list(bass=0.0)
-    check(len(a) == len(b) == len(n) and any(a[i][5] != b[i][5] for i in fine) and all(a[i][5] == b[i][5] for i in thick) and n == n2,
-          "aigus: les fines branches scintillent, les troncs non, rien sans aigus")
-    check(all(w[4] > f[4] * 1.29 for w, f in zip(wide, flat)) and all(0.0 <= it[5] <= 1.0 for it in a + wide) and finite(a + wide),
-          "basses: les branches s'epaississent ; intensites dans [0, 1], rien de non fini")
+    L.update(0.1, kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=50, ceiling=1.0)
+    p1 = L.stats()["pushes"]
+    L.update(0.1, kicks=50, ceiling=1.0)
+    check(p1 == 1 and L.stats()["pushes"] == 2, "kicks: 4 poussees par seconde au plus, une rafale de 50 = une seule poussee", f"{p1} {L.stats()['pushes']}")
     # ---- robustesse
     L = fd.Lightning(1)
-    L.update(float("inf"), kicks=1, ceiling=1.0)
-    L.update(-1.0, kicks=1, ceiling=1.0)
-    L.update(float("nan"), kicks=1, ceiling=1.0)
-    L.update(0.1, kicks=-5, ceiling=7.0)
-    check(finite(L.draw_list()) and 0.0 <= L.charge <= 1.0 and L.gens <= fd.MAX_DEPTH, "robustesse: dt infini / negatif / NaN, kicks negatifs, plafond hors plage")
+    for dt in (float("inf"), -1.0, float("nan"), 0.1):
+        L.update(dt, kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=-5, ceiling=7.0, speed=-3.0, high=9.0)
+    L.update(0.1, kicks=10 ** 9, ceiling=float("nan"))
+    check(finite(L) and L.stats()["segments"] <= fd.MAX_SEGMENTS, "robustesse: dt infini / negatif / NaN, kicks negatifs ou enormes, plafond hors plage")
+    L.clear()
+    check(L.empty and L.segments() == [], "clear: vide")
     # ---- voyant de l'interface
     from core import explain
-    check(explain.foudre_info_text(None).startswith("foudre :") and "repos" in explain.foudre_info_text((0, 0.0))
-          and explain.foudre_info_text((3, 0.52)) == "foudre : profondeur 3/6, charge 52 %" and explain.foudre_info_text((9, 7.0)).endswith("100 %"),
-          "voyant: profondeur et charge de la foudre, repos, valeurs hors plage bornees")
+    check(explain.foudre_info_text(None).startswith("foudre :") and "repos" in explain.foudre_info_text({"segments": 0})
+          and explain.foudre_info_text({"segments": 312, "tips": 14, "pulses": 2}) == "foudre : 312 segments, 14 pointes, pouls 2",
+          "voyant: segments, pointes et pouls de la foudre, repos")
     # ---- reglages et panique
     from core import params_schema as ps
     from core.controls import panic

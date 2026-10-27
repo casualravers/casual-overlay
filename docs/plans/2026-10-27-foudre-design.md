@@ -1,6 +1,6 @@
 # Foudre : un strobe subtil en arbre de lumiere (spec)
 
-Date : 2026-10-27. Statut : implemente (voir CLAUDE.md, section Foudre) ; reste a regler a l'oeil.
+Date : 2026-10-27. Statut : REMPLACEE par `2026-10-27-foudre-reseau-design.md` (v2, reseau vivant).
 
 ## But
 
