@@ -1234,16 +1234,22 @@ def install(c):
             with STATS.timed("panel.lignes"):
                 add_rows(rows[:ROWS_FIRST], False)
             rest = rows[ROWS_FIRST:]
+            panel_state["filling"] = bool(rest)                # l'ecran de chargement attend la fin du remplissage
             if rest:
                 gen = panel_state["gen"]
 
                 def more() -> None:
-                    if panel_state.get("gen") != gen or not inner.winfo_exists():
+                    if panel_state.get("gen") != gen:
+                        return
+                    if not inner.winfo_exists():
+                        panel_state["filling"] = False
                         return
                     with STATS.timed("panel.lot"):
                         add_rows([rest.pop(0) for _ in range(min(ROWS_BATCH, len(rest)))], True)
                     if rest:
                         root.after(1, more)
+                    else:
+                        panel_state["filling"] = False
                 root.after(1, more)
         with STATS.timed("panel.habillage"):
             skin.apply(scene_panel)                    # TOUJOURS : un panneau reconstruit sans habillage (vignettes pretes, Rescanner...) laissait les cases brutes

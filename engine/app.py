@@ -104,7 +104,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
             s.projection = Projection(s)                 # la GUI seule s'ouvre ; la projection part du bouton (ou de --projeter)
             if args.projeter:
                 print(s.projection.start())
-            gl_gui.run_gui(s, live)
+            gl_gui.run_gui(s, live, boot=getattr(args, "boot", None))
         else:
             gl_main(s)
         clean = True
