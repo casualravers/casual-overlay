@@ -7671,9 +7671,21 @@ def check_doodles() -> None:
                 inside &= -1e-9 <= x and -1e-9 <= y and x + rw <= 1.0 + 1e-9 and y + rh <= 1.0 + 1e-9 and rh <= dd.MAX_HEIGHT_FRAC + 1e-9
     check(inside, "position: toujours entierement dans le cadre (ratios extremes compris), hauteur <= 30 %")
     x, y, rw, rh = dd.place(rng, 2.0, 16 / 9)
-    check(abs(rh - 0.30) < 1e-9 and abs(rw * 16 / 9 / rh - 2.0) < 1e-9, "position: hauteur 30 % de l'ecran, ratio de l'image garde")
+    check(abs(rh - dd.MAX_HEIGHT_FRAC) < 1e-9 and abs(rw * 16 / 9 / rh - 2.0) < 1e-9, "position: hauteur maximale de l'ecran, ratio de l'image garde")
     xs = {round(dd.place(rng, 1.0, 16 / 9)[0], 3) for _ in range(40)}
     check(len(xs) > 20, "position: tirage different a chaque apparition")
+    # les medias affiches ne se recouvrent pas : le suivant va dans un endroit libre, reduit si besoin
+    rng2, shown, clash, cover, small = random.Random(11), [], 0, 0, 0
+    for _ in range(400):
+        rect = dd.place(rng2, rng2.choice((0.6, 1.0, 1.5, 2.2)), 16 / 9, avoid=shown[-(dd.MAX_VISIBLE - 1):])
+        within = -1e-9 <= rect[0] and -1e-9 <= rect[1] and rect[0] + rect[2] <= 1.0 + 1e-9 and rect[1] + rect[3] <= 1.0 + 1e-9
+        cover += 0 if within else 1
+        clash += any(dd._overlap(rect, o) > 1e-9 for o in shown[-(dd.MAX_VISIBLE - 1):])
+        small += rect[3] < 0.99 * dd.MAX_HEIGHT_FRAC
+        shown.append(rect)
+        shown[:] = shown[-6:]
+    check(cover == 0 and clash <= 8 and small < 300, "position: les medias visibles ne se recouvrent (presque) jamais, toujours dans le cadre", f"{clash} recouvrements, {small} reduits, {cover} hors cadre")
+    check(dd.MAX_HEIGHT_FRAC >= 0.4, "position: les medias sont grands (au moins 40 % de la hauteur)")
     a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, 14.3, 14.65, 15, 16)]
     check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
           and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
@@ -7686,8 +7698,8 @@ def check_doodles() -> None:
     dropped = []
     for i in range(7):
         dropped += wall.add(i, (0, 0, 0.1, 0.1), 100.0 + i)
-    check(len(wall) == 5 and dropped == [0, 1] and [it["id"] for it in wall.items] == [2, 3, 4, 5, 6], "mur: 5 medias au plus, le plus ancien part", str(dropped))
-    check(wall.step(110.0) == [] and wall.step(119.5) == [2, 3, 4] and len(wall) == 2, "mur: les medias expires sont retires")
+    check(len(wall) == dd.MAX_VISIBLE == 3 and dropped == [0, 1, 2, 3] and [it["id"] for it in wall.items] == [4, 5, 6], "mur: 3 medias au plus, le plus ancien part", str(dropped))
+    check(wall.step(110.0) == [] and wall.step(119.5) == [4] and len(wall) == 2, "mur: les medias expires sont retires")
     check(len(wall.visible(112.0)) == 2 and wall.clear() == [5, 6] and len(wall) == 0, "mur: visibles puis vide")
 
     # --- un tour d'interrogation avec un faux reseau
@@ -7878,8 +7890,9 @@ def check_doodles() -> None:
     changed = np.abs(img.astype(int) - base.astype(int)).sum(axis=2) > 60
     ys, xs = np.nonzero(changed)
     x0, y0, x1, y1 = xs.min(), ys.min(), xs.max(), ys.max()
-    check(abs((y1 - y0 + 1) - 0.30 * size[1]) <= 3 and abs((x1 - x0 + 1) - 2 * 0.30 * size[1]) <= 3 and x0 >= 0 and y0 >= 0 and x1 < size[0] and y1 < size[1],
-          "rendu: doodle de 30 % de la hauteur, ratio garde, entierement dans le cadre", f"{x1 - x0 + 1}x{y1 - y0 + 1}")
+    hf = gl.doodles.MAX_HEIGHT_FRAC if hasattr(gl, "doodles") else 0.45
+    check(abs((y1 - y0 + 1) - hf * size[1]) <= 3 and abs((x1 - x0 + 1) - 2 * hf * size[1]) <= 3 and x0 >= 0 and y0 >= 0 and x1 < size[0] and y1 < size[1],
+          "rendu: doodle a la hauteur maximale, ratio garde, entierement dans le cadre", f"{x1 - x0 + 1}x{y1 - y0 + 1}")
     ex, ey = rect[0] * size[0], rect[1] * size[1]
     check(abs(x0 - ex) <= 3 and abs(y0 - ey) <= 3, "rendu: pose a l'endroit tire", f"({x0},{y0}) attendu ({ex:.0f},{ey:.0f})")
     cx = (x0 + x1) // 2
@@ -7948,7 +7961,7 @@ def check_doodles() -> None:
     r4 = gl.Renderer(ctx, size, None)
     for _ in range(8):
         r4.add_doodle(half, time.monotonic() - 5.0)
-    check(len(r4.wall) == 5 and len(r4.doodle_tex) == 5, "rendu: 5 doodles au plus, les textures des evinces sont liberees", f"{len(r4.wall)} {len(r4.doodle_tex)}")
+    check(len(r4.wall) == 3 and len(r4.doodle_tex) == 3, "rendu: 3 doodles au plus, les textures des evinces sont liberees", f"{len(r4.wall)} {len(r4.doodle_tex)}")
     r4._draw_doodles(fbo, size, time.monotonic() + 60.0)
     check(len(r4.wall) == 0 and not r4.doodle_tex, "rendu: apres 15 s tout est retire et libere")
     # la panique n'y touche pas (meme regle que le logo et le texte)
