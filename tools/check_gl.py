@@ -8256,6 +8256,92 @@ def check_reaction_sim() -> None:
           "garde-fou : un motif eteint est ressemee au controle suivant (graine suivante)", str((first, second, dead.seed)))
 
 
+def check_bg_labyrinthe() -> None:
+    print("Fond genere : palette labyrinthe (reaction-diffusion en trois couches)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    fbos: dict = {}
+
+    def fbo_for(sz):
+        if sz not in fbos:
+            fbos[sz] = ctx.framebuffer(color_attachments=[ctx.texture(sz, 4)])
+        return fbos[sz]
+
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe", bg_rd_color1="#ff0000", bg_rd_color2="#00ff00",
+                bg_rd_color3="#0000ff", bg_rd_ground="#000000", bg_react=0.0, bg_hue=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0)
+    clock = {}
+
+    def run(frames=40, state=quiet, size=(640, 360), rr=None, **kw):
+        """Enchaine `frames` images de 0,05 s (dt est plafonne a 0,1 s) ; rend (Renderer, derniere image)."""
+        p = dict(base, **kw)
+        fbo = fbo_for(size)
+        rr = rr or gl.Renderer(ctx, size, None)
+        t0 = clock.get(id(rr), 0.0)
+        for i in range(frames):
+            st = state(i) if callable(state) else state
+            rr.draw(fbo, size, st, p, t0 + 0.05 * i)
+        clock[id(rr)] = t0 + 0.05 * frames
+        return rr, read_target(ctx, fbo, size).astype(int)
+
+    r1, a = run()
+    _r2, b = run()
+    check(abs(a - b).max() == 0 and sum(int(a[:, :, c].max() > 200) for c in range(3)) >= 2,
+          "labyrinthe: image non vide, deterministe (deux Renderer neufs)")
+    _r, same = run(bg_rd_offset=0.0)
+    _r, apart = run(bg_rd_offset=0.03)
+    pure_red = (apart[:, :, 0] > 200) & (apart[:, :, 1] < 50) & (apart[:, :, 2] < 50)
+    # couches confondues : seul le bord anti-crenele laisse un peu des couleurs du dessous (au plus m (1 - m) = 25 % = 64)
+    check(same[:, :, 0].max() < 70 and same[:, :, 1].max() < 70 and pure_red.any(),
+          "labyrinthe: ecart 0 = trois couches confondues, ecart 0,03 = couches separees")
+    _r, hue = run(bg_hue=1.0 / 3.0)
+    check(abs(hue[:, :, 1] - a[:, :, 0]).max() <= 3, "labyrinthe: la teinte du fond tourne les couleurs (rouge -> vert)")
+    _r, big = run(size=(1280, 720))
+    small_ = big.reshape(360, 2, 640, 2, 3).mean(axis=(1, 3))
+    check(abs(small_ - a).mean() < 6, "labyrinthe: meme dessin quelle que soit la taille de la fenetre", f"ecart {abs(small_ - a).mean():.1f}")
+    rt, t1 = run(tempo=0.0)
+    _rt, t2 = run(rr=rt, frames=20, tempo=0.0)
+    check(abs(t2 - t1).max() == 0 and abs(run(rr=r1, frames=20)[1] - a).mean() > 1,
+          "labyrinthe: master du tempo a 0 = motif fige ; vitesse 1 = il evolue")
+    loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0)
+    _r, calm = run(state=quiet, bg_react=0.0)
+    _r, noisy = run(state=lambda i: dict(loud, beats=i // 5), bg_react=0.0)
+    check(abs(calm - noisy).max() == 0, "labyrinthe: reaction 0 = image identique avec ou sans son")
+    rq, _ = run(frames=60, bg_react=1.0, bg_rd_shape=0.2)
+    rb, _ = run(frames=60, state=dict(quiet, bass=1.0), bg_react=1.0, bg_rd_shape=0.2)
+    _l, sq = rd_components(rq.rd.read_v() > 0.25)
+    _l, sb = rd_components(rb.rd.read_v() > 0.25)
+    check(np.mean(sb) > 1.3 * np.mean(sq), "labyrinthe: les basses poussent le motif vers les lignes (composantes plus grandes)",
+          f"aire moyenne {np.mean(sq):.0f} -> {np.mean(sb):.0f}")
+    rk, _ = run(frames=40, state=lambda i: dict(quiet, beats=i // 8), bg_react=1.0)
+    rn, _ = run(frames=40, bg_react=1.0)
+    check(not np.array_equal(rk.rd.read_v(), rn.rd.read_v()), "labyrinthe: les kicks sement des germes (la simulation change)")
+    re_, _ = run(frames=30, bg_react=1.0)
+    _r, still = run(rr=re_, frames=1, bg_react=1.0, tempo=0.0)
+    _r, wide = run(rr=re_, frames=1, state=dict(quiet, beat=1.0, since_beat=0.0), bg_react=1.0, tempo=0.0)
+    check(abs(wide - still).mean() > 1, "labyrinthe: l'enveloppe du kick ecarte les couches")
+    # changement de palette : la stochastique n'est pas touchee, le labyrinthe repart d'un etat seme
+    rs, _ = run(frames=1, bg_palette="stochastique")
+    run(rr=rs, frames=40)
+    _r, s1 = run(rr=rs, frames=1, bg_palette="stochastique")
+    _r, s2 = run(frames=42, bg_palette="stochastique")
+    check(abs(s1 - s2).max() == 0, "labyrinthe: la palette stochastique est identique apres un passage par le labyrinthe")
+    run(rr=rs, frames=1, tempo=0.0)
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    fresh = ReactionDiffusion(ctx, ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes()), SHADER_DIR)
+    fresh.ensure(1.0)
+    fresh.reset(rs.rd.seed)
+    check(np.array_equal(rs.rd.read_v(), fresh.read_v()), "labyrinthe: revenir a la palette repart d'un etat seme propre")
+    rw, _ = run(frames=20, tempo=0.0)
+    v_before = rw.rd.read_v().copy()
+    run(rr=rw, frames=2, size=(960, 540), tempo=0.0)
+    check(np.array_equal(rw.rd.read_v(), v_before), "labyrinthe: une fenetre redimensionnee ne touche pas a la simulation")
+
+
 def check_reaction_pure() -> None:
     print("Reaction-diffusion : logique pure (core/reaction.py)")
     from core import reaction as rc
@@ -9072,6 +9158,7 @@ def main() -> None:
     check_bg_stochastic()
     check_reaction_pure()
     check_reaction_sim()
+    check_bg_labyrinthe()
     check_cells()
     check_noise()
     check_doodles()

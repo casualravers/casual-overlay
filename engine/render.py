@@ -18,7 +18,9 @@ from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
+from core import reaction
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
+from engine.reaction import ReactionDiffusion
 from engine.video import LogoVideo
 
 SHADER_DIR = Path(__file__).resolve().parent.parent / "gl_shaders"
@@ -253,6 +255,10 @@ class Renderer:
         self._bg_scroll = 0.0
         self._bg_flip_t = 0.0
         self._sto_flick = 0.0                      # palette stochastique : phase integree du scintillement (aigus)
+        self.rd: ReactionDiffusion | None = None   # palette labyrinthe : simulation creee au premier besoin
+        self._rd_acc = 0.0                         # reste de l'accumulateur de pas de simulation
+        self._rd_beats: int | None = None          # compteur de kicks deja semes
+        self._rd_active = False                    # palette active a l'image precedente
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
@@ -580,6 +586,39 @@ class Renderer:
         self._qr = (url, tex, side)
         return tex, side
 
+    def _labyrinth(self, sp, p: dict, dt: float, t: float, react: float, bg_au, state: dict, kicks_on: bool) -> None:
+        """Palette labyrinthe : fait avancer la simulation (seulement si elle est affichee) et pose ses uniforms (texture unite 6).
+        `dt` deja multiplie par le master du tempo ; basses = forme et vitesse, kicks = germes, enveloppe du kick = ecart des couches."""
+        active = p["bg_mode"] == "pattern" and p["bg_palette"] == "labyrinthe"
+        beats = int(state.get("beats", 0))
+        if active:
+            if self.rd is None:
+                self.rd = ReactionDiffusion(self.ctx, self.vbo, self.shader_dir)
+            self.rd.ensure(float(p["bg_rd_scale"]))
+            if not self._rd_active:                    # activation : repart d'un etat seme propre
+                self.rd.reset(self.rd.seed)
+                self._rd_acc, self._rd_beats = 0.0, beats
+            bass = react * float(bg_au[0])
+            seeds: list = []
+            if kicks_on and self._rd_beats is not None:
+                for k in range(self._rd_beats + 1, beats + 1):
+                    seeds += reaction.kick_seeds(k)
+            self._rd_beats = beats
+            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass)
+            if seeds and n == 0:
+                n = 1                                  # un kick sur une image sans pas : les germes passent quand meme
+            self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), seeds[:4])
+            self.rd.watch(t)
+            self.rd.texture.use(6)
+            w, h = self.rd.size
+            self._set(sp, "u_rd", (float(p["bg_rd_offset"]) * (1.0 + 1.5 * react * float(bg_au[2])), 0.5 / h, 0.0, 0.0))
+            for key, name in (("bg_rd_color1", "u_rd_c1"), ("bg_rd_color2", "u_rd_c2"), ("bg_rd_color3", "u_rd_c3"), ("bg_rd_ground", "u_rd_ground")):
+                self._set(sp, name, hex_to_rgb(p[key], DEFAULT_PARAMS[key]))
+        else:
+            self.video_tex.use(6)                      # une unite jamais vide, meme hors de cette palette
+        self._set(sp, "u_rd_tex", 6)
+        self._rd_active = active
+
     def _draw_qr(self, target, size: tuple[int, int], p: dict) -> None:
         if float(p.get("qr_on", 0.0)) < 0.5:
             return
@@ -754,12 +793,13 @@ class Renderer:
         flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0)
         self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
         self._bg_clock += dt                       # horloge reelle: la palette "test" tourne a 30 images/s fixes
-        self._set(sp, "u_bg_palette", {"duo": 1.0, "test": 2.0, "stochastique": 3.0}.get(p["bg_palette"], 0.0))
+        self._set(sp, "u_bg_palette", {"duo": 1.0, "test": 2.0, "stochastique": 3.0, "labyrinthe": 4.0}.get(p["bg_palette"], 0.0))
         self._set(sp, "u_sto", (float(p["bg_sto_size"]), float(p["bg_sto_regular"]), float(p["bg_sto_vary"]), float(p["bg_sto_density"])))
         self._set(sp, "u_sto2", ({"waves": 1.0, "gradient": 2.0}.get(p["bg_sto_field"], 0.0), float(p["bg_sto_invert"]),
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
         self._set(sp, "u_sto_au", (react * float(bg_au[0]), react * float(bg_au[2]),
                                    float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0, 0.0))
+        self._labyrinth(sp, p, dt, t, react, bg_au, state, react > 0 and react_m > 0 and has_kick(src_bg))
         self._set(sp, "u_bg_frame", float(int(self._bg_clock * 30.0)))
         self._set(sp, "u_bg_c1", hex_to_rgb(p["bg_color1"], DEFAULT_PARAMS["bg_color1"]))
         self._set(sp, "u_bg_c2", hex_to_rgb(p["bg_color2"], DEFAULT_PARAMS["bg_color2"]))

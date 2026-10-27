@@ -36,6 +36,14 @@ uniform float u_beat;          // enveloppe du kick 1 -> 0
 uniform vec4  u_sto;           // x = taille des points (px pour 720 px de haut), y = regularite, z = variation de taille, w = densite
 uniform vec4  u_sto2;          // x = champ (0 bruit, 1 vagues, 2 degrade), y = inversion, z = arc-en-ciel, w = phase du scintillement
 uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (deja multiplies par la reaction)
+// Palette labyrinthe (u_bg_palette = 4) : etat d'une reaction-diffusion (r = U, g = V, grille en boucle, origine BAS gauche) lu trois
+// fois avec un petit decalage chacune : trois couches colorees decalees, posees dans l'ordre sur le fond.
+uniform sampler2D u_rd_tex;
+uniform vec4  u_rd;            // x = ecart des couches (fraction de la hauteur), y = demi-texel de la simulation (en hauteur)
+uniform vec3  u_rd_c1;
+uniform vec3  u_rd_c2;
+uniform vec3  u_rd_c3;
+uniform vec3  u_rd_ground;
 
 // Fonte acide du logo (dissolution sur place) : un champ de bruit local au logo est compare a un seuil
 // qui monte avec u_melt ; ce qui est sous le seuil disparait, et la lisiere ronge brille d'un acide.
@@ -174,8 +182,27 @@ vec3 stochastic_pattern(vec2 p) {
     return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
 }
 
+float rd_layer(vec2 p, float angle) {
+    float ar = u_res.x / max(u_res.y, 1.0);
+    vec2 q = p + u_rd.x * vec2(cos(angle) / ar, sin(angle));     // decalage isotrope a l'ecran
+    float v = texture(u_rd_tex, vec2(q.x, 1.0 - q.y)).g;
+    float w = max(u_rd.y * 4.0, 0.02);                            // bord net sans crenelage (V varie vite pres du seuil)
+    return smoothstep(0.25 - w, 0.25 + w, v);
+}
+
+vec3 labyrinth_pattern(vec2 p) {
+    vec3 col = u_rd_ground;
+    col = mix(col, u_rd_c1, rd_layer(p, 1.5707963));
+    col = mix(col, u_rd_c2, rd_layer(p, 3.6651914));
+    col = mix(col, u_rd_c3, rd_layer(p, 5.7595865));
+    return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
+}
+
 // p : position ecran, origine HAUT gauche.
 vec3 background_pattern(vec2 p) {
+    if (u_bg_palette > 3.5) {
+        return labyrinth_pattern(p);
+    }
     if (u_bg_palette > 2.5) {
         return stochastic_pattern(p);
     }
