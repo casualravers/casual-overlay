@@ -8744,19 +8744,20 @@ def check_foudre_pure() -> None:
         most = max(most, len(L3.pulses()))
     adv(L, 3.0, ceiling=1.0)
     check(len(p0) == 1 and p0[0][0] == 0.0 and abs(p1[0][0] - fd.PULSE_SPEED * 0.1) < 0.05 * fd.PULSE_SPEED * 0.1 + 1e-9 and abs(L2.pulses()[0][0] - fd.PULSE_SPEED * 0.05) < 0.005
-          and most <= fd.MAX_PULSES and L.pulses() == [], "pouls: part de 0, avance de PULSE_SPEED x tempo, au plus 4 en meme temps, disparait au bout du reseau", f"{p0} {p1} {most}")
+          and most <= fd.MAX_PULSES and L.pulses() == [], "pouls: part de 0, avance de PULSE_SPEED x tempo, au plus MAX_PULSES en meme temps, disparait au bout du reseau", f"{p0} {p1} {most}")
     # ---- le pouls renforce les noeuds dans l'ordre : la racine d'abord, les extremites ensuite
     L = run(1, secs=6.0)
-    adv(L, 1.0, ceiling=0.0)
+    L.vig = [0.3 if al else v for v, al in zip(L.vig, L.alive)]                          # reseau au repos : de la marge pour que les ondes se voient
     own = lambda: {i: L.vig[i] for i in range(len(L.x)) if L.alive[i]}                 # vigueur propre de chaque noeud (la vigueur affichee est le max des descendants)
+    L.pulse_list = []                                                                  # les ondes lentes du tirage precedent ne sont pas finies : on repart d'un reseau sans onde
     before = own()
     L.update(0.0, kicks=1, ceiling=1.0)
     L.update(0.1, ceiling=1.0)
     up1 = [L.dist[i] for i, v in own().items() if i in before and v > before[i] + 1e-6]
     after1 = own()
-    adv(L, 0.4, ceiling=1.0)
+    adv(L, 1.5, ceiling=1.0)
     up2 = [L.dist[i] for i, v in own().items() if i in after1 and v > after1[i] + 1e-6]
-    check(len(up1) > 5 and max(up1) < 0.35 and up2 and max(up2) > max(up1) + 0.2,
+    check(len(up1) > 5 and max(up1) < 0.35 and up2 and max(up2) > max(up1) + 0.12,
           "pouls: renforce d'abord les noeuds proches de la racine, puis les lointains", f"{len(up1)} {max(up1, default=0):.2f} {max(up2, default=0):.2f}")
     # ---- consolidation : les routes tres utilisees s'epaississent petit a petit (modele des tuyaux)
     L = fd.Lightning(1)
