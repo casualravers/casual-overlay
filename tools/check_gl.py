@@ -8167,6 +8167,95 @@ def check_params_schema() -> None:
           "labyrinthe: une scene capturee avec cette palette la rejoue entierement")
 
 
+def rd_components(mask):
+    """Composantes connexes (voisinage 4, bords en boucle) d'un masque booleen : tableau d'etiquettes (0 = vide) et tailles."""
+    from collections import deque
+    h, w = mask.shape
+    labels = np.zeros((h, w), dtype=np.int32)
+    sizes = []
+    for y0, x0 in zip(*np.nonzero(mask)):
+        if labels[y0, x0]:
+            continue
+        n = len(sizes) + 1
+        labels[y0, x0] = n
+        todo, size = deque([(y0, x0)]), 0
+        while todo:
+            y, x = todo.popleft()
+            size += 1
+            for yy, xx in (((y + 1) % h, x), ((y - 1) % h, x), (y, (x + 1) % w), (y, (x - 1) % w)):
+                if mask[yy, xx] and not labels[yy, xx]:
+                    labels[yy, xx] = n
+                    todo.append((yy, xx))
+        sizes.append(size)
+    return labels, sizes
+
+
+def check_reaction_sim() -> None:
+    print("Reaction-diffusion : simulation sur le GPU (engine/reaction.py)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+
+    def sim(shape, steps, seed=0, scale=1.0):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(scale)
+        r.reset(seed)
+        for _ in range(steps // 20):
+            r.step(20, shape)
+        return r
+
+    a, b = sim(0.6, 500), sim(0.6, 500)
+    check(a.read_v().shape == (216, 384) and np.array_equal(a.read_v(), b.read_v()), "simulation deterministe a graine egale")
+    alive = {s: float((sim(s, 2000).read_v() > 0.25).mean()) for s in (0.0, 0.5, 1.0)}
+    check(all(0.05 < x < 0.70 for x in alive.values()), "motif vivant apres 2000 pas, sans envahir tout (taches, milieu, labyrinthe)", str(alive))
+    # Pendant une division, une tache forme un instant deux blobs collés : on juge le motif installe (6000 pas, ~10 s).
+    spots = sim(0.0, 6000).read_v() > 0.25
+    lab, sizes = rd_components(spots)
+    near = False
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            other = np.roll(np.roll(lab, dy, axis=0), dx, axis=1)
+            near = near or bool(((lab > 0) & (other > 0) & (lab != other)).any())
+    check(len(sizes) >= 30 and max(sizes) < 4 * float(np.median(sizes)) and not near,
+          "forme 0 : taches nombreuses, de taille reguliere, qui ne se touchent jamais (pas meme en diagonale)",
+          f"{len(sizes)} taches, plus grande {max(sizes)}, mediane {np.median(sizes):.0f}, trop proches {near}")
+    _l, maze = rd_components(sim(1.0, 2000).read_v() > 0.25)
+    check(np.mean(maze) > 3 * np.mean(sizes), "forme 1 : les taches se soudent en lignes (composantes bien plus grandes)",
+          f"aire moyenne {np.mean(maze):.0f} contre {np.mean(sizes):.0f}")
+    frozen = sim(0.6, 400)
+    v0 = frozen.read_v().copy()
+    frozen.step(0, 0.6)
+    check(np.array_equal(frozen.read_v(), v0), "0 pas = etat inchange")
+    empty = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+    empty.ensure(1.0)
+    empty.write(np.ones((216, 384), np.float32), np.zeros((216, 384), np.float32))
+    empty.step(1, 0.6, [(0.25, 0.5)])
+    for _ in range(15):
+        empty.step(20, 0.6)
+    v = empty.read_v()
+    check(v[100:116, 88:104].max() > 0.25 and v[:, 200:].max() < 0.05,
+          "un germe pose fait naitre une tache a cet endroit (et seulement la)", f"{v[100:116, 88:104].max():.2f} / {v[:, 200:].max():.2f}")
+    grown = sim(0.6, 1000)
+    seed_before = grown.seed
+    grown.ensure(1.5)
+    for _ in range(25):
+        grown.step(20, 0.6)
+    gv = grown.read_v()
+    check(gv.shape == (rc.grid_size(1.5)[1], rc.grid_size(1.5)[0]) and grown.seed == seed_before and 0.05 < (gv > 0.25).mean() < 0.7,
+          "taille du motif changee : etat recopie (pas reinitialise), motif toujours vivant", str((gv.shape, (gv > 0.25).mean())))
+    dead = sim(0.6, 200)
+    dead.write(np.ones((216, 384), np.float32), np.zeros((216, 384), np.float32))
+    first, second = dead.watch(10.0), dead.watch(12.1)
+    check(not first and second and dead.seed == 1 and dead.read_v().max() > 0.5,
+          "garde-fou : un motif eteint est ressemee au controle suivant (graine suivante)", str((first, second, dead.seed)))
+
+
 def check_reaction_pure() -> None:
     print("Reaction-diffusion : logique pure (core/reaction.py)")
     from core import reaction as rc
@@ -8982,6 +9071,7 @@ def main() -> None:
     check_melt()
     check_bg_stochastic()
     check_reaction_pure()
+    check_reaction_sim()
     check_cells()
     check_noise()
     check_doodles()
