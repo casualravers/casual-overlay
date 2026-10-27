@@ -380,6 +380,23 @@ les basses).
   lignes, type motif de Turing) : les points sont independants et se touchent quand la densite monte ; la reaction-diffusion est une autre palette.
   `check_gl.py` : `check_bg_stochastic` (pixels : densite, regularite mesuree par blocs, variation, inversion, arc-en-ciel, teinte, champs,
   resolution, derive, son, reaction 0) ; schema, scene rejouee, GUI et Randomizer dans leurs verifications.
+- **Palette `labyrinthe`** (reaction-diffusion, motif de Turing ; spec et plan : `docs/plans/2026-10-27-fond-labyrinthe-*.md`) : taches qui se
+  repoussent (jamais collees) et se soudent en lignes sinueuses, en trois couches colorees decalees (le look du pull montre par l'utilisateur).
+  **Simulation Gray-Scott sur le GPU** : `engine/reaction.py` (`ReactionDiffusion`, possedee par le `Renderer`, creee au premier besoin) +
+  `gl_shaders/rd_step.frag` (laplacien 3 x 3, Du 1, Dv 0,5, dt 1) ; logique pure dans `core/reaction.py` (`feed_kill`, `grid_size`, germes,
+  `steps_for`). Etat **RG32F** (repli RG16F) en ping-pong sur une **grille fixe** de 384 x 216 (/ `bg_rd_scale`), bords en boucle, independante de la
+  fenetre ; changer d'echelle recopie l'etat (bilineaire, numpy). **Piege du demi-flottant** : en RG16F un increment `F x (1 - U)` plus petit que le
+  demi-ulp pres de 1 est perdu, et le motif se figeait en un point fixe d'arrondi apres ~15 s (vu en revue, test « se reorganise encore apres
+  10000 pas ») ; il faussait aussi le reglage des taches. `bg_rd_shape` interpole (F, K) de **taches (0,0367 ; 0,0649)** a **labyrinthe
+  (0,0290 ; 0,0570)** (valeurs classiques ; en RG32F : 238 taches regulieres, aucun contact, motif toujours actif). Etat initial : 40 germes (graine fixe), refait a chaque activation de la palette et a chaque nouveau
+  Renderer (ouverture de la projection). Garde-fou : toutes les 2 s, moyenne de V (mipmaps 1 x 1) ; motif eteint = ressemee. Pas par image :
+  600 / s x `bg_speed` x (1 + basses), plafond 24 (exces jete), `dt` deja multiplie par le tempo (tempo 0 = fige). Rendu (`scene.frag`,
+  `labyrinth_pattern`, palette 4, texture unite 6) : V lu trois fois a 120 degres d'ecart (`bg_rd_offset`), seuil 0,25 anti-crenele, couches
+  `bg_rd_color1/2/3` sur `bg_rd_ground`, puis `bg_hue`. **Son** (x `bg_react`) : basses = forme + 0,4 (vers les lignes) et vitesse, chaque kick seme
+  3 germes (`kick_seeds`), l'enveloppe du kick ouvre l'ecart (x 2,5). Un kick tombe pendant une division : deux blobs colles un instant (normal).
+  **Cout** : +0,6 ms a 1280 x 720 ; `core.safety.BG_RD_COST_MS` = 1,0. Bloc `rd_box` dans « Fond genere ». Le Full Randomizer la tire une fois sur
+  cinq. `check_gl.py` : `check_reaction_pure` (pur), `check_reaction_sim` (vivant a trois formes, taches separees et regulieres, lignes, germes,
+  echelle, garde-fou), `check_bg_labyrinthe` (pixels : couches, teinte, taille de fenetre, tempo, son, reaction 0, changement de palette).
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
   (`dt * vitesse`), pas calculees par `vitesse * temps` : changer la vitesse dans la GUI ne
   fait jamais sauter le motif.

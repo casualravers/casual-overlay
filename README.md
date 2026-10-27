@@ -196,7 +196,10 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
   carreaux, contraste, cadence, reaction au kick ; effet immediat). Palette **Stochastique** : un tramage de points (couleur 1 sur couleur 2) dont la
   densite dessine un champ qui bouge (bruit fluide, vagues ou degrade) ; reglages propres : taille des points, regularite (1 = sans amas ni trous,
   0 = grain aleatoire), variation de taille, densite, arc-en-ciel, inversion. Le son la module : les basses ajoutent des points, le kick donne un coup
-  de contraste et fait avancer les vagues, les aigus font scintiller les points.
+  de contraste et fait avancer les vagues, les aigus font scintiller les points. Palette **Labyrinthe** : une reaction-diffusion (motif de Turing,
+  comme une empreinte digitale) simulee par la carte graphique, des taches qui ne se touchent jamais et se soudent en lignes sinueuses, en trois
+  couches colorees decalees sur un fond sombre ; reglages : forme (taches -> labyrinthe), taille du motif, ecart des couches, quatre couleurs. Les
+  basses poussent vers les lignes et accelerent le motif, chaque kick seme de nouvelles taches et ecarte un instant les couches.
 - **Noise** : un seul hasard, prereglé, qui joue le role d'une musique imaginaire : des ondulations et des coups au hasard,
   meme sans son, sur les effets que tu coches (wobble, onde de choc, aberration, glitch, reaction du logo). Deux reglages :
   son *intensite* et les cases de ce sur quoi il agit (rien n'est coche par defaut). Un indicateur montre ce qu'il envoie.

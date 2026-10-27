@@ -224,9 +224,9 @@ def _pick_weighted(rng: random.Random, names: list[str], weights: dict, last: st
 
 
 def random_background_params(rng: random.Random) -> dict:
-    """Fond genere aux valeurs aleatoires, dans les plages des curseurs (jamais la palette banc de test). Les reglages de la palette
-    stochastique ne sont tires que pour elle."""
-    palette = rng.choice(("classic", "duo", "duo", "stochastique"))
+    """Fond genere aux valeurs aleatoires, dans les plages des curseurs (jamais la palette banc de test). Les reglages des palettes
+    stochastique et labyrinthe ne sont tires que pour elles."""
+    palette = rng.choice(("classic", "duo", "duo", "stochastique", "labyrinthe"))
     values = {"bg_palette": palette, "bg_hue": round(rng.random(), 3), "bg_angle": round(rng.uniform(0, 180), 1),
               "bg_speed": round(rng.uniform(0.4, 1.8), 2), "bg_tile": round(rng.uniform(50, 150), 1),
               "bg_checker": round(rng.uniform(0.06, 0.32), 3), "bg_flip": round(rng.uniform(0.5, 3.5), 2),
@@ -241,7 +241,19 @@ def random_background_params(rng: random.Random) -> dict:
                        "bg_sto_regular": round(rng.uniform(0.4, 1.0), 2), "bg_sto_vary": round(rng.uniform(0.0, 0.8), 2),
                        "bg_sto_density": round(rng.uniform(0.3, 0.7), 2), "bg_sto_invert": float(rng.random() < 0.5),
                        "bg_sto_rainbow": 0.0 if rng.random() < 0.5 else round(rng.uniform(0.0, 0.6), 2)})
+    if palette == "labyrinthe":
+        h = rng.random()
+        hues = (h, (h + rng.uniform(0.2, 0.4)) % 1.0, (h + rng.uniform(0.6, 0.8)) % 1.0)      # trois teintes espacees d'au moins 0,2
+        values.update({"bg_rd_shape": round(rng.uniform(0.2, 0.9), 2), "bg_rd_scale": round(rng.uniform(0.7, 1.5), 2),
+                       "bg_rd_offset": round(rng.uniform(0.0, 0.03), 3)})
+        for key, hue in zip(("bg_rd_color1", "bg_rd_color2", "bg_rd_color3"), hues):
+            values[key] = _hex(colorsys.hsv_to_rgb(hue, rng.uniform(0.6, 1.0), rng.uniform(0.8, 1.0)))
+        values["bg_rd_ground"] = _hex(colorsys.hsv_to_rgb(rng.random(), rng.uniform(0.2, 0.6), rng.uniform(0.03, 0.12)))
     return values
+
+
+def _hex(rgb) -> str:
+    return "#%02x%02x%02x" % tuple(round(c * 255) for c in rgb)
 
 
 def random_effects(rng: random.Random) -> dict:

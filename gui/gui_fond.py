@@ -68,12 +68,15 @@ def install(c):
     pz = Zone(pattern_box)
     add_section_title(pz, "Fond genere")
     palette_var = param_radio(pz, "Palette", "bg_palette",
-                              (("Arc-en-ciel", "classic"), ("Duo", "duo"), ("Banc de test", "test"), ("Stochastique", "stochastique")),
+                              (("Arc-en-ciel", "classic"), ("Duo", "duo"), ("Banc de test", "test"), ("Stochastique", "stochastique"),
+                               ("Labyrinthe", "labyrinthe")),
                               tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
                                       "Duo: degrade lisse entre deux couleurs. "
                                       "Banc de test: copie EXACTE du motif de test (carreaux de 80 px, 30 images/s) ; "
                                       "les autres reglages du motif ne s'y appliquent pas. "
-                                      "Stochastique: des points (couleur 1) sur un fond (couleur 2) dont la densite dessine un champ qui bouge.")
+                                      "Stochastique: des points (couleur 1) sur un fond (couleur 2) dont la densite dessine un champ qui bouge. "
+                                      "Labyrinthe: une reaction-diffusion (motif de Turing) : taches qui se repoussent et se soudent en "
+                                      "lignes sinueuses, en trois couches colorees decalees ; elle vit et se reorganise en continu.")
     r = pz.next_row()
     add_label(pz, "Couleurs 1 / 2", r, "Les deux couleurs du degrade de la palette Duo.")
     pair = tk.Frame(pattern_box)
@@ -111,14 +114,29 @@ def install(c):
     tk.Checkbutton(sto_box, text="Inverser (couleur 2 sur couleur 1)", variable=sto_inv_var).grid(
         row=sz.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
-    def show_sto(*_a) -> None:
-        if palette_var.get() == "stochastique":
-            sto_box.grid()
-        else:
-            sto_box.grid_remove()
+    # ---- palette LABYRINTHE (reaction-diffusion) : ses reglages ne s'affichent que pour elle
+    rd_box = tk.Frame(pattern_box)
+    rd_box.grid(row=pz.next_row(), column=0, columnspan=3, sticky="new")
+    rd_box.columnconfigure(2, weight=1)
+    rz = Zone(rd_box)
+    param_slider(rz, "Forme", "bg_rd_shape", 0.0, 1.0, 0.05,
+                 "0 = taches qui se repoussent (jamais collees) ; 1 = taches soudees en lignes sinueuses (labyrinthe). "
+                 "Avec la reaction a l'audio, les basses poussent vers les lignes.")
+    param_slider(rz, "Taille du motif", "bg_rd_scale", 0.5, 2.0, 0.05, "Epaisseur des lignes et des taches (le motif se redimensionne sans repartir de zero).")
+    param_slider(rz, "Ecart des couches", "bg_rd_offset", 0.0, 0.05, 0.002,
+                 "Decalage des trois couches colorees (0 = confondues). Le kick l'ouvre un instant.")
+    for label, key in (("Couche 1", "bg_rd_color1"), ("Couche 2", "bg_rd_color2"), ("Couche 3", "bg_rd_color3"), ("Fond", "bg_rd_ground")):
+        color_row(rz, label, key)
 
-    palette_var.trace_add("write", show_sto)
-    show_sto()
+    def show_palette_blocks(*_a) -> None:
+        for box, name in ((sto_box, "stochastique"), (rd_box, "labyrinthe")):
+            if palette_var.get() == name:
+                box.grid()
+            else:
+                box.grid_remove()
+
+    palette_var.trace_add("write", show_palette_blocks)
+    show_palette_blocks()
 
     # ---- fond VIDEO : un fichier brut lu en boucle plein cadre (le decodage est dans le fil GL : BgVideoManager)
     bgvid_box = tk.Frame(pattern_holder)
@@ -183,4 +201,4 @@ def install(c):
     tab_fond.update_idletasks()
 
     import types
-    return types.SimpleNamespace(apply_bgv=apply_bgv, bg_color1_var=bg_color1_var, bg_color2_var=bg_color2_var, bg_presets=bg_presets, bg_var=bg_var, bgv_status=bgv_status, bgv_var=bgv_var, bgvid_box=bgvid_box, load_overlay_preset=load_overlay_preset, pattern_box=pattern_box, save_overlay_preset=save_overlay_preset, sto_box=sto_box, update_overlay_preset=update_overlay_preset)
+    return types.SimpleNamespace(apply_bgv=apply_bgv, bg_color1_var=bg_color1_var, bg_color2_var=bg_color2_var, bg_presets=bg_presets, bg_var=bg_var, bgv_status=bgv_status, bgv_var=bgv_var, bgvid_box=bgvid_box, load_overlay_preset=load_overlay_preset, pattern_box=pattern_box, rd_box=rd_box, save_overlay_preset=save_overlay_preset, sto_box=sto_box, update_overlay_preset=update_overlay_preset)

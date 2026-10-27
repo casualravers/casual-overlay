@@ -595,14 +595,23 @@ def check_gui() -> None:
             c["melt_var"].set(0)
             c["cell_var"].set(0)
             c["mosaic_var"].set(0)
-            out["g_pal"], out["sto_shown"] = {}, {}
+            out["g_pal"], out["sto_shown"], out["rd_shown"] = {}, {}, {}
             c["bg_var"].set("pattern")
-            for pal in ("classic", "duo", "test", "stochastique"):
+            for pal in ("classic", "duo", "test", "stochastique", "labyrinthe"):
                 c["palette_var"].set(pal)
                 root.update_idletasks()
                 out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse",
-                                                                    "Taille des carreaux", "Contraste du damier", "Cadence du damier")}
+                                                                    "Taille des carreaux", "Contraste du damier", "Cadence du damier",
+                                                                    "Reaction a l'audio")}
                 out["sto_shown"][pal] = c["sto_box"].winfo_ismapped()
+                out["rd_shown"][pal] = c["rd_box"].winfo_ismapped()
+            c["palette_var"].set("labyrinthe")
+            for w in gg.leaves(c["rd_box"]):
+                if w.winfo_class() == "Scale" and float(w.cget("to")) == 2.0:
+                    w.set(1.5)
+            root.update_idletasks()
+            out["rd_written"] = params["bg_rd_scale"]
+            c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
             c["synced"]["bg_sto_field"].set("noise")
@@ -1463,8 +1472,15 @@ def check_gui() -> None:
           and all(gp.get(pl, {}).get("Taille des carreaux") == on for pl in ("classic", "duo")),
           "palette stochastique: couleurs et teinte actives, damier grise, angle actif seulement pour les vagues et le degrade",
           f"{gs} {out.get('sto_angle_waves')}")
-    check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True},
+    check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True, "labyrinthe": False},
           "palette stochastique: ses reglages ne s'affichent que pour elle", str(out.get("sto_shown")))
+    check(out.get("rd_shown") == {"classic": False, "duo": False, "test": False, "stochastique": False, "labyrinthe": True},
+          "palette labyrinthe: ses reglages ne s'affichent que pour elle", str(out.get("rd_shown")))
+    gl_ = gp.get("labyrinthe", {})
+    check(all(gl_.get(lb) == on for lb in ("Teinte", "Vitesse", "Reaction a l'audio"))
+          and all(gl_.get(lb) == off for lb in ("Couleurs 1 / 2", "Angle du degrade", "Taille des carreaux", "Contraste du damier", "Cadence du damier")),
+          "palette labyrinthe: teinte, vitesse et reaction actives, couleurs du duo, angle et damier grises", str(gl_))
+    check(out.get("rd_written") == 1.5, "palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
@@ -6592,8 +6608,8 @@ def check_randomizer() -> None:
     # plages
     rng = rnd_mod.Random(7)
     ok_bg = all(0 <= v["bg_hue"] <= 1 and 0 <= v["bg_angle"] <= 180 and 0.4 <= v["bg_speed"] <= 1.8 and 50 <= v["bg_tile"] <= 150
-                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo", "stochastique")
-                and (v["bg_palette"] == "classic" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
+                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo", "stochastique", "labyrinthe")
+                and (v["bg_palette"] not in ("duo", "stochastique") or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
                 for v in (rz.random_background_params(rng) for _ in range(300)))
     check(ok_bg, "fond aleatoire: valeurs dans les plages des curseurs, jamais la palette banc de test")
     vals = [rz.random_background_params(rnd_mod.Random(s)) for s in range(300)]
@@ -6606,6 +6622,15 @@ def check_randomizer() -> None:
           "fond aleatoire: la palette stochastique est tiree, dans les plages", f"{len(st)} sur 300")
     check(all(not any(k.startswith("bg_sto_") for k in v) for v in vals if v["bg_palette"] != "stochastique"),
           "fond aleatoire: les reglages stochastiques ne sont tires que pour cette palette")
+    lb = [v for v in vals if v["bg_palette"] == "labyrinthe"]
+    hexes = lambda v: [v[k] for k in ("bg_rd_color1", "bg_rd_color2", "bg_rd_color3", "bg_rd_ground")]
+    check(len(lb) > 30 and all(0.2 <= v["bg_rd_shape"] <= 0.9 and 0.7 <= v["bg_rd_scale"] <= 1.5 and 0 <= v["bg_rd_offset"] <= 0.03
+                               and all(h.startswith("#") and len(h) == 7 for h in hexes(v))
+                               and max(int(v["bg_rd_ground"][i:i + 2], 16) for i in (1, 3, 5)) <= 0.12 * 255 + 1 for v in lb)
+          and all(gl.coerce_params(v)[k] == v[k] for v in lb for k in v),
+          "fond aleatoire: la palette labyrinthe est tiree, dans les plages, fond sombre", f"{len(lb)} sur 300")
+    check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
+          "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
     costly = [sum(1 for k in ("holo_on", "melt_on", "cell_on") if fx[k] >= 0.5) for fx in fxs]
     check(max(costly) <= rz.MAX_COSTLY and set(costly) >= {0, 1, 2}, "effets aleatoires: au plus deux effets couteux a la fois",
@@ -8170,6 +8195,226 @@ def check_params_schema() -> None:
     back = sc.scene_values(sc.capture_scene("S", sto_p, "live", None), dict(gl.load_params(), bg_mode="live"))
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
+    rd_keys = [k for k in d if k.startswith("bg_rd_")]
+    check(len(rd_keys) == 7 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+          and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14",
+          "labyrinthe: 7 reglages du fond, valeurs par defaut")
+    v = gl.coerce_params({"bg_palette": "labyrinthe", "bg_rd_scale": 9.0, "bg_rd_offset": -1.0})
+    check(v["bg_palette"] == "labyrinthe" and v["bg_rd_scale"] == 2.0 and v["bg_rd_offset"] == 0.0,
+          "labyrinthe: palette acceptee, reglages bornes")
+    rd_p = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe", bg_rd_shape=0.2, bg_rd_scale=1.4, bg_rd_offset=0.02,
+                bg_rd_color1="#112233", bg_rd_color2="#445566", bg_rd_color3="#778899", bg_rd_ground="#000000")
+    back = sc.scene_values(sc.capture_scene("L", rd_p, "live", None), dict(gl.DEFAULT_PARAMS, bg_mode="live"))
+    check(all(back[k] == rd_p[k] for k in rd_keys) and back["bg_palette"] == "labyrinthe",
+          "labyrinthe: une scene capturee avec cette palette la rejoue entierement")
+
+
+def rd_components(mask):
+    """Composantes connexes (voisinage 4, bords en boucle) d'un masque booleen : tableau d'etiquettes (0 = vide) et tailles."""
+    from collections import deque
+    h, w = mask.shape
+    labels = np.zeros((h, w), dtype=np.int32)
+    sizes = []
+    for y0, x0 in zip(*np.nonzero(mask)):
+        if labels[y0, x0]:
+            continue
+        n = len(sizes) + 1
+        labels[y0, x0] = n
+        todo, size = deque([(y0, x0)]), 0
+        while todo:
+            y, x = todo.popleft()
+            size += 1
+            for yy, xx in (((y + 1) % h, x), ((y - 1) % h, x), (y, (x + 1) % w), (y, (x - 1) % w)):
+                if mask[yy, xx] and not labels[yy, xx]:
+                    labels[yy, xx] = n
+                    todo.append((yy, xx))
+        sizes.append(size)
+    return labels, sizes
+
+
+def check_reaction_sim() -> None:
+    print("Reaction-diffusion : simulation sur le GPU (engine/reaction.py)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+
+    def sim(shape, steps, seed=0, scale=1.0):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(scale)
+        r.reset(seed)
+        for _ in range(steps // 20):
+            r.step(20, shape)
+        return r
+
+    a, b = sim(0.6, 500), sim(0.6, 500)
+    check(a.read_v().shape == (216, 384) and np.array_equal(a.read_v(), b.read_v()), "simulation deterministe a graine egale")
+    alive = {s: float((sim(s, 2000).read_v() > 0.25).mean()) for s in (0.0, 0.5, 1.0)}
+    check(all(0.05 < x < 0.70 for x in alive.values()), "motif vivant apres 2000 pas, sans envahir tout (taches, milieu, labyrinthe)", str(alive))
+    # Pendant une division, une tache forme un instant deux blobs collés : on juge le motif installe (6000 pas, ~10 s).
+    spots = sim(0.0, 6000).read_v() > 0.25
+    lab, sizes = rd_components(spots)
+    near = False
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            other = np.roll(np.roll(lab, dy, axis=0), dx, axis=1)
+            near = near or bool(((lab > 0) & (other > 0) & (lab != other)).any())
+    check(len(sizes) >= 30 and max(sizes) < 4 * float(np.median(sizes)) and not near,
+          "forme 0 : taches nombreuses, de taille reguliere, qui ne se touchent jamais (pas meme en diagonale)",
+          f"{len(sizes)} taches, plus grande {max(sizes)}, mediane {np.median(sizes):.0f}, trop proches {near}")
+    _l, maze = rd_components(sim(1.0, 2000).read_v() > 0.25)
+    check(np.mean(maze) > 3 * np.mean(sizes), "forme 1 : les taches se soudent en lignes (composantes bien plus grandes)",
+          f"aire moyenne {np.mean(maze):.0f} contre {np.mean(sizes):.0f}")
+    still_alive = {}
+    for s in (0.0, 0.6, 1.0):                    # le motif vit en continu : il ne se fige pas en un point fixe (piege du demi-flottant)
+        r_ = sim(s, 10000)
+        m0 = r_.read_v() > 0.25
+        for _ in range(100):
+            r_.step(20, s)
+        still_alive[s] = int(((r_.read_v() > 0.25) != m0).sum())
+    check(all(n_ > 300 for n_ in still_alive.values()), "le motif se reorganise encore apres 10000 pas (il ne se fige pas)",
+          f"cellules changees entre 10000 et 12000 pas : {still_alive}")
+    frozen = sim(0.6, 400)
+    v0 = frozen.read_v().copy()
+    frozen.step(0, 0.6)
+    check(np.array_equal(frozen.read_v(), v0), "0 pas = etat inchange")
+    empty = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+    empty.ensure(1.0)
+    empty.write(np.ones((216, 384), np.float32), np.zeros((216, 384), np.float32))
+    empty.step(1, 0.6, [(0.25, 0.5)])
+    for _ in range(15):
+        empty.step(20, 0.6)
+    v = empty.read_v()
+    check(v[100:116, 88:104].max() > 0.25 and v[:, 200:].max() < 0.05,
+          "un germe pose fait naitre une tache a cet endroit (et seulement la)", f"{v[100:116, 88:104].max():.2f} / {v[:, 200:].max():.2f}")
+    grown = sim(0.6, 1000)
+    seed_before = grown.seed
+    grown.ensure(1.5)
+    for _ in range(25):
+        grown.step(20, 0.6)
+    gv = grown.read_v()
+    check(gv.shape == (rc.grid_size(1.5)[1], rc.grid_size(1.5)[0]) and grown.seed == seed_before and 0.05 < (gv > 0.25).mean() < 0.7,
+          "taille du motif changee : etat recopie (pas reinitialise), motif toujours vivant", str((gv.shape, (gv > 0.25).mean())))
+    dead = sim(0.6, 200)
+    dead.write(np.ones((216, 384), np.float32), np.zeros((216, 384), np.float32))
+    first, second = dead.watch(10.0), dead.watch(12.1)
+    check(not first and second and dead.seed == 1 and dead.read_v().max() > 0.5,
+          "garde-fou : un motif eteint est ressemee au controle suivant (graine suivante)", str((first, second, dead.seed)))
+
+
+def check_bg_labyrinthe() -> None:
+    print("Fond genere : palette labyrinthe (reaction-diffusion en trois couches)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    fbos: dict = {}
+
+    def fbo_for(sz):
+        if sz not in fbos:
+            fbos[sz] = ctx.framebuffer(color_attachments=[ctx.texture(sz, 4)])
+        return fbos[sz]
+
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe", bg_rd_color1="#ff0000", bg_rd_color2="#00ff00",
+                bg_rd_color3="#0000ff", bg_rd_ground="#000000", bg_react=0.0, bg_hue=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0)
+    clock = {}
+
+    def run(frames=40, state=quiet, size=(640, 360), rr=None, **kw):
+        """Enchaine `frames` images de 0,05 s (dt est plafonne a 0,1 s) ; rend (Renderer, derniere image)."""
+        p = dict(base, **kw)
+        fbo = fbo_for(size)
+        rr = rr or gl.Renderer(ctx, size, None)
+        t0 = clock.get(id(rr), 0.0)
+        for i in range(frames):
+            st = state(i) if callable(state) else state
+            rr.draw(fbo, size, st, p, t0 + 0.05 * i)
+        clock[id(rr)] = t0 + 0.05 * frames
+        return rr, read_target(ctx, fbo, size).astype(int)
+
+    r1, a = run()
+    _r2, b = run()
+    check(abs(a - b).max() == 0 and sum(int(a[:, :, c].max() > 200) for c in range(3)) >= 2,
+          "labyrinthe: image non vide, deterministe (deux Renderer neufs)")
+    _r, same = run(bg_rd_offset=0.0)
+    _r, apart = run(bg_rd_offset=0.03)
+    pure_red = (apart[:, :, 0] > 200) & (apart[:, :, 1] < 50) & (apart[:, :, 2] < 50)
+    # couches confondues : seul le bord anti-crenele laisse un peu des couleurs du dessous (au plus m (1 - m) = 25 % = 64)
+    check(same[:, :, 0].max() < 70 and same[:, :, 1].max() < 70 and pure_red.any(),
+          "labyrinthe: ecart 0 = trois couches confondues, ecart 0,03 = couches separees")
+    _r, hue = run(bg_hue=1.0 / 3.0)
+    check(abs(hue[:, :, 1] - a[:, :, 0]).max() <= 3, "labyrinthe: la teinte du fond tourne les couleurs (rouge -> vert)")
+    _r, big = run(size=(1280, 720))
+    small_ = big.reshape(360, 2, 640, 2, 3).mean(axis=(1, 3))
+    check(abs(small_ - a).mean() < 6, "labyrinthe: meme dessin quelle que soit la taille de la fenetre", f"ecart {abs(small_ - a).mean():.1f}")
+    rt, t1 = run(tempo=0.0)
+    _rt, t2 = run(rr=rt, frames=20, tempo=0.0)
+    check(abs(t2 - t1).max() == 0 and abs(run(rr=r1, frames=20)[1] - a).mean() > 1,
+          "labyrinthe: master du tempo a 0 = motif fige ; vitesse 1 = il evolue")
+    rk0, k1 = run(tempo=0.0, bg_react=1.0)
+    _rk0, k2 = run(rr=rk0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_react=1.0)
+    check(abs(k2 - k1).max() == 0, "labyrinthe: tempo a 0 = fige meme quand des kicks arrivent (les germes attendent)")
+    loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0)
+    _r, calm = run(state=quiet, bg_react=0.0)
+    _r, noisy = run(state=lambda i: dict(loud, beats=i // 5), bg_react=0.0)
+    check(abs(calm - noisy).max() == 0, "labyrinthe: reaction 0 = image identique avec ou sans son")
+    rq, _ = run(frames=60, bg_react=1.0, bg_rd_shape=0.2)
+    rb, _ = run(frames=60, state=dict(quiet, bass=1.0), bg_react=1.0, bg_rd_shape=0.2)
+    _l, sq = rd_components(rq.rd.read_v() > 0.25)
+    _l, sb = rd_components(rb.rd.read_v() > 0.25)
+    check(np.mean(sb) > 1.3 * np.mean(sq), "labyrinthe: les basses poussent le motif vers les lignes (composantes plus grandes)",
+          f"aire moyenne {np.mean(sq):.0f} -> {np.mean(sb):.0f}")
+    rk, _ = run(frames=40, state=lambda i: dict(quiet, beats=i // 8), bg_react=1.0)
+    rn, _ = run(frames=40, bg_react=1.0)
+    check(not np.array_equal(rk.rd.read_v(), rn.rd.read_v()), "labyrinthe: les kicks sement des germes (la simulation change)")
+    re_, _ = run(frames=30, bg_react=1.0)
+    _r, still = run(rr=re_, frames=1, bg_react=1.0, tempo=0.0)
+    _r, wide = run(rr=re_, frames=1, state=dict(quiet, beat=1.0, since_beat=0.0), bg_react=1.0, tempo=0.0)
+    check(abs(wide - still).mean() > 1, "labyrinthe: l'enveloppe du kick ecarte les couches")
+    # changement de palette : la stochastique n'est pas touchee, le labyrinthe repart d'un etat seme
+    rs, _ = run(frames=1, bg_palette="stochastique")
+    run(rr=rs, frames=40)
+    _r, s1 = run(rr=rs, frames=1, bg_palette="stochastique")
+    _r, s2 = run(frames=42, bg_palette="stochastique")
+    check(abs(s1 - s2).max() == 0, "labyrinthe: la palette stochastique est identique apres un passage par le labyrinthe")
+    run(rr=rs, frames=1, tempo=0.0)
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    fresh = ReactionDiffusion(ctx, ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes()), SHADER_DIR)
+    fresh.ensure(1.0)
+    fresh.reset(rs.rd.seed)
+    check(np.array_equal(rs.rd.read_v(), fresh.read_v()), "labyrinthe: revenir a la palette repart d'un etat seme propre")
+    rw, _ = run(frames=20, tempo=0.0)
+    v_before = rw.rd.read_v().copy()
+    run(rr=rw, frames=2, size=(960, 540), tempo=0.0)
+    check(np.array_equal(rw.rd.read_v(), v_before), "labyrinthe: une fenetre redimensionnee ne touche pas a la simulation")
+
+
+def check_reaction_pure() -> None:
+    print("Reaction-diffusion : logique pure (core/reaction.py)")
+    from core import reaction as rc
+    check(rc.feed_kill(0) == rc.SPOTS and rc.feed_kill(1) == rc.MAZE and rc.feed_kill(-3) == rc.SPOTS
+          and all(abs(a - (b + c) / 2) < 1e-12 for a, b, c in zip(rc.feed_kill(0.5), rc.SPOTS, rc.MAZE)),
+          "forme: taches a 0, labyrinthe a 1, bornee, interpolee")
+    check(rc.grid_size(1) == (384, 216) and rc.grid_size(2) == (192, 108) and rc.grid_size(9) == (192, 108) and rc.grid_size(0.5) == (768, 432),
+          "grille: fixe, independante de la fenetre, bornee")
+    s1 = rc.initial_seeds(1)
+    check(s1 == rc.initial_seeds(1) and s1 != rc.initial_seeds(2) and len(s1) == 40 and all(0 <= x < 1 and 0 <= y < 1 for x, y in s1),
+          "germes initiaux: 40, deterministes, dans le cadre")
+    k5 = rc.kick_seeds(5)
+    check(len(k5) == 3 and k5 == rc.kick_seeds(5) and k5 != rc.kick_seeds(6) and all(0 <= x < 1 and 0 <= y < 1 for x, y in k5),
+          "germes du kick: 3, deterministes, differents d'un kick a l'autre")
+    n, acc = rc.steps_for(0.0, 1 / 60, 1.0, 0.0)
+    check(n == 10 and abs(acc) < 1e-9 and rc.steps_for(0.5, 0.0, 1.0, 0.0) == (0, 0.5) and rc.steps_for(0.0, 1.0, 0.0, 1.0)[0] == 0,
+          "pas par image: 600 par seconde, reste garde, vitesse 0 = fige", str((n, acc)))
+    n, acc = rc.steps_for(0.0, 0.1, 4.0, 1.0)
+    check(n == 24 and 0 <= acc < 1, "pas par image: plafonnes a 24, l'exces est jete", str((n, acc)))
 
 
 def _in_range(p, value) -> bool:
@@ -8414,6 +8659,9 @@ def check_safeguards() -> None:
     check(sf.background_cost({}, full) == 0.0 and sf.background_cost(dict(bg_mode="live", bg_palette="stochastique"), full) == 0.0
           and sf.background_cost(sto_next, full) > sf.background_cost(dict(sto_next, bg_sto_field="waves"), full) > 0.0,
           "securite GPU: cout du fond stochastique (bruit > vagues), nul hors du fond genere")
+    check(sf.background_cost(dict(bg_mode="pattern", bg_palette="labyrinthe"), full) > 0.0
+          and sf.background_cost(dict(bg_mode="live", bg_palette="labyrinthe"), full) == 0.0,
+          "securite GPU: cout du fond labyrinthe compte, nul hors du fond genere")
     # --- annuler / retablir
     udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
     ubook = sc_.SceneBook(lambda: udir / "scenes.json")
@@ -8942,7 +9190,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout")
+         "check_stage_layout", "check_reaction_pure")
 
 
 def main() -> None:
@@ -8962,6 +9210,9 @@ def main() -> None:
     check_holo()
     check_melt()
     check_bg_stochastic()
+    check_reaction_pure()
+    check_reaction_sim()
+    check_bg_labyrinthe()
     check_cells()
     check_noise()
     check_doodles()
