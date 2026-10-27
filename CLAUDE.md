@@ -686,6 +686,11 @@ visuel d'audio2wave, il ne le complete pas) :
   - `check_gl.py` (`check_randomizer`, `gui_random_steps`) : banque, reglages, plages, effets, determinisme, sources, verrous, banque
     vide, scene applicable (`scene_values`), reglages par set / copie / export, puis dans la fenetre : panneau, tirage + flash, VJ sur set
     vide, Garder + rejouer, verrou, categories, dossier, retour a l'ordre normal.
+    **Piege (echec une fois sur deux)** : un tirage qui tombe sur un autre mode audio2wave programme `request_mode` (`after(30)`) ; le
+    `root.update()` suivant detruit le panneau et `c["live_host"]` des etapes d'apres est perime (cascade d'echecs). Les tirages appliques
+    par les tests (`gui_random_steps`, et `/api/random` de la telecommande dans `gui_expand_steps` : reglages par defaut = les quatre modes)
+    ont donc `modes: []`, et `gui_random_steps` remet la memoire a zero avec la graine (le rng de la GUI n'est pas graine) ; une reconstruction
+    du panneau que le test n'a pas demandee est signalee par une verification (« aucun changement de mode audio2wave inattendu »).
 - **Panneau etendu** (`scene_top` = barre + `scene_panel`, `set_expanded`, `refresh_scene_panel`, `build_panel_row`) : bouton
   `Etendre` / `Reduire` dans la barre ; l'etat est `s.scenes_expanded` (survit aux reconstructions de la fenetre). La fenetre
   grandit de `scene_panel.winfo_reqheight()` (memorise dans `s.scene_panel_h`, plafonne a la hauteur de l'ecran - 80) et la
