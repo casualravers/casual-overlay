@@ -8,7 +8,7 @@ from __future__ import annotations
 from core import explain
 from core import scenes
 from core import sessionlog
-from tkinter import ttk
+from tkinter import colorchooser, ttk
 import audio2wave_gl as gl
 import json
 import icons
@@ -95,9 +95,21 @@ def install(c):
         return explain.phase_measures_text(info if (info and float(params.get("auto_phase", 1.0)) >= 0.5) else None)
 
     def strobe_line() -> str:
+        if params.get("strobe_kind") == "foudre":
+            return explain.foudre_info_text(s.status.get("foudre"))
         info = s.status.get("strobe_info")
         armed = float(params.get("strobe_auto", 0.0)) >= 0.5
         return explain.strobe_info_text(info[0] if info else None, time.monotonic() - info[1] if info else None, armed)
+
+    def sync_kind() -> None:
+        """Mode Foudre : ses reglages sont actifs et « Sombre » est grise ; mode Strobe : l'inverse (jamais retires : la mise en page ne bouge pas)."""
+        foudre = params.get("strobe_kind") == "foudre"
+        for key, on in (("foudre_widgets", foudre), ("strobe_widgets", not foudre)):
+            for w in vj_ui.get(key, []):
+                try:
+                    w.configure(state="normal" if on else "disabled")
+                except tk.TclError:
+                    pass
 
     def update_master_panel() -> None:
         """Libelles des boutons du panneau de controle (les touches S / K peuvent les avoir changes) et voyant du mode silence."""
@@ -159,6 +171,13 @@ def install(c):
                 var.set(params[key] if isinstance(params[key], str) else int(round(float(params[key]))))
             except (tk.TclError, KeyError, ValueError):
                 pass
+        cvar = vj_ui.get("foudre_color")
+        if cvar is not None:
+            try:
+                cvar.set(str(params["foudre_color"]))
+            except (tk.TclError, KeyError):
+                pass
+        sync_kind()
         update_master_panel()
 
     # ---- historique des scenes jouees et retour a la precedente
@@ -254,6 +273,7 @@ def install(c):
         if was:
             s.commands.put("flash")
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+            params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1          # mode Foudre : grande decharge a pleine profondeur
         btn = vj_ui.get("build")
         if btn is not None:
             try:
@@ -307,7 +327,7 @@ def install(c):
                 skin.apply(f)
             setattr(s, "master_tab", nb.index("current"))
 
-        def slider(f, i, key, label, lo, hi, step, factor, unit, default, tip, dec=0, var_key=None) -> None:
+        def slider(f, i, key, label, lo, hi, step, factor, unit, default, tip, dec=0, var_key=None) -> tuple:
             row, col = i if isinstance(i, tuple) else (i % 3, 3 * (i // 3))
             var = tk.DoubleVar(value=round(float(params.get(key, default / factor)) * factor, dec))
             shown = tk.StringVar(value=f"{var.get():.{dec}f}{unit}")
@@ -327,6 +347,7 @@ def install(c):
             Tooltip(name, tip + " Double-clic sur le nom : valeur d'origine.")
             Tooltip(scale, tip)
             knobs.append((key, var, factor, dec, shown, unit))
+            return name, scale
 
         def toggle(f, key, text, tip, **grid) -> tk.Checkbutton:
             """Case a cocher liee a un reglage 0 / 1 (relue par `sync_master_panel` : la panique la decoche)."""
@@ -405,7 +426,10 @@ def install(c):
         # ---- Live : strobe, verrou, montee / drop
         def fill_1(f) -> None:
             params["strobe_mode"] = "manual"              # plus de choix de mode : le bouton fait un eclair, « Strobe auto » decide seul
-            sb = button(f, strobe_text(), row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            radios(f, "strobe_kind", (("Strobe", "strobe"), ("Foudre", "foudre")), row=0, span=6, on_change=lambda: sync_kind(),
+                   tip="Ce que fait le strobe : des eclairs blancs (Strobe) ou un arbre de lumiere fractal qui part du centre sur chaque kick, s'amplifie "
+                       "d'un kick a l'autre et s'eteint sans kick (Foudre). Le bouton, Strobe auto, la Montee et le Drop suivent le mode choisi.")
+            sb = button(f, strobe_text(), row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["strobe"] = sb
             sb.bind("<ButtonPress-1>", lambda e: (gl.strobe_press(params), sb.configure(text=strobe_text())), add="+")
             sb.bind("<ButtonRelease-1>", lambda e: (gl.strobe_release(params), sb.configure(text=strobe_text())), add="+")
@@ -415,22 +439,56 @@ def install(c):
                                                     "aigus) ; une cadence qui accelere pendant une montee ; un gros eclair au drop ; un eclair a chaque kick au pic. "
                                                     "La montee et le drop partent aussi tout seuls (montee quand l'energie monte ou que les basses disparaissent, gros eclair au drop). "
                                                     "Le limiteur de securite (10 eclairs par seconde, rafales de 8 s) reste applique.",
-                   row=0, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
-            slider(f, (2, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 16, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
-            bb = button(f, build_text(), start_build, row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+                   row=1, column=3, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            slider(f, (3, 0), "build_time", "Duree", 2, 60, 1, 1.0, " s", 16, "Duree de la montee, en secondes : reactivite, strobe (de 0,5 a 16 Hz, lent au depart) et teinte montent sur cette duree, puis restent au maximum jusqu'au drop (bouton Drop, 2e appui sur Montee, ou drop detecte en mode Montee / drop auto).")
+            bb = button(f, build_text(), start_build, row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["build"] = bb
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
                         "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
-            drop = button(f, "Drop", do_drop, row=1, column=3, sticky="w", padx=6, pady=(3, 0))
-            Tooltip(drop, "Relache la montee d'un coup : flash blanc, tout retombe aux reglages normaux.")
+            drop = button(f, "Drop", do_drop, row=2, column=3, sticky="w", padx=6, pady=(3, 0))
+            Tooltip(drop, "Relache la montee d'un coup : flash blanc (mode Foudre : grande decharge a pleine profondeur), tout retombe aux reglages normaux.")
             sinfo = tk.Label(f, text="strobe auto : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
-            slider(f, (3, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100,
-                   "Les eclairs ne blanchissent que les parties SOMBRES de l'image : seuil de luminosite (100 % = toute l'image, plus bas = seulement ce qui est plus "
-                   "sombre que ce seuil, les parties claires ne bougent pas). S'applique a tous les eclairs : le bouton, ceux de la montee et le strobe auto "
-                   "(dont l'accent discret de groove est deja limite a 50 %). Double-clic sur le nom : retour a 100 %.")
-            sinfo.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
+            dark = slider(f, (4, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100,
+                          "Les eclairs ne blanchissent que les parties SOMBRES de l'image : seuil de luminosite (100 % = toute l'image, plus bas = seulement ce qui est plus "
+                          "sombre que ce seuil, les parties claires ne bougent pas). S'applique a tous les eclairs : le bouton, ceux de la montee et le strobe auto "
+                          "(dont l'accent discret de groove est deja limite a 50 %). Double-clic sur le nom : retour a 100 %. Sans objet en mode Foudre.")
+            reach = slider(f, (3, 3), "foudre_reach", "Portee", 40, 150, 5, 100.0, "%", 100,
+                           "Foudre : jusqu'ou vont les branches (100 % = jusqu'au bord de l'image).")
+            amount = slider(f, (4, 3), "foudre_amount", "Intensite", 0, 150, 5, 100.0, "%", 70,
+                            "Foudre : intensite de la lumiere (le plafond reste sous le blanc plein ecran).")
+            crow = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
+            crow.grid(row=5, column=0, columnspan=6, sticky="w", padx=6, pady=(3, 0))
+            cname = tk.Label(crow, text="Couleur", width=9, anchor="w", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG)
+            cname.pack(side="left")
+            cvar = tk.StringVar(value=str(params.get("foudre_color", "#3a7bff")))
+            vj_ui["foudre_color"] = cvar
+            swatch = tk.Label(crow, width=3, bg=cvar.get())
+            centry = tk.Entry(crow, textvariable=cvar, width=8)
+            centry.pack(side="left")
+            swatch.pack(side="left", padx=(8, 0))
+
+            def color_written(*_a) -> None:
+                text = cvar.get().strip().lstrip("#")
+                if len(text) == 6 and all(ch in "0123456789abcdefABCDEF" for ch in text):             # seule une valeur complete est poussee
+                    params["foudre_color"] = "#" + text.lower()
+                    swatch.configure(bg=params["foudre_color"])
+
+            cvar.trace_add("write", color_written)
+
+            def pick_color() -> None:
+                chosen = colorchooser.askcolor(color=params["foudre_color"], title="Couleur de la foudre")
+                if chosen and chosen[1]:
+                    cvar.set(chosen[1])
+
+            cpick = tk.Button(crow, text="...", command=pick_color, padx=6)
+            cpick.pack(side="left", padx=(6, 0))
+            Tooltip(cpick, "Couleur du halo de la foudre (le coeur est toujours blanc).")
+            sinfo.grid(row=6, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
             vj_ui["strobe_info"] = sinfo
-            Tooltip(sinfo, "Ce que fait le strobe auto : la raison de son dernier eclair (accent de groove, kick au pic, drop, montee...).")
+            Tooltip(sinfo, "Strobe auto : la raison de son dernier eclair (accent de groove, kick au pic, drop, montee...). Mode Foudre : profondeur et charge de l'arbre.")
+            vj_ui["foudre_widgets"] = [*reach, *amount, cname, centry, cpick]
+            vj_ui["strobe_widgets"] = [*dark]
+            sync_kind()
 
         new_tab("Live", fill_1)
 
@@ -814,6 +872,7 @@ def install(c):
             s.commands.put("flash")
             params["strobe_why"] = why
             params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
+            params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1
             rhythm_ui["t_drop"] = time.monotonic()
             scene_msg.set("DROP detecte")
         elif not auto:

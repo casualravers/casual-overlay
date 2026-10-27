@@ -1268,7 +1268,9 @@ def check_gui() -> None:
           "memoires de masters (GUI): une memoire enregistree se rappelle d'un clic (teinte, symetrie), sans les etats du moment", str(out.get("x_memory")))
     check(out.get("x_history") == (True,) * 4 and out.get("x_history_lock") == (True, True, True) and out.get("x_lock_bar_off") is True,
           "historique (GUI): chaque scene jouee est notee, Retour rejoue la precedente, le verrou l'interdit", str((out.get("x_history"), out.get("x_history_lock"))))
-    check(out.get("x_build") == (True,) * 4, "montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc", str(out.get("x_build")))
+    check(out.get("x_foudre_ui") == (True,) * 11, "foudre (GUI): interrupteur Strobe / Foudre au-dessus du bouton, reglages de la foudre actifs ou grises selon le mode, curseurs et couleur ecrivent les reglages",
+          str(out.get("x_foudre_ui")))
+    check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc, decharge de la foudre", str(out.get("x_build")))
     check(out.get("x_silence") == (True,) * 3, "phases auto (GUI): la case ecrit auto_phase", str(out.get("x_silence")))
     check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
@@ -4340,7 +4342,30 @@ def gui_expand_steps(c, s, out) -> None:
             root.update()
         nb_.select(0)
         root.update()
-    knobs = [w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
+    # Foudre : interrupteur Strobe / Foudre de l'onglet Live (reglages de la foudre actifs ou grises, jamais retires)
+    ui = c["vj_ui"]
+    ui["tabs"][0].select(1)                                                               # onglet Live : un curseur n'appelle sa commande que s'il est affiche
+    root.update()
+    rb = {w.cget("text"): w for w in walk_(mpanel) if w.winfo_class() == "Radiobutton" and w.cget("text") in ("Strobe", "Foudre")}
+    rb["Foudre"].invoke()
+    root.update()
+    st = lambda ws: {str(w.cget("state")) for w in ws}
+    in_foudre = (params["strobe_kind"] == "foudre", st(ui["foudre_widgets"]) == {"normal"}, st(ui["strobe_widgets"]) == {"disabled"})
+    scales = [w for w in ui["foudre_widgets"] if w.winfo_class() == "Scale"]
+    scales[1].set(120)                                                                    # Intensite
+    scales[0].set(80)                                                                     # Portee
+    ui["foudre_color"].set("#ff8800")
+    root.update()
+    values = (abs(params["foudre_amount"] - 1.2) < 1e-6, abs(params["foudre_reach"] - 0.8) < 1e-6, params["foudre_color"] == "#ff8800")
+    params["foudre_amount"], params["foudre_reach"] = 0.7, 1.0
+    rb["Strobe"].invoke()
+    root.update()
+    in_strobe = (params["strobe_kind"] == "strobe", st(ui["foudre_widgets"]) == {"disabled"}, st(ui["strobe_widgets"]) == {"normal"})
+    out["x_foudre_ui"] = in_foudre + values + in_strobe + (rb["Strobe"].winfo_rooty() < ui["strobe"].winfo_rooty(), ui["strobe"].cget("text").startswith("Strobe"))
+    ui["foudre_color"].set("#3a7bff")
+    ui["tabs"][0].select(0)
+    root.update()
+    knobs =[w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
     keys = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master")
     before = {k: params[k] for k in keys}
     for w, v in zip(knobs[:5], (150, 60, 40, 30, 90)):                       # onglet « Masters »
@@ -4397,8 +4422,9 @@ def gui_expand_steps(c, s, out) -> None:
     started = params["build"]
     s.commands.queue.clear() if hasattr(s.commands, "queue") else None
     hits = params["strobe_hits"]
+    drops0 = params["foudre_drop"]
     vjc["drop"]()
-    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty())
+    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty(), params["foudre_drop"] == drops0 + 1)
     while not s.commands.empty():
         s.commands.get_nowait()
     sil = next((w for w in walk_(mpanel) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Phases auto"), None)
@@ -8416,8 +8442,8 @@ def check_foudre_render() -> None:
                 bg_hue=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, strobe_auto=0.0, trans_time=0.0)
     clock: dict = {}
 
-    def frame(rr, size, p, n=1, advance=True):
-        """`n` images de 0,05 s ; la machine de la foudre avance du meme pas (la Task 4 la fera avancer par `draw`)."""
+    def frame(rr, size, p, n=1, advance=False):
+        """`n` images de 0,05 s ; `draw` fait avancer la machine de la foudre (`advance` : l'avancer en plus, a la main)."""
         fbo = fbo_for(size)
         for _ in range(n):
             if advance:
@@ -8492,6 +8518,64 @@ def check_foudre_render() -> None:
         ok = False
         print("   ", exc)
     check(ok, "foudre: redimensionnement, portrait et 4:1 sans exception, la foudre reste visible")
+
+    # ---- branchement : les kicks, la phase, le strobe, la montee, le drop et la panique pilotent la foudre par l'etat et les reglages
+    def drive(p, frames=65, beats=lambda i: i // 10, phase=None, extra=None, at=None, sz=size):
+        """Rend `frames` images de 0,05 s ; `beats(i)` = compteur de kicks a l'image i, `phase` = nom de phase, `at[i]` = reglages changes a l'image i."""
+        rr = gl.Renderer(ctx, sz, None)
+        fbo = fbo_for(sz)
+        pp = dict(p)
+        whites = 0.0
+        for i in range(frames):
+            if at and i in at:
+                pp.update(at[i])
+            st = dict(quiet, beats=beats(i))
+            if phase:
+                st["phase"] = {"name": phase, "since": 5.0}
+            if extra:
+                st.update(extra)
+            rr.draw(fbo, sz, st, pp, 0.05 * i)
+            whites = max(whites, float((read_target(ctx, fbo, sz).min(axis=2) > 250).mean())) if i % 8 == 0 else whites
+        return rr, read_target(ctx, fbo, sz).astype(int), whites
+
+    fp = dict(base, strobe_kind="foudre", auto_phase=1.0)
+    rr, im, wh = drive(fp, phase="peak")
+    check(rr.bolt.gens == 6 and wh < 0.02, "foudre: au pic, 6 kicks de suite = 6 generations, pas de blanc plein ecran", f"{rr.bolt.gens} {wh:.3f}")
+    rr, _im, _ = drive(fp, phase="groove")
+    check(rr.bolt.gens == 3, "foudre: en groove le plafond est de 3 generations", f"{rr.bolt.gens}")
+    check(all(drive(fp, phase=ph)[0].bolt.empty for ph in ("silence", "ambient")), "foudre: rien en silence ni en ambiance")
+    rr, _im, _ = drive(dict(fp, auto_phase=0.0), phase="peak")
+    check(rr.bolt.gens == 3, "foudre: Phases auto coupees = plafond moyen (3 generations)", f"{rr.bolt.gens}")
+    check(drive(dict(fp, react_master=0.0), phase="peak")[0].bolt.empty, "foudre: reactivite a 0 = les kicks ne declenchent rien")
+    rr, im, _ = drive(dict(fp, strobe_kind="strobe"), phase="peak")
+    check(rr.bolt.empty and im.max() == 0, "strobe: les memes kicks ne declenchent rien en mode Strobe")
+    rr, _im, _ = drive(dict(fp, strobe_hits=1), beats=lambda i: 0, frames=12, phase="peak")
+    check(rr.bolt.gens == 1, "foudre: un appui sur le bouton Strobe declenche une decharge", f"{rr.bolt.gens}")
+    rr, _im, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual"), beats=lambda i: 0, frames=40)
+    check(rr.bolt.gens == 6 and rr.bolt.charge == 1.0, "foudre: bouton maintenu = charge au maximum, profondeur 6 sans kick", f"{rr.bolt.gens} {rr.bolt.charge}")
+    rr, _im, _ = drive(dict(fp, build=0.9), phase="groove")
+    check(rr.bolt.gens == 5, "foudre: une montee a 90 % releve le plafond (5 generations)", f"{rr.bolt.gens}")
+    rr, im, wh = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}})
+    check(rr.bolt.gens == 6 and lit(im) > 2000 and wh < 0.02, "foudre: un Drop donne une grande decharge a pleine profondeur", f"{rr.bolt.gens} {lit(im)} {wh:.3f}")
+    rr, im, _ = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}, 30: {"foudre_clear": 1}})
+    check(rr.bolt.empty and im.max() == 0, "foudre: la panique vide la foudre")
+    rr, _im, _ = drive(fp, beats=lambda i: 0 if i < 5 else 50, frames=12, phase="peak")
+    check(rr.bolt.gens == 1, "foudre: une rafale de 50 kicks en une image = une seule poussee", f"{rr.bolt.gens}")
+    rr, im, _ = drive(dict(fp, tempo=0.0), phase="peak")
+    check(im.max() == 0 and not rr.bolt.empty, "foudre: tempo a 0 = croissance figee, aucune exception")
+    rr = gl.Renderer(ctx, size, None)
+    fbo = fbo_for(size)
+    ok = True
+    for i in range(6):
+        rr.draw(fbo, size, dict(quiet, beats=i, phase={"name": "peak", "since": 5.0}), fp, 7.0 * i)       # fenetre gelee : 7 s entre deux images
+        im = read_target(ctx, fbo, size)
+        ok = ok and rr.bolt.gens <= 6 and bool(np.isfinite(rr.bolt.charge))
+    check(ok, "foudre: des images tres espacees (fenetre gelee) ne donnent ni saut ni valeur infinie")
+    rr, _im, _ = drive(fp, phase="peak")
+    ps = dict(fp, strobe_kind="strobe")
+    for i in range(130):
+        rr.draw(fbo, size, dict(quiet, beats=7), ps, 3.3 + 0.05 * i)
+    check(rr.bolt.empty, "foudre: repasser en mode Strobe la laisse s'eteindre seule")
 
 
 def check_reaction_pure() -> None:
@@ -8670,6 +8754,11 @@ def check_foudre_pure() -> None:
     L.update(float("nan"), kicks=1, ceiling=1.0)
     L.update(0.1, kicks=-5, ceiling=7.0)
     check(finite(L.draw_list()) and 0.0 <= L.charge <= 1.0 and L.gens <= fd.MAX_DEPTH, "robustesse: dt infini / negatif / NaN, kicks negatifs, plafond hors plage")
+    # ---- voyant de l'interface
+    from core import explain
+    check(explain.foudre_info_text(None).startswith("foudre :") and "repos" in explain.foudre_info_text((0, 0.0))
+          and explain.foudre_info_text((3, 0.52)) == "foudre : profondeur 3/6, charge 52 %" and explain.foudre_info_text((9, 7.0)).endswith("100 %"),
+          "voyant: profondeur et charge de la foudre, repos, valeurs hors plage bornees")
     # ---- reglages et panique
     from core import params_schema as ps
     from core.controls import panic

@@ -322,6 +322,8 @@ class Renderer:
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
         self.bolt = Lightning(1)                   # mode Foudre du strobe (core/foudre.py) : arbre de lumiere declenche par les kicks
+        self._new_kicks, self._fired_seen = 0, 0   # kicks vus a cette image, eclairs du strobe deja traduits en decharges
+        self._drop_seen = self._clear_seen = None  # compteurs foudre_drop / foudre_clear deja vus (None : pas encore lus)
         self.foudre_tex = self.foudre_fbo = self.foudre_prog = self.foudre_vao = None
         self.foudre_vbo = ctx.buffer(reserve=MAX_SEGMENTS * 6 * 4 * 4)       # 6 sommets par segment, 4 flottants par sommet
         self.reload_shaders()
@@ -438,6 +440,7 @@ class Renderer:
         now = time.monotonic()
         beats = int(state.get("beats", 0))
         new_kicks, self._strobe_beats = max(beats - self._strobe_beats, 0), beats
+        self._new_kicks = new_kicks                                   # lu par la foudre (mode Foudre : les kicks la declenchent directement)
         kicked = new_kicks > 0
         hits = int(p["strobe_hits"])
         fire = hits != self._strobe_seen
@@ -485,6 +488,8 @@ class Renderer:
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
+        if p.get("strobe_kind") == "foudre":                          # mode Foudre : les eclairs acceptes deviennent des decharges (lues par `draw`), jamais de blanc
+            return 0.0
         return max(0.0, 1.0 - (now - self._strobe_last) / self._strobe_len)
 
     def _dark_threshold(self, p: dict) -> float:
@@ -896,10 +901,27 @@ class Renderer:
             self.layer_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
 
         # Foudre (mode du strobe) : les rubans de l'arbre dans une texture demi-resolution, composee par post.frag.
+        # Le strobe tourne dans les deux modes (limiteur, cerveau du strobe auto) ; en mode Foudre il ne rend pas d'eclair blanc : ses
+        # eclairs acceptes, les kicks, le bouton maintenu, la montee, le Drop et la panique pilotent la machine de la foudre.
+        strobe_v = self._strobe(p, state)
         bolt_on = False
+        drops, clears = int(p["foudre_drop"]), int(p["foudre_clear"])
+        if self._drop_seen is None:
+            self._drop_seen, self._clear_seen = drops, clears
         if p["strobe_kind"] == "foudre":
+            fired = self.strobe_fired - self._fired_seen
+            kicks = 0 if float(p["react_master"]) <= 0.001 else self._new_kicks + fired
+            if clears != self._clear_seen:
+                self.bolt.clear()
+            if drops != self._drop_seen:
+                self.bolt.drop()
+            hold = float(p["strobe_on"]) >= 0.5 and p["strobe_mode"] == "manual"
+            self.bolt.update(raw_dt, kicks, phase_ceiling(phase_name, build), hold, tempo)
             self.bolt.configure(width / max(height, 1), float(p["foudre_reach"]))
             bolt_on = self._draw_bolt(p, self.bolt.draw_list(bass, high, t), size)
+        else:
+            self.bolt.update(raw_dt)                  # hors mode Foudre : une decharge en cours s'eteint seule
+        self._fired_seen, self._drop_seen, self._clear_seen = self.strobe_fired, drops, clears
 
         # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.
         fx_bg, fx_logo = layer_effects(p)
@@ -924,7 +946,7 @@ class Renderer:
         self._set(pp, "u_au_logo", tuple(float(v) for v in lg_au))
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
-        self._set(pp, "u_strobe", self._strobe(p, state))
+        self._set(pp, "u_strobe", strobe_v)
         self._set(pp, "u_strobe_dark", self._dark_threshold(p))
         self._set(pp, "u_foudre", _unit(p["foudre_amount"], 0.0, 1.5) if bolt_on else 0.0)
         self._set(pp, "u_foudre_tex", 7)
