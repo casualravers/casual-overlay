@@ -2422,6 +2422,86 @@ def check_melt() -> None:
           "melt_react > 0: le cycle s'accelere avec les basses")
 
 
+def check_bg_stochastic() -> None:
+    print("Fond genere : palette stochastique (halftone, points aleatoires)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    fbos: dict = {}
+
+    def fbo_for(sz):
+        if sz not in fbos:
+            fbos[sz] = ctx.framebuffer(color_attachments=[ctx.texture(sz, 4)])
+        return fbos[sz]
+
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="stochastique", bg_color1="#ff0000", bg_color2="#0000ff",
+                bg_speed=0.0, bg_react=0.0, bg_hue=0.0, bg_angle=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, bg_sto_size=20.0)
+
+    def render(state=quiet, t=1.0, size=(640, 360), rr=None, **kw):
+        """Image rendue (haut en premier, int). Sans `rr` : un Renderer neuf, une image a t = 0 puis l'image demandee."""
+        p = dict(base, **kw)
+        fbo = fbo_for(size)
+        if rr is None:
+            rr = gl.Renderer(ctx, size, None)
+            rr.draw(fbo, size, state, p, 0.0)
+        rr.draw(fbo, size, state, p, t)
+        return read_target(ctx, fbo, size).astype(int)
+
+    def lit(img):                 # part des pixels couverts par un point (rouge) plutot que par le fond (bleu)
+        return float((img[:, :, 0] > img[:, :, 2]).mean())
+
+    def blocks(img, n=40):        # couverture moyenne par blocs de n x n px
+        m = (img[:, :, 0] > img[:, :, 2]).astype(float)
+        h, w = (m.shape[0] // n) * n, (m.shape[1] // n) * n
+        return m[:h, :w].reshape(h // n, n, w // n, n).mean(axis=(1, 3))
+
+    a, b = render(), render()
+    check(abs(a - b).max() == 0, "stochastique: rendu deterministe (deux Renderer neufs, memes reglages)")
+    dens = [lit(render(bg_sto_density=d)) for d in (0.0, 0.2, 0.5, 0.8, 1.0)]
+    check(dens[0] < 0.02 and dens[1] < dens[2] < dens[3] and dens[4] > 0.45,
+          "stochastique: la densite fait la part de points allumes (0 = aucun, 1 = presque tout)", " ".join(f"{x:.3f}" for x in dens))
+
+    def clumps(regular):          # ecart de la couverture par blocs a sa moyenne locale (3 x 3 blocs) : grand = amas et vides
+        bl = blocks(render(bg_sto_field="gradient", bg_sto_regular=regular))
+        pad = np.pad(bl, 1, mode="edge")
+        local = sum(pad[i:i + bl.shape[0], j:j + bl.shape[1]] for i in range(3) for j in range(3)) / 9.0
+        return float((bl - local).std())
+
+    c1, c0 = clumps(1.0), clumps(0.0)
+    check(c1 < 0.7 * c0, "stochastique: regularite 1 = points repartis sans amas (bruit bleu), 0 = grain aleatoire",
+          f"ecart {c1:.3f} contre {c0:.3f}")
+    v0, v1 = render(bg_sto_field="gradient", bg_sto_vary=0.0), render(bg_sto_field="gradient", bg_sto_vary=1.0)
+    w = v0.shape[1]
+    edge = lambda img: lit(np.concatenate([img[:, : w // 8], img[:, -w // 8:]], axis=1))     # champ fort (aller-retour : bords)
+    light = lambda img: lit(img[:, int(w * 0.30):int(w * 0.40)])                          # champ faible (0,4 .. 0,2)
+    check(edge(v1) > edge(v0) + 0.05 and light(v1) < light(v0),
+          "stochastique: variation de taille = gros points ou le champ est fort, fins ou il est faible",
+          f"fort {edge(v0):.2f} -> {edge(v1):.2f}, faible {light(v0):.2f} -> {light(v1):.2f}")
+    inv = render(bg_sto_invert=1.0)
+    check(abs(inv[:, :, 0] - a[:, :, 2]).max() <= 2 and abs(inv[:, :, 2] - a[:, :, 0]).max() <= 2,
+          "stochastique: inversion = couleurs des points et du fond echangees")
+    check(a[:, :, 1].max() < 5 and render(bg_sto_rainbow=1.0)[:, :, 1].max() > 100,
+          "stochastique: arc-en-ciel 0 = deux couleurs seulement, 1 = la teinte des points varie")
+    hue = render(bg_hue=1.0 / 3.0)
+    check(hue[:, :, 2].max() < 5 and hue[:, :, 1].max() > 200, "stochastique: la teinte du fond tourne aussi les points (rouge -> vert, bleu -> rouge)")
+    fields = {f: render(bg_sto_field=f) for f in ("noise", "waves", "gradient")}
+    diffs = [abs(fields[x] - fields[y]).mean() for x, y in (("noise", "waves"), ("noise", "gradient"), ("waves", "gradient"))]
+    check(min(diffs) > 3, "stochastique: les trois champs (bruit, vagues, degrade) donnent trois images differentes",
+          " ".join(f"{x:.1f}" for x in diffs))
+    tiny = render(size=(1280, 720), bg_sto_size=3.0)
+    check(lit(tiny) > 0.05, "stochastique: points de 3 px en 1280 x 720 encore visibles", f"{lit(tiny):.3f}")
+    small, big = blocks(render()), blocks(render(size=(1280, 720)), 80)
+    check(abs(small - big).mean() < 0.03, "stochastique: meme dessin quelle que soit la resolution", f"ecart {abs(small - big).mean():.3f}")
+    rr = gl.Renderer(ctx, (640, 360), None)
+    still = render(rr=rr, t=0.0, bg_speed=1.0)
+    for i in range(1, 30):                       # dt est plafonne a 0,1 s par image : 1,5 s = 30 images
+        moved = render(rr=rr, t=0.05 * i, bg_speed=1.0)
+    check(abs(moved - still).mean() > 2, "stochastique: le champ derive au cours du temps", f"ecart {abs(moved - still).mean():.1f}")
+
+
 def check_gates() -> None:
     print("Reglages incompatibles grises (modes d'audio2wave)")
     try:
@@ -8756,6 +8836,7 @@ def main() -> None:
     check_logo_video()
     check_holo()
     check_melt()
+    check_bg_stochastic()
     check_cells()
     check_noise()
     check_doodles()
