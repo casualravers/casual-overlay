@@ -468,6 +468,9 @@ def check_gui() -> None:
     def on_ready(c):
         root = c["root"]
         out["builds"] = out.get("builds", 0) + 1
+        if out["builds"] == 1 and boot is not None:           # ecran de chargement : fenetre construite transparente, revelee plus tard
+            out["boot_first"] = (round(float(root.attributes("-alpha")), 1), bool(boot.top.winfo_exists()), root.winfo_ismapped())
+            root.after(2500, lambda: out.setdefault("boot_after", (round(float(root.attributes("-alpha")), 1), bool(boot.top.winfo_exists()))))
         first_ = out.setdefault("first_widgets", (c["notebook"], c["scene_bar"], c["right_cv"], c["live_host"]))
         out["swap_keeps_overlay"] = out.get("swap_keeps_overlay", True) and (c["notebook"], c["scene_bar"], c["right_cv"]) == first_[:3]
         out["swap_new_panel"] = out.get("swap_new_panel", False) or (out["builds"] > 1 and c["live_host"] is not first_[3])
@@ -1076,13 +1079,18 @@ def check_gui() -> None:
     core_autosave.AUTOSAVE_PATH = _tmp_presets / "autosave.json"
     live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
-        gl_gui.run_gui(s, live, on_ready)
+        import gui_splash
+        boot = gui_splash.start()
+        gl_gui.run_gui(s, live, on_ready, boot=boot)
     finally:
         core_autosave.AUTOSAVE_PATH = real_autosave_path
         core_params.OVERLAY_PRESETS_PATH = real_presets_path
         core_params.BACKGROUND_PRESETS_PATH = real_bg_presets_path
         _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
         _scenes.MASTERS_PATH = real_masters_path
+    check(out.get("boot_first") == (0.0, True, True) and out.get("boot_after") == (1.0, False),
+          "chargement: la fenetre se construit transparente (mappee) sous l'ecran de chargement, puis il disparait et elle est visible",
+          f"{out.get('boot_first')} {out.get('boot_after')}")
     p = out.get("p_neon", ())
     check(p == ("live", "classic", 1.5, 0.0, "#ff3df2", 1, 0.11),
           "preset overlay integre charge (logo, effets, halo) SANS toucher au fond", str(p))

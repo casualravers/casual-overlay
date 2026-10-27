@@ -25,6 +25,7 @@ class Stats:
         self.log = log                                  # fonction(message) ou None
         self.ops: dict[str, list] = {}                  # nom -> [appels, total ms, pire ms]
         self.stack: list[str] = []                      # operations en cours (la derniere = la plus interne)
+        self.on_enter = None                            # fonction(nom) appelee a l'entree de chaque section (ecran de chargement), erreurs ignorees
         self.last_logged: dict[str, float] = {}
         self.stalls: list[tuple[float, str]] = []       # (duree ms, operation la plus longue de la fenetre du gel)
         self.recent: list[tuple[float, str, float]] = []  # (fin, nom, ms) des dernieres operations de plus de 20 ms
@@ -33,6 +34,11 @@ class Stats:
     def timed(self, name: str):
         t0 = self.clock()
         self.stack.append(name)
+        if self.on_enter is not None:
+            try:
+                self.on_enter(name)
+            except Exception:
+                pass
         try:
             yield
         finally:

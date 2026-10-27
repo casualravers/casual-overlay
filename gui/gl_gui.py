@@ -618,12 +618,21 @@ def drop_cover(root, cover, delay_ms: int = 350) -> None:
     root.after(delay_ms, gone)
 
 
-def run_gui(s, live, on_ready=None) -> None:
+REVEAL_MAX_S = 12.0                    # attente maximale du panneau etendu avant de reveler quand meme
+REVEAL_DELAY_MS = 700                  # la mise en page se fixe (`layout["settled"]` : 400 ms) avant d'afficher la fenetre
+
+
+def run_gui(s, live, on_ready=None, boot=None) -> None:
     """Cree la fenetre Tk, la construit pour le mode courant et bloque dans mainloop() jusqu'a la fin.
 
-    `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite."""
+    `on_ready(controls)` (tests): appele dans le fil tkinter, une fois la fenetre construite.
+    `boot` (`gui_splash.Splash`) : ecran de chargement deja ouvert ; sa racine est reutilisee, la fenetre est construite
+    transparente puis revelee (`reveal`) une fois sa mise en page stabilisee."""
     require_audio2wave_api(live)
-    root = tk.Tk()
+    root = boot.root if boot is not None else tk.Tk()
+    if boot is not None:
+        root.deiconify()                                   # affichee mais transparente (alpha 0) : mise en page normale, invisible
+        STATS.on_enter = boot.on_section
 
     def report(exc, val, tb) -> None:                     # une erreur de callback ne doit pas passer inapercue : journal + console
         sessionlog.error("Erreur dans l'interface (callback Tk)", val)
@@ -631,6 +640,23 @@ def run_gui(s, live, on_ready=None) -> None:
 
     root.report_callback_exception = report
     build_window(s, live, root, s.mode, on_ready)
+    if boot is not None:
+        t_start = time.perf_counter()
+
+        def reveal() -> None:
+            ready = getattr(root, "_boot_ready", None)
+            if time.perf_counter() - t_start < REVEAL_MAX_S and ready is not None and not ready():
+                root.after(100, reveal)                    # le panneau etendu se remplit encore : l'ecran de chargement reste
+                return
+            STATS.on_enter = None
+            try:
+                root.attributes("-alpha", 1.0)
+                root.lift()
+                root.focus_force()
+            except tk.TclError:
+                pass
+            boot.close()
+        root.after(REVEAL_DELAY_MS, reveal)
     watch = uistats.StallWatch(period_ms=50.0)
 
     def stall_watch() -> None:
@@ -690,9 +716,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         keep_size = (root.winfo_width(), root.winfo_height())
     install_device_cache()
     DEVICE_CACHE["on"] = True
-    snapshot = grab_window(root)
+    boot_top = getattr(root, "_boot_top", None)             # ecran de chargement : il survit a la reconstruction
+    others = [c for c in root.winfo_children() if c is not boot_top]
+    snapshot = grab_window(root) if others else None        # premiere construction : rien a figer
     with STATS.timed("build.destruction"):
-        for child in list(root.winfo_children()):
+        for child in others:
             child.destroy()
     cover = show_cover(root, snapshot)
     apply_a2w_palette()
@@ -1740,6 +1768,14 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                           + (" (Full Randomizer)" if scene_book.vj()["order"] == "alea" else ""))
         update_vj_button()
 
+    def thumbs_pending() -> bool:
+        return any(v == "pending" for v in getattr(s, "thumb_cache", {}).values())
+
+    def boot_waiting() -> bool:
+        """Pendant l'ecran de chargement les vignettes qui arrivent en rafale ne reconstruisent pas le panneau a chaque fois : un seul
+        rafraichissement quand elles sont toutes pretes et que le panneau a fini de se remplir."""
+        return getattr(root, "_boot_top", None) is not None and (thumbs_pending() or bool(panel_state.get("filling")))
+
     def vj_tick() -> None:
         """Minuteur du VJ (250 ms). Chaque etape est isolee et la suivante est TOUJOURS programmee : une erreur (affichee sur la console)
         ne doit jamais tuer le minuteur, sinon Play ne ferait plus rien et le VJ ne passerait plus jamais a la scene suivante."""
@@ -1760,7 +1796,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             traceback.print_exc()
             vj["t_next"] = time.monotonic() + max(float(scene_book.vj()["seconds"]), 5.0)     # pas de boucle d'erreurs a 4 Hz
         try:
-            if getattr(s, "thumb_dirty", False) and time.monotonic() - panel_state.get("thumb_at", 0.0) >= 0.8:
+            if getattr(s, "thumb_dirty", False) and time.monotonic() - panel_state.get("thumb_at", 0.0) >= 0.8 and not boot_waiting():
                 s.thumb_dirty = False                      # une vignette est prete (calculee dans un fil) : au plus un rafraichissement
                 panel_state["thumb_at"] = time.monotonic() # toutes les 0,8 s, les vignettes arrivent en rafale
                 refresh_scene_panel()
@@ -2361,7 +2397,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         s.expand_default_done = True
         set_expanded(True)
 
-    after(900, open_panel_by_default)
+    # Au demarrage avec ecran de chargement, le panneau est etendu et rempli AVANT que la fenetre soit revelee (sinon la fenetre rame
+    # juste apres) : plus tot (la mise en page se fixe a 400 ms) et `_boot_ready` dit a `run_gui` quand tout est pret.
+    after(450 if boot_top is not None else 900, open_panel_by_default)
+    root._boot_ready = lambda: (bool(os.environ.get("CASUAL_NO_EXPAND")) or getattr(s, "expand_default_done", False)) and not panel_state.get("filling") and not thumbs_pending() and not getattr(s, "thumb_dirty", False)
 
     def watch_page() -> None:
         """La taille VOULUE de la page change sans que la page change de taille (section « Affichage et analyse » qu'on ouvre, onglet plus haut,

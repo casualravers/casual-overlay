@@ -40,6 +40,13 @@ from pathlib import Path
 
 # La GUI (gl_gui, gui_*, skin, theme, icons, py_modes) vit dans gui/ : modules plats, importes par leur nom.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "gui"))
+
+# Ecran de chargement le plus tot possible (les imports lourds ci-dessous prennent ~1,5 s) : seulement au lancement du programme avec --gui.
+_EARLY_BOOT = None
+if __name__ == "__main__" and "--gui" in sys.argv[1:] and not {"--list-devices", "--list-audio-devices", "--dry-run", "--diagnostic", "-h", "--help"} & set(sys.argv[1:]):
+    import gui_splash
+    _EARLY_BOOT = gui_splash.start()           # None si Tk est indisponible : demarrage comme avant
+
 from engine.deps import MISSING, _optional_import, np, glfw, moderngl, sd, PIL_Image, PIL_ImageDraw, PIL_ImageFont  # noqa: E402,F401
 from engine.audio import (  # noqa: E402,F401
     ATTACK_TAU_S, AudioAnalyzer, BANDS, BAND_GATE, BASELINE_FALL_TAU_S, BASELINE_RISE_TAU_S, BEAT_DECAY_TAU_S, BEAT_IDLE_S, DEV_TAU_S, FeatureExtractor, KICK_K, KICK_MIN, KICK_RATIO_EXTRA, KICK_REFRACTORY_S, KICK_WARMUP_S, MIC_WORDS, NOT_A_MIC, PEAK_HALF_LIFE_S, RELEASE_TAU_S, RingBuffer, SoundDeviceInput, SyntheticAudio, _coef, find_input_device, pick_default_device, print_audio_devices, synth_audio_block, system_default_input_name,
@@ -190,6 +197,13 @@ def main() -> None:
     args = parse_args()
     if args.diagnostic:
         sys.exit(diagnostics.run_cli(Path(args.a2w_dir), args.synthetic, args.gui))
+    boot = _EARLY_BOOT
+    if boot is None and args.gui and not (args.list_audio_devices or args.list_devices or args.dry_run or args.diagnostic):
+        import gui_splash
+        boot = gui_splash.start()                         # ecran de chargement (None si Tk indisponible)
+    args.boot = boot
+    if boot is not None:
+        boot.bump("Verification de l'ordinateur...", 0.05)
     if not (args.list_audio_devices or args.list_devices or args.dry_run):
         # Ce PC est-il pret ? Une erreur arrete le programme avec un message clair, les manques moins graves sont signales.
         args.diag_checks, ready = diagnostics.preflight(Path(args.a2w_dir), args.synthetic, args.gui)
@@ -210,6 +224,8 @@ def main() -> None:
 
     render_w, render_h = (int(v) for v in parse_pair(args.render_size, "--render-size", "x"))
     live = None
+    if boot is not None:
+        boot.bump("Chargement d'audio2wave...", 0.2)
     if not args.synthetic or args.list_devices or args.gui:
         live = load_live(Path(args.a2w_dir))
 
@@ -252,6 +268,8 @@ def main() -> None:
             print(format_command(live.producer_command(live_args)))
         return
 
+    if boot is not None:
+        boot.bump("Demarrage de l'audio...", 0.3)
     require_deps()
     if live_args is not None and shutil.which("ffmpeg") is None:
         print("ffmpeg introuvable dans le PATH (winget install --id Gyan.FFmpeg).", file=sys.stderr)
