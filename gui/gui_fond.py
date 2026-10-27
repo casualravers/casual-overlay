@@ -67,11 +67,13 @@ def install(c):
     pattern_box.columnconfigure(2, weight=1)         # le bandeau "Fond genere" prend toute la largeur
     pz = Zone(pattern_box)
     add_section_title(pz, "Fond genere")
-    param_radio(pz, "Palette", "bg_palette", (("Arc-en-ciel", "classic"), ("Duo", "duo"), ("Banc de test", "test")),
-                tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
-                        "Duo: degrade lisse entre deux couleurs. "
-                        "Banc de test: copie EXACTE du motif de test (carreaux de 80 px, 30 images/s) ; "
-                        "les autres reglages du motif ne s'y appliquent pas.")
+    palette_var = param_radio(pz, "Palette", "bg_palette",
+                              (("Arc-en-ciel", "classic"), ("Duo", "duo"), ("Banc de test", "test"), ("Stochastique", "stochastique")),
+                              tooltip="Arc-en-ciel: le visuel d'origine (canaux R/V/B qui defilent). "
+                                      "Duo: degrade lisse entre deux couleurs. "
+                                      "Banc de test: copie EXACTE du motif de test (carreaux de 80 px, 30 images/s) ; "
+                                      "les autres reglages du motif ne s'y appliquent pas. "
+                                      "Stochastique: des points (couleur 1) sur un fond (couleur 2) dont la densite dessine un champ qui bouge.")
     r = pz.next_row()
     add_label(pz, "Couleurs 1 / 2", r, "Les deux couleurs du degrade de la palette Duo.")
     pair = tk.Frame(pattern_box)
@@ -86,7 +88,37 @@ def install(c):
     param_slider(pz, "Contraste du damier", "bg_checker", 0.0, 1.0, 0.02)
     param_slider(pz, "Cadence du damier", "bg_flip", 0.0, 8.0, 0.25, "Nombre de bascules du damier par seconde.")
     param_slider(pz, "Reaction a l'audio", "bg_react", 0.0, 2.0, 0.1,
-                 "Flash et bascule du damier a chaque kick, defilement accelere par les basses. 0 = aucune.")
+                 "Flash et bascule du damier a chaque kick, defilement accelere par les basses. 0 = aucune. "
+                 "Stochastique : les basses ajoutent des points, le kick donne un coup de contraste, les aigus font scintiller.")
+
+    # ---- palette STOCHASTIQUE : ses reglages ne s'affichent que pour elle
+    sto_box = tk.Frame(pattern_box)
+    sto_box.grid(row=pz.next_row(), column=0, columnspan=3, sticky="new")
+    sto_box.columnconfigure(2, weight=1)
+    sz = Zone(sto_box)
+    param_radio(sz, "Champ", "bg_sto_field", (("Bruit", "noise"), ("Vagues", "waves"), ("Degrade", "gradient")),
+                tooltip="Ce que les points dessinent : des taches qui derivent, des bandes qui se propagent (dans la direction de l'angle) "
+                        "ou un degrade aller-retour.")
+    param_slider(sz, "Taille des points", "bg_sto_size", 3, 60, 1, "Taille des points, en pixels pour une image de 720 px de haut.")
+    param_slider(sz, "Regularite", "bg_sto_regular", 0.0, 1.0, 0.05,
+                 "1 = points repartis sans amas ni trous (tramage stochastique) ; 0 = grain aleatoire brut.")
+    param_slider(sz, "Variation de taille", "bg_sto_vary", 0.0, 1.0, 0.05,
+                 "0 = tous les points ont la meme taille ; 1 = gros la ou le champ est fort, fins la ou il est faible.")
+    param_slider(sz, "Densite", "bg_sto_density", 0.0, 1.0, 0.02, "Part de points allumes au repos (0 = aucun, 1 = presque tous).")
+    param_slider(sz, "Arc-en-ciel", "bg_sto_rainbow", 0.0, 1.0, 0.05, "0 = points de la couleur 1 ; plus haut = leur teinte suit le champ.")
+    sto_inv_var = tk.IntVar(value=int(float(params["bg_sto_invert"]) >= 0.5))
+    bind_param("bg_sto_invert", sto_inv_var, float)
+    tk.Checkbutton(sto_box, text="Inverser (couleur 2 sur couleur 1)", variable=sto_inv_var).grid(
+        row=sz.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+
+    def show_sto(*_a) -> None:
+        if palette_var.get() == "stochastique":
+            sto_box.grid()
+        else:
+            sto_box.grid_remove()
+
+    palette_var.trace_add("write", show_sto)
+    show_sto()
 
     # ---- fond VIDEO : un fichier brut lu en boucle plein cadre (le decodage est dans le fil GL : BgVideoManager)
     bgvid_box = tk.Frame(pattern_holder)
@@ -151,4 +183,4 @@ def install(c):
     tab_fond.update_idletasks()
 
     import types
-    return types.SimpleNamespace(apply_bgv=apply_bgv, bg_color1_var=bg_color1_var, bg_color2_var=bg_color2_var, bg_presets=bg_presets, bg_var=bg_var, bgv_status=bgv_status, bgv_var=bgv_var, bgvid_box=bgvid_box, load_overlay_preset=load_overlay_preset, pattern_box=pattern_box, save_overlay_preset=save_overlay_preset, update_overlay_preset=update_overlay_preset)
+    return types.SimpleNamespace(apply_bgv=apply_bgv, bg_color1_var=bg_color1_var, bg_color2_var=bg_color2_var, bg_presets=bg_presets, bg_var=bg_var, bgv_status=bgv_status, bgv_var=bgv_var, bgvid_box=bgvid_box, load_overlay_preset=load_overlay_preset, pattern_box=pattern_box, save_overlay_preset=save_overlay_preset, sto_box=sto_box, update_overlay_preset=update_overlay_preset)

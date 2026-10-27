@@ -590,11 +590,26 @@ def check_gui() -> None:
             c["melt_var"].set(0)
             c["cell_var"].set(0)
             c["mosaic_var"].set(0)
-            out["g_pal"] = {}
-            for pal in ("classic", "duo", "test"):
+            out["g_pal"], out["sto_shown"] = {}, {}
+            c["bg_var"].set("pattern")
+            for pal in ("classic", "duo", "test", "stochastique"):
                 c["palette_var"].set(pal)
-                out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse")}
+                root.update_idletasks()
+                out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse",
+                                                                    "Taille des carreaux", "Contraste du damier", "Cadence du damier")}
+                out["sto_shown"][pal] = c["sto_box"].winfo_ismapped()
+            c["synced"]["bg_sto_field"].set("waves")
+            out["sto_angle_waves"] = row_states("Angle du degrade")
+            c["synced"]["bg_sto_field"].set("noise")
+            for w in gg.leaves(c["sto_box"]):
+                if w.winfo_class() == "Scale" and float(w.cget("to")) == 60.0:
+                    w.set(25)
+            c["synced"]["bg_sto_invert"].set(1)
+            root.update_idletasks()
+            out["sto_written"] = (params["bg_sto_size"], params["bg_sto_invert"])
+            c["synced"]["bg_sto_invert"].set(0)
             c["palette_var"].set("classic")
+            c["bg_var"].set("live")
             out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
             c["bg_var"].set("pattern")                   # pire cas: bloc motif ouvert + effets du logo delies
             c["link_var"].set(0)
@@ -1435,6 +1450,16 @@ def check_gui() -> None:
           and gp.get("duo", {}).get("Angle du degrade") == on and gp.get("test", {}).get("Teinte") == off
           and gp.get("test", {}).get("Vitesse") == off and gp.get("test", {}).get("Couleurs 1 / 2") == off,
           "palette du fond: couleurs et angle seulement en Duo ; en Banc de test tous les reglages du motif sont grises", str(gp))
+    gs = gp.get("stochastique", {})
+    check(gs.get("Couleurs 1 / 2") == on and gs.get("Teinte") == on and gs.get("Angle du degrade") == off
+          and out.get("sto_angle_waves") == on and all(gs.get(lb) == off for lb in ("Taille des carreaux", "Contraste du damier", "Cadence du damier"))
+          and all(gp.get(pl, {}).get("Taille des carreaux") == on for pl in ("classic", "duo")),
+          "palette stochastique: couleurs et teinte actives, damier grise, angle actif seulement pour les vagues et le degrade",
+          f"{gs} {out.get('sto_angle_waves')}")
+    check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True},
+          "palette stochastique: ses reglages ne s'affichent que pour elle", str(out.get("sto_shown")))
+    check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
+          str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
     check(out.get("cover") in ((True, True), (False, False)), "reconstruction de la fenetre: l'ancienne image est posee dessus pendant la construction (ou desactivee si la capture est impossible)", str(out.get("cover")))
     big, mid, small, back = (out.get(k, ()) for k in ("lay_big", "lay_mid", "lay_small", "lay_back"))
@@ -8082,6 +8107,12 @@ def check_params_schema() -> None:
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
     check(gl.coerce_params({"bg_palette": "duo"})["bg_sto_density"] == 0.5, "stochastique: un ancien preset sans ces cles prend les defauts")
+    from core import scenes as sc
+    sto_p = dict(gl.load_params(), bg_mode="pattern", bg_palette="stochastique", bg_sto_field="waves", bg_sto_size=17.0,
+                 bg_sto_regular=0.3, bg_sto_vary=0.6, bg_sto_density=0.7, bg_sto_invert=1.0, bg_sto_rainbow=0.4)
+    back = sc.scene_values(sc.capture_scene("S", sto_p, "live", None), dict(gl.load_params(), bg_mode="live"))
+    check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
+          "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
 
 
 def _in_range(p, value) -> bool:
