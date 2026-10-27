@@ -21,7 +21,9 @@ FADE_OUT_S = 0.7
 INTRO_S = 0.9                 # apparition : le media « pop » (grossit avec un depassement) en tournant un peu
 OUTRO_S = 0.9                 # disparition : il se tasse puis rapetisse en pivotant
 TILT_RAD = 0.30               # inclinaison de depart / d'arrivee (~17 degres)
-MAX_HEIGHT_FRAC = 0.45        # hauteur maximale d'un media (fraction de la hauteur de l'ecran)
+MAX_HEIGHT_FRAC = 0.45        # hauteur maximale d'une photo (fraction de la hauteur de l'ecran)
+TEXT_HEIGHT_FRAC = 0.30       # hauteur d'un media decoupe (texte, dessin : beaucoup de transparence) : plus petit, il est deja lisible
+CUTOUT_SHARE = 0.10           # part de pixels transparents au-dela de laquelle un media est un texte / dessin et non une photo
 CONFIG_NAME = "depot.json"
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -175,6 +177,11 @@ def place(rng, aspect: float, screen_aspect: float, max_height: float = MAX_HEIG
             if best_cost is None or cost < best_cost:
                 best, best_cost = rect, cost
     return best
+
+
+def height_for(transparent_share: float) -> float:
+    """Hauteur maximale d'un media selon la part de ses pixels transparents : une photo (opaque) est grande, un texte ou un dessin detoure reste a sa taille d'origine."""
+    return TEXT_HEIGHT_FRAC if float(transparent_share) > CUTOUT_SHARE else MAX_HEIGHT_FRAC
 
 
 def alpha(age: float, life: float = LIFE_S, fade_in: float = FADE_IN_S, fade_out: float = FADE_OUT_S) -> float:

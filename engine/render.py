@@ -543,7 +543,7 @@ class Renderer:
     # ---- Doodles du site : par-dessus tout, apres la trainee et le post-traitement (ni symetrie, ni teinte, ni PANIQUE n'y touchent)
     def add_doodle(self, rgba, now: float) -> None:
         """Pose un doodle (tableau uint8 RGBA premultiplie, premiere ligne = haut) a un endroit tire au hasard, entierement dans le cadre.
-        A appeler depuis le fil GL. Au-dela de 5 medias le plus ancien part."""
+        A appeler depuis le fil GL. Au-dela de MAX_VISIBLE medias le plus ancien part."""
         h, w = rgba.shape[:2]
         tile = mosaic_tile(rgba)                    # la mosaique du logo se nourrit de tous les doodles recus, meme ceux qui ont quitte l'ecran
         if tile is not None:
@@ -558,7 +558,8 @@ class Renderer:
         ident = self._doodle_id
         self.doodle_tex[ident] = tex
         sw, sh = self.screen_size
-        rect = doodles.place(self._doodle_rng, w / h, sw / max(sh, 1), avoid=[it["rect"] for it in self.wall.items[-(doodles.MAX_VISIBLE - 1):]])
+        share = float((rgba[..., 3] < 250).mean())          # part transparente : texte / dessin detoure (taille moderee) ou photo (grande)
+        rect = doodles.place(self._doodle_rng, w / h, sw / max(sh, 1), doodles.height_for(share), avoid=[it["rect"] for it in self.wall.items[-(doodles.MAX_VISIBLE - 1):]])
         for gone in self.wall.add(ident, rect, now):
             self._release_doodle(gone)
 

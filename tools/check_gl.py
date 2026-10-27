@@ -7686,6 +7686,9 @@ def check_doodles() -> None:
         shown[:] = shown[-6:]
     check(cover == 0 and clash <= 8 and small < 300, "position: les medias visibles ne se recouvrent (presque) jamais, toujours dans le cadre", f"{clash} recouvrements, {small} reduits, {cover} hors cadre")
     check(dd.MAX_HEIGHT_FRAC >= 0.4, "position: les medias sont grands (au moins 40 % de la hauteur)")
+    check(dd.height_for(0.0) == dd.MAX_HEIGHT_FRAC and dd.height_for(0.05) == dd.MAX_HEIGHT_FRAC and dd.height_for(0.5) == dd.TEXT_HEIGHT_FRAC
+          and dd.height_for(1.0) == dd.TEXT_HEIGHT_FRAC and dd.TEXT_HEIGHT_FRAC < dd.MAX_HEIGHT_FRAC,
+          "taille: une photo (opaque) est grande, un texte ou dessin detoure (beaucoup de transparence) garde la taille moderee")
     a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, 14.3, 14.65, 15, 16)]
     check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
           and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
@@ -7949,6 +7952,8 @@ def check_doodles() -> None:
     cx2 = int((r2.wall.items[-1]["rect"][0] + r2.wall.items[-1]["rect"][2] / 2) * size[0])
     px = img2[cy2, cx2]
     check(120 <= px[0] <= 136 and px[1] == 0 and px[2] == 0, "rendu: alpha premultiplie (50 % de rouge sur noir = 128, pas 64)", str(px))
+    check(abs(r.wall.items[-1]["rect"][3] - dd.MAX_HEIGHT_FRAC) < 1e-9 and abs(r2.wall.items[-1]["rect"][3] - dd.TEXT_HEIGHT_FRAC) < 1e-9,
+          "rendu: une photo opaque est grande (45 %), un media transparent (texte, dessin) garde 30 %", f"{r.wall.items[-1]['rect'][3]:.2f} {r2.wall.items[-1]['rect'][3]:.2f}")
     # le fondu : au tout debut le doodle est invisible, il apparait ensuite
     r3 = gl.Renderer(ctx, size, None)
     r3.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
