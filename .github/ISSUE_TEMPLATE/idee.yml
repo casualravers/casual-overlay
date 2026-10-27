@@ -1,0 +1,22 @@
+name: Idee
+description: Une idee d'amelioration, meme vague (le detail viendra au brainstorming)
+title: "Idee : "
+labels: ["idee"]
+body:
+  - type: textarea
+    id: voir
+    attributes:
+      label: Ce que je veux voir
+      description: Une ou deux phrases suffisent.
+    validations:
+      required: true
+  - type: textarea
+    id: pourquoi
+    attributes:
+      label: Pourquoi
+      description: Le probleme ou l'envie derriere (facultatif).
+  - type: textarea
+    id: bon
+    attributes:
+      label: Comment je saurai que c'est bon
+      description: Ce que je regarderai sur le projecteur ou dans l'interface (facultatif).
