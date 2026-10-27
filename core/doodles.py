@@ -14,14 +14,14 @@ REQUEST_TIMEOUT_S = 6.0       # delai d'une requete reseau
 LIST_LIMIT = 100              # fichiers demandes a chaque interrogation (les plus recents d'abord)
 MAX_BYTES = 5 * 1024 * 1024   # taille maximale d'un fichier
 MAX_SIDE = 4096               # dimension maximale (px)
-MAX_VISIBLE = 5               # medias visibles en meme temps
+MAX_VISIBLE = 3               # medias visibles en meme temps (plus grands, donc moins nombreux : ils ne se recouvrent pas)
 LIFE_S = 15.0                 # duree d'affichage (fondus compris)
 FADE_IN_S = 0.4              # courts : le mouvement d'apparition / de disparition (pose) fait le gros du travail
 FADE_OUT_S = 0.7
 INTRO_S = 0.9                 # apparition : le media « pop » (grossit avec un depassement) en tournant un peu
 OUTRO_S = 0.9                 # disparition : il se tasse puis rapetisse en pivotant
 TILT_RAD = 0.30               # inclinaison de depart / d'arrivee (~17 degres)
-MAX_HEIGHT_FRAC = 0.30        # hauteur maximale d'un media (fraction de la hauteur de l'ecran)
+MAX_HEIGHT_FRAC = 0.45        # hauteur maximale d'un media (fraction de la hauteur de l'ecran)
 CONFIG_NAME = "depot.json"
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -142,17 +142,39 @@ def check_size(width: int, height: int) -> str:
     return ""
 
 
-def place(rng, aspect: float, screen_aspect: float, max_height: float = MAX_HEIGHT_FRAC) -> tuple[float, float, float, float]:
+def _overlap(r1: tuple, r2: tuple, margin: float = 0.0) -> float:
+    """Aire de recouvrement de deux rectangles (x, y, w, h), le second elargi de `margin` de chaque cote."""
+    dx = min(r1[0] + r1[2], r2[0] + r2[2] + margin) - max(r1[0], r2[0] - margin)
+    dy = min(r1[1] + r1[3], r2[1] + r2[3] + margin) - max(r1[1], r2[1] - margin)
+    return dx * dy if dx > 0.0 and dy > 0.0 else 0.0
+
+
+SCALES = (1.0, 0.85, 0.7, 0.55)      # tailles essayees (x la hauteur maximale) quand la place manque
+TRIES = 30                           # positions tirees par taille
+GAP = 0.03                           # marge gardee autour des medias deja la (le mouvement d'apparition les agrandit un peu)
+
+
+def place(rng, aspect: float, screen_aspect: float, max_height: float = MAX_HEIGHT_FRAC, avoid: tuple | list = ()) -> tuple[float, float, float, float]:
     """Rectangle (x, y, largeur, hauteur) du media en fractions de l'ecran, origine en haut a gauche, TOUJOURS entierement dans le cadre.
     La hauteur vaut `max_height` de l'ecran (ratio de l'image garde) ; une image tres large est reduite pour ne pas depasser en largeur.
-    `rng` : objet avec `random()` (random.Random)."""
+    `avoid` : rectangles des medias deja affiches. Le media va dans un endroit libre (marge `GAP`) ; s'il n'y en a pas a taille pleine il est
+    reduit (jusqu'a 55 %), puis, faute de place, pose la ou il en recouvre le moins. `rng` : objet avec `random()` (random.Random)."""
     aspect = max(float(aspect), 1e-3)
     screen_aspect = max(float(screen_aspect), 1e-3)
-    h = max(0.01, min(float(max_height), 1.0))
-    w = h * aspect / screen_aspect
-    if w > 1.0:
-        h, w = h / w, 1.0
-    return rng.random() * (1.0 - w), rng.random() * (1.0 - h), w, h
+    best, best_cost = None, None
+    for scale in SCALES if avoid else SCALES[:1]:
+        h = max(0.01, min(float(max_height) * scale, 1.0))
+        w = h * aspect / screen_aspect
+        if w > 1.0:
+            h, w = h / w, 1.0
+        for _ in range(TRIES if avoid else 1):
+            rect = (rng.random() * (1.0 - w), rng.random() * (1.0 - h), w, h)
+            cost = sum(_overlap(rect, other, GAP) for other in avoid)
+            if cost <= 0.0:
+                return rect
+            if best_cost is None or cost < best_cost:
+                best, best_cost = rect, cost
+    return best
 
 
 def alpha(age: float, life: float = LIFE_S, fade_in: float = FADE_IN_S, fade_out: float = FADE_OUT_S) -> float:

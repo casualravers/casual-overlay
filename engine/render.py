@@ -558,7 +558,7 @@ class Renderer:
         ident = self._doodle_id
         self.doodle_tex[ident] = tex
         sw, sh = self.screen_size
-        rect = doodles.place(self._doodle_rng, w / h, sw / max(sh, 1))
+        rect = doodles.place(self._doodle_rng, w / h, sw / max(sh, 1), avoid=[it["rect"] for it in self.wall.items[-(doodles.MAX_VISIBLE - 1):]])
         for gone in self.wall.add(ident, rect, now):
             self._release_doodle(gone)
 
