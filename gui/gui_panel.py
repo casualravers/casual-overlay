@@ -972,7 +972,7 @@ def install(c):
         text_var = tk.StringVar(value=rs["text"])
         text_entry = tk.Entry(fr, textvariable=text_var, width=24)
         text_entry.pack(side="left", padx=(0, 6))
-        Tooltip(text_entry, "Texte tire comme logo (defaut CASUAL RAVERS). Entree ou changer de champ pour valider ; vide = jamais de texte.")
+        Tooltip(text_entry, "Texte tire comme logo (defaut CASUAL RAVERS). Plusieurs textes : separe-les par | (un tirage en choisit un). Entree ou changer de champ pour valider ; vide = jamais de texte.")
         for ev in ("<Return>", "<FocusOut>"):
             text_entry.bind(ev, lambda e: set_random_option(text=text_var.get()) if text_var.get().strip()[:randomizer.MAX_TEXT] != scene_book.vj()["random"]["text"] else None)
         # ---- verrous

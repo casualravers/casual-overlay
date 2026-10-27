@@ -11,7 +11,7 @@ from tkinter import filedialog
 import audio2wave_gl as gl
 import time
 import tkinter as tk
-from core import schedule
+from core import schedule, textcycle
 
 
 def install(c):
@@ -104,6 +104,40 @@ def install(c):
 
     text_widget.bind("<KeyRelease>", apply_text)     # couvre aussi le collage (Ctrl+V)
     text_widget.bind("<FocusOut>", apply_text)
+
+    # ---- textes suivants : se succedent apres le texte principal, toutes les N mesures
+    r = tz.next_row()
+    add_label(tz, "Textes suivants", r, "Un texte par ligne (\\n = retour a la ligne). Apres le texte principal, ils se succedent en boucle, toutes les N mesures, "
+                                          "avec un fondu court. Vide = un seul texte.")
+    extra_frame = tk.Frame(text_box)
+    extra_frame.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    extra_text = tk.Text(extra_frame, width=22, height=3, wrap="none", undo=True, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG,
+                         insertbackground=a2w.GUI_FG, relief="flat", highlightthickness=1,
+                         highlightbackground=a2w.GUI_PANEL_BG, highlightcolor=a2w.GUI_ACCENT)
+    extra_text.pack(anchor="w")
+    extra_text.insert("1.0", str(params.get("logo_texts", "")))
+
+    def apply_extra(_evt=None) -> None:
+        params["logo_texts"] = extra_text.get("1.0", "end-1c")
+
+    extra_text.bind("<KeyRelease>", apply_extra)
+    extra_text.bind("<FocusOut>", apply_extra)
+    bars_row = tk.Frame(extra_frame)
+    bars_row.pack(anchor="w", pady=(3, 0))
+    tk.Label(bars_row, text="Changer toutes les").pack(side="left")
+    bars_var = tk.StringVar(value=str(int(params.get("text_bars", 4))))
+    bars_menu = tk.OptionMenu(bars_row, bars_var, *[str(b) for b in textcycle.BARS],
+                              command=lambda v: params.__setitem__("text_bars", int(v)))
+    bars_menu.pack(side="left", padx=4)
+    tk.Label(bars_row, text="mesures").pack(side="left")
+    extra_info = tk.Label(extra_frame, text="", anchor="w", fg=a2w.GUI_MUTED_FG)
+    extra_info.pack(anchor="w", pady=(2, 0))
+
+    def extra_tick() -> None:
+        n = len(textcycle.texts_of(params.get("text_content", ""), params.get("logo_texts", "")))
+        extra_info.configure(text=(f"texte {int(params.get('text_idx', 0)) % n + 1}/{n}" if n > 1 else "un seul texte"))
+
+    ui_every("textes", 500, extra_tick, 1000)
 
     # ---- planning : le texte change tout seul a l'heure de chaque passage
     r = tz.next_row()

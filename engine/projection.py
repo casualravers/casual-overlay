@@ -11,6 +11,7 @@ import time
 from core import params as core_params, params_schema, sessionlog
 from core.automation import AutomationEngine, set_fx_link
 from core import phase as core_phase
+from core.textcycle import TextCycle, text_at, texts_of
 from core.controls import panic, strobe_press, strobe_release
 from core.params import FX_NAMES, load_params, save_params
 from engine.preview import PREVIEW_WIDTH, write_preview
@@ -109,7 +110,7 @@ def logo_signature(params: dict) -> tuple:
     """Ce qui determine la texture du logo: si ca change, il faut la regenerer. Les autres
     reglages (position, taille, opacite, effets...) sont relus a chaque image, sans regeneration."""
     if params.get("logo_source") == "text":
-        return ("text", params.get("text_content", ""), params.get("text_font", "auto"),
+        return ("text", text_at(params.get("text_content", ""), params.get("logo_texts", ""), params.get("text_idx", 0)), params.get("text_font", "auto"),
                 params.get("text_color", "#ffffff"), params.get("text_align", "center"))
     if params.get("logo_source") == "video":
         key = str(params.get("logo_key", "")).strip().lstrip("#").lower()
@@ -452,6 +453,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     warned = False
     last_restarts = 0
     last_beats = 0
+    text_cycle = TextCycle()
     refresh = glfw.get_video_mode(window.monitor).refresh_rate or 60
     cap = refresh * 1.02 if args.fps_cap is None else args.fps_cap
     period = 1.0 / cap if cap > 0 else 0.0
@@ -478,6 +480,13 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         if args.max_seconds is not None and now - t0 >= args.max_seconds:
             break
 
+        if params.get("logo_source") == "text":                 # textes en rotation : indice et fondu relus par le rendu
+            rhythm = getattr(analyzer, "rhythm", None)
+            params["text_idx"], params["text_fade"] = text_cycle.update(
+                now, analyzer.beats, len(texts_of(params.get("text_content", ""), params.get("logo_texts", ""))), params.get("text_bars", 4),
+                params.get("tempo", 1.0), getattr(rhythm, "bpm", None))
+        else:
+            params["text_fade"] = 1.0
         apply_logo_request(s, renderer)
         while True:                             # doodles du site decodes par le fil de recuperation : poses ici (fil GL)
             try:

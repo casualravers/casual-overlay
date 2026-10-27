@@ -172,6 +172,16 @@ def random_name(rng: random.Random, taken) -> str:
     return f"{base} {n}"
 
 
+def texts_list(raw: str) -> list[str]:
+    """Textes du Randomizer : plusieurs separes par « | » (un tirage en choisit un) ; vide = aucun."""
+    return [t.strip() for t in str(raw or "").split("|") if t.strip()]
+
+
+def text_key(text: str, raw: str) -> str:
+    """Cle de memoire d'un texte tire : `text` s'il est seul, `text:<texte>` parmi plusieurs (jamais deux fois de suite le meme)."""
+    return "text" if len(texts_list(raw)) <= 1 else "text:" + text
+
+
 def text_media(rng: random.Random, text: str) -> dict:
     """Le texte comme logo : source texte, contenu donne, couleur tiree (lisible sur un fond sombre), centre ; la police reste celle du moment."""
     return {"logo_source": "text", "text_content": text, "text_color": rng.choice(GLOW_COLORS), "text_align": "center"}
@@ -455,16 +465,16 @@ def draw_scene(rng: random.Random, settings: dict, ctx: Context) -> tuple[dict, 
     else:
         # une video deja choisie pour le fond n'est pas aussi le logo (sauf si c'est la seule)
         assets = ([a for a in pool if a.path != record.get("bg_video")] or pool) if "media" in settings["overlay"] else []
-        choices = [("asset", a) for a in assets] + ([("text", settings["text"])] if "text" in settings["overlay"] and settings["text"].strip() else [])
-        picked = _fresh(rng, choices, ctx.memory, "media", avoid=last.get("media"), key=lambda c: c[1].path if c[0] == "asset" else "text") if choices else None
+        choices = [("asset", a) for a in assets] + ([("text", t) for t in texts_list(settings["text"])] if "text" in settings["overlay"] else [])
+        picked = _fresh(rng, choices, ctx.memory, "media", avoid=last.get("media"), key=lambda c: c[1].path if c[0] == "asset" else text_key(c[1], settings["text"])) if choices else None
         if picked is None:
             media = current_media                 # pas de media a tirer : celui d'avant reste (un preset remettrait le logo par defaut)
             if "media" in settings["overlay"] or "text" in settings["overlay"]:
                 notes.append("media: banque vide")
         elif picked[0] == "text":
-            media = text_media(rng, settings["text"])
-            record["media"] = "text"
-            notes.append(f"media: texte {settings['text'].strip().splitlines()[0][:30]}")
+            media = text_media(rng, picked[1])
+            record["media"] = text_key(picked[1], settings["text"])
+            notes.append(f"media: texte {picked[1].splitlines()[0][:30]}")
         else:
             media = media_for(picked[1])
             record["media"] = picked[1].path
