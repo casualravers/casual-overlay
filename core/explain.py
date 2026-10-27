@@ -39,6 +39,16 @@ def strobe_info_text(reason: str | None, age: float | None, armed: bool) -> str:
     return f"strobe auto : dernier eclair = {reason}, il y a {_fr(age or 0.0, 0)} s"
 
 
+def foudre_info_text(info: tuple | None, max_depth: int = 6) -> str:
+    """Mode Foudre : « foudre : profondeur 3/6, charge 52 % » ; (profondeur, charge) vient du moteur, None = pas de projection."""
+    if not info:
+        return "foudre : en attente de la projection"
+    gens, charge = int(info[0]), float(info[1])
+    if gens <= 0:
+        return "foudre : au repos, attend un kick"
+    return f"foudre : profondeur {gens}/{max_depth}, charge {round(100 * min(max(charge, 0.0), 1.0))} %"
+
+
 def phase_measures_text(info: dict | None) -> str:
     """Ce que le detecteur de phases mesure (kicks par seconde, energie / moyenne, gain des mediums + aigus sur 8 et 20 s)."""
     if not info or "kicks" not in info:

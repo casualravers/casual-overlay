@@ -1,6 +1,6 @@
 # Foudre : un strobe subtil en arbre de lumiere (spec)
 
-Date : 2026-10-27. Statut : spec a relire, pas encore planifiee ni developpee.
+Date : 2026-10-27. Statut : implemente (voir CLAUDE.md, section Foudre) ; reste a regler a l'oeil.
 
 ## But
 

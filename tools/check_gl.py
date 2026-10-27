@@ -1268,7 +1268,10 @@ def check_gui() -> None:
           "memoires de masters (GUI): une memoire enregistree se rappelle d'un clic (teinte, symetrie), sans les etats du moment", str(out.get("x_memory")))
     check(out.get("x_history") == (True,) * 4 and out.get("x_history_lock") == (True, True, True) and out.get("x_lock_bar_off") is True,
           "historique (GUI): chaque scene jouee est notee, Retour rejoue la precedente, le verrou l'interdit", str((out.get("x_history"), out.get("x_history_lock"))))
-    check(out.get("x_build") == (True,) * 4, "montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc", str(out.get("x_build")))
+    check(out.get("x_drop_foudre") == (True, True), "foudre (GUI): le Drop declenche la grande decharge et n'envoie pas le flash blanc plein ecran", str(out.get("x_drop_foudre")))
+    check(out.get("x_foudre_ui") == (True,) * 11, "foudre (GUI): interrupteur Strobe / Foudre au-dessus du bouton, reglages de la foudre actifs ou grises selon le mode, curseurs et couleur ecrivent les reglages",
+          str(out.get("x_foudre_ui")))
+    check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc, decharge de la foudre", str(out.get("x_build")))
     check(out.get("x_silence") == (True,) * 3, "phases auto (GUI): la case ecrit auto_phase", str(out.get("x_silence")))
     check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
@@ -4340,7 +4343,30 @@ def gui_expand_steps(c, s, out) -> None:
             root.update()
         nb_.select(0)
         root.update()
-    knobs = [w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
+    # Foudre : interrupteur Strobe / Foudre de l'onglet Live (reglages de la foudre actifs ou grises, jamais retires)
+    ui = c["vj_ui"]
+    ui["tabs"][0].select(1)                                                               # onglet Live : un curseur n'appelle sa commande que s'il est affiche
+    root.update()
+    rb = {w.cget("text"): w for w in walk_(mpanel) if w.winfo_class() == "Radiobutton" and w.cget("text") in ("Strobe", "Foudre")}
+    rb["Foudre"].invoke()
+    root.update()
+    st = lambda ws: {str(w.cget("state")) for w in ws}
+    in_foudre = (params["strobe_kind"] == "foudre", st(ui["foudre_widgets"]) == {"normal"}, st(ui["strobe_widgets"]) == {"disabled"})
+    scales = [w for w in ui["foudre_widgets"] if w.winfo_class() == "Scale"]
+    scales[1].set(120)                                                                    # Intensite
+    scales[0].set(80)                                                                     # Portee
+    ui["foudre_color"].set("#ff8800")
+    root.update()
+    values = (abs(params["foudre_amount"] - 1.2) < 1e-6, abs(params["foudre_reach"] - 0.8) < 1e-6, params["foudre_color"] == "#ff8800")
+    params["foudre_amount"], params["foudre_reach"] = 0.7, 1.0
+    rb["Strobe"].invoke()
+    root.update()
+    in_strobe = (params["strobe_kind"] == "strobe", st(ui["foudre_widgets"]) == {"disabled"}, st(ui["strobe_widgets"]) == {"normal"})
+    out["x_foudre_ui"] = in_foudre + values + in_strobe + (rb["Strobe"].winfo_rooty() < ui["strobe"].winfo_rooty(), ui["strobe"].cget("text").startswith("Strobe"))
+    ui["foudre_color"].set("#3a7bff")
+    ui["tabs"][0].select(0)
+    root.update()
+    knobs =[w for w in walk_(mpanel) if w.winfo_class() == "Scale"]
     keys = ("react_master", "tempo", "overlay_master", "bg_master", "hue_master")
     before = {k: params[k] for k in keys}
     for w, v in zip(knobs[:5], (150, 60, 40, 30, 90)):                       # onglet « Masters »
@@ -4397,10 +4423,24 @@ def gui_expand_steps(c, s, out) -> None:
     started = params["build"]
     s.commands.queue.clear() if hasattr(s.commands, "queue") else None
     hits = params["strobe_hits"]
+    drops0 = params["foudre_drop"]
     vjc["drop"]()
-    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty())
+    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty(), params["foudre_drop"] == drops0 + 1)
     while not s.commands.empty():
         s.commands.get_nowait()
+    # mode Foudre : le Drop ne lance pas le flash blanc plein ecran (la grande decharge le remplace)
+    params["strobe_kind"] = "foudre"
+    vjc["build"]()
+    for _ in range(4):
+        root.update()
+        time.sleep(0.05)
+    drops1 = params["foudre_drop"]
+    vjc["drop"]()
+    sent = []
+    while not s.commands.empty():
+        sent.append(s.commands.get_nowait())
+    out["x_drop_foudre"] = (params["foudre_drop"] == drops1 + 1, "flash" not in sent)
+    params["strobe_kind"] = "strobe"
     sil = next((w for w in walk_(mpanel) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Phases auto"), None)
     start_ = params["auto_phase"]
     sil.invoke() if sil is not None else None
@@ -8396,6 +8436,166 @@ def check_bg_labyrinthe() -> None:
     check(np.array_equal(rw.rd.read_v(), v_before), "labyrinthe: une fenetre redimensionnee ne touche pas a la simulation")
 
 
+def check_foudre_render() -> None:
+    print("Foudre : rendu (passe GL des segments, composition dans post.frag)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    fbos: dict = {}
+
+    def fbo_for(sz):
+        if sz not in fbos:
+            fbos[sz] = ctx.framebuffer(color_attachments=[ctx.texture(sz, 4)])
+        return fbos[sz]
+
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    # fond noir (bg_master 0) : ce qui reste a l'image est la foudre seule ; rien ne bouge sans elle
+    base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="classic", bg_master=0.0, bg_speed=0.0, bg_flip=0.0, bg_checker=0.0, bg_react=0.0,
+                bg_hue=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, strobe_auto=0.0, trans_time=0.0)
+    clock: dict = {}
+
+    def frame(rr, size, p, n=1, advance=False):
+        """`n` images de 0,05 s ; `draw` fait avancer la machine de la foudre (`advance` : l'avancer en plus, a la main)."""
+        fbo = fbo_for(size)
+        for _ in range(n):
+            if advance:
+                rr.bolt.update(0.05)
+            t0 = clock.get(id(rr), 0.0)
+            rr.draw(fbo, size, quiet, p, t0)
+            clock[id(rr)] = t0 + 0.05
+        return read_target(ctx, fbo, size).astype(int)
+
+    def push(rr):
+        rr.bolt.update(0.0, kicks=1, ceiling=1.0)
+
+    def lit(img) -> int:
+        return int((img.sum(axis=2) > 90).sum())
+
+    size = (640, 360)
+    ref = frame(gl.Renderer(ctx, size, None), size, dict(base, strobe_kind="strobe"), 8)
+    check(ref.max() == 0, "foudre: reference sans foudre = fond noir")
+    rr = gl.Renderer(ctx, size, None)
+    empty = frame(rr, size, dict(base, strobe_kind="foudre"), 8)
+    check(abs(empty - ref).max() == 0, "foudre: mode Foudre sans decharge = image inchangee")
+    rr = gl.Renderer(ctx, size, None)
+    push(rr)
+    img = frame(rr, size, dict(base, strobe_kind="foudre"), 9)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    rad = np.hypot((xx - size[0] / 2) / size[1], (yy - size[1] / 2) / size[1])
+    add = img.sum(axis=2)
+    check(lit(img) > 200 and add[rad < 0.1].mean() > add[(rad > 0.40) & (rad < 0.50)].mean(),
+          "foudre: apres un kick des pixels s'allument, le centre est plus lumineux que la peripherie", f"{lit(img)}")
+    check((img.min(axis=2) > 250).mean() < 0.02, "foudre: aucun flash plein ecran (moins de 2 % de pixels blancs)")
+    rs = gl.Renderer(ctx, size, None)
+    push(rs)
+    still = frame(rs, size, dict(base, strobe_kind="strobe"), 9)
+    check(abs(still - ref).max() == 0, "foudre: en mode Strobe, une decharge en cours ne s'affiche pas")
+    sums = {}
+    for col in ("#ff0000", "#00ff00"):
+        rc = gl.Renderer(ctx, size, None)
+        push(rc)
+        im = frame(rc, size, dict(base, strobe_kind="foudre", foudre_color=col), 9)
+        sums[col] = im.reshape(-1, 3).sum(axis=0)
+    check(sums["#ff0000"][0] > 1.2 * sums["#ff0000"][1] and sums["#00ff00"][1] > 1.2 * sums["#00ff00"][0],
+          "foudre: le halo prend la couleur choisie (coeur blanc)", f"{sums}")
+    # ---- profondeur : plus de lumiere a chaque kick, puis un plafond
+    rd = gl.Renderer(ctx, size, None)
+    counts = []
+    for _k in range(7):
+        push(rd)
+        counts.append(lit(frame(rd, size, dict(base, strobe_kind="foudre"), 10)))
+    check(counts[5] > 1.8 * counts[0] and all(counts[i + 1] >= 0.85 * counts[i] for i in range(5)) and abs(counts[6] - counts[5]) < 0.25 * counts[5],
+          "foudre: de plus en plus de lumiere a chaque kick, puis plafond", f"{counts}")
+    # ---- le logo n'est jamais assombri
+    logo = np.zeros((64, 64, 4), dtype=np.uint8)
+    logo[:] = (200, 0, 0, 255)
+    p_logo = dict(base, strobe_kind="foudre", logo_x=0.5, logo_y=0.5)
+    r0 = gl.Renderer(ctx, size, logo)
+    base_logo = frame(r0, size, dict(p_logo, strobe_kind="strobe"), 9)
+    r1 = gl.Renderer(ctx, size, logo)
+    push(r1)
+    with_bolt = frame(r1, size, p_logo, 9)
+    on_logo = base_logo[:, :, 0] > 100
+    check(on_logo.sum() > 100 and (with_bolt - base_logo).min() >= -1 and (with_bolt - base_logo)[on_logo].max() >= 0,
+          "foudre: s'ajoute sur le logo sans jamais l'assombrir", f"{on_logo.sum()}")
+    # ---- formats extremes et redimensionnement
+    rz = gl.Renderer(ctx, size, None)
+    push(rz)
+    ok = True
+    try:
+        for sz in ((640, 360), (320, 180), (640, 360), (360, 640), (800, 200)):
+            im = frame(rz, sz, dict(base, strobe_kind="foudre"), 4)
+            ok = ok and lit(im) > 20 and bool(np.isfinite(im).all())
+    except Exception as exc:
+        ok = False
+        print("   ", exc)
+    check(ok, "foudre: redimensionnement, portrait et 4:1 sans exception, la foudre reste visible")
+
+    # ---- branchement : les kicks, la phase, le strobe, la montee, le drop et la panique pilotent la foudre par l'etat et les reglages
+    def drive(p, frames=65, beats=lambda i: i // 10, phase=None, extra=None, at=None, sz=size):
+        """Rend `frames` images de 0,05 s ; `beats(i)` = compteur de kicks a l'image i, `phase` = nom de phase, `at[i]` = reglages changes a l'image i."""
+        rr = gl.Renderer(ctx, sz, None)
+        fbo = fbo_for(sz)
+        pp = dict(p)
+        whites = 0.0
+        for i in range(frames):
+            if at and i in at:
+                pp.update(at[i])
+            st = dict(quiet, beats=beats(i))
+            if phase:
+                st["phase"] = {"name": phase, "since": 5.0}
+            if extra:
+                st.update(extra)
+            rr.draw(fbo, sz, st, pp, 0.05 * i)
+            whites = max(whites, float((read_target(ctx, fbo, sz).min(axis=2) > 250).mean())) if i % 8 == 0 else whites
+        return rr, read_target(ctx, fbo, sz).astype(int), whites
+
+    fp = dict(base, strobe_kind="foudre", auto_phase=1.0)
+    rr, im, wh = drive(fp, phase="peak")
+    check(rr.bolt.gens == 6 and wh < 0.02, "foudre: au pic, 6 kicks de suite = 6 generations, pas de blanc plein ecran", f"{rr.bolt.gens} {wh:.3f}")
+    rr, _im, _ = drive(fp, phase="groove")
+    check(rr.bolt.gens == 3, "foudre: en groove le plafond est de 3 generations", f"{rr.bolt.gens}")
+    check(all(drive(fp, phase=ph)[0].bolt.empty for ph in ("silence", "ambient")), "foudre: rien en silence ni en ambiance")
+    rr, _im, _ = drive(dict(fp, auto_phase=0.0), phase="peak")
+    check(rr.bolt.gens == 3, "foudre: Phases auto coupees = plafond moyen (3 generations)", f"{rr.bolt.gens}")
+    check(drive(dict(fp, react_master=0.0), phase="peak")[0].bolt.empty, "foudre: reactivite a 0 = les kicks ne declenchent rien")
+    rr, im, _ = drive(dict(fp, strobe_kind="strobe"), phase="peak")
+    check(rr.bolt.empty and im.max() == 0, "strobe: les memes kicks ne declenchent rien en mode Strobe")
+    rr, _im, _ = drive(dict(fp, strobe_hits=1), beats=lambda i: 0, frames=12, phase="peak")
+    check(rr.bolt.gens == 1, "foudre: un appui sur le bouton Strobe declenche une decharge", f"{rr.bolt.gens}")
+    rr, _im, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual"), beats=lambda i: 0, frames=40)
+    check(rr.bolt.gens == 6 and rr.bolt.charge == 1.0, "foudre: bouton maintenu = charge au maximum, profondeur 6 sans kick", f"{rr.bolt.gens} {rr.bolt.charge}")
+    rr, _im, _ = drive(dict(fp, build=0.9), phase="groove")
+    check(rr.bolt.gens == 5, "foudre: une montee a 90 % releve le plafond (5 generations)", f"{rr.bolt.gens}")
+    rr, im, wh = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}})
+    check(rr.bolt.gens == 6 and lit(im) > 2000 and wh < 0.02, "foudre: un Drop donne une grande decharge a pleine profondeur", f"{rr.bolt.gens} {lit(im)} {wh:.3f}")
+    rr, im, _ = drive(fp, beats=lambda i: 0, frames=40, at={5: {"foudre_drop": 1}, 30: {"foudre_clear": 1}})
+    check(rr.bolt.empty and im.max() == 0, "foudre: la panique vide la foudre")
+    rr, _im, _ = drive(fp, beats=lambda i: 0 if i < 5 else 50, frames=12, phase="peak")
+    check(rr.bolt.gens == 1, "foudre: une rafale de 50 kicks en une image = une seule poussee", f"{rr.bolt.gens}")
+    rr, im, _ = drive(dict(fp, tempo=0.0), phase="peak")
+    check(im.max() == 0 and not rr.bolt.empty, "foudre: tempo a 0 = croissance figee, aucune exception")
+    rr = gl.Renderer(ctx, size, None)
+    fbo = fbo_for(size)
+    ok = True
+    for i in range(6):
+        rr.draw(fbo, size, dict(quiet, beats=i, phase={"name": "peak", "since": 5.0}), fp, 7.0 * i)       # fenetre gelee : 7 s entre deux images
+        im = read_target(ctx, fbo, size)
+        ok = ok and rr.bolt.gens <= 6 and bool(np.isfinite(rr.bolt.charge))
+    check(ok, "foudre: des images tres espacees (fenetre gelee) ne donnent ni saut ni valeur infinie")
+    rr, _im, _ = drive(fp, phase="peak")
+    ps = dict(fp, strobe_kind="strobe")
+    for i in range(130):
+        rr.draw(fbo, size, dict(quiet, beats=7), ps, 3.3 + 0.05 * i)
+    check(rr.bolt.empty, "foudre: repasser en mode Strobe la laisse s'eteindre seule")
+    rr, im, _ = drive(fp, beats=lambda i: min(i // 10, 6), frames=80, phase="peak", at={62: {"strobe_kind": "strobe", "foudre_clear": 1}, 68: {"strobe_kind": "foudre"}})
+    check(rr.bolt.empty and im.max() == 0, "foudre: la panique donnee en mode Strobe vide aussi la foudre (rien ne reapparait au retour)")
+    rr, im, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual", comp_trail=0.97), beats=lambda i: 0, frames=80)
+    check(im.max() <= 231 and (im.min(axis=2) > 200).mean() < 0.05,"foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
+
+
 def check_reaction_pure() -> None:
     print("Reaction-diffusion : logique pure (core/reaction.py)")
     from core import reaction as rc
@@ -8415,6 +8615,204 @@ def check_reaction_pure() -> None:
           "pas par image: 600 par seconde, reste garde, vitesse 0 = fige", str((n, acc)))
     n, acc = rc.steps_for(0.0, 0.1, 4.0, 1.0)
     check(n == 24 and 0 <= acc < 1, "pas par image: plafonnes a 24, l'exces est jete", str((n, acc)))
+
+
+def check_foudre_pure() -> None:
+    print("Foudre : arbre et machine d'etat (core/foudre.py)")
+    import math as _m
+    from core import foudre as fd
+
+    def finite(items) -> bool:
+        return all(_m.isfinite(v) for it in items for v in it)
+
+    # ---- arbre
+    t1 = fd.build_tree(1, 16 / 9)
+    check(t1 == fd.build_tree(1, 16 / 9) and t1 != fd.build_tree(2, 16 / 9), "arbre: deterministe pour une graine, different d'une graine a l'autre")
+    bad_cap, bad_frame, bad_nan, deep, asym, ok_children = 0, 0, 0, 0, 0, True
+    for seed in range(30):
+        for asp in (0.5, 16 / 9, 4.0):
+            tree = fd.build_tree(seed, asp)
+            bad_cap += len(tree) > fd.MAX_SEGMENTS
+            hx = 0.5 * asp + 1e-6
+            bad_frame += any(abs(s.x0) > hx or abs(s.x1) > hx or abs(s.y0) > 0.5 + 1e-6 or abs(s.y1) > 0.5 + 1e-6 for s in tree)
+            bad_nan += not all(_m.isfinite(v) for s in tree for v in (s.x0, s.y0, s.x1, s.y1, s.width))
+        tree = fd.build_tree(seed, 16 / 9)
+        deep += max(s.gen for s in tree) == fd.MAX_DEPTH - 1
+        tips = [(s.x1, s.y1) for s in tree if s.k == s.n - 1]
+        asym += _m.hypot(sum(x for x, _ in tips) / len(tips), sum(y for _, y in tips) / len(tips)) > 0.02
+        by_gen: dict = {}
+        for s in tree:
+            by_gen.setdefault(s.gen, []).append(s)
+        if not 5 <= len({s.branch for s in by_gen[0]}) <= 7:
+            ok_children = False
+        for g in range(1, fd.MAX_DEPTH):
+            verts = {(round(s.x1, 12), round(s.y1, 12)) for s in by_gen.get(g - 1, [])} | {(round(s.x0, 12), round(s.y0, 12)) for s in by_gen.get(g - 1, [])}
+            for s in by_gen.get(g, []):
+                if s.k == 0 and (round(s.x0, 12), round(s.y0, 12)) not in verts:
+                    ok_children = False
+    check(bad_cap == 0 and bad_nan == 0, "arbre: 300 segments au plus, aucun NaN (30 graines, 3 formats d'image)")
+    check(bad_frame == 0, "arbre: reach 1 -> tous les points dans le cadre, portrait et 4:1 compris")
+    check(deep >= 27, "arbre: les six generations sont presentes", f"{deep}/30")
+    check(asym >= 24, "arbre: etalement asymetrique (centre de masse des pointes decale)", f"{asym}/30")
+    check(ok_children, "arbre: 5 a 7 troncs, chaque branche repart d'un point de sa branche mere")
+    ext = lambda r: sum(max(_m.hypot(s.x1, s.y1) for s in fd.build_tree(sd, 16 / 9, r)) for sd in range(30)) / 30
+    check(ext(0.4) < ext(1.0) - 0.05, "arbre: la portee reglable agrandit l'etendue", f"{ext(0.4):.2f} < {ext(1.0):.2f}")
+    # ---- plafond par phase
+    pc = fd.phase_ceiling
+    check([pc("silence"), pc("ambient"), pc("groove"), pc("build"), pc("break"), pc("peak"), pc(None)] == [0.0, 0.0, 0.5, 0.7, 0.17, 1.0, 0.5]
+          and pc("groove", 0.9) == 0.9 and pc("silence", 0.4) == 0.4, "plafond: par phase, et la montee le releve (max des deux)")
+
+    def adv(L, secs, **kw):
+        """Avance de `secs` par pas de 0,1 s ; les kicks ne comptent qu'au premier pas."""
+        kicks = kw.pop("kicks", 0)
+        for i in range(max(int(round(secs / 0.1)), 1)):
+            L.update(0.1, kicks=kicks if i == 0 else 0, **kw)
+
+    # ---- accumulation
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    gens, charges = [], []
+    for _ in range(10):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
+        gens.append(L.gens)
+        charges.append(L.charge)
+    check(gens == [1, 2, 3, 4, 5, 6, 6, 6, 6, 6] and charges[:4] == sorted(charges[:4]) and 0.6 < charges[5] <= 1.0
+          and len(L.draw_list()) <= fd.MAX_SEGMENTS, "accumulation: une generation de plus par kick jusqu'a 6, charge croissante et bornee", f"{gens} {charges[5]:.2f}")
+    L = fd.Lightning(1)
+    for _ in range(8):
+        adv(L, 0.5, kicks=1, ceiling=0.5)
+    L0 = fd.Lightning(1)
+    for _ in range(8):
+        adv(L0, 0.5, kicks=1, ceiling=0.0)
+    check(L.gens == 3 and L0.empty, "plafond: 0,5 -> 3 generations au plus, 0 -> aucune decharge", f"{L.gens} {L0.empty}")
+    # ---- delai minimal entre deux poussees
+    L = fd.Lightning(1)
+    L.update(0.1, kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=50, ceiling=1.0)
+    g_before = L.gens
+    L.update(0.1, kicks=50, ceiling=1.0)
+    check(g_before == 1 and L.gens == 2, "kicks: 4 poussees par seconde au plus, une rafale de 50 = une seule poussee", f"{g_before} {L.gens}")
+    # ---- croissance
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    first = len(L.draw_list())
+    L.update(0.1)
+    L.update(0.1)
+    L.update(0.1)
+    trunk = sum(1 for s in fd.build_tree(L.tree_seed, 16 / 9, 1.0) if s.gen == 0)
+    full = len(L.draw_list())
+    L2 = fd.Lightning(1)
+    L2.update(0.0, kicks=1, ceiling=1.0, speed=0.0)
+    adv(L2, 0.5, speed=0.0)
+    check(first == 0 and full == trunk and L2.gens == 1 and not L2.draw_list(),
+          "croissance: rien au depart, tronc entier apres 0,3 s, tempo 0 = croissance figee", f"{first} {full}/{trunk} {len(L2.draw_list())}")
+    # ---- decroissance
+    L = fd.Lightning(1)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    c0 = L.charge
+    adv(L, 2.5)
+    half = L.charge
+    adv(L, 2.0)
+    check(abs(half - c0 / 2) < 0.02 * c0 + 0.01 and L.empty, "decroissance: demi-vie de 2,5 s, arbre efface apres 4 s sans kick", f"{c0:.2f} {half:.2f} {L.empty}")
+    L = fd.Lightning(1)
+    for _ in range(6):
+        adv(L, 0.3, kicks=1, ceiling=1.0)
+    widths_full = [it[4] for it in L.draw_list()]
+    guard = 0
+    while L.charge > 0.3 and guard < 100:
+        adv(L, 0.1)
+        guard += 1
+    widths_late = [it[4] for it in L.draw_list()]
+    check(min(widths_full) < 0.0025 and widths_late and min(widths_late) > 0.0025 and not L.empty,
+          "decroissance: les fines branches s'eteignent avant les troncs", f"{min(widths_full):.4f} {min(widths_late) if widths_late else None}")
+    # ---- bouton maintenu
+    L = fd.Lightning(1)
+    adv(L, 0.1, hold=True)
+    g1 = L.gens
+    adv(L, 2.0, hold=True)
+    full_hold = (L.gens, L.charge)
+    adv(L, 0.1, hold=False)
+    check(g1 == 1 and full_hold == (6, 1.0) and L.charge < 1.0, "maintenu: charge au maximum, une generation toute les 0,25 s, decroit au relachement", f"{g1} {full_hold} {L.charge:.2f}")
+    # ---- le tempo qui baisse ne fait jamais rentrer l'arbre (croissance integree image par image)
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    adv(L, 0.3)
+    grown = len(L.draw_list())
+    adv(L, 0.5, speed=0.2)
+    slow = len(L.draw_list())
+    adv(L, 0.5, speed=0.0)
+    check(grown == slow == len(L.draw_list()) and grown > 0, "croissance: un tempo qui baisse (puis tombe a 0) ne fait pas rentrer l'arbre", f"{grown} {slow}")
+    # ---- bouton maintenu : charge tenue, aucune pulsation
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    adv(L, 3.0, hold=True)
+    seen = []
+    for _ in range(10):
+        adv(L, 0.1, hold=True)
+        seen.append(L.draw_list()[0][5])
+    check(max(seen) - min(seen) < 0.01, "maintenu: l'arbre ne pulse pas (pas d'eclat relance toutes les 0,25 s)", f"{min(seen):.3f} {max(seen):.3f}")
+    # ---- drop et clear
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.drop()
+    ok_state = (L.gens, L.charge) == (6, 1.0)
+    adv(L, 1.0)
+    total = len(fd.build_tree(L.tree_seed, 16 / 9, 1.0))
+    check(ok_state and len(L.draw_list()) == total, "drop: pleine profondeur et tout l'arbre visible en 1 s", f"{len(L.draw_list())}/{total}")
+    seed_before = L.tree_seed
+    L.clear()
+    was_empty = L.empty
+    L.update(0.1, kicks=1, ceiling=1.0)
+    check(was_empty and L.tree_seed != seed_before, "clear: vide, et l'arbre suivant est different")
+    # ---- basses et aigus
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.drop()
+    adv(L, 1.0)
+    a = L.draw_list(high=1.0, t=0.0)
+    b = L.draw_list(high=1.0, t=0.37)
+    n = L.draw_list(high=0.0, t=0.0)
+    n2 = L.draw_list(high=0.0, t=0.37)
+    fine = [i for i, it in enumerate(a) if it[4] < 0.002]
+    thick = [i for i, it in enumerate(a) if it[4] > 0.005]
+    wide = L.draw_list(bass=1.0)
+    flat = L.draw_list(bass=0.0)
+    check(len(a) == len(b) == len(n) and any(a[i][5] != b[i][5] for i in fine) and all(a[i][5] == b[i][5] for i in thick) and n == n2,
+          "aigus: les fines branches scintillent, les troncs non, rien sans aigus")
+    check(all(w[4] > f[4] * 1.29 for w, f in zip(wide, flat)) and all(0.0 <= it[5] <= 1.0 for it in a + wide) and finite(a + wide),
+          "basses: les branches s'epaississent ; intensites dans [0, 1], rien de non fini")
+    # ---- robustesse
+    L = fd.Lightning(1)
+    L.update(float("inf"), kicks=1, ceiling=1.0)
+    L.update(-1.0, kicks=1, ceiling=1.0)
+    L.update(float("nan"), kicks=1, ceiling=1.0)
+    L.update(0.1, kicks=-5, ceiling=7.0)
+    check(finite(L.draw_list()) and 0.0 <= L.charge <= 1.0 and L.gens <= fd.MAX_DEPTH, "robustesse: dt infini / negatif / NaN, kicks negatifs, plafond hors plage")
+    # ---- voyant de l'interface
+    from core import explain
+    check(explain.foudre_info_text(None).startswith("foudre :") and "repos" in explain.foudre_info_text((0, 0.0))
+          and explain.foudre_info_text((3, 0.52)) == "foudre : profondeur 3/6, charge 52 %" and explain.foudre_info_text((9, 7.0)).endswith("100 %"),
+          "voyant: profondeur et charge de la foudre, repos, valeurs hors plage bornees")
+    # ---- reglages et panique
+    from core import params_schema as ps
+    from core.controls import panic
+    by_key = {p.key: p for p in ps.TABLE}
+    want = {"strobe_kind": "strobe", "foudre_amount": 0.7, "foudre_reach": 1.0, "foudre_color": "#3a7bff", "foudre_drop": 0, "foudre_clear": 0}
+    check(all(k in by_key and by_key[k].default == v for k, v in want.items())
+          and by_key["strobe_kind"].choices == ("strobe", "foudre")
+          and (by_key["foudre_amount"].lo, by_key["foudre_amount"].hi) == (0.0, 1.5) and (by_key["foudre_reach"].lo, by_key["foudre_reach"].hi) == (0.4, 1.5),
+          "reglages: strobe_kind, foudre_amount / reach / color et leurs defauts dans le schema")
+    check(all(k in ps.ROOM_KEYS and k in ps.OVERLAY_PRESET_EXCLUDED for k in want) and all(k in ps.TRANSIENT_KEYS for k in ("foudre_drop", "foudre_clear"))
+          and not any(k in ps.TRANSIENT_KEYS for k in ("strobe_kind", "foudre_amount", "foudre_reach", "foudre_color")),
+          "reglages: reglages de salle (ni presets ni scenes), compteurs d'etat seulement pour foudre_drop / foudre_clear")
+    check(ps.validate("foudre_amount", 9.0) == (True, 1.5) and ps.validate("foudre_reach", 0.0) == (True, 0.4) and ps.validate("strobe_kind", "plasma") == (False, None),
+          "reglages: valeurs hors plage ramenees, enum inconnu refuse")
+    pp = {"strobe_kind": "foudre", "foudre_clear": 3}
+    panic(pp)
+    check(pp["foudre_clear"] == 4 and pp["strobe_kind"] == "foudre", "panique: vide la foudre (compteur +1) sans changer strobe_kind")
 
 
 def _in_range(p, value) -> bool:
@@ -9190,7 +9588,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure")
 
 
 def main() -> None:
@@ -9211,8 +9609,10 @@ def main() -> None:
     check_melt()
     check_bg_stochastic()
     check_reaction_pure()
+    check_foudre_pure()
     check_reaction_sim()
     check_bg_labyrinthe()
+    check_foudre_render()
     check_cells()
     check_noise()
     check_doodles()
