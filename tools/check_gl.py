@@ -8828,6 +8828,20 @@ def check_foudre_pure() -> None:
     pul = L.pulses()
     adv(L, 0.3, ceiling=1.0, speed=0.0)
     check({s[:4] for s in L.segments()} <= snap and L.pulses() == pul, "tempo: a 0 rien ne pousse et les ondes sont figees")
+    # ---- listes bornees : les noeuds elagues sont retires (sinon fuite et cout qui grandit sans fin)
+    L = fd.Lightning(5)
+    L.configure(16 / 9, 1.0)
+    for i in range(2400):                                                   # 2 minutes de pic a 20 images/s
+        L.update(0.05, kicks=1 if i % 10 == 0 else 0, ceiling=1.0)
+    st = L.stats()
+    check(len(L.x) <= 2 * L.n_alive + 300 and len(L.x) == len(L.parent) == len(L.alive),
+          "foudre: les listes de noeuds restent bornees apres 2 min de pic", f"{len(L.x)} noeuds en liste pour {L.n_alive} vivants")
+    L._compact()                                                            # etat compact garanti pour verifier les index
+    ok_graph = all(L.alive) and all(p < i for i, p in enumerate(L.parent)) and all(0 <= t < len(L.x) for t in L.tips) \
+        and all(0 <= a < len(L.x) and 0 <= b < len(L.x) for a, b in L.joins) \
+        and all(i in L.grid.get(L._cell(L.x[i], L.y[i]), ()) for i in range(len(L.x)))
+    check(ok_graph and st["segments"] > 100, "foudre: apres compactage le graphe est coherent (parents, pointes, soudures, grille)")
+
     # ---- cout : le calcul reste sous le budget d'une image (garde contre un calcul quadratique)
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)

@@ -48,7 +48,7 @@ Repere inchange : centre = (0, 0), hauteur d'image = 1, largeur = `aspect`. Cons
 - **Kick** : pouls + pousses + renforcement.
 - **Basses** : l'epaisseur et le halo respirent (shader).
 - **Aigus** : plus de brindilles fines naissent (probabilite de pousse fine) et les fines scintillent (shader).
-- **Tempo** : vitesse de croissance et de l'onde (tempo 0 = tout fige, rien ne rentre : la croissance est integree).
+- **Tempo** : vitesse de croissance et de l'onde (tempo 0 = plus aucune croissance ni onde ; la vigueur continue de decroitre en temps reel, donc le silence efface le reseau meme a tempo bas).
 - **Phase** : plafond d'energie (voir plus haut). Tout x master de reactivite comme avant.
 
 ## Rendu

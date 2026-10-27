@@ -927,8 +927,8 @@ class Renderer:
             if drops != self._drop_seen:
                 self.bolt.drop()
             hold = float(p["strobe_on"]) >= 0.5 and p["strobe_mode"] == "manual"
-            self.bolt.update(raw_dt, kicks, phase_ceiling(phase_name, build), hold, tempo, high)
             self.bolt.configure(width / max(height, 1), float(p["foudre_reach"]))
+            self.bolt.update(raw_dt, kicks, phase_ceiling(phase_name, build), hold, tempo, high)
             bolt_on = self._draw_bolt(p, size, bass, high, t)
         else:
             self.bolt.update(raw_dt, ceiling=0.0)     # hors mode Foudre : le reseau en cours s'eteint seul

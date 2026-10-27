@@ -310,6 +310,25 @@ class Lightning:
             if self.alive[i] and self.kids[i] == 0 and self.vig[i] <= 0.0 and self.jref.get(i, 0) == 0:
                 self._remove(i)
 
+    def _compact(self) -> None:
+        """Retire les noeuds elagues des listes (sinon elles grandissent sans fin et chaque boucle les parcourt) ; l'ordre est conserve : un parent precede toujours ses enfants."""
+        new = {}
+        for i, a in enumerate(self.alive):
+            if a:
+                new[i] = len(new)
+        keep = list(new)
+        for name in ("x", "y", "dist", "heading", "vig", "w", "desc", "kids"):
+            old = getattr(self, name)
+            setattr(self, name, [old[i] for i in keep])
+        self.parent = [new[self.parent[i]] if self.parent[i] >= 0 else -1 for i in keep]
+        self.alive = [True] * len(keep)
+        self.tips = {new[i]: v for i, v in self.tips.items()}
+        self.joins = [(new[a], new[b]) for a, b in self.joins]
+        self.jref = {new[i]: v for i, v in self.jref.items() if v > 0}
+        self.grid = {}
+        for i in range(len(keep)):
+            self.grid.setdefault(self._cell(self.x[i], self.y[i]), []).append(i)
+
     def _pulses(self, dt: float, speed: float) -> None:
         """Les ondes avancent le long des routes et renforcent les noeuds qu'elles atteignent (plus fort pour les routes tres utilisees)."""
         keep = []
@@ -345,6 +364,8 @@ class Lightning:
             self._grow(dt * speed, self.energy)
         self._pulses(dt, speed)
         self._live(dt, speed)
+        if len(self.x) > 2 * self.n_alive + 256:
+            self._compact()
 
     # ---- lecture
     def segments(self) -> list[tuple[float, float, float, float, float, float, float]]:
