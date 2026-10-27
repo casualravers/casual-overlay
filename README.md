@@ -308,6 +308,13 @@ Pistes identifiees, pas encore faites (les plus lourdes en dernier) :
 - **Modes Snap et Ridge en GL** : faits (60 images/s, tous les styles de Snap, Ridge). Reste : `--stereo` / `--split-channels` (le son
   vient du tampon mono de l'analyse), brancher leurs automations de courbes sur le moteur GL et charger leur Mode VJ (enchainement de
   presets) en meme temps qu'un preset overlay.
+- **Fond shader utilisateur** : un nouveau mode de fond, a cote de live, motif et video, qui charge un fichier `.frag` choisi par l'utilisateur
+  (dossier `~/.audio2wave/shaders/`), sans toucher au code. Contrat d'uniforms fixe et versionne : `u_time`, `u_res`, `u_bass`, `u_mid`,
+  `u_high`, `u_beat`, `u_since_beat`, `u_phase` et quatre curseurs generiques `u_p1..u_p4` ; adaptateur `mainImage` pour recopier des shaders
+  Shadertoy. Rechargement automatique a l'enregistrement ; une erreur de compilation s'affiche dans le statut (avec la ligne) et l'ancien
+  shader continue de tourner. S'integre aux scenes, aux presets de fond, au Full Randomizer (banque de shaders) et aux archives de set
+  (le fichier est embarque). Securite GPU : cout mesure par `PerfGuard`, coupure automatique et retour au fond precedent si un shader
+  est trop lourd. Pistes ensuite : effets de post-traitement utilisateur chainables (lisent l'image finale), puis un editeur integre.
 - **Detourage plus fin du logo video** : similarite et fondu reglables dans la GUI (valeurs fixes),
   et relance du decodage sans a-coup.
 - **Plusieurs logos ou textes a la fois**, chacun avec sa couche d'effets.
