@@ -6596,8 +6596,8 @@ def check_randomizer() -> None:
     # plages
     rng = rnd_mod.Random(7)
     ok_bg = all(0 <= v["bg_hue"] <= 1 and 0 <= v["bg_angle"] <= 180 and 0.4 <= v["bg_speed"] <= 1.8 and 50 <= v["bg_tile"] <= 150
-                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo", "stochastique")
-                and (v["bg_palette"] == "classic" or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
+                and 0.06 <= v["bg_checker"] <= 0.32 and v["bg_palette"] in ("classic", "duo", "stochastique", "labyrinthe")
+                and (v["bg_palette"] not in ("duo", "stochastique") or (v["bg_color1"].startswith("#") and len(v["bg_color2"]) == 7))
                 for v in (rz.random_background_params(rng) for _ in range(300)))
     check(ok_bg, "fond aleatoire: valeurs dans les plages des curseurs, jamais la palette banc de test")
     vals = [rz.random_background_params(rnd_mod.Random(s)) for s in range(300)]
@@ -6610,6 +6610,15 @@ def check_randomizer() -> None:
           "fond aleatoire: la palette stochastique est tiree, dans les plages", f"{len(st)} sur 300")
     check(all(not any(k.startswith("bg_sto_") for k in v) for v in vals if v["bg_palette"] != "stochastique"),
           "fond aleatoire: les reglages stochastiques ne sont tires que pour cette palette")
+    lb = [v for v in vals if v["bg_palette"] == "labyrinthe"]
+    hexes = lambda v: [v[k] for k in ("bg_rd_color1", "bg_rd_color2", "bg_rd_color3", "bg_rd_ground")]
+    check(len(lb) > 30 and all(0.2 <= v["bg_rd_shape"] <= 0.9 and 0.7 <= v["bg_rd_scale"] <= 1.5 and 0 <= v["bg_rd_offset"] <= 0.03
+                               and all(h.startswith("#") and len(h) == 7 for h in hexes(v))
+                               and max(int(v["bg_rd_ground"][i:i + 2], 16) for i in (1, 3, 5)) <= 0.12 * 255 + 1 for v in lb)
+          and all(gl.coerce_params(v)[k] == v[k] for v in lb for k in v),
+          "fond aleatoire: la palette labyrinthe est tiree, dans les plages, fond sombre", f"{len(lb)} sur 300")
+    check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
+          "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
     costly = [sum(1 for k in ("holo_on", "melt_on", "cell_on") if fx[k] >= 0.5) for fx in fxs]
     check(max(costly) <= rz.MAX_COSTLY and set(costly) >= {0, 1, 2}, "effets aleatoires: au plus deux effets couteux a la fois",
