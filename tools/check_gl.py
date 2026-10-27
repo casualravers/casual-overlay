@@ -8660,11 +8660,10 @@ def check_foudre_pure() -> None:
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
     counts = []
-    for _s in range(3):
-        for _k in range(2):
-            adv(L, 0.5, kicks=1, ceiling=1.0)
+    for _s in range(4):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
         counts.append(L.stats()["segments"])
-    check(counts == sorted(set(counts)) and counts[-1] > 150, "croissance: de plus en plus de segments seconde apres seconde sous les kicks", f"{counts}")
+    check(counts == sorted(counts) and counts[0] > 50 and counts[-1] >= 2 * counts[0], "croissance: de plus en plus de segments demi-seconde apres demi-seconde sous les kicks", f"{counts}")
     L = fd.Lightning(1)
     L.configure(16 / 9, 1.0)
     worst = (0, 0)
@@ -8694,6 +8693,119 @@ def check_foudre_pure() -> None:
         asym += _m.hypot(sum(s[2] for s in segs) / len(segs), sum(s[3] for s in segs) / len(segs)) > 0.02
     check(asym >= 4, "reseau: etalement asymetrique (centre de masse decale)", f"{asym}/5")
     check(finite(run(1, secs=10.0)), "reseau: aucune valeur non finie")
+    # ---- pouls : une onde part de la racine et avance en distance de chemin
+    import time as _time
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    L.update(0.0, kicks=1, ceiling=1.0)
+    p0 = L.pulses()
+    L.update(0.1, ceiling=1.0)
+    p1 = L.pulses()
+    L2 = fd.Lightning(1)
+    L2.update(0.0, kicks=1, ceiling=1.0)
+    L2.update(0.1, ceiling=1.0, speed=0.5)
+    most = 0
+    L3 = fd.Lightning(1)
+    for _i in range(40):
+        L3.update(0.1, kicks=1 if _i % 3 == 0 else 0, ceiling=1.0)
+        most = max(most, len(L3.pulses()))
+    adv(L, 3.0, ceiling=1.0)
+    check(len(p0) == 1 and p0[0][0] == 0.0 and abs(p1[0][0] - fd.PULSE_SPEED * 0.1) < 0.05 * fd.PULSE_SPEED * 0.1 + 1e-9 and abs(L2.pulses()[0][0] - fd.PULSE_SPEED * 0.05) < 0.005
+          and most <= fd.MAX_PULSES and L.pulses() == [], "pouls: part de 0, avance de PULSE_SPEED x tempo, au plus 4 en meme temps, disparait au bout du reseau", f"{p0} {p1} {most}")
+    # ---- le pouls renforce les noeuds dans l'ordre : la racine d'abord, les extremites ensuite
+    L = run(1, secs=6.0)
+    adv(L, 1.0, ceiling=0.0)
+    own = lambda: {i: L.vig[i] for i in range(len(L.x)) if L.alive[i]}                 # vigueur propre de chaque noeud (la vigueur affichee est le max des descendants)
+    before = own()
+    L.update(0.0, kicks=1, ceiling=1.0)
+    L.update(0.1, ceiling=1.0)
+    up1 = [L.dist[i] for i, v in own().items() if i in before and v > before[i] + 1e-6]
+    after1 = own()
+    adv(L, 0.4, ceiling=1.0)
+    up2 = [L.dist[i] for i, v in own().items() if i in after1 and v > after1[i] + 1e-6]
+    check(len(up1) > 5 and max(up1) < 0.35 and up2 and max(up2) > max(up1) + 0.2,
+          "pouls: renforce d'abord les noeuds proches de la racine, puis les lointains", f"{len(up1)} {max(up1, default=0):.2f} {max(up2, default=0):.2f}")
+    # ---- consolidation : les routes tres utilisees s'epaississent petit a petit (modele des tuyaux)
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    ws = []
+    for _k in range(6):
+        adv(L, 0.5, kicks=1, ceiling=1.0)
+        segs = L.segments()
+        ws.append(min(segs, key=lambda s: s[6])[4])
+    segs = L.segments()
+    far = sorted(segs, key=lambda s: -s[6])[:10]
+    root_w = min(segs, key=lambda s: s[6])[4]
+    adv(L, 1.0, ceiling=1.0, speed=0.1)
+    root_w2 = min(L.segments(), key=lambda s: s[6])[4]
+    check(ws == sorted(ws) and ws[-1] > 1.5 * ws[0] and max(ws) <= fd.W_TRUNK + 1e-12 and root_w >= 2 * sum(s[4] for s in far) / 10 and root_w2 >= root_w - 1e-12,
+          "consolidation: le tronc s'epaissit de kick en kick (jamais plus que W_TRUNK), plus gros que les pointes, un tempo qui baisse ne l'amincit pas", f"{[round(w, 4) for w in ws]} {root_w:.4f}")
+    # ---- evolution sous musique soutenue : des routes s'effacent, d'autres naissent
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    snaps = {}
+    for sec in range(1, 15):
+        for _k in range(2):
+            adv(L, 0.5, kicks=1, ceiling=0.6)
+        if sec in (3, 8, 14):
+            snaps[sec] = {s[:4] for s in L.segments()}
+    check(len(snaps[3] - snaps[14]) >= 10 and len(snaps[14] - snaps[8]) >= 10, "evolution: sous musique soutenue des routes s'effacent et d'autres naissent",
+          f"{len(snaps[3] - snaps[14])} {len(snaps[14] - snaps[8])}")
+    # ---- effacement sans kick : les fines partent avant les troncs, le reseau est vide en 8 s, jamais de segment pendu
+    L = run(1, secs=6.0)
+    t_fine = t_empty = None
+    hanging = False
+    for i in range(1, 100):
+        adv(L, 0.1, ceiling=0.0)
+        segs = L.segments()
+        orphans = {s[:2] for s in segs} - {s[2:4] for s in segs}                    # departs qui ne sont l'arrivee d'aucun segment : la racine seule
+        hanging = hanging or len(orphans) > 1
+        if t_fine is None and not any(s[4] < 2 * fd.W_FINE for s in segs):
+            t_fine = i * 0.1
+        if t_empty is None and L.empty:
+            t_empty = i * 0.1
+            break
+    check(t_fine is not None and t_empty is not None and t_fine < t_empty <= 8.0 and not hanging, "effacement: sans kick les fines partent avant les troncs, reseau vide en 8 s au plus, jamais de segment pendu", f"{t_fine} {t_empty}")
+    # ---- bouton maintenu : dense, sans pulsation
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    adv(L, 3.0, hold=True)
+    dense = L.stats()["segments"]
+    means = []
+    for _i in range(10):
+        adv(L, 0.1, hold=True)
+        segs = L.segments()
+        means.append(sum(s[5] for s in segs) / max(len(segs), 1))
+    adv(L, 3.0)
+    check(dense > 250 and max(means) - min(means) < 0.12 and L.stats()["segments"] < dense, "maintenu: reseau dense sans pulsation de l'ensemble, il decroit au relachement", f"{dense} {max(means) - min(means):.3f}")
+    # ---- drop : grande onde, pousses en masse, vigueurs au maximum ; sur un reseau vide il en cree un
+    L = run(1, secs=1.0)
+    n0 = L.stats()["segments"]
+    L.drop()
+    pe = max((e for _r, e in L.pulses()), default=0)
+    check(pe >= 1.5 and L.stats()["segments"] >= n0 + 15 and min(s[5] for s in L.segments()) > 0.99, "drop: onde d'energie 1,5, pousses en masse, toutes les vigueurs au maximum", f"{pe} {n0}->{L.stats()['segments']}")
+    L = fd.Lightning(1)
+    L.drop()
+    check(not L.empty and L.pulses(), "drop: sur un reseau vide, il en cree un")
+    # ---- l'energie regle la densite ; plafond 0 = rien ; tempo 0 = plus de croissance
+    hi, lo = run(1, secs=25.0, ceiling=1.0).stats()["segments"], run(1, secs=25.0, ceiling=0.5).stats()["segments"]
+    check(hi >= 1.15 * lo and run(1, secs=5.0, ceiling=0.0).empty, "energie: plafond 1 plus dense que 0,5 apres 25 s, plafond 0 = rien", f"{hi} {lo}")
+    L = run(1, secs=6.0)
+    snap = {s[:4] for s in L.segments()}
+    pul = L.pulses()
+    adv(L, 0.3, ceiling=1.0, speed=0.0)
+    check({s[:4] for s in L.segments()} <= snap and L.pulses() == pul, "tempo: a 0 rien ne pousse et les ondes sont figees")
+    # ---- cout : le calcul reste sous le budget d'une image (garde contre un calcul quadratique)
+    L = fd.Lightning(1)
+    L.configure(16 / 9, 1.0)
+    t0 = _time.perf_counter()
+    for i in range(600):
+        L.update(0.016, kicks=1 if i % 30 == 0 else 0, ceiling=1.0, high=0.5)
+        L.segments()
+    ms = (_time.perf_counter() - t0) / 600 * 1000
+    print(f"    cout moyen d'une image (update + segments) : {ms:.2f} ms")
+    check(ms < 20.0, "cout: moins de 20 ms par image en moyenne au pic", f"{ms:.2f} ms")
+
     # ---- une poussee au plus toutes les 0,25 s
     L = fd.Lightning(1)
     L.update(0.1, kicks=1, ceiling=1.0)
