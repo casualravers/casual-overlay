@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import time
 import tkinter as tk
+from pathlib import Path
 
 import theme
 
-WIDTH, HEIGHT = 420, 132
+WIDTH, HEIGHT = 420, 232
+LOGO_PATH = Path(__file__).resolve().parent.parent / "asset" / "logo_chargement.png"     # fabrique par tools/make_logo_chargement.py
+LOGO_W = 340
 BAR_W, BAR_H = 340, 6
 CREEP = 0.07                  # chaque jalon avance la barre de cette part du chemin restant (jamais a 100 % avant la fin)
 MIN_REPAINT_S = 0.03
@@ -46,13 +49,29 @@ class Splash:
         x = (top.winfo_screenwidth() - WIDTH) // 2
         y = (top.winfo_screenheight() - HEIGHT) // 3
         top.geometry(f"{WIDTH}x{HEIGHT}+{x}+{y}")
-        tk.Label(top, text="casual-overlay", bg=theme.BG, fg=theme.FG, font=("Segoe UI", 15, "bold")).pack(pady=(20, 2))
+        self.logo = self._load_logo()
+        if self.logo is not None:                            # la forme d'onde d'un kick, aberration chromatique et glitch
+            tk.Label(top, image=self.logo, bg=theme.BG, bd=0).pack(pady=(24, 4))
+        tk.Label(top, text="casual-overlay", bg=theme.BG, fg=theme.FG, font=("Segoe UI", 13 if self.logo else 15, "bold")).pack(pady=(0 if self.logo else 20, 2))
         self.label = tk.Label(top, text="Demarrage...", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SMALL)
         self.label.pack()
         self.bar = tk.Canvas(top, width=BAR_W, height=BAR_H, bg=theme.PANEL, bd=0, highlightthickness=0)
-        self.bar.pack(pady=(14, 0))
+        self.bar.pack(pady=(10, 0))
         self.fill = self.bar.create_rectangle(0, 0, 0, BAR_H, fill=theme.LIVE, width=0)
         top.update()                                         # premiere peinture : evenements traites une fois, ensuite seulement le dessin
+
+    @staticmethod
+    def _load_logo():
+        """Le logo du chargement, reduit a LOGO_W (None si le fichier ou Pillow manque : le titre seul est affiche)."""
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(LOGO_PATH).convert("RGBA")
+            img = img.resize((LOGO_W, max(round(img.height * LOGO_W / img.width), 1)), Image.LANCZOS)
+            bg = Image.new("RGBA", img.size, theme.BG)           # compose sur le fond : coins nets, pas de frange sombre
+            bg.alpha_composite(img)
+            return ImageTk.PhotoImage(bg.convert("RGB"))
+        except Exception:
+            return None
 
     def bump(self, label: str | None = None, to: float | None = None) -> None:
         """Avance la barre (jamais en arriere) et change le texte ; le dessin est limite a ~30 par seconde."""
