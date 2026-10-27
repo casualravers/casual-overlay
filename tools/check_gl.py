@@ -7965,6 +7965,16 @@ def check_params_schema() -> None:
     import build_portable
     check((ROOT / "core" / "params_schema.py").is_file() and "core" in build_portable.APP_DIRS,
           "version portable: core/params_schema.py embarque")
+    d = gl.DEFAULT_PARAMS
+    check(d["bg_sto_field"] == "noise" and d["bg_sto_size"] == 10.0 and d["bg_sto_regular"] == 1.0 and d["bg_sto_vary"] == 0.0
+          and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
+          "stochastique: valeurs par defaut (tramage pur)")
+    sto = [k for k in d if k.startswith("bg_sto_")]
+    check(len(sto) == 7 and all(k in gl.BG_KEYS for k in sto), "stochastique: 7 reglages, tous du fond (presets de fond, scenes)")
+    v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
+    check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
+          "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
+    check(gl.coerce_params({"bg_palette": "duo"})["bg_sto_density"] == 0.5, "stochastique: un ancien preset sans ces cles prend les defauts")
 
 
 def _in_range(p, value) -> bool:
