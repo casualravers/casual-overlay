@@ -12,7 +12,9 @@ EFFECT_COST_MS = (("cell_on", "cellules", 6.7), ("holo_on", "halo", 3.3), ("melt
 # Surcout du fond genere en palette stochastique, en ms a 1080p (mesure a 1280 x 720 : bruit +2,3 ms, vagues +1,3 ms, x 2,25 pour 1080p ;
 # le degrade, non mesure, est compte comme les vagues). Le fond n'est jamais coupe : il compte seulement dans l'estimation.
 BG_STO_COST_MS = {"noise": 5.2, "waves": 2.9, "gradient": 2.9}
-BG_RD_COST_MS = 1.0             # palette labyrinthe (reaction-diffusion) : simulation a grille fixe + trois lectures par pixel
+# Palette labyrinthe (reaction-diffusion) : mesure +0,6 ms a 1280 x 720 (simulation a grille fixe, quasi independante de la taille,
+# + trois lectures par pixel) ; 1,0 ms a 1080p par prudence.
+BG_RD_COST_MS = 1.0
 REF_PIXELS = 1920 * 1080
 HIGH = 0.90                                    # part du budget d'une image qu'on accepte de remplir (comme PerfGuard.HIGH)
 BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field")
