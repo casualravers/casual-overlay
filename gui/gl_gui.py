@@ -1257,6 +1257,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     pattern_box = gui_fond_ctl.pattern_box
     save_overlay_preset = gui_fond_ctl.save_overlay_preset
     sto_box = gui_fond_ctl.sto_box
+    rd_box = gui_fond_ctl.rd_box
     update_overlay_preset = gui_fond_ctl.update_overlay_preset
     cap = max(360, cap - tab_fond.winfo_reqheight())     # le choix du fond prend de la place au-dessus du panneau
     fit()
@@ -2457,7 +2458,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "add_random5": add_random_scenes, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
                        "move_entry": move_entry_now, "move_to": move_entry_to, "apply_auto": lambda name: (vj_auto.__setitem__("on", True), apply_scene_core(name), vj_auto.__setitem__("on", False)), "undo": lambda: undo_now(), "redo": lambda: redo_now(), "panel_ops": panel_ops, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
-            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "sto_box": sto_box, "synced": synced,"bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
+            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "pattern_box": pattern_box, "sto_box": sto_box, "rd_box": rd_box, "synced": synced,"bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,

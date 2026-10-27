@@ -590,14 +590,23 @@ def check_gui() -> None:
             c["melt_var"].set(0)
             c["cell_var"].set(0)
             c["mosaic_var"].set(0)
-            out["g_pal"], out["sto_shown"] = {}, {}
+            out["g_pal"], out["sto_shown"], out["rd_shown"] = {}, {}, {}
             c["bg_var"].set("pattern")
-            for pal in ("classic", "duo", "test", "stochastique"):
+            for pal in ("classic", "duo", "test", "stochastique", "labyrinthe"):
                 c["palette_var"].set(pal)
                 root.update_idletasks()
                 out["g_pal"][pal] = {lb: row_states(lb) for lb in ("Couleurs 1 / 2", "Angle du degrade", "Teinte", "Vitesse",
-                                                                    "Taille des carreaux", "Contraste du damier", "Cadence du damier")}
+                                                                    "Taille des carreaux", "Contraste du damier", "Cadence du damier",
+                                                                    "Reaction a l'audio")}
                 out["sto_shown"][pal] = c["sto_box"].winfo_ismapped()
+                out["rd_shown"][pal] = c["rd_box"].winfo_ismapped()
+            c["palette_var"].set("labyrinthe")
+            for w in gg.leaves(c["rd_box"]):
+                if w.winfo_class() == "Scale" and float(w.cget("to")) == 2.0:
+                    w.set(1.5)
+            root.update_idletasks()
+            out["rd_written"] = params["bg_rd_scale"]
+            c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
             c["synced"]["bg_sto_field"].set("noise")
@@ -1456,8 +1465,15 @@ def check_gui() -> None:
           and all(gp.get(pl, {}).get("Taille des carreaux") == on for pl in ("classic", "duo")),
           "palette stochastique: couleurs et teinte actives, damier grise, angle actif seulement pour les vagues et le degrade",
           f"{gs} {out.get('sto_angle_waves')}")
-    check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True},
+    check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True, "labyrinthe": False},
           "palette stochastique: ses reglages ne s'affichent que pour elle", str(out.get("sto_shown")))
+    check(out.get("rd_shown") == {"classic": False, "duo": False, "test": False, "stochastique": False, "labyrinthe": True},
+          "palette labyrinthe: ses reglages ne s'affichent que pour elle", str(out.get("rd_shown")))
+    gl_ = gp.get("labyrinthe", {})
+    check(all(gl_.get(lb) == on for lb in ("Teinte", "Vitesse", "Reaction a l'audio"))
+          and all(gl_.get(lb) == off for lb in ("Couleurs 1 / 2", "Angle du degrade", "Taille des carreaux", "Contraste du damier", "Cadence du damier")),
+          "palette labyrinthe: teinte, vitesse et reaction actives, couleurs du duo, angle et damier grises", str(gl_))
+    check(out.get("rd_written") == 1.5, "palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
