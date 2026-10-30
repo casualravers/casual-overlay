@@ -1376,7 +1376,7 @@ redemarre ffmpeg), MIDI,
 sortie Spout/NDI, plusieurs logos a la fois, synchro de la lecture du logo anime sur le kick.
 
 Lanceur : [start.bat](start.bat) (demande explicite, malgre le "pas de .bat" du plan d'origine) : va dans
-son dossier, utilise `.venv\Scripts\python.exe` (message d'installation s'il manque), lance
+son dossier, utilise `python\python.exe` puis `.venv\Scripts\python.exe` ; s'ils manquent il **propose (O/N) de creer `.venv`** (`py -3.12 -m venv` + `pip install -r requirements-gl.txt`, Python 3.12 par winget si besoin, `.venv` retire si pip echoue) et, si ffmpeg manque (PATH ou `ffmpeg\`), **de l'installer par winget** (`Gyan.FFmpeg`, source `winget` : `msstore` a echoue sur un certificat) puis de copier `ffmpeg.exe` / `ffprobe.exe` dans `ffmpeg\` (le PATH de la console n'est pas mis a jour par winget) ; ce controle est saute avec `--synthetic`, `--diagnostic` et `--list-*`. Le fichier doit rester en CRLF (etiquettes `goto`). Verifie par essai dans un dossier temporaire (refus, `.venv` present, `ffmpeg\` present, arguments a parentheses) ; **jamais essaye avec une vraie installation**. Lance
 `audio2wave_gl.py --gui %*` (arguments transmis, donc `-d`, `--text`, `--synthetic`... marchent) et garde la
 console ouverte (`pause`) si le programme sort avec un code d'erreur. Fichier en ASCII + CRLF (accents
 interdits, comme le reste). Une sortie anormale isolee (code -1073740022) a ete vue une fois au tout premier
