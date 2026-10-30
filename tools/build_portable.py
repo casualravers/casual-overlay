@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent          # racine du depot (ce script est dans tools/)
-APP_FILES = ("audio2wave_gl.py", "requirements-gl.txt", "start.bat", "README.md")
+APP_FILES = ("audio2wave_gl.py", "requirements-gl.txt", "start.bat", "README.md", "LICENCES.txt")
 APP_DIRS = ("gl_shaders", "core", "engine", "gui", "tools")      # gui/ : fenetre de reglages ; tools/ : check_gl.py (le diagnostic l'importe pas, mais on le garde pour verifier sur place)
 PY_SKIP_DIRS = {"Doc", "include", "libs", "Scripts", "__pycache__"}            # a la racine de l'installation Python
 LIB_SKIP = {"test", "tests", "idlelib", "lib2to3", "turtledemo", "ensurepip", "__pycache__", "site-packages"}
@@ -47,6 +47,8 @@ Sans micro ni ffmpeg : start.bat --synthetic --no-fullscreen
 
 Tes scenes, sets et presets sont ranges dans le dossier de l'utilisateur (.audio2wave), pas dans ce dossier :
 on peut remplacer ce dossier par une version plus recente sans rien perdre.
+
+Licences des composants (dont ffmpeg, sous GPL) : LICENCES.txt
 
 Si Windows SmartScreen se plaint au premier lancement : "Informations complementaires" puis "Executer quand meme".
 """
@@ -160,6 +162,10 @@ def build_ffmpeg(out: Path, ffmpeg_dir: Path | None) -> list[str]:
     for dll in ffmpeg_dir.glob("*.dll"):
         shutil.copy2(dll, dst / dll.name)
         copied.append(dll.name)
+    lic = ffmpeg_dir.parent / "LICENSE"                     # un build Gyan range sa licence a cote de bin/
+    if lic.is_file():
+        shutil.copy2(lic, dst / "LICENSE-ffmpeg.txt")
+        copied.append("LICENSE-ffmpeg.txt")
     return copied
 
 

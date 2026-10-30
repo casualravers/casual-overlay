@@ -5402,7 +5402,7 @@ def check_diagnostics() -> None:
     out.mkdir()
     bp.build_app(out, gl.DEFAULT_A2W_DIR)
     names = {str(x.relative_to(out)).replace("\\", "/") for x in out.rglob("*") if x.is_file()}
-    check({"audio2wave_gl.py", "engine/diagnostics.py", "gui/skin.py", "start.bat", "LISEZMOI.txt", "gl_shaders/post.frag", "audio2wave/audio2wave_live.py",
+    check({"audio2wave_gl.py", "engine/diagnostics.py", "gui/skin.py", "start.bat", "LISEZMOI.txt", "LICENCES.txt", "gl_shaders/post.frag", "audio2wave/audio2wave_live.py",
            "audio2wave/common.py"} <= names and not any(n.startswith("asset/animations") for n in names)
           and any(n.startswith("asset/") and n.endswith(".png") for n in names), "portable: le dossier contient le programme, les shaders, audio2wave, le logo ; pas les animations perso")
     src, dst = tmp / "src", tmp / "dst"

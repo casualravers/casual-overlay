@@ -1,0 +1,42 @@
+casual-overlay - licences des composants
+=========================================
+
+Ce dossier regroupe le programme casual-overlay et des logiciels tiers. Chacun reste soumis a SA licence.
+
+1. casual-overlay et audio2wave
+-------------------------------
+Code de casual-overlay (dossiers core/, engine/, gui/, gl_shaders/, tools/, fichiers .py a la racine) et
+audio2wave (dossier audio2wave/) : (c) Casual Ravers. Tous droits reserves, sauf accord ecrit.
+
+2. ffmpeg (dossier ffmpeg/) - GPL
+---------------------------------
+ffmpeg.exe et ffprobe.exe sont un build "full" de FFmpeg (https://ffmpeg.org), distribue sous licence
+GNU GPL version 3, car il inclut des bibliotheques sous GPL (par exemple x264 et x265).
+
+- Texte de la licence : https://www.gnu.org/licenses/gpl-3.0.txt (et le fichier ffmpeg/LICENSE-ffmpeg.txt
+  quand il accompagne le build).
+- Code source de FFmpeg : https://ffmpeg.org/download.html
+- Build utilise (Gyan) : https://www.gyan.dev/ffmpeg/builds/ - le code source de ses bibliotheques y est indique.
+- Sur demande ecrite, Casual Ravers fournit le code source correspondant au build livre.
+
+casual-overlay lance ffmpeg comme un programme separe (sous-processus et tubes) : il n'est pas lie au code de
+casual-overlay, qui n'est donc pas soumis a la GPL. FFmpeg n'est pas une creation de Casual Ravers.
+Certains codecs (H.264, H.265...) peuvent etre couverts par des brevets propres a chaque pays.
+
+3. Python et bibliotheques (dossier python/)
+--------------------------------------------
+Licences permissives, a conserver avec les composants. Indiquees d'apres les projets d'origine ; a reverifier
+sur le build livre (chaque bibliotheque porte son fichier de licence dans python/Lib/site-packages).
+
+- Python 3.12 (PSF License), avec Tcl/Tk (licence BSD)
+- moderngl, glcontext : MIT
+- glfw (pyGLFW) : MIT ; bibliotheque GLFW : zlib
+- numpy : BSD 3 clauses
+- sounddevice : MIT ; PortAudio : MIT
+- Pillow : HPND (licence PIL)
+- tkinterdnd2 : MIT ; tkdnd : BSD
+
+4. Polices et medias
+--------------------
+Les polices Windows (Arial, Impact...) ne sont pas livrees : elles viennent du PC. Les images du dossier asset/
+appartiennent a Casual Ravers.
