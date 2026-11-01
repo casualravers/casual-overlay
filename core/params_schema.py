@@ -202,6 +202,13 @@ TABLE: tuple[Param, ...] = (
     _p("bg_rd_color2", "#2f6bff", scope="bg", doc="Palette labyrinthe : couleur de la couche 2."),
     _p("bg_rd_color3", "#19d6a5", scope="bg", doc="Palette labyrinthe : couleur de la couche 3 (posee par-dessus)."),
     _p("bg_rd_ground", "#120d14", scope="bg", doc="Palette labyrinthe : couleur du fond."),
+    _p("bg_rd_mix", 0.0, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : variete des zones (points, lignes, taches dans la meme image) ; 0 = une seule forme partout."),
+    _p("bg_rd_drift", 0.3, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : vitesse de derive des zones de formes."),
+    _p("bg_rd_layers", 0.0, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : epaisseur differente par couche (1 fine, 3 epaisse) ; 0 = meme seuil partout."),
+    _p("bg_rd_sym", "none", choices=("none", "mirror_lr", "mirror_tb", "quad", "rot"), scope="bg",
+       doc="Palette labyrinthe : symetrie de colonisation (germes et zones) ; le motif lui-meme n'est jamais strictement symetrique."),
+    _p("bg_rd_branches", 4, 2, 8, scope="bg", doc="Palette labyrinthe : nombre de branches de la symetrie en rotation."),
+    _p("bg_rd_free", 0.5, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : liberte de la symetrie (0 = la plus stricte possible, 1 = presque aucune)."),
     _p("auto_master", 1.0, 0.0, 1.0, keep=True, doc="Interrupteur general des automations (1 = actives)."),
 )
 

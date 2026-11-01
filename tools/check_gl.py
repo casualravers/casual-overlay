@@ -6466,6 +6466,12 @@ def check_automation() -> None:
           "par defaut: effets et fond animes, position/taille/opacite du logo laisses fixes", f"{len(enabled)} actives")
     periods = [default[k]["period"] for k in enabled]
     check(len(set(periods)) == len(periods), "periodes des automations actives toutes differentes (pas de repetition)")
+    from core import params_schema as ps_
+    rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free")
+    check(len(specs) == 28 and all(k in specs and default[k]["enabled"] for k in rd_auto)
+          and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto)
+          and not any(k in specs for k in ("bg_rd_scale", "bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
+          "labyrinthe: 5 automations actives par defaut, plages dans celles des reglages, ni taille, ni derive, ni symetrie", str(len(specs)))
 
     def fresh():
         p = copy.deepcopy(gl.DEFAULT_PARAMS)
@@ -6677,6 +6683,13 @@ def check_randomizer() -> None:
                                and max(int(v["bg_rd_ground"][i:i + 2], 16) for i in (1, 3, 5)) <= 0.12 * 255 + 1 for v in lb)
           and all(gl.coerce_params(v)[k] == v[k] for v in lb for k in v),
           "fond aleatoire: la palette labyrinthe est tiree, dans les plages, fond sombre", f"{len(lb)} sur 300")
+    from core import reaction as rc_
+    sym_share = sum(1 for v in lb if v["bg_rd_sym"] != "none") / max(len(lb), 1)
+    check(all(0 <= v["bg_rd_mix"] <= 0.9 and 0 <= v["bg_rd_layers"] <= 0.8 and 0.1 <= v["bg_rd_drift"] <= 0.8
+              and v["bg_rd_sym"] in rc_.SYM_MODES and 2 <= v["bg_rd_branches"] <= 8 and 0 <= v["bg_rd_free"] <= 1
+              and (v["bg_rd_sym"] != "rot" or v["bg_rd_free"] >= 0.2) for v in lb) and 0.25 <= sym_share <= 0.45,
+          "fond aleatoire: zones, couches et symetrie du labyrinthe tirees dans leurs plages (symetrie une fois sur trois environ)",
+          f"part avec symetrie {sym_share:.2f}")
     check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
@@ -8262,9 +8275,24 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 7 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
-          and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14",
-          "labyrinthe: 7 reglages du fond, valeurs par defaut")
+    check(len(rd_keys) == 13 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+          and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
+          and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
+          and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5,
+          "labyrinthe: 13 reglages du fond (zones, couches, symetrie), valeurs par defaut neutres")
+    vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
+    check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
+          "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
+    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free")
+    old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
+    for k in new_rd:
+        old_scene.get("fond", {}).pop(k, None)
+    try:
+        back_old = sc.scene_values(old_scene, dict(gl.DEFAULT_PARAMS, bg_mode="live"))
+        old_ok = all(back_old.get(k, d[k]) == d[k] for k in new_rd)
+    except Exception as exc:                                  # noqa: BLE001
+        old_ok = repr(exc)
+    check(old_ok is True, "labyrinthe: une ancienne scene sans les nouveaux reglages se charge avec leurs valeurs neutres", str(old_ok))
     v = gl.coerce_params({"bg_palette": "labyrinthe", "bg_rd_scale": 9.0, "bg_rd_offset": -1.0})
     check(v["bg_palette"] == "labyrinthe" and v["bg_rd_scale"] == 2.0 and v["bg_rd_offset"] == 0.0,
           "labyrinthe: palette acceptee, reglages bornes")
