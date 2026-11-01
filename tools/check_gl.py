@@ -9420,6 +9420,11 @@ def check_safeguards() -> None:
     check(sf.background_cost(dict(bg_mode="pattern", bg_palette="labyrinthe"), full) > 0.0
           and sf.background_cost(dict(bg_mode="live", bg_palette="labyrinthe"), full) == 0.0,
           "securite GPU: cout du fond labyrinthe compte, nul hors du fond genere")
+    lab0, lab1 = dict(bg_mode="pattern", bg_palette="labyrinthe", bg_rd_mix=0.0), dict(bg_mode="pattern", bg_palette="labyrinthe", bg_rd_mix=0.6)
+    small = (640, 360)
+    check(abs(sf.background_cost(lab1, small) - sf.background_cost(lab0, small) - sf.BG_RD_ZONE_COST_MS) < 1e-9 and sf.BG_RD_ZONE_COST_MS > 0
+          and "bg_rd_mix" in sf.BG_KEYS,
+          "securite GPU: les zones du labyrinthe comptent en plus (carte a grille fixe : cout independant de la taille du rendu)")
     # --- annuler / retablir
     udir = Path(tempfile.mkdtemp(prefix="casual_overlay_undo_"))
     ubook = sc_.SceneBook(lambda: udir / "scenes.json")

@@ -15,9 +15,12 @@ BG_STO_COST_MS = {"noise": 5.2, "waves": 2.9, "gradient": 2.9}
 # Palette labyrinthe (reaction-diffusion) : mesure +0,6 ms a 1280 x 720 (simulation a grille fixe, quasi independante de la taille,
 # + trois lectures par pixel) ; 1,0 ms a 1080p par prudence.
 BG_RD_COST_MS = 1.0
+# Zones de formes du labyrinthe (bg_rd_mix > 0) : une passe de carte (F, K) par image a la taille de la grille, independante du rendu.
+# Mesure sur Intel UHD 605 (GPU faible), 10 pas par image : +0,3 ms (zones), +1,6 ms (rotation a 8 branches) ; 1,5 ms par prudence.
+BG_RD_ZONE_COST_MS = 1.5
 REF_PIXELS = 1920 * 1080
 HIGH = 0.90                                    # part du budget d'une image qu'on accepte de remplir (comme PerfGuard.HIGH)
-BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field")
+BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field", "bg_rd_mix")
 
 
 def _scale(render_size: tuple[int, int] | None) -> float:
@@ -36,7 +39,8 @@ def background_cost(values: dict, render_size: tuple[int, int] | None = None) ->
     if values.get("bg_mode") != "pattern":
         return 0.0
     if values.get("bg_palette") == "labyrinthe":
-        return BG_RD_COST_MS * _scale(render_size)
+        zones = BG_RD_ZONE_COST_MS if float(values.get("bg_rd_mix", 0.0) or 0.0) > 0.0 else 0.0
+        return BG_RD_COST_MS * _scale(render_size) + zones
     if values.get("bg_palette") != "stochastique":
         return 0.0
     return BG_STO_COST_MS.get(values.get("bg_sto_field", "noise"), BG_STO_COST_MS["noise"]) * _scale(render_size)

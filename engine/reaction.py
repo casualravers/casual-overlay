@@ -19,6 +19,10 @@ class ReactionDiffusion:
         frag = (shader_dir / "rd_step.frag").read_text(encoding="utf-8")
         self.prog = ctx.program(vertex_shader=vert, fragment_shader=frag)
         self.vao = ctx.vertex_array(self.prog, [(vbo, "2f", "in_pos")])
+        zfrag = (shader_dir / "rd_zone.frag").read_text(encoding="utf-8")
+        self.zone_prog = ctx.program(vertex_shader=vert, fragment_shader=zfrag)
+        self.zone_vao = ctx.vertex_array(self.zone_prog, [(vbo, "2f", "in_pos")])
+        self.zone_tex = self.zone_fbo = None                  # carte (F, K) des zones, a la taille de la grille
         self.tex: list = []
         self.fbo: list = []
         self.cur = 0
@@ -32,9 +36,10 @@ class ReactionDiffusion:
         return self.tex[self.cur]
 
     def _alloc(self, size: tuple[int, int]) -> None:
-        for obj in (*self.fbo, *self.tex):
+        for obj in (*self.fbo, *self.tex, *(o for o in (self.zone_fbo, self.zone_tex) if o is not None)):
             obj.release()
         self.tex, self.fbo = [], []
+        self.zone_tex = self.zone_fbo = None
         # RG32F d'abord : en RG16F un increment F x (1 - U) plus petit que le demi-ulp pres de 1 est perdu et le motif se fige en un
         # point fixe d'arrondi apres ~15 s (mesure). La grille est petite (384 x 216 x 8 octets) : le cout est negligeable. Repli RG16F.
         for dtype in ("f4", "f2"):
@@ -48,6 +53,10 @@ class ReactionDiffusion:
         for t in self.tex:
             t.filter = (moderngl.LINEAR, moderngl.LINEAR)
             t.repeat_x = t.repeat_y = True
+        if self.tex:
+            self.zone_tex = self.ctx.texture(size, 2, dtype=self.dtype)
+            self.zone_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+            self.zone_fbo = self.ctx.framebuffer(color_attachments=[self.zone_tex])
         self.size, self.cur = size, 0
 
     def ensure(self, scale: float) -> None:
@@ -121,11 +130,21 @@ class ReactionDiffusion:
         prog["u_grid"].value = (float(w), float(h))
         prog["u_fk"].value = rc.shape_feed_kill(shape)
         sym = rc.SYM_MODES.index(zone.sym) if zone.sym in rc.SYM_MODES else 0
+        if zone.mix > 0.0:                                 # carte (F, K) des zones : une passe par appel, pas une par pas
+            zp = self.zone_prog
+            for name, value in (("u_mix", float(zone.mix)), ("u_base", float(shape)), ("u_zone_t", float(zone.t)),
+                                ("u_fk3", [rc.SPOTS, rc.MAZE, rc.BLOB]), ("u_zone_cells", tuple(float(c) for c in rc.ZONE_CELLS)),
+                                ("u_sym", sym), ("u_branches", rc.orbit_size("rot", zone.branches)), ("u_free", float(zone.free)),
+                                ("u_aspect", w / h), ("u_free_zone", rc.FREE_ZONE)):
+                if name in zp:
+                    zp[name].value = value
+            self.zone_fbo.viewport = (0, 0, w, h)
+            self.zone_fbo.use()
+            self.zone_vao.render(moderngl.TRIANGLE_STRIP)
+            self.zone_tex.use(1)
         free_noise = rc.FREE_NOISE if self.dtype == "f4" else 0.0          # en 16 bits un increment de 1e-3 serait perdu
-        for name, value in (("u_mix", float(zone.mix)), ("u_base", float(shape)), ("u_zone_t", float(zone.t)),
-                            ("u_fk3", [rc.SPOTS, rc.MAZE, rc.BLOB]), ("u_zone_cells", tuple(float(c) for c in rc.ZONE_CELLS)),
-                            ("u_sym", sym), ("u_branches", rc.orbit_size("rot", zone.branches)), ("u_free", float(zone.free)),
-                            ("u_aspect", w / h), ("u_free_zone", rc.FREE_ZONE), ("u_free_noise", free_noise)):
+        for name, value in (("u_mix", float(zone.mix)), ("u_zone", 1), ("u_sym", sym), ("u_free", float(zone.free)),
+                            ("u_free_noise", free_noise)):
             if name in prog:
                 prog[name].value = value
         queue = [(s[0], s[1], s[2] if len(s) > 2 else rc.SEED_RADIUS) for s in seeds]
