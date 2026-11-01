@@ -614,6 +614,22 @@ def check_gui() -> None:
                     w.set(1.5)
             root.update_idletasks()
             out["rd_written"] = params["bg_rd_scale"]
+            out["rd_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False))
+                              for lb in ("Variete", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
+            for w in gg.row_of_label(c["rd_box"], "Variete", panels=False):
+                for x in gg.leaves(w):
+                    if x.winfo_class() == "Scale":
+                        x.set(0.4)
+            root.update_idletasks()
+            out["rd_mix_written"] = params["bg_rd_mix"]
+            c["synced"]["bg_rd_sym"].set("mirror_lr")
+            root.update_idletasks()
+            out["rd_branch_mirror"] = row_states("Branches")
+            c["synced"]["bg_rd_sym"].set("rot")
+            root.update_idletasks()
+            out["rd_branch_rot"] = row_states("Branches")
+            out["rd_sym_written"] = params["bg_rd_sym"]
+            c["synced"]["bg_rd_sym"].set("none")
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
@@ -1492,6 +1508,12 @@ def check_gui() -> None:
           and all(gl_.get(lb) == off for lb in ("Couleurs 1 / 2", "Angle du degrade", "Taille des carreaux", "Contraste du damier", "Cadence du damier")),
           "palette labyrinthe: teinte, vitesse et reaction actives, couleurs du duo, angle et damier grises", str(gl_))
     check(out.get("rd_written") == 1.5, "palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
+    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 6 and out.get("rd_mix_written") == 0.4
+          and out.get("rd_sym_written") == "rot",
+          "palette labyrinthe: variete, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
+          str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"))))
+    check(out.get("rd_branch_mirror") == off and out.get("rd_branch_rot") == on,
+          "palette labyrinthe: Branches grise hors rotation", str((out.get("rd_branch_mirror"), out.get("rd_branch_rot"))))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
