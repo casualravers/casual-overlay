@@ -398,6 +398,24 @@ les basses).
   **Cout** : +0,6 ms a 1280 x 720 ; `core.safety.BG_RD_COST_MS` = 1,0. Bloc `rd_box` dans « Fond genere ». Le Full Randomizer la tire une fois sur
   cinq. `check_gl.py` : `check_reaction_pure` (pur), `check_reaction_sim` (vivant a trois formes, taches separees et regulieres, lignes, germes,
   echelle, garde-fou), `check_bg_labyrinthe` (pixels : couches, teinte, taille de fenetre, tempo, son, reaction 0, changement de palette).
+  **Zones, symetries, epaisseur** (issue #102 ; spec et plan : `docs/plans/2026-11-01-labyrinthe-evolution-*.md`) : axe interne de forme **0..2**
+  (`core.reaction.shape_feed_kill` : 0 points `SPOTS`, 1 lignes `MAZE`, 2 taches `BLOB` = (0,044 ; 0,060), trouve par `tools/rd_sweep.py` : grosse
+  masse pleine percee de trous, ~50 % de l'image ; la bande utile est etroite, au-dessus de F 0,04 un K de 0,058 ou moins envahit tout). **Carte de
+  forme** (`bg_rd_mix` variete, `bg_rd_drift` derive) : `gl_shaders/rd_zone.frag` calcule (F, K) par cellule **une fois par image** (texture RG32F,
+  unite 1, lue par `rd_step.frag` ; recalculee a chaque pas elle coutait jusqu'a +11 ms en rotation sur Intel UHD 605) : bruit de valeur periodique
+  a 2 octaves (`ZONE_CELLS` 5 x 3), temps integre `Renderer._rd_zone_t` (`ZONE_SPEED` x drift x dt du tempo, seulement quand des pas sont faits) ;
+  une ligne qui entre dans une zone > 1 s'agglomere. **Symetrie de colonisation** (`bg_rd_sym` none / mirror_lr / mirror_tb / quad / rot,
+  `bg_rd_branches`, `bg_rd_free` Liberte) : germes en orbite (`core.reaction.colonize`, ~40 au total via `base_seed_count`, decalage et rayon
+  x Liberte, deterministes), zones lues aux coordonnees repliees (rotation : repli en miroir dans le secteur, pas de couture) + bruit non replie
+  x Liberte, et un faible bruit de V (`FREE_NOISE`, sans effet mesurable : ce sont les germes et les zones qui liberent le motif). **Mesure** : la
+  REPARTITION (part de V > 0,25 par bloc) reste en miroir (0,89 a Liberte 0,1 apres 10 s, 0,19 sans symetrie), les pixels se liberent en ~10 s ;
+  Liberte 0 = miroir parfait qui ne se defait jamais (calcul deterministe). Germes en file (`queue_seeds`, 32 au plus, 4 par pas ; 4 sans symetrie
+  comme avant). **Epaisseur des couches** (`bg_rd_layers`, `LAYER_SPREAD` 0,05) : seuils 0,20 / 0,25 / 0,30, couche 1 (dessous) epaisse, couche 3
+  (dessus) fine : liseres emboites visibles meme sans ecart (V plafonne vers 0,35 : un seuil plus haut fait disparaitre la couche du dessus).
+  **Valeurs neutres** (mix 0, layers 0, sym none) = simulation et image identiques bit pour bit a la version d'avant. Automations actives par
+  defaut : forme, ecart, variete, epaisseur, liberte (pas taille, derive, symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0.
+  `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
+  `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, symetrie a chaud, rafale, epaisseur).
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
   (`dt * vitesse`), pas calculees par `vitesse * temps` : changer la vitesse dans la GUI ne
   fait jamais sauter le motif.
@@ -962,7 +980,7 @@ l'alpha du logo : composite `rgb + fond*(1-a)` = additif, comme avant), puis `po
 
 ### Automations (`AUTOMATION_SPECS`, touche T, `--no-automation`)
 
-Pour que les visuels vivent tout seuls : 23 reglages (dont 4 pour les effets de la couche logo) peuvent suivre une courbe (fond motif :
+Pour que les visuels vivent tout seuls : 28 reglages (dont 4 pour les effets de la couche logo) peuvent suivre une courbe (fond motif :
 teinte, angle, vitesse, carreaux, contraste, cadence ; logo : position X/Y, tailles,
 opacite, pulsation, contour et son rayon ; effets : les 5 intensites). Meme principe que
 "Variation automatique" d'audio2wave (points de controle boucles, interpoles lineairement,
@@ -977,7 +995,7 @@ case `~`, bouton de courbe, presets sinus/triangle/carre/dents de scie/aleatoire
   source unique : la GUI s'en sert pour enregistrer les editeurs, le moteur pour les plages
   (plus etroites que celles des curseurs : un reglage automatise est PILOTE, le curseur suit ;
   tant que la case `~` est cochee, deplacer le curseur a la main est ecrase).
-- **Actives par defaut** (18) : fond, effets, contour du logo, pulsation. **Coupees par
+- **Actives par defaut** (23) : fond (dont 5 de la palette labyrinthe), effets, contour du logo, pulsation. **Coupees par
   defaut** : position X/Y, tailles et opacite du logo (une marque ne doit pas se promener sans
   l'avoir voulu). Periodes toutes differentes entre les actives (79, 53, 37, 29, 23...), donc
   l'ensemble ne se repete jamais a l'identique. Plages volontairement moderees (contour <=
