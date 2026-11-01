@@ -679,7 +679,8 @@ class Renderer:
             self.rd_note = "" if self.rd.dtype == "f4" or sym == "none" else "Liberte sans effet : etat de la simulation en 16 bits"
             self.rd.texture.use(6)
             w, h = self.rd.size
-            self._set(sp, "u_rd", (float(p["bg_rd_offset"]) * (1.0 + 1.5 * react * float(bg_au[2])), 0.5 / h, 0.0, 0.0))
+            self._set(sp, "u_rd", (float(p["bg_rd_offset"]) * (1.0 + 1.5 * react * float(bg_au[2])), 0.5 / h,
+                                  float(p["bg_rd_layers"]) * reaction.LAYER_SPREAD, 0.0))
             for key, name in (("bg_rd_color1", "u_rd_c1"), ("bg_rd_color2", "u_rd_c2"), ("bg_rd_color3", "u_rd_c3"), ("bg_rd_ground", "u_rd_ground")):
                 self._set(sp, name, hex_to_rgb(p[key], DEFAULT_PARAMS[key]))
         else:

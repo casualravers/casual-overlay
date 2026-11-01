@@ -34,7 +34,7 @@ ZONE_SPEED = 0.08               # cycles de derive des zones par seconde a bg_rd
 FREE_NOISE = 1e-3               # bruit asymetrique ajoute a V a chaque pas, x Liberte (seulement avec une symetrie)
 FREE_ZONE = 0.35                # part du bruit non replie dans la carte des zones, x Liberte
 FREE_JITTER = 0.04              # decalage max d'une copie de germe (fraction de la hauteur), x Liberte
-LAYER_SPREAD = 0.12             # ecart des seuils des couches a bg_rd_layers = 1
+LAYER_SPREAD = 0.05             # ecart des seuils des couches a bg_rd_layers = 1 (V plafonne vers 0,35 : 0,30 garde la couche du dessus visible)
 MAX_PENDING_SEEDS = 32          # file des germes en attente (orbites), les plus anciens jetes au-dela
 
 

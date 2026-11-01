@@ -8570,6 +8570,17 @@ def check_bg_labyrinthe() -> None:
     zt = rz0._rd_zone_t
     _rz0, z2 = run(rr=rz0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_rd_mix=0.8)
     check(abs(z2 - z1).max() == 0 and rz0._rd_zone_t == zt, "labyrinthe: tempo a 0 = zones figees elles aussi (derive arretee)")
+    _r, flat_layers = run(bg_rd_layers=0.0)
+    check(abs(flat_layers - a).max() == 0, "labyrinthe: epaisseur des couches 0 = image d'origine")
+    def visible(img):
+        """Part des pixels de chaque couche (rouge = 1, vert = 2, bleu = 3 ; couche 3 posee par-dessus)."""
+        return [float(((img[:, :, c] > 180) & (img[:, :, (c + 1) % 3] < 80) & (img[:, :, (c + 2) % 3] < 80)).mean()) for c in range(3)]
+
+    v0 = visible(run(bg_rd_layers=0.0, bg_rd_offset=0.0)[1])
+    v1 = visible(run(bg_rd_layers=1.0, bg_rd_offset=0.0)[1])
+    check(v0[0] < 0.002 and v0[1] < 0.002 and v0[2] > 0.05 and min(v1) > 0.01 and v1[0] + v1[1] + v1[2] > v0[2],
+          "labyrinthe: epaisseur des couches = liseres emboites (couche 1 dessous epaisse, couche 3 dessus fine), visibles meme sans ecart",
+          f"sans {[round(x, 3) for x in v0]} / avec {[round(x, 3) for x in v1]}")
     rs0, _ = run(bg_rd_sym="none", bg_rd_mix=0.6)
     resets = []
     real_reset = rs0.rd.reset
