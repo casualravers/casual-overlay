@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+from typing import NamedTuple
 
 # (F, K) : taches qui se repoussent et se divisent jusqu'a remplir l'ecran (valeur classique ; mesure en RG32F : 238 taches, aucun contact,
 # motif toujours actif apres 12000 pas). En RG16F elle semblait ne jamais se diviser : c'etait un artefact d'arrondi (voir engine/reaction.py).
@@ -41,6 +42,16 @@ def feed_kill(shape: float) -> tuple[float, float]:
     """(F, K) du modele : 0 = taches, 1 = labyrinthe, interpolation lineaire (forme bornee a 0..1)."""
     s = min(max(float(shape), 0.0), 1.0)
     return (SPOTS[0] + (MAZE[0] - SPOTS[0]) * s, SPOTS[1] + (MAZE[1] - SPOTS[1]) * s) if 0.0 < s < 1.0 else (SPOTS if s == 0.0 else MAZE)
+
+
+class Zone(NamedTuple):
+    """Reglages des zones et de la symetrie pour un pas de simulation (mix 0 et sym none = comportement d'origine)."""
+    mix: float = 0.0            # variete des zones (ecart de forme autour de la forme de base)
+    t: float = 0.0              # temps de derive integre (cycles)
+    sym: str = "none"           # symetrie de colonisation (SYM_MODES)
+    branches: int = 4           # branches de la rotation
+    free: float = 0.0           # liberte de la symetrie
+    aspect: float = 16 / 9      # largeur / hauteur de la grille (rotations rondes a l'ecran)
 
 
 def shape_feed_kill(s: float) -> tuple[float, float]:

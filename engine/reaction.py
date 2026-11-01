@@ -101,18 +101,24 @@ class ReactionDiffusion:
         """V en float32, forme (h, w), haut en premier."""
         return self._read()[1]
 
-    def step(self, n: int, shape: float, seeds=()) -> None:
+    def step(self, n: int, shape: float, seeds=(), zone: rc.Zone | None = None) -> list:
         """`n` pas Gray-Scott a la forme `shape` (axe 0..2 : points, lignes, taches) ; les germes (au plus 4, positions normalisees
-        origine haut gauche) ne sont poses qu'au premier pas."""
+        origine haut gauche) ne sont poses qu'au premier pas. `zone` : carte de forme qui derive (None = forme uniforme).
+        Rend les germes qui n'ont pas pu etre poses."""
         if n <= 0 or not self.tex:
-            return
+            return list(seeds)
         prev = self.ctx.fbo
         w, h = self.size
         prog = self.prog
+        zone = zone or rc.Zone()
         prog["u_state"].value = 0
         prog["u_texel"].value = (1.0 / w, 1.0 / h)
         prog["u_grid"].value = (float(w), float(h))
         prog["u_fk"].value = rc.shape_feed_kill(shape)
+        for name, value in (("u_mix", float(zone.mix)), ("u_base", float(shape)), ("u_zone_t", float(zone.t)),
+                            ("u_fk3", [rc.SPOTS, rc.MAZE, rc.BLOB]), ("u_zone_cells", tuple(float(c) for c in rc.ZONE_CELLS))):
+            if name in prog:
+                prog[name].value = value
         seeds = list(seeds)[:4]
         flat = [(x, y, rc.SEED_RADIUS) for x, y in seeds] + [(0.0, 0.0, 0.0)] * (4 - len(seeds))
         if "u_seeds" in prog:
@@ -128,6 +134,7 @@ class ReactionDiffusion:
             self.cur = dst
         if prev is not None:                               # contexte autonome (tests) : pas de framebuffer actif a rendre
             prev.use()
+        return []
 
     def watch(self, now: float) -> bool:
         """Toutes les WATCH_S s, moyenne de V (mipmaps, niveau 1 x 1) ; motif eteint = ressemee (graine suivante). Rend True si ressemee."""

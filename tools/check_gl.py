@@ -8407,6 +8407,60 @@ def check_reaction_sim() -> None:
           "garde-fou : un motif eteint est ressemee au controle suivant (graine suivante)", str((first, second, dead.seed)))
 
 
+def check_rd_zones() -> None:
+    print("Reaction-diffusion : zones de formes (points, lignes, taches dans la meme image)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+
+    def sim(shape, steps, zone=None, r=None):
+        if r is None:
+            r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+            r.ensure(1.0)
+            r.reset(0)
+        for _ in range(steps // 20):
+            r.step(20, shape, zone=zone)
+        return r
+
+    plain = sim(0.6, 1000).read_v()
+    neutral = sim(0.6, 1000, rc.Zone(mix=0.0, t=3.0, free=0.9)).read_v()
+    check(np.array_equal(plain, neutral), "zones : variete 0 = simulation identique a la version sans zones (bit pour bit)")
+    v = sim(1.0, 6000, rc.Zone(mix=0.8, t=0.0)).read_v() > 0.25
+    lab, sizes = rd_components(v)
+    h, w = v.shape
+    blocks = []
+    for by in range(3):
+        for bx in range(5):
+            ids = np.unique(lab[by * h // 3:(by + 1) * h // 3, bx * w // 5:(bx + 1) * w // 5])
+            ids = ids[ids > 0]
+            if len(ids):
+                blocks.append(float(np.mean([sizes[i - 1] for i in ids])))
+    check(len(blocks) >= 10 and max(blocks) > 4 * min(blocks), "zones : des regions aux caracteres differents coexistent (fines et grasses)",
+          f"aire moyenne par bloc {min(blocks):.0f} .. {max(blocks):.0f}" if blocks else "aucun bloc")
+    r = sim(1.0, 2000, rc.Zone(mix=0.9, t=0.0))
+    covers = []
+    for i in range(40):
+        sim(1.0, 100, rc.Zone(mix=0.9, t=0.05 * (i + 1)), r)
+        covers.append(float((r.read_v() > 0.25).mean()))
+    check(all(0.05 < c < 0.9 for c in covers), "zones : le motif reste vivant partout pendant la derive",
+          f"couverture {min(covers):.2f} .. {max(covers):.2f}")
+    _l, flat = rd_components(sim(1.0, 6000).read_v() > 0.25)
+    _l, zoned = rd_components(sim(1.0, 6000, rc.Zone(mix=0.9)).read_v() > 0.25)
+    check(max(zoned) >= 1.5 * max(flat), "zones : une partie de l'image s'agglomere en grosses taches",
+          f"plus grande composante {max(zoned)} contre {max(flat)}")
+    grown = sim(1.0, 1000, rc.Zone(mix=0.8))
+    grown.ensure(1.5)
+    sim(1.0, 500, rc.Zone(mix=0.8), grown)
+    gc = float((grown.read_v() > 0.25).mean())
+    check(0.05 < gc < 0.9, "zones : taille du motif changee avec des zones actives, motif toujours vivant", f"couverture {gc:.2f}")
+
+
 def check_bg_labyrinthe() -> None:
     print("Fond genere : palette labyrinthe (reaction-diffusion en trois couches)")
     try:
@@ -8460,6 +8514,10 @@ def check_bg_labyrinthe() -> None:
     rk0, k1 = run(tempo=0.0, bg_react=1.0)
     _rk0, k2 = run(rr=rk0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_react=1.0)
     check(abs(k2 - k1).max() == 0, "labyrinthe: tempo a 0 = fige meme quand des kicks arrivent (les germes attendent)")
+    rz0, z1 = run(tempo=0.0, bg_rd_mix=0.8)
+    zt = rz0._rd_zone_t
+    _rz0, z2 = run(rr=rz0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_rd_mix=0.8)
+    check(abs(z2 - z1).max() == 0 and rz0._rd_zone_t == zt, "labyrinthe: tempo a 0 = zones figees elles aussi (derive arretee)")
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0)
     _r, calm = run(state=quiet, bg_react=0.0)
     _r, noisy = run(state=lambda i: dict(loud, beats=i // 5), bg_react=0.0)
@@ -9815,6 +9873,7 @@ def main() -> None:
     check_foudre_pure()
     check_textcycle()
     check_reaction_sim()
+    check_rd_zones()
     check_bg_labyrinthe()
     check_foudre_render()
     check_cells()

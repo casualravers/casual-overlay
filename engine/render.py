@@ -258,6 +258,7 @@ class Renderer:
         self._sto_flick = 0.0                      # palette stochastique : phase integree du scintillement (aigus)
         self.rd: ReactionDiffusion | None = None   # palette labyrinthe : simulation creee au premier besoin
         self._rd_acc = 0.0                         # reste de l'accumulateur de pas de simulation
+        self._rd_zone_t = 0.0                      # temps de derive des zones de formes (integre, tempo compris)
         self._rd_beats: int | None = None          # compteur de kicks deja semes
         self._rd_pending: list = []                # germes des kicks en attente d'un pas (motif fige : tempo ou vitesse a 0)
         self._rd_active = False                    # palette active a l'image precedente
@@ -664,8 +665,12 @@ class Renderer:
                 self._rd_pending = self._rd_pending[-4:]          # au plus 4 germes en attente (les plus recents)
             self._rd_beats = beats
             n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass)
-            if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes attendent le prochain pas
-                self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending)
+            if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes et les zones attendent
+                self._rd_zone_t += dt * reaction.ZONE_SPEED * float(p["bg_rd_drift"])
+                gw, gh = self.rd.size
+                zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=str(p["bg_rd_sym"]),
+                                     branches=int(p["bg_rd_branches"]), free=float(p["bg_rd_free"]), aspect=gw / gh)
+                self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending, zone)
                 self._rd_pending = []
             self.rd.watch(t)
             self.rd.texture.use(6)
