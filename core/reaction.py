@@ -21,11 +21,82 @@ KICK_SEEDS = 3                  # germes semes par kick
 DEAD_LEVEL = 0.002              # moyenne de V sous laquelle le motif est considere eteint
 WATCH_S = 2.0                   # periode du garde-fou anti-extinction
 
+# Zones de formes et symetries de colonisation (docs/plans/2026-11-01-labyrinthe-evolution-design.md).
+BLOB = (0.0250, 0.0550)         # (F, K) : grosses taches pleines (provisoire : fixe par balayage, tools/rd_sweep.py)
+SYM_MODES = ("none", "mirror_lr", "mirror_tb", "quad", "rot")
+ZONE_CELLS = (5, 3)             # reseau periodique du bruit des zones, en cellules sur la grille (~un tiers de la hauteur)
+ZONE_SPEED = 0.08               # cycles de derive des zones par seconde a bg_rd_drift = 1
+FREE_NOISE = 1e-3               # bruit asymetrique ajoute a V a chaque pas, x Liberte (seulement avec une symetrie)
+FREE_ZONE = 0.35                # part du bruit non replie dans la carte des zones, x Liberte
+FREE_JITTER = 0.04              # decalage max d'une copie de germe (fraction de la hauteur), x Liberte
+LAYER_SPREAD = 0.12             # ecart des seuils des couches a bg_rd_layers = 1
+MAX_PENDING_SEEDS = 32          # file des germes en attente (orbites), les plus anciens jetes au-dela
+
 
 def feed_kill(shape: float) -> tuple[float, float]:
     """(F, K) du modele : 0 = taches, 1 = labyrinthe, interpolation lineaire (forme bornee a 0..1)."""
     s = min(max(float(shape), 0.0), 1.0)
     return (SPOTS[0] + (MAZE[0] - SPOTS[0]) * s, SPOTS[1] + (MAZE[1] - SPOTS[1]) * s) if 0.0 < s < 1.0 else (SPOTS if s == 0.0 else MAZE)
+
+
+def shape_feed_kill(s: float) -> tuple[float, float]:
+    """(F, K) sur l'axe interne 0..2 : 0 = points, 1 = lignes, 2 = taches (lineaire par morceaux, borne). Sur 0..1 : exactement feed_kill."""
+    s = min(max(float(s), 0.0), 2.0)
+    if s <= 1.0:
+        return feed_kill(s)
+    if s == 2.0:
+        return BLOB
+    t = s - 1.0
+    return (MAZE[0] + (BLOB[0] - MAZE[0]) * t, MAZE[1] + (BLOB[1] - MAZE[1]) * t)
+
+
+def orbit_size(sym: str, branches: int) -> int:
+    """Nombre de copies d'un germe pour une symetrie (branches de la rotation bornees a 2..8)."""
+    if sym == "rot":
+        return min(max(int(branches), 2), 8)
+    return {"mirror_lr": 2, "mirror_tb": 2, "quad": 4}.get(sym, 1)
+
+
+def base_seed_count(sym: str, branches: int) -> int:
+    """Germes de base de l'etat initial : ~SEED_COUNT au total une fois repetes en orbite."""
+    return max(1, round(SEED_COUNT / orbit_size(sym, branches)))
+
+
+def _orbit(x: float, y: float, sym: str, branches: int, aspect: float) -> list[tuple[float, float]]:
+    if sym == "mirror_lr":
+        return [(x, y), (1.0 - x, y)]
+    if sym == "mirror_tb":
+        return [(x, y), (x, 1.0 - y)]
+    if sym == "quad":
+        return [(x, y), (1.0 - x, y), (x, 1.0 - y), (1.0 - x, 1.0 - y)]
+    if sym == "rot":
+        n = orbit_size(sym, branches)
+        dx, dy = (x - 0.5) * aspect, y - 0.5                 # coordonnees isotropes : rotation bien ronde a l'ecran
+        out = []
+        for i in range(n):
+            a = 2.0 * math.pi * i / n
+            ca, sa = math.cos(a), math.sin(a)
+            out.append((0.5 + (dx * ca - dy * sa) / aspect, 0.5 + dx * sa + dy * ca))
+        return out
+    return [(x, y)]
+
+
+def colonize(points, sym: str, branches: int, free: float, aspect: float, salt: int) -> list[tuple[float, float, float]]:
+    """Germes (x, y, rayon) : chaque point repete en orbite selon la symetrie ; la Liberte decale position et rayon de chaque copie
+    (deterministe pour `salt`). Sans symetrie, les points sont rendus tels quels avec le rayon par defaut (Liberte sans effet)."""
+    if sym not in SYM_MODES[1:]:
+        return [(x, y, SEED_RADIUS) for x, y in points]
+    free = min(max(float(free), 0.0), 1.0)
+    rng = random.Random(salt)
+    out = []
+    for x, y in points:
+        for ox, oy in _orbit(x, y, sym, branches, aspect):
+            jx, jy, jr = (rng.uniform(-1.0, 1.0) for _ in range(3))
+            if free > 0.0:
+                ox += FREE_JITTER * free * jx / aspect
+                oy += FREE_JITTER * free * jy
+            out.append((ox % 1.0, oy % 1.0, SEED_RADIUS * (1.0 + 0.3 * free * jr)))
+    return out
 
 
 def grid_size(scale: float) -> tuple[int, int]:

@@ -8715,6 +8715,28 @@ def check_reaction_pure() -> None:
           "pas par image: 600 par seconde, reste garde, vitesse 0 = fige", str((n, acc)))
     n, acc = rc.steps_for(0.0, 0.1, 4.0, 1.0)
     check(n == 24 and 0 <= acc < 1, "pas par image: plafonnes a 24, l'exces est jete", str((n, acc)))
+    check(rc.shape_feed_kill(0) == rc.SPOTS and rc.shape_feed_kill(1) == rc.MAZE and rc.shape_feed_kill(2) == rc.BLOB
+          and rc.shape_feed_kill(5) == rc.BLOB and rc.shape_feed_kill(-1) == rc.SPOTS
+          and all(rc.shape_feed_kill(s) == rc.feed_kill(s) for s in (0.0, 0.25, 0.6, 1.0)),
+          "forme 0..2 : points, lignes, taches ; identique a feed_kill sur 0..1")
+    mid = rc.shape_feed_kill(1.5)
+    check(all(abs(a - (b + c) / 2) < 1e-12 for a, b, c in zip(mid, rc.MAZE, rc.BLOB)), "forme 1,5 : milieu lignes / taches")
+    check([rc.orbit_size(s, 6) for s in rc.SYM_MODES] == [1, 2, 2, 4, 6] and rc.orbit_size("rot", 20) == 8 and rc.orbit_size("rot", 1) == 2,
+          "taille des orbites, branches bornees 2..8")
+    pts = rc.initial_seeds(3, 10)
+    check(rc.colonize(pts, "none", 4, 0.9, 16 / 9, 1) == [(x, y, rc.SEED_RADIUS) for x, y in pts], "sans symetrie : germes inchanges, liberte sans effet")
+    m = rc.colonize([(0.2, 0.3)], "mirror_lr", 4, 0.0, 16 / 9, 1)
+    check(len(m) == 2 and abs(m[1][0] - 0.8) < 1e-9 and abs(m[1][1] - 0.3) < 1e-9, "miroir gauche-droite exact a liberte 0")
+    q = rc.colonize([(0.2, 0.3)], "quad", 4, 0.0, 16 / 9, 1)
+    check(sorted((round(x, 6), round(y, 6)) for x, y, _ in q) == [(0.2, 0.3), (0.2, 0.7), (0.8, 0.3), (0.8, 0.7)], "quatre quadrants exacts")
+    r = rc.colonize([(0.7, 0.5)], "rot", 4, 0.0, 16 / 9, 1)
+    dist = [((x - 0.5) * 16 / 9) ** 2 + (y - 0.5) ** 2 for x, y, _ in r]
+    check(len(r) == 4 and max(dist) - min(dist) < 1e-9, "rotation : copies a egale distance du centre (coordonnees isotropes)")
+    j1, j2 = rc.colonize(pts, "quad", 4, 0.8, 16 / 9, 5), rc.colonize(pts, "quad", 4, 0.8, 16 / 9, 5)
+    check(j1 == j2 and j1 != rc.colonize(pts, "quad", 4, 0.0, 16 / 9, 5)
+          and all(0 <= x < 1 and 0 <= y < 1 and r_ > 0 for x, y, r_ in j1), "liberte : decalage deterministe, dans le cadre")
+    check(rc.base_seed_count("none", 4) == 40 and rc.base_seed_count("quad", 4) == 10 and rc.base_seed_count("rot", 8) == 5,
+          "germes de base reduits selon l'orbite (~40 au total)")
 
 
 def check_foudre_pure() -> None:
