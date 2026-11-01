@@ -102,7 +102,8 @@ class ReactionDiffusion:
         return self._read()[1]
 
     def step(self, n: int, shape: float, seeds=()) -> None:
-        """`n` pas Gray-Scott ; les germes (au plus 4, positions normalisees origine haut gauche) ne sont poses qu'au premier pas."""
+        """`n` pas Gray-Scott a la forme `shape` (axe 0..2 : points, lignes, taches) ; les germes (au plus 4, positions normalisees
+        origine haut gauche) ne sont poses qu'au premier pas."""
         if n <= 0 or not self.tex:
             return
         prev = self.ctx.fbo
@@ -111,7 +112,7 @@ class ReactionDiffusion:
         prog["u_state"].value = 0
         prog["u_texel"].value = (1.0 / w, 1.0 / h)
         prog["u_grid"].value = (float(w), float(h))
-        prog["u_fk"].value = rc.feed_kill(shape)
+        prog["u_fk"].value = rc.shape_feed_kill(shape)
         seeds = list(seeds)[:4]
         flat = [(x, y, rc.SEED_RADIUS) for x, y in seeds] + [(0.0, 0.0, 0.0)] * (4 - len(seeds))
         if "u_seeds" in prog:

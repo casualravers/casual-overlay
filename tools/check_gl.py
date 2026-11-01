@@ -8336,6 +8336,12 @@ def check_reaction_sim() -> None:
     _l, maze = rd_components(sim(1.0, 2000).read_v() > 0.25)
     check(np.mean(maze) > 3 * np.mean(sizes), "forme 1 : les taches se soudent en lignes (composantes bien plus grandes)",
           f"aire moyenne {np.mean(maze):.0f} contre {np.mean(sizes):.0f}")
+    blobs = sim(2.0, 6000).read_v() > 0.25
+    _lb, bsizes = rd_components(blobs)
+    check(0.45 <= blobs.mean() <= 0.85 and np.mean(bsizes) > 5 * np.mean(maze), "forme 2 : grosses taches pleines, sans tout envahir",
+          f"couverture {blobs.mean():.2f}, aire moyenne {np.mean(bsizes):.0f}")
+    path = {s: float((sim(s, 3000).read_v() > 0.25).mean()) for s in (1.2, 1.4, 1.6, 1.8)}
+    check(all(0.05 < x < 0.9 for x in path.values()), "chemin lignes -> taches vivant a chaque etape", str(path))
     still_alive = {}
     for s in (0.0, 0.6, 1.0):                    # le motif vit en continu : il ne se fige pas en un point fixe (piege du demi-flottant)
         r_ = sim(s, 10000)

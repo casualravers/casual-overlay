@@ -22,7 +22,11 @@ DEAD_LEVEL = 0.002              # moyenne de V sous laquelle le motif est consid
 WATCH_S = 2.0                   # periode du garde-fou anti-extinction
 
 # Zones de formes et symetries de colonisation (docs/plans/2026-11-01-labyrinthe-evolution-design.md).
-BLOB = (0.0250, 0.0550)         # (F, K) : grosses taches pleines (provisoire : fixe par balayage, tools/rd_sweep.py)
+# (F, K) : grosses plages pleines percees de trous (une seule masse connexe, ~50 % de l'image). Trouve par balayage (tools/rd_sweep.py,
+# RG32F, 6000 pas) : couverture 0,49, motif toujours actif, chemin lignes -> taches vivant ; voisins sains de tous cotes (0,048 ; 0,060,
+# plus proche des 65 % vises, n'est qu'a 0,001 en K de l'envahissement total : ecarte). La bande de transition est etroite : au-dessus de
+# F 0,04, K 0,058 ou moins remplit tout l'ecran.
+BLOB = (0.0440, 0.0600)
 SYM_MODES = ("none", "mirror_lr", "mirror_tb", "quad", "rot")
 ZONE_CELLS = (5, 3)             # reseau periodique du bruit des zones, en cellules sur la grille (~un tiers de la hauteur)
 ZONE_SPEED = 0.08               # cycles de derive des zones par seconde a bg_rd_drift = 1
