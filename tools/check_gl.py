@@ -622,12 +622,19 @@ def check_gui() -> None:
                         x.set(0.4)
             root.update_idletasks()
             out["rd_mix_written"] = params["bg_rd_mix"]
+            def rd_states(label):                         # ligne cherchee DANS rd_box (dans pattern_box, la ligne serait tout le bloc)
+                return {str(x.cget("state")) for w in gg.row_of_label(c["rd_box"], label, panels=False)
+                        for x in gg.leaves(w) if x.winfo_class() in ("Scale", "Entry", "Radiobutton")}
+
+            c["synced"]["bg_rd_sym"].set("none")
+            root.update_idletasks()
+            out["rd_others_none"] = {lb: rd_states(lb) for lb in ("Variete", "Symetrie", "Forme")}
             c["synced"]["bg_rd_sym"].set("mirror_lr")
             root.update_idletasks()
-            out["rd_branch_mirror"] = row_states("Branches")
+            out["rd_branch_mirror"] = rd_states("Branches")
             c["synced"]["bg_rd_sym"].set("rot")
             root.update_idletasks()
-            out["rd_branch_rot"] = row_states("Branches")
+            out["rd_branch_rot"] = rd_states("Branches")
             out["rd_sym_written"] = params["bg_rd_sym"]
             c["synced"]["bg_rd_sym"].set("none")
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
@@ -1512,8 +1519,10 @@ def check_gui() -> None:
           and out.get("rd_sym_written") == "rot",
           "palette labyrinthe: variete, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
           str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"))))
-    check(out.get("rd_branch_mirror") == off and out.get("rd_branch_rot") == on,
-          "palette labyrinthe: Branches grise hors rotation", str((out.get("rd_branch_mirror"), out.get("rd_branch_rot"))))
+    check(out.get("rd_branch_mirror") == off and out.get("rd_branch_rot") == on
+          and all(v == on for v in (out.get("rd_others_none") or {"x": off}).values()),
+          "palette labyrinthe: Branches grise hors rotation, et lui seul (variete, symetrie, forme restent actives)",
+          str((out.get("rd_branch_mirror"), out.get("rd_branch_rot"), out.get("rd_others_none"))))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))

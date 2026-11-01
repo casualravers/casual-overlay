@@ -1412,7 +1412,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     gates.add(pal_rows("Teinte", "Vitesse", "Reaction a l'audio"), lambda: palette_var.get() != "test")
     gates.add(pal_rows("Taille des carreaux", "Contraste du damier", "Cadence du damier"), lambda: palette_var.get() in ("classic", "duo"))
     rd_sym_var = synced["bg_rd_sym"]
-    gates.add(pal_rows("Branches"), lambda: rd_sym_var.get() == "rot")
+    # cherche dans rd_box : dans pattern_box, la ligne de Branches serait rd_box entier (tout le bloc grise, symetrie comprise)
+    gates.add(gui_gates.row_of_label(rd_box, "Branches", panels=False), lambda: rd_sym_var.get() == "rot")
     for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
