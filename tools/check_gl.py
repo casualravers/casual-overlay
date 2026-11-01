@@ -8461,6 +8461,58 @@ def check_rd_zones() -> None:
     check(0.05 < gc < 0.9, "zones : taille du motif changee avec des zones actives, motif toujours vivant", f"couverture {gc:.2f}")
 
 
+def check_rd_symmetry() -> None:
+    print("Reaction-diffusion : symetries de colonisation (germes et zones, liberte)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+
+    def sim(zone, steps=3000, shape=0.6):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(1.0)
+        r.reset(0, zone)
+        for _ in range(steps // 20):
+            left = r.step(20, shape, (), zone)
+            while left:
+                left = r.step(1, shape, left, zone)
+        return r.read_v()
+
+    def corr(a, b):
+        return float(np.corrcoef(a.ravel(), b.ravel())[0, 1])
+
+    def spread(v, b=24):
+        """Repartition du motif : part de V > 0,25 par bloc de b x b cellules (ou sont les points, les lignes, les taches)."""
+        m = (v > 0.25).astype(float)
+        h, w = m.shape
+        return m[:h // b * b, :w // b * b].reshape(h // b, b, w // b, b).mean(axis=(1, 3))
+
+    # La symetrie porte sur la COLONISATION (repartition des zones), pas sur les pixels : le motif lui-meme se libere au fil du temps.
+    lo = sim(rc.Zone(mix=0.9, sym="mirror_lr", free=0.1), 6000, 1.0)
+    hi = sim(rc.Zone(mix=0.9, sym="mirror_lr", free=0.9), 6000, 1.0)
+    none_ = sim(rc.Zone(mix=0.9, sym="none", free=0.1), 6000, 1.0)
+    s_lo, s_hi, s_none = (corr(spread(v), spread(v)[:, ::-1]) for v in (lo, hi, none_))
+    check(s_lo > 0.7 and s_none < 0.35 and s_hi < s_lo - 0.15,
+          "symetrie : repartition des zones en miroir a liberte faible, qui se defait avec la liberte ; aucune sans symetrie",
+          f"miroir de la repartition {s_lo:.2f} (liberte 0,1) / {s_hi:.2f} (0,9) / {s_none:.2f} (aucune)")
+    check(corr(lo, lo[:, ::-1]) < 0.999, "symetrie : le motif lui-meme n'est jamais strictement en miroir (liberte > 0)",
+          f"miroir des pixels {corr(lo, lo[:, ::-1]):.3f}")
+    strict = sim(rc.Zone(mix=0.9, sym="mirror_lr", free=0.0), 2000, 1.0)
+    check(corr(strict, strict[:, ::-1]) > 0.999, "symetrie : liberte 0 = miroir parfait (calcul deterministe et symetrique)",
+          f"{corr(strict, strict[:, ::-1]):.4f}")
+    plain = sim(None, 1000)
+    check(np.array_equal(plain, sim(rc.Zone(mix=0.0, sym="none", free=0.9), 1000)),
+          "symetrie aucune + variete 0 : simulation identique a l'origine (liberte sans effet)")
+    qd = sim(rc.Zone(mix=0.6, sym="quad", free=0.1))
+    check(corr(qd, qd[::-1, :]) > 0.5 and corr(qd, qd[:, ::-1]) > 0.5, "symetrie quatre quadrants : miroir horizontal et vertical",
+          f"{corr(qd, qd[::-1, :]):.3f} / {corr(qd, qd[:, ::-1]):.3f}")
+
+
 def check_bg_labyrinthe() -> None:
     print("Fond genere : palette labyrinthe (reaction-diffusion en trois couches)")
     try:
@@ -8518,6 +8570,17 @@ def check_bg_labyrinthe() -> None:
     zt = rz0._rd_zone_t
     _rz0, z2 = run(rr=rz0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_rd_mix=0.8)
     check(abs(z2 - z1).max() == 0 and rz0._rd_zone_t == zt, "labyrinthe: tempo a 0 = zones figees elles aussi (derive arretee)")
+    rs0, _ = run(bg_rd_sym="none", bg_rd_mix=0.6)
+    resets = []
+    real_reset = rs0.rd.reset
+    rs0.rd.reset = lambda *a, **k: (resets.append(a), real_reset(*a, **k))
+    run(rr=rs0, frames=20, bg_rd_sym="mirror_lr", bg_rd_mix=0.6)
+    rs0.rd.reset = real_reset
+    check(resets == [], "labyrinthe: changer de symetrie a chaud ne reinitialise pas la simulation (pas de saut d'image)", str(len(resets)))
+    rb8, _ = run(frames=1, tempo=0.0, bg_react=1.0, bg_rd_sym="rot", bg_rd_branches=8)
+    run(rr=rb8, frames=1, state=dict(quiet, beats=50), tempo=0.0, bg_react=1.0, bg_rd_sym="rot", bg_rd_branches=8)
+    check(0 < len(rb8._rd_pending) <= 32, "labyrinthe: une rafale de kicks en rotation a 8 branches garde une file de germes bornee",
+          str(len(rb8._rd_pending)))
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0)
     _r, calm = run(state=quiet, bg_react=0.0)
     _r, noisy = run(state=lambda i: dict(loud, beats=i // 5), bg_react=0.0)
@@ -8829,6 +8892,9 @@ def check_reaction_pure() -> None:
           and all(0 <= x < 1 and 0 <= y < 1 and r_ > 0 for x, y, r_ in j1), "liberte : decalage deterministe, dans le cadre")
     check(rc.base_seed_count("none", 4) == 40 and rc.base_seed_count("quad", 4) == 10 and rc.base_seed_count("rot", 8) == 5,
           "germes de base reduits selon l'orbite (~40 au total)")
+    qd = rc.queue_seeds([1] * 30, [2] * 10)
+    check(len(qd) == rc.MAX_PENDING_SEEDS == 32 and qd[-10:] == [2] * 10 and rc.queue_seeds([], [3]) == [3],
+          "file des germes : bornee a 32, les plus recents gardes")
 
 
 def check_foudre_pure() -> None:
@@ -9874,6 +9940,7 @@ def main() -> None:
     check_textcycle()
     check_reaction_sim()
     check_rd_zones()
+    check_rd_symmetry()
     check_bg_labyrinthe()
     check_foudre_render()
     check_cells()

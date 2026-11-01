@@ -114,6 +114,11 @@ def colonize(points, sym: str, branches: int, free: float, aspect: float, salt: 
     return out
 
 
+def queue_seeds(pending: list, new: list) -> list:
+    """File des germes en attente (orbites : plus de 4 par kick) : ajout a la fin, au plus MAX_PENDING_SEEDS, les plus recents gardes."""
+    return (list(pending) + list(new))[-MAX_PENDING_SEEDS:]
+
+
 def grid_size(scale: float) -> tuple[int, int]:
     """Taille de la grille pour une echelle (0,5..2) : plus grande echelle = grille plus petite = motif plus gros a l'ecran."""
     s = min(max(float(scale), 0.5), 2.0)

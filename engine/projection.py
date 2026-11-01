@@ -544,6 +544,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             renderer.draw(ctx.screen, size, state, params, now - t0)
         s.status["sources"] = renderer.sources_now                                    # voyants de l'interface : sources par couche, dernier eclair
         s.status["strobe_info"] = renderer.strobe_info
+        s.status["rd"] = renderer.rd_note                                              # palette labyrinthe : liberte sans effet en 16 bits
         s.status["foudre"] = renderer.bolt.stats()                      # voyant du mode Foudre : segments, pointes, pouls
         s.status["mosaic"] = len(renderer.mosaic_tiles)                               # voyant de l'interface : doodles disponibles pour la mosaique
         if args.screenshot and not shot_done and now - t0 >= args.max_seconds - 0.2:
