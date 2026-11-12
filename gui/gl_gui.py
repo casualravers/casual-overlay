@@ -1164,6 +1164,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         holder = compact_scale(z.parent, lo, hi, step, var, length)
         scale = holder.scale
         holder.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        if tooltip:                                 # l'info-bulle suit aussi le curseur, pas seulement son libelle
+            Tooltip(holder, tooltip)
         if auto_key:
             add_auto(z, r, auto_key, var)
         return scale
@@ -1185,6 +1187,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         frame.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         for text, value in choices:
             tk.Radiobutton(frame, text=text, variable=var, value=value).pack(side="left")
+        if tooltip:
+            Tooltip(frame, tooltip)
         return var
 
     def color_row(z: Zone, label: str, key: str, tooltip: str | None = None,

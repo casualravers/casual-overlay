@@ -420,7 +420,12 @@ les basses).
   zone qui se libere est recolonisee par les bords et les germes des kicks (ceux tombes dans un vide meurent). `u_zoned` (rd_step.frag) = carte lue
   si mix > 0 ou void > 0 ; a 0 partout : bit pour bit l'ancien comportement. **Valeurs neutres** (mix 0, layers 0, sym none, void 0) = simulation et
   image identiques bit pour bit a la version d'avant. Automations actives par defaut : forme, ecart, variete, epaisseur, liberte, vide (0,15 a 0,6,
-  periode 107 s ; pas taille, derive, symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0.
+  periode 107 s ; pas derive ni symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0.
+  **Taille du motif** (`bg_rd_scale`, 0,3 a 2) : automatisable (courbe 0,6 a 1,6, periode 127 s, **coupee par defaut** : chaque changement de
+  taille floute un peu le motif). `ReactionDiffusion.ensure(scale, now)` recopie l'etat sur le GPU (passe de recopie bilineaire, ~0,1 ms ; l'ancien
+  numpy coutait ~12 ms) et, avec `now`, ne change la taille de la grille qu'une fois par `RESIZE_MIN_S` (0,4 s). Echelle 0,3 = grille de 1280 x 720 :
+  les pas par image sont plafonnes par cellules x pas (`MAX_CELL_STEPS` 5 millions, mesure a 0,85 ns par cellule et par pas : ~4 ms), donc ~5 pas par
+  image a 0,3 (le motif y evolue deux fois moins vite), 15 a 0,5, 24 a 1. `core.reaction.step_load` entre dans l'estimation de la securite GPU.
   `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
   `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, relance a la symetrie, rafale, epaisseur).
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**

@@ -613,6 +613,19 @@ def check_gui() -> None:
                 if w.winfo_class() == "Scale" and float(w.cget("to")) == 2.0:
                     w.set(1.5)
             root.update_idletasks()
+            rd_labels = [w for w in gg.leaves(c["rd_box"]) if w.winfo_class() == "Label" and w.bind("<Enter>")]
+            shown = 0
+            for w in rd_labels:
+                w.event_generate("<Enter>")
+                tips_here = [t for t in w.winfo_children() if t.winfo_class() == "Toplevel"]
+                shown += sum(1 for t in tips_here if t.winfo_ismapped())
+                w.event_generate("<Leave>")
+            def _walk(w):
+                yield w
+                for ch in w.winfo_children():
+                    yield from _walk(ch)
+            rd_ctrl = [w for w in _walk(c["rd_box"]) if w.winfo_class() == "Frame" and w.bind("<Enter>")]
+            out["rd_tips"] = (len(rd_labels), shown, [], len(rd_ctrl))
             out["rd_written"] = params["bg_rd_scale"]
             out["rd_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False))
                               for lb in ("Variete", "Vide", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
@@ -1514,7 +1527,10 @@ def check_gui() -> None:
     check(all(gl_.get(lb) == on for lb in ("Teinte", "Vitesse", "Reaction a l'audio"))
           and all(gl_.get(lb) == off for lb in ("Couleurs 1 / 2", "Angle du degrade", "Taille des carreaux", "Contraste du damier", "Cadence du damier")),
           "palette labyrinthe: teinte, vitesse et reaction actives, couleurs du duo, angle et damier grises", str(gl_))
-    check(out.get("rd_written") == 1.5, "palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
+    n_tip, n_shown, _unused, n_ctrl = out.get("rd_tips", (0, 0, [], 0))
+    check(n_tip >= 9 and n_shown == n_tip, "palette labyrinthe: chaque ligne a une info-bulle qui s'affiche au survol du libelle", str(out.get("rd_tips")))
+    check(n_ctrl >= 9, "palette labyrinthe: les curseurs et choix portent aussi l'info-bulle (survol du controle)", str(out.get("rd_tips")))
+    check(out.get("rd_written") == 1.5,"palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
     check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 7 and out.get("rd_mix_written") == 0.4
           and out.get("rd_sym_written") == "rot",
           "palette labyrinthe: variete, vide, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
@@ -6499,10 +6515,12 @@ def check_automation() -> None:
     check(len(set(periods)) == len(periods), "periodes des automations actives toutes differentes (pas de repetition)")
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
-    check(len(specs) == 29 and all(k in specs and default[k]["enabled"] for k in rd_auto)
-          and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto)
-          and not any(k in specs for k in ("bg_rd_scale", "bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
-          "labyrinthe: 6 automations actives par defaut, plages dans celles des reglages, ni taille, ni derive, ni symetrie", str(len(specs)))
+    check(len(specs) == 30 and all(k in specs and default[k]["enabled"] for k in rd_auto)
+          and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto + ("bg_rd_scale",))
+          and "bg_rd_scale" in specs and not default["bg_rd_scale"]["enabled"]
+          and not any(k in specs for k in ("bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
+          "labyrinthe: 6 automations actives par defaut + la taille du motif (coupee par defaut), plages dans celles des reglages, ni derive ni symetrie",
+          str(len(specs)))
 
     def fresh():
         p = copy.deepcopy(gl.DEFAULT_PARAMS)
@@ -8431,6 +8449,24 @@ def check_reaction_sim() -> None:
     gv = grown.read_v()
     check(gv.shape == (rc.grid_size(1.5)[1], rc.grid_size(1.5)[0]) and grown.seed == seed_before and 0.05 < (gv > 0.25).mean() < 0.7,
           "taille du motif changee : etat recopie (pas reinitialise), motif toujours vivant", str((gv.shape, (gv > 0.25).mean())))
+    fine = sim(0.6, 1000)
+    v_a = fine.read_v().copy()
+    fine.ensure(0.5, 10.0)
+    v_b = fine.read_v()
+    check(v_b.shape == (432, 768) and abs(float(v_b.mean()) - float(v_a.mean())) < 0.02 and float(np.abs(v_b[::2, ::2] - v_a).mean()) < 0.05,
+          "taille du motif doublee (recopie sur le GPU) : meme motif, grille 768 x 432",
+          str((v_b.shape, float(v_b.mean()), float(v_a.mean()), float(np.abs(v_b[::2, ::2] - v_a).mean()))))
+    fine.step(5, 0.6)
+    fine.ensure(1.0, 10.1)                                   # trop tot apres le dernier changement : la grille ne bouge pas
+    held = fine.size
+    fine.ensure(1.0, 10.1 + rc.RESIZE_MIN_S + 0.01)
+    check(held == (768, 432) and fine.size == (384, 216) and fine.read_v().shape == (216, 384),
+          "echelle automatisee : un seul changement de taille de grille par RESIZE_MIN_S", str((held, fine.size)))
+    thin = sim(0.6, 200)
+    thin.ensure(0.3)
+    thin.step(3, 0.6)
+    check(thin.size == (1280, 720) and thin.read_v().shape == (720, 1280) and 0.0 < float(thin.read_v().mean()) < 0.6,
+          "echelle 0,3 : grille 1280 x 720, simulation vivante", str((thin.size, float(thin.read_v().mean()))))
     dead = sim(0.6, 200)
     dead.write(np.ones((216, 384), np.float32), np.zeros((216, 384), np.float32))
     first, second = dead.watch(10.0), dead.watch(12.1)
@@ -8941,6 +8977,16 @@ def check_reaction_pure() -> None:
           "forme: taches a 0, labyrinthe a 1, bornee, interpolee")
     check(rc.grid_size(1) == (384, 216) and rc.grid_size(2) == (192, 108) and rc.grid_size(9) == (192, 108) and rc.grid_size(0.5) == (768, 432),
           "grille: fixe, independante de la fenetre, bornee")
+    check(rc.grid_size(0.3) == (1280, 720) and rc.grid_size(0.1) == (1280, 720) and rc.SCALE_MIN == 0.3,
+          "grille: l'echelle descend jusqu'a 0,3 (1280 x 720), bornee")
+    n_fine, _ = rc.steps_for(0.0, 0.1, 4.0, 1.0, 1280 * 720)
+    n_mid, _ = rc.steps_for(0.0, 0.1, 4.0, 1.0, 768 * 432)
+    n_base, _ = rc.steps_for(0.0, 0.1, 4.0, 1.0, 384 * 216)
+    check(n_fine == 5 and n_mid == 15 and n_base == 24 and rc.max_steps(10 ** 9) == 1,
+          "pas par image: une grille fine en fait moins (cellules x pas plafonnes), jamais moins de 1", str((n_fine, n_mid, n_base)))
+    check(rc.step_load(1.0) == 1.0 and 3.5 < rc.step_load(0.5) < 4.5 and rc.step_load(0.3) > rc.step_load(0.5) > rc.step_load(1.0)
+          and rc.step_load(0.3) < 6.0, "charge de la simulation: 1 a l'echelle 1, croit en dessous, plafonnee par les pas",
+          str((rc.step_load(1.0), rc.step_load(0.5), rc.step_load(0.3))))
     s1 = rc.initial_seeds(1)
     check(s1 == rc.initial_seeds(1) and s1 != rc.initial_seeds(2) and len(s1) == 40 and all(0 <= x < 1 and 0 <= y < 1 for x, y in s1),
           "germes initiaux: 40, deterministes, dans le cadre")

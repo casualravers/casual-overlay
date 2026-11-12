@@ -16,6 +16,12 @@ MAZE = (0.0290, 0.0570)         # (F, K) : taches soudees en lignes sinueuses (l
 BASE_GRID = (384, 216)          # grille de simulation a l'echelle 1 (independante de la fenetre)
 STEPS_PER_S = 600.0             # pas de simulation par seconde a vitesse 1
 MAX_STEPS = 24                  # plafond par image (au-dela, l'exces est jete : pas de retard qui s'accumule)
+SCALE_MIN, SCALE_MAX = 0.3, 2.0     # taille du motif (grille de 1280 x 720 a 0,3 : lignes tres fines)
+# Cellules x pas au plus par image : une grille fine (1280 x 720 = 11 fois plus de cellules qu'a l'echelle 1) ne peut pas faire autant de
+# pas par image. Mesure (Radeon integree) : 0,85 ns par cellule et par pas, soit ~4,2 ms a 5 millions ; a l'echelle 0,3 la simulation tourne
+# alors a ~5 pas par image (300 / s au lieu de 600 : le motif evolue deux fois moins vite), a l'echelle 0,5 a 10 pas (inchange).
+MAX_CELL_STEPS = 5_000_000
+RESIZE_MIN_S = 0.4              # echelle automatisee : au plus un changement de taille de la grille par ce delai
 SEED_COUNT = 40                 # germes de l'etat initial
 SEED_RADIUS = 3.0               # rayon d'un germe, en cellules
 KICK_SEEDS = 3                  # germes semes par kick
@@ -139,9 +145,21 @@ def queue_seeds(pending: list, new: list) -> list:
 
 
 def grid_size(scale: float) -> tuple[int, int]:
-    """Taille de la grille pour une echelle (0,5..2) : plus grande echelle = grille plus petite = motif plus gros a l'ecran."""
-    s = min(max(float(scale), 0.5), 2.0)
+    """Taille de la grille pour une echelle (0,3..2) : plus grande echelle = grille plus petite = motif plus gros a l'ecran."""
+    s = min(max(float(scale), SCALE_MIN), SCALE_MAX)
     return round(BASE_GRID[0] / s), round(BASE_GRID[1] / s)
+
+
+def step_load(scale: float) -> float:
+    """Charge GPU de la simulation a 60 images/s rapportee a l'echelle 1 (10 pas sur 384 x 216) : 1 a l'echelle 1, ~4 a 0,5, ~5 a 0,3
+    (les pas par image sont plafonnes par MAX_CELL_STEPS)."""
+    w, h = grid_size(scale)
+    return min(10, max_steps(w * h)) * w * h / (10.0 * BASE_GRID[0] * BASE_GRID[1])
+
+
+def max_steps(cells: int) -> int:
+    """Pas par image au plus pour une grille de `cells` cellules (au moins 1, au plus MAX_STEPS)."""
+    return max(1, min(MAX_STEPS, MAX_CELL_STEPS // max(int(cells), 1)))
 
 
 def initial_seeds(seed: int, count: int = SEED_COUNT) -> list[tuple[float, float]]:
@@ -156,8 +174,9 @@ def kick_seeds(kick_index: int, count: int = KICK_SEEDS) -> list[tuple[float, fl
     return [(rng.random(), rng.random()) for _ in range(count)]
 
 
-def steps_for(acc: float, dt: float, speed: float, energy: float) -> tuple[int, float]:
-    """Pas a faire pour cette image et reste de l'accumulateur. `dt` deja multiplie par le master du tempo."""
+def steps_for(acc: float, dt: float, speed: float, energy: float, cells: int | None = None) -> tuple[int, float]:
+    """Pas a faire pour cette image et reste de l'accumulateur. `dt` deja multiplie par le master du tempo ; `cells` = taille de la
+    grille (plafonne les pas d'une grille fine, voir MAX_CELL_STEPS ; None = plafond MAX_STEPS seul)."""
     acc += max(dt, 0.0) * STEPS_PER_S * max(speed, 0.0) * (1.0 + max(energy, 0.0))
     whole = math.floor(acc)
-    return min(whole, MAX_STEPS), acc - whole
+    return min(whole, MAX_STEPS if cells is None else max_steps(cells)), acc - whole

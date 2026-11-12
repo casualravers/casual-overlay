@@ -196,7 +196,7 @@ TABLE: tuple[Param, ...] = (
     _p("bg_sto_invert", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : 1 = echange la couleur des points et celle du fond."),
     _p("bg_sto_rainbow", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : la teinte des points suit le champ (0 = couleur 1 seule)."),
     _p("bg_rd_shape", 0.6, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : 0 = taches qui se repoussent, 1 = lignes sinueuses (labyrinthe)."),
-    _p("bg_rd_scale", 1.0, 0.5, 2.0, scope="bg", doc="Palette labyrinthe : taille du motif (plus grand = lignes et taches plus epaisses)."),
+    _p("bg_rd_scale", 1.0, 0.3, 2.0, scope="bg", doc="Palette labyrinthe : taille du motif (plus grand = lignes et taches plus epaisses)."),
     _p("bg_rd_offset", 0.012, 0.0, 0.05, scope="bg", doc="Palette labyrinthe : ecart entre les trois couches colorees (fraction de la hauteur)."),
     _p("bg_rd_color1", "#ff4a2a", scope="bg", doc="Palette labyrinthe : couleur de la couche 1."),
     _p("bg_rd_color2", "#2f6bff", scope="bg", doc="Palette labyrinthe : couleur de la couche 2."),

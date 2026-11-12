@@ -120,7 +120,7 @@ def install(c):
     rd_box.columnconfigure(2, weight=1)
     rz = Zone(rd_box)
     param_slider(rz, "Forme", "bg_rd_shape", 0.0, 1.0, 0.05, "Taches (0) ou lignes de labyrinthe (1).")
-    param_slider(rz, "Taille du motif", "bg_rd_scale", 0.5, 2.0, 0.05, "Epaisseur des lignes et des taches.")
+    param_slider(rz, "Taille du motif", "bg_rd_scale", 0.3, 2.0, 0.05, "Epaisseur des lignes et des taches.")
     param_slider(rz, "Ecart des couches", "bg_rd_offset", 0.0, 0.05, 0.002, "Decalage entre les 3 couleurs.")
     param_slider(rz, "Variete", "bg_rd_mix", 0.0, 1.0, 0.05, "Points, lignes et taches melanges par zones.")
     param_slider(rz, "Vide", "bg_rd_void", 0.0, 1.0, 0.05, "Zones sans matiere (et zones denses) qui derivent.")

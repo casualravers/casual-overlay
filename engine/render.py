@@ -657,7 +657,7 @@ class Renderer:
         if active:
             if self.rd is None:
                 self.rd = ReactionDiffusion(self.ctx, self.vbo, self.shader_dir)
-            self.rd.ensure(float(p["bg_rd_scale"]))
+            self.rd.ensure(float(p["bg_rd_scale"]), t)
             gw, gh = self.rd.size
             sym, branches, free = str(p["bg_rd_sym"]), int(p["bg_rd_branches"]), float(p["bg_rd_free"])
             zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh,
@@ -684,7 +684,7 @@ class Renderer:
                 # sans symetrie : au plus 4 germes en attente comme avant (comportement d'origine) ; avec : file bornee des orbites
                 self._rd_pending = reaction.queue_seeds(self._rd_pending, new)[-(4 if sym == "none" else reaction.MAX_PENDING_SEEDS):]
             self._rd_beats = beats
-            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass)
+            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass, gw * gh)
             if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes et les zones attendent
                 self._rd_zone_t += dt * reaction.ZONE_SPEED * float(p["bg_rd_drift"])
                 zone = zone._replace(t=self._rd_zone_t)
