@@ -21,6 +21,7 @@ SEED_RADIUS = 3.0               # rayon d'un germe, en cellules
 KICK_SEEDS = 3                  # germes semes par kick
 DEAD_LEVEL = 0.002              # moyenne de V sous laquelle le motif est considere eteint
 WATCH_S = 2.0                   # periode du garde-fou anti-extinction
+RESEED_DELAY_S = 0.4            # symetrie ou branches changees : le motif repart des germes apres ce delai sans nouveau changement
 
 # Zones de formes et symetries de colonisation (docs/plans/2026-11-01-labyrinthe-evolution-design.md).
 # (F, K) : grosses plages pleines percees de trous (une seule masse connexe, ~50 % de l'image). Trouve par balayage (tools/rd_sweep.py,

@@ -409,13 +409,13 @@ les basses).
   x Liberte, deterministes), zones lues aux coordonnees repliees (rotation : repli en miroir dans le secteur, pas de couture) + bruit non replie
   x Liberte, et un faible bruit de V (`FREE_NOISE`, sans effet mesurable : ce sont les germes et les zones qui liberent le motif). **Mesure** : la
   REPARTITION (part de V > 0,25 par bloc) reste en miroir (0,89 a Liberte 0,1 apres 10 s, 0,19 sans symetrie), les pixels se liberent en ~10 s ;
-  Liberte 0 = miroir parfait qui ne se defait jamais (calcul deterministe). Germes en file (`queue_seeds`, 32 au plus, 4 par pas ; 4 sans symetrie
+  Liberte 0 = miroir parfait qui ne se defait jamais (calcul deterministe). **Un motif deja installe ne prend pas la symetrie** (elle ne vit que dans les germes) : changer `bg_rd_sym` (ou `bg_rd_branches` en rotation) relance donc le motif des germes (`Renderer._rd_sig` / `_rd_want`, apres `RESEED_DELAY_S` 0,4 s de stabilite pour qu'un curseur en mouvement ne relance pas a chaque cran) ; variete, liberte, forme, derive et epaisseur (automatisables) ne relancent jamais. Germes en file (`queue_seeds`, 32 au plus, 4 par pas ; 4 sans symetrie
   comme avant). **Epaisseur des couches** (`bg_rd_layers`, `LAYER_SPREAD` 0,05) : seuils 0,20 / 0,25 / 0,30, couche 1 (dessous) epaisse, couche 3
   (dessus) fine : liseres emboites visibles meme sans ecart (V plafonne vers 0,35 : un seuil plus haut fait disparaitre la couche du dessus).
   **Valeurs neutres** (mix 0, layers 0, sym none) = simulation et image identiques bit pour bit a la version d'avant. Automations actives par
   defaut : forme, ecart, variete, epaisseur, liberte (pas taille, derive, symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0.
   `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
-  `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, symetrie a chaud, rafale, epaisseur).
+  `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, relance a la symetrie, rafale, epaisseur).
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
   (`dt * vitesse`), pas calculees par `vitesse * temps` : changer la vitesse dans la GUI ne
   fait jamais sauter le motif.

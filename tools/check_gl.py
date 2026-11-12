@@ -8616,9 +8616,19 @@ def check_bg_labyrinthe() -> None:
     resets = []
     real_reset = rs0.rd.reset
     rs0.rd.reset = lambda *a, **k: (resets.append(a), real_reset(*a, **k))
+    run(rr=rs0, frames=40, bg_rd_sym="none", bg_rd_mix=0.3, bg_rd_free=0.9, bg_rd_shape=0.2, bg_rd_drift=1.0, bg_rd_layers=0.5)
+    check(resets == [], "labyrinthe: variete, liberte, forme, derive, epaisseur (automatisables) ne relancent jamais le motif", str(len(resets)))
+    run(rr=rs0, frames=3, bg_rd_sym="mirror_lr", bg_rd_mix=0.6)
+    check(resets == [], "labyrinthe: une symetrie qui vient de changer attend (un curseur en mouvement ne relance pas a chaque cran)", str(len(resets)))
+    run(rr=rs0, frames=3, bg_rd_sym="quad", bg_rd_mix=0.6)
     run(rr=rs0, frames=20, bg_rd_sym="mirror_lr", bg_rd_mix=0.6)
+    check(len(resets) == 1, "labyrinthe: la symetrie changee puis stable relance le motif une seule fois (sinon elle ne se voyait jamais)", str(len(resets)))
+    run(rr=rs0, frames=20, bg_rd_sym="mirror_lr", bg_rd_branches=7, bg_rd_mix=0.6)
+    check(len(resets) == 1, "labyrinthe: les branches ne comptent qu'en rotation", str(len(resets)))
+    run(rr=rs0, frames=20, bg_rd_sym="rot", bg_rd_branches=7, bg_rd_mix=0.6)
+    run(rr=rs0, frames=20, bg_rd_sym="rot", bg_rd_branches=5, bg_rd_mix=0.6)
+    check(len(resets) == 3, "labyrinthe: en rotation, changer le nombre de branches relance aussi le motif", str(len(resets)))
     rs0.rd.reset = real_reset
-    check(resets == [], "labyrinthe: changer de symetrie a chaud ne reinitialise pas la simulation (pas de saut d'image)", str(len(resets)))
     rb8, _ = run(frames=1, tempo=0.0, bg_react=1.0, bg_rd_sym="rot", bg_rd_branches=8)
     run(rr=rb8, frames=1, state=dict(quiet, beats=50), tempo=0.0, bg_react=1.0, bg_rd_sym="rot", bg_rd_branches=8)
     check(0 < len(rb8._rd_pending) <= 32, "labyrinthe: une rafale de kicks en rotation a 8 branches garde une file de germes bornee",

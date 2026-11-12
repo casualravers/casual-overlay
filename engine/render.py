@@ -263,6 +263,8 @@ class Renderer:
         self._rd_beats: int | None = None          # compteur de kicks deja semes
         self._rd_pending: list = []                # germes des kicks en attente d'un pas (motif fige : tempo ou vitesse a 0)
         self._rd_active = False                    # palette active a l'image precedente
+        self._rd_sig: tuple = ()                   # (symetrie, branches) du motif en place : la symetrie ne vit que dans les germes
+        self._rd_want: tuple | None = None         # (signature voulue, instant) tant qu'elle n'est pas restee stable RESEED_DELAY_S
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
@@ -659,9 +661,20 @@ class Renderer:
             gw, gh = self.rd.size
             sym, branches, free = str(p["bg_rd_sym"]), int(p["bg_rd_branches"]), float(p["bg_rd_free"])
             zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh)
+            sig = (sym, branches if sym == "rot" else 0)
             if not self._rd_active:                    # activation : repart d'un etat seme propre (germes en orbite si symetrie)
                 self.rd.reset(self.rd.seed, zone)
                 self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
+                self._rd_sig, self._rd_want = sig, None
+            elif sig != self._rd_sig:                  # un motif deja installe ne prend pas la symetrie : il repart des germes
+                if self._rd_want is None or self._rd_want[0] != sig:      # (apres un delai : un curseur en mouvement ne relance pas a chaque cran)
+                    self._rd_want = (sig, t)
+                elif t - self._rd_want[1] >= reaction.RESEED_DELAY_S:
+                    self.rd.reset(self.rd.seed, zone)
+                    self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
+                    self._rd_sig, self._rd_want = sig, None
+            else:
+                self._rd_want = None
             bass = react * float(bg_au[0])
             if kicks_on and self._rd_beats is not None:
                 new = []
