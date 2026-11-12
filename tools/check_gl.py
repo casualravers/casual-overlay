@@ -2758,6 +2758,9 @@ def check_latence() -> None:
           "latence: chaque debut de son est associe a sa detection puis a sa premiere image blanche (kick manque = None)", str(rows))
     bound = 3000 if os.environ.get("CI") else 250          # serveur d'integration continue : OpenGL logiciel sur une machine partagee, on ne verifie que « ca marche »
     tries = 3 if os.environ.get("CI") else 1               # une mesure en temps reel sur un serveur partage peut encore rater un kick : trois essais, un vrai defaut les rate tous
+    # Serveur d'integration continue : le rendu logiciel prend le processeur et prive le fil d'analyse, 3 kicks sur 4 peuvent etre manques
+    # (vu sur trois executions de suite, y compris sur une PR sans code) ; on exige alors qu'au moins un kick soit detecte ET montre. En local : un seul manque.
+    max_missed = 3 if os.environ.get("CI") else 1
     tot, res = {}, {"missed": 99}
     for n in range(1, tries + 1):
         try:
@@ -2766,10 +2769,10 @@ def check_latence() -> None:
             check(False, "latence: chaine logicielle mesurable", str(exc))
             return
         tot = res["total"]
-        if tot and res["missed"] <= 1 and 0 < tot["median"] < bound:
+        if tot and res["missed"] <= max_missed and 0 < tot["median"] < bound:
             break
         print(f"  (information) latence, essai {n}/{tries} insuffisant : {tot} manques={res['missed']} lignes={res['rows']}")
-    check(tot and res["missed"] <= 1 and 0 < tot["median"] < bound,
+    check(tot and res["missed"] <= max_missed and 0 < tot["median"] < bound,
           f"latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de {bound} ms",
           f"{tot} manques={res['missed']}")
     print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
