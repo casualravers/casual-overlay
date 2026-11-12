@@ -168,10 +168,29 @@ def check_microphone(sd=None, synthetic: bool = False) -> Check | None:
                      "Branche un micro ou une carte son. Windows : Parametres > Confidentialite > Microphone doit etre "
                      "autorise pour les applications de bureau.")
     try:
-        default = sd.query_devices(kind="input").get("name", "")
+        info = sd.query_devices(kind="input")
+        default = info.get("name", "")
     except Exception:
-        default = ""
-    return Check("Micro", "ok", f"{len(inputs)} entree(s)" + (f", par defaut : {default}" if default else ""))
+        info, default = {}, ""
+    detail = f"{len(inputs)} entree(s)" + (f", par defaut : {default}" if default else "")
+    api = ""
+    try:
+        api = str(sd.query_hostapis(info.get("hostapi"))["name"])
+    except Exception:
+        pass                                                  # pilote qui ne dit rien : pas de remarque sur l'API
+    try:
+        low = float(info.get("default_low_input_latency", 0.0)) * 1000.0
+    except (TypeError, ValueError):
+        low = 0.0
+    if api:
+        detail += f" ({api}" + (f", latence d'entree annoncee ~{low:.0f} ms" if low > 0.0 else "") + ")"
+    if api.upper() == "MME":                                   # tampons de 30 a 100 ms : le visuel arrive en retard sur le son
+        return Check("Micro", "warn", detail + " : pilote MME, tres lent",
+                     "Choisis une entree WASAPI (ou ASIO) avec --audio-device : le pilote MME ajoute 30 a 100 ms de retard.")
+    if "WASAPI" in api.upper() and sys.platform == "win32":
+        return Check("Micro", "ok", detail + " ; si l'image est en retard : coupe les « ameliorations audio » du micro "
+                                            "(Parametres > Son > Proprietes du micro), elles ajoutent du delai")
+    return Check("Micro", "ok", detail)
 
 
 def check_settings_dir(path: Path | None = None) -> Check:

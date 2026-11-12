@@ -8,6 +8,7 @@ import math
 import sys
 import threading
 import time
+from collections import deque
 
 from core.onset import OnsetDetector, WideRise
 from core.phase import PhaseTracker
@@ -44,6 +45,9 @@ HIT_MIN = 0.0003             # energie minimale de la bande aigue pour declarer 
 HIT_REFRACTORY_S = 0.09
 HIT_DECAY_TAU_S = 0.12       # decroissance de l'enveloppe des frappes (plus vive que celle du kick)
 EDGES = ("hit", "bg", "logo")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo
+STAMP_KEEP = 512                  # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 512)
+AGE_FLOOR_S = 3.0                 # fenetre du plancher du retard de capture (le retard stable, sans la gigue du fil d'analyse)
+AGE_SMOOTH_TAU_S = 0.5            # lissage du retard de capture publie
 
 
 def _coef(dt: float, tau: float) -> float:
@@ -168,10 +172,15 @@ class RingBuffer:
         self.total = 0
         self.lock = threading.Lock()
         self.event = threading.Event()
+        self.stamps: deque = deque(maxlen=STAMP_KEEP)       # (echantillons ecrits en tout, instant monotonic du dernier echantillon du bloc)
 
-    def write(self, x) -> None:
+    def write(self, x, t_end: float | None = None) -> None:
+        """`t_end` : instant (time.monotonic) auquel le DERNIER echantillon du bloc a ete capture (le callback audio le deduit de
+        l'horodatage du pilote) ; sans lui, l'instant de l'ecriture."""
         x = np.asarray(x, dtype=np.float32)
         n = len(x)
+        if t_end is None:
+            t_end = time.monotonic()
         if n >= self.size:
             x = x[-self.size:]
             n = self.size
@@ -185,7 +194,21 @@ class RingBuffer:
                 self.buf[:n - k] = x[k:]
             self.pos = end % self.size
             self.total += n
+            self.stamps.append((self.total, t_end))
         self.event.set()
+
+    def time_at(self, index: int, rate: float) -> float | None:
+        """Instant (time.monotonic) de capture de l'echantillon numero `index` (compte depuis le debut : `index` = `total` donne la fin du
+        dernier bloc ecrit). None tant qu'aucun bloc n'est ecrit."""
+        with self.lock:
+            stamps = list(self.stamps)
+        if not stamps:
+            return None
+        for total, t_end in stamps:
+            if total >= index:
+                return t_end - (total - index) / rate
+        total, t_end = stamps[-1]
+        return t_end + (index - total) / rate
 
     def latest(self, n: int):
         out = np.zeros(n, dtype=np.float32)
@@ -317,8 +340,23 @@ def print_audio_devices(file=sys.stdout) -> None:
             print(f"  {i:3d}  [{api}] {d['name']}  ({d['default_samplerate']:.0f} Hz)", file=file)
 
 
+def capture_age(time_info, frames: int, rate: float, max_age_s: float = 1.0) -> float:
+    """Age (secondes) du DERNIER echantillon d'un bloc au moment du callback : horloge du pilote (`currentTime` moins l'instant
+    de capture du premier echantillon, `inputBufferAdcTime`, plus la duree du bloc). Un pilote qui ne renseigne pas ces temps (0, valeurs
+    absurdes, negatives ou absentes) donne 0 : le bloc est alors date a l'instant du callback, comme avant."""
+    try:
+        adc = float(time_info.inputBufferAdcTime)
+        cur = float(time_info.currentTime)
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+    if adc <= 0.0 or cur <= 0.0:
+        return 0.0
+    age = cur - (adc + frames / float(rate))
+    return age if 0.0 <= age <= max_age_s else 0.0
+
+
 class SoundDeviceInput:
-    """Capture sounddevice en callback (mono, blocs courts) vers un RingBuffer."""
+    """Capture sounddevice en callback (mono, blocs courts) vers un RingBuffer ; chaque bloc est date a sa capture."""
 
     def __init__(self, device, ring: RingBuffer, blocksize: int = 512):
         info = sd.query_devices(device, "input")
@@ -333,7 +371,8 @@ class SoundDeviceInput:
     def _callback(self, indata, frames, time_info, status):
         if status:
             self.dropped = getattr(self, "dropped", 0) + 1
-        self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1))
+        now = time.monotonic()
+        self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), now - capture_age(time_info, frames, self.rate))
 
     def start(self):
         self.stream.start()
@@ -362,6 +401,9 @@ class AudioAnalyzer:
         self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
         self.phase = PhaseTracker()             # phases du morceau (silence, ambiance, groove, montee, cassure, pic), nourries ici elles aussi
         self._last_total = 0
+        self._ages: deque = deque()             # (instant du traitement, retard de capture) sur AGE_FLOOR_S : leur plus petit = le retard stable
+        self.audio_age_ms = 0.0                 # age du dernier echantillon analyse quand l'analyse en parle (capture + attente du fil), lisse
+        self.audio_age_floor_ms = 0.0           # idem sans la gigue d'ordonnancement : le retard de capture « de croisiere »
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -371,6 +413,23 @@ class AudioAnalyzer:
     def stop(self):
         self._stop.set()
         self.ring.event.set()
+
+    def _audio_time(self, total: int, rate: float, now: float, dt: float) -> float:
+        """Instant « sans gigue » de la fin de la fenetre analysee : instant de capture + le plus petit retard vu depuis AGE_FLOOR_S.
+        Date les kicks du rythme (BPM, grille) a leur place dans le son, pas a l'heure ou le fil d'analyse a fini de les traiter.
+        Sans horodatage de capture : `now`, comme avant."""
+        t_end = self.ring.time_at(total, rate)
+        if t_end is None:
+            return now
+        age = max(now - t_end, 0.0)
+        ages = self._ages
+        ages.append((now, age))
+        while ages and now - ages[0][0] > AGE_FLOOR_S:
+            ages.popleft()
+        floor = min(a for _t, a in ages)
+        self.audio_age_floor_ms = floor * 1000.0
+        self.audio_age_ms += (age * 1000.0 - self.audio_age_ms) * _coef(dt, AGE_SMOOTH_TAU_S)
+        return t_end + floor
 
     def _run(self):
         while not self._stop.is_set():
@@ -399,8 +458,9 @@ class AudioAnalyzer:
                     self.t_beat = now
                     self.beats += 1
             try:
-                self.rhythm.update(now, levels, beat)
-                self.phase.update(now, levels, beat, self.rhythm.state, self.rhythm.bpm)
+                t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
+                self.rhythm.update(t_audio, levels, beat)
+                self.phase.update(t_audio, levels, beat, self.rhythm.state, self.rhythm.bpm)
             except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
                 pass
 
@@ -413,6 +473,8 @@ class AudioAnalyzer:
             state["hits"] = self.hits
         state["phase"] = self.phase.snapshot()                  # phase du morceau et multiplicateurs lisses (voir core/phase.py)
         state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
+        state["audio_age_ms"] = self.audio_age_ms             # retard de capture + attente du fil d'analyse (0 sans horodatage de capture)
+        state["audio_age_floor_ms"] = self.audio_age_floor_ms
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since
         state["beat"] = math.exp(-since / BEAT_DECAY_TAU_S) if t_beat is not None else 0.0
