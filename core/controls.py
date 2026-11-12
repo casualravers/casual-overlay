@@ -80,7 +80,7 @@ PANIC_RESET = {
     "hue_master": 0.0, "hue_cycle": 0.0, "hue_spectrum": 0.0, "breath_overlay": 0.0, "breath_bg": 0.0,
     "bg_master": 1.0, "overlay_master": 1.0, "react_master": 1.0, "tempo": 1.0, "fx_master": 1.0,
     "holo_on": 0.0, "melt_on": 0.0, "cell_on": 0.0, "mosaic_on": 0.0, "bpm_auto": 0.0, "drop_auto": 0.0,
-    "sync_lead_ms": 0.0,
+    "sync_lead_ms": 0.0, "breath_pulse": 0.0,
 }
 
 

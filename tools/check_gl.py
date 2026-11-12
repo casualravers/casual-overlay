@@ -3085,6 +3085,97 @@ def check_pulse() -> None:
     check(len(steady) >= 15 and min(b - a for a, b in zip(steady, steady[1:])) > 0.9 * P, "avance: une avance enorme est plafonnee (60 % de la periode), toujours un declenchement par kick", f"{len(steady)}")
 
 
+def check_bands_pulse() -> None:
+    """Lot 5 de la spec synchro son / image : enveloppes continues par bande, sources de bande et de pulsation, respiration sur la pulsation."""
+    print("Bandes fines, sources de pulsation et respiration")
+    from core import audio_layers as al
+    from core.pulse import swell
+    from engine import audio as au
+    rate = 48000
+    # --- 8 enveloppes continues : une sinusoide de 60 Hz n'allume que les graves, une de 6 kHz que les aigus ; relachement long aux graves, court aux aigus
+    def run_bands(freq, secs=3.0, amp=0.3, gate_after=None):
+        ex = au.FeatureExtractor(rate)
+        ring = au.RingBuffer()
+        out = []
+        sig = amp * np.sin(2 * np.pi * freq * np.arange(int(rate * (secs + 1.0))) / rate).astype(np.float32)
+        if gate_after is not None:
+            sig[int(gate_after * rate):] = 0.0
+        t = 0.0
+        for i in range(0, len(sig) - 512, 512):
+            ring.write(sig[i:i + 512])
+            t = (i + 512) / rate
+            lv, _ = ex.process(ring.latest(ex.win_size), 512 / rate, t)
+            out.append((t, lv["bands"], lv["band_rise"]))
+        return out
+    low = run_bands(60.0)[-1][1]
+    high = run_bands(6000.0)[-1][1]
+    check(len(low) == 8 and low[1] > 0.5 and max(low[3:]) < 0.05 and high[6] > 0.5 and max(high[:4]) < 0.05,
+          "bandes: 60 Hz allume les graves seulement, 6 kHz les aigus seulement", f"{[round(v, 2) for v in low]} / {[round(v, 2) for v in high]}")
+    rise = [r for _t, _b, r in run_bands(60.0, secs=2.0)]
+    check(max(r[1] for r in rise[:40]) > 0.5 and max(r[1] for r in rise[-20:]) < 0.05, "bandes: la derivee (montee) est forte a l'attaque et nulle en regime etabli",
+          f"{max(r[1] for r in rise[:40]):.2f} -> {max(r[1] for r in rise[-20:]):.3f}")
+    def decay_time(freq, band):                                   # temps pour retomber sous la moitie apres l'arret du son
+        seq = run_bands(freq, secs=3.0, gate_after=1.5)
+        peak = max(b[band] for t, b, _r in seq if t < 1.5)
+        for t, b, _r in seq:
+            if t > 1.6 and b[band] < 0.5 * peak:
+                return t - 1.5
+        return 9.9
+    d_low, d_high = decay_time(40.0, 0), decay_time(6000.0, 6)
+    check(d_low > d_high * 1.5 and d_high < 0.25, "bandes: les graves retombent lentement, les aigus vite (relachements propres a chaque bande)", f"sub {d_low * 1000:.0f} ms, aigus {d_high * 1000:.0f} ms")
+    # --- sources de bande
+    st = {"bass": 0.9, "mid": 0.1, "high": 0.2, "beat": 0.5, "since_beat": 0.3, "bands": [0.8, 0.1, 0.0, 0.4, 0.0, 0.2, 0.0, 0.6]}
+    check(al.layer_levels(st, "sub") == (0.8, 0.0, 0.0, al.NO_KICK) and al.layer_levels(st, "corps") == (0.4, 0.4, 0.0, al.NO_KICK)
+          and al.layer_levels(st, "presence") == (0.2, 0.2, 0.0, al.NO_KICK) and al.layer_levels(st, "air") == (0.6, 0.6, 0.0, al.NO_KICK),
+          "sources: sub / corps / presence / air = enveloppe de la bande (la plus forte de ses bandes), sans attaque")
+    check(al.layer_levels({"bass": 0, "high": 0, "beat": 0, "since_beat": 9}, "corps") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: sans bandes publiees, une source de bande se tait")
+    # --- sources de pulsation
+    sp = {"bass": 0, "high": 0, "beat": 0, "since_beat": 9, "pulse_since": {"pouls": 0.0, "croches": 0.2}}
+    p0, p2 = al.layer_levels(sp, "pouls"), al.layer_levels(sp, "croches")
+    check(abs(p0[2] - 1.0) < 1e-9 and p0[3] == 0.0 and abs(p0[0] - 0.8) < 1e-9 and 0.3 < p2[2] < 0.4 and p2[3] == 0.2,
+          "sources: pouls = enveloppe qui part sur l'evenement et decroit en 200 ms ; depuis l'evenement = 'since'", f"{p0} {p2}")
+    check(al.layer_levels(sp, "mesure") == (0.0, 0.0, 0.0, al.NO_KICK) and al.layer_levels(dict(sp, pulse_since={}), "pouls") == (0.0, 0.0, 0.0, al.NO_KICK),
+          "sources: pulsation perdue ou grille sans evenement = la couche se tait")
+    check(abs(al.layer_levels(dict(sp, react_m=0.5), "pouls")[2] - 0.5) < 1e-9, "sources: le master de reactivite s'applique aussi aux sources de pulsation")
+    check(all(s in al.LABELS for s in al.SOURCES), "sources: chaque source a son libelle")
+    # --- reglages : les nouvelles sources sont des valeurs valides, la respiration est dans la table
+    cp = gl.coerce_params({"src_bg": "croches", "src_logo": "sub", "breath_pulse": 3.0})
+    check(cp.get("src_bg") == "croches" and cp.get("src_logo") == "sub" and cp.get("breath_pulse") == 1.0 and gl.coerce_params({"src_bg": "n'importe quoi"}).get("src_bg") != "n'importe quoi",
+          "reglages: src_bg / src_logo acceptent les sources de bande et de pulsation ; breath_pulse est bornee a 0..1")
+    # --- respiration : courbe douce, sommet sur le temps
+    check(abs(swell(0.0) - 1.0) < 1e-9 and abs(swell(0.5)) < 1e-9 and swell(None) == 0.5 and abs(swell(0.25) - 0.5) < 1e-9,
+          "respiration: sommet sur le temps, creux a mi-chemin, 0,5 sans pulsation")
+    check(abs(swell(0.9, 0.5, 0.05) - 1.0) < 1e-9, "respiration: l'avance decale la courbe (le sommet tombe sur le temps ENTENDU)", f"{swell(0.9, 0.5, 0.05):.3f}")
+    ph = [swell(i / 200.0) for i in range(201)]
+    check(max(abs(b - a) for a, b in zip(ph, ph[1:])) < 0.05, "respiration: courbe douce (jamais de saut)")
+    # --- evenements de pulsation dans l'analyseur : un par temps, deux par temps (croches), un sur quatre (mesure) ; rien sans pulsation
+    P = 60.0 / 124
+    an = au.AudioAnalyzer(au.RingBuffer(), au.FeatureExtractor(rate))
+    an.rhythm.bpm, an.phase.phase = 124.0, "groove"
+    pend = [(k * P + 0.016) for k in range(1, 70)]
+    t, i = 0.0, 0
+    base = None
+    while t < 30.0:
+        kick = False
+        while i < len(pend) and pend[i] <= t:
+            kick, i = True, i + 1
+        an._lead_step(t, kick)
+        if abs(t - 20.0) < 0.006:
+            base = dict(an.pulse_events)
+        t += 0.0107
+    ev = {k: an.pulse_events.get(k, 0) - (base or {}).get(k, 0) for k in al.PULSE_GRIDS}
+    beats = 10.0 / P
+    check(abs(ev["pouls"] - beats) <= 1.5 and abs(ev["croches"] - 2 * beats) <= 2.5 and abs(ev["doubles"] - 4 * beats) <= 4.5 and abs(ev["mesure"] - beats / 4) <= 1.5 and ev["phrase8"] <= 2,
+          "pulsation: 10 s a 124 BPM = ~20 temps, 2 x croches, 4 x doubles, 1 temps sur 4, 1 temps sur 8", str(ev))
+    st_now = an.latest()
+    check(st_now["pulse_since"] != {} and st_now["pulse"]["phase_now"] is not None and 0.0 <= st_now["pulse"]["phase_now"] < 1.0,
+          "pulsation: latest() publie le temps depuis chaque evenement et la phase a l'instant de la lecture")
+    an_off = au.AudioAnalyzer(au.RingBuffer(), au.FeatureExtractor(rate))
+    for k in range(200):
+        an_off._lead_step(k * 0.0107, False)
+    check(an_off.pulse_events == {} and an_off.latest()["pulse_since"] == {}, "pulsation: sans kick ni BPM, aucun evenement (les sources de pulsation se taisent)")
+
+
 def check_latence() -> None:
     print("Mesure de latence audio -> image (tools/mesure_latence.py)")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -6147,7 +6238,8 @@ def check_audio_layers_pure() -> None:
     check(al.layer_levels(st, "kick") == (0.0, 0.0, 0.9, 0.2), "sources: kick = seulement ce qui part des kicks")
     check(al.layer_levels(st, "rien") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: rien = la couche ne reagit plus")
     check(al.layer_levels(st, "n'importe quoi") == al.layer_levels(st, "tout") and al.valid(None) == "tout", "sources: valeur inconnue = tout")
-    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False], "sources: has_kick (auto est resolue avant)")
+    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False] + [False] * (len(al.BAND_SOURCES) + len(al.PULSE_GRIDS)),
+          "sources: has_kick (auto est resolue avant ; les bandes fines et la pulsation n'ont pas de kick)")
     st2 = dict(st, hit=0.7, since_hit=0.05, beat_bg=0.4, since_bg=0.6)
     check(al.layer_levels(st2, "frappes") == (0.0, 0.0, 0.7, 0.05) and al.layer_levels(st, "frappes") == (0.0, 0.0, 0.0, al.NO_KICK),
           "sources: frappes = les attaques des aigus (rien sans detecteur)")
@@ -6309,6 +6401,24 @@ def check_audio_layers() -> None:
     check(changed(render(hit, src_bg="aigus", **ab), still) == 0, "sources: fond sur les aigus, un kick seul ne declenche pas l'aberration")
     check(changed(render(hit, src_bg="kick", **ab), still) > 500, "sources: fond sur kick, l'aberration part au kick")
     check(changed(render(bass_only, src_bg="kick", **wob), still) == 0, "sources: fond sur kick, les basses seules ne font pas onduler")
+    # lot 5 : bandes fines, pulsation, respiration sur la pulsation
+    sub_on = dict(bass_only, bass=0.0, bands=[1.0, 0, 0, 0, 0, 0, 0, 0])
+    check(changed(render(sub_on, src_bg="sub", **wob), still) > 2000 and changed(render(dict(sub_on, bands=[0.0] * 8), src_bg="sub", **wob), still) == 0
+          and changed(render(sub_on, src_bg="air", **wob), still) == 0, "sources: fond sur sub = le wobble suit l'enveloppe de la bande 20-60 Hz, pas une autre bande")
+    pulse_hit = dict(bass_only, bass=0.0, pulse_since={"pouls": 0.05})
+    check(changed(render(pulse_hit, src_bg="pouls", **ab), still) > 500 and changed(render(dict(pulse_hit, pulse_since={}), src_bg="pouls", **ab), still) == 0
+          and changed(render(pulse_hit, src_bg="croches", **ab), still) == 0,
+          "sources: fond sur pouls = l'aberration part sur l'evenement de la pulsation (sans kick), rien sans evenement ni sur une autre grille")
+    pul = lambda ph: dict(bass_only, pulse={"state": "cale", "phase_now": ph, "period_ms": 484.0}, lead_s=0.0)
+    check(changed(render(pul(0.0), breath_pulse=1.0), still) == 0, "respiration pulsation: sur le temps l'image est celle d'origine")
+    img_trough = render(pul(0.5), breath_pulse=1.0)
+    check(changed(img_trough, still) > 100 and (img_trough[:, :, :3] > 240).all(axis=2).sum() < (still[:, :, :3] > 240).all(axis=2).sum(),
+          "respiration pulsation: entre deux temps l'overlay s'attenue (creux)")
+    check(changed(render(pul(0.5), breath_pulse=0.0), still) == 0, "respiration pulsation: reglage a 0 = aucun effet")
+    calm = dict(bass_only, bass=0.0, pulse={"state": "perdue", "phase_now": 0.5})
+    dim = render(calm, breath_pulse=1.0)
+    check(float(dim.mean()) < float(render(dict(calm, bass=1.0), breath_pulse=1.0).mean()),
+          "respiration pulsation: sans pulsation calee, elle suit l'enveloppe des basses (fond plus sombre quand elles sont faibles)")
     # source « auto » : suit la phase du morceau, avec fondu (l'horloge `t` fait foi)
     from core.audio_layers import SourceMixer
     wob_auto = dict(src_bg="auto", **wob)
@@ -10364,7 +10474,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse")
 
 
 def main() -> None:
@@ -10454,6 +10564,7 @@ def main() -> None:
     check_calibration()
     check_bench_kick()
     check_pulse()
+    check_bands_pulse()
     check_latence()
     check_beat_grid()
     check_playback()
