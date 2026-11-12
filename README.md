@@ -203,6 +203,10 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
   comme une empreinte digitale) simulee par la carte graphique, des taches qui ne se touchent jamais et se soudent en lignes sinueuses, en trois
   couches colorees decalees sur un fond sombre ; reglages : forme (taches -> labyrinthe), taille du motif, ecart des couches, quatre couleurs. Les
   basses poussent vers les lignes et accelerent le motif, chaque kick seme de nouvelles taches et ecarte un instant les couches.
+  Variete : points, lignes et grosses taches dans la meme image, par zones qui derivent (Derive) : les lignes s'agglomerent en taches la ou la
+  zone passe. Epaisseur des couches : couche 1 epaisse dessous, couche 3 fine dessus (liseres emboites). Symetrie (miroirs, quadrants, rotation a
+  N branches) : l'image est colonisee de facon symetrique, mais le dessin lui-meme reste libre ; Liberte regle a quel point (0 = miroir parfait).
+  Forme, ecart, variete, epaisseur et liberte suivent des automations (actives par defaut).
 - **Noise** : un seul hasard, prereglé, qui joue le role d'une musique imaginaire : des ondulations et des coups au hasard,
   meme sans son, sur les effets que tu coches (wobble, onde de choc, aberration, glitch, reaction du logo). Deux reglages :
   son *intensite* et les cases de ce sur quoi il agit (rien n'est coche par defaut). Un indicateur montre ce qu'il envoie.
