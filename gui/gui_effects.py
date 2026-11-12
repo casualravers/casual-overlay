@@ -49,6 +49,15 @@ def install(c):
         var = tk.StringVar(value=params[key])
         c.bind_param(key, var, str)
         menu = tk.OptionMenu(parent, var, *audio_layers.SOURCES)
+        inner = menu["menu"]                       # une ligne de separation entre les familles : sources par attaque, bandes fines, pulsation
+        done = 0
+        for group in audio_layers.SOURCE_GROUPS[:-1]:
+            done += len(group)
+            try:
+                inner.insert_separator(done)
+            except tk.TclError:
+                break
+            done += 1                              # le separateur compte comme une entree du menu
         menu.grid(row=row, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         Tooltip(menu, src_tip)
         return var
@@ -195,6 +204,9 @@ def install(c):
                  "Degre maximal de dissolution. 1 = le logo disparait entierement au plus fort du cycle.")
     param_slider(zone_melt, "Duree du cycle", "melt_period", 4.0, 60.0, 1.0,
                  "Secondes pour un cycle complet : intact, fond, dissous, se reforme.")
+    param_slider(zone_melt, "Cycle en temps", "melt_beats", 0.0, 64.0, 1.0,
+                 "Fonte sur la pulsation : le cycle dure ce nombre de TEMPS de la musique (16 = quatre mesures), quel que soit le BPM. 0 = la duree en secondes ci-dessus. "
+                 "Demande une pulsation calee ou libre (voyant de l'onglet Affichage) ; sans elle, la duree en secondes s'applique.")
     param_slider(zone_melt, "Grain", "melt_scale", 0.3, 4.0, 0.05,
                  "Finesse des trous : petit = grosses plaques, grand = fines piqures.")
     param_slider(zone_melt, "Bord acide", "melt_edge", 0.0, 2.0, 0.05,

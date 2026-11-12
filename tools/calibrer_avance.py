@@ -187,13 +187,35 @@ def report(result: dict) -> str:
     lines = [f"Retard son -> lumiere : mediane {s['median']:.0f} ms (de {s['min']:.0f} a {s['max']:.0f} ms, p95 {s['p95']:.0f}), "
              f"{s['n']} mesure(s), {s['missed']} clic(s) sans flash.",
              f"Precision de lecture : une image de la camera = {s.get('resolution_ms', 0.0):.0f} ms.",
-             f"=> AVANCE recommandee : {s['advance_ms']} ms (reglage disponible avec le lot 4 de la spec ; en attendant, c'est le retard que voit le public)."]
+             f"=> AVANCE recommandee : {s['advance_ms']} ms (curseur « Avance » de l'onglet Affichage : le bouton « Calibrer... » l'applique ; c'est le retard que voit le public)."]
     if s["spread_ms"] > 60.0:
         lines.append("Attention : les mesures sont tres dispersees (plus de 60 ms) : le retard n'est pas assez stable pour etre compense "
                      "par une avance fixe (charge du portable ? pilote en mode partage ?). Refais la mesure sans autre programme ouvert.")
     if s.get("resolution_ms", 0.0) > 20.0:
         lines.append("La camera filme a moins de 50 images/s : le chiffre est approximatif. Reprends en ralenti (120 ou 240 images/s).")
     return "\n".join(lines)
+
+
+MIN_MEASURES = 3             # moins de 3 clics apparies : pas assez pour proposer une avance
+MAX_LEAD_MS = 200            # plage du reglage `sync_lead_ms`
+
+
+def advice(result: dict) -> tuple[int | None, str]:
+    """(avance a proposer en ms ou None, texte pour l'utilisateur) : sert au bouton « Calibrer... » de la GUI. Pas d'avance proposee si moins de
+    3 clics sont apparies ; plafonnee a la plage du reglage (200 ms) avec une remarque."""
+    text = report(result)
+    s = result["summary"]
+    if s.get("n", 0) < MIN_MEASURES:
+        return None, text + (f"\nSeulement {s.get('n', 0)} mesure(s) : il en faut au moins {MIN_MEASURES}. Filme plus longtemps." if s.get("n") else "")
+    ms = int(s["advance_ms"])
+    if ms > MAX_LEAD_MS:
+        text += f"\nL'avance maximale du reglage est {MAX_LEAD_MS} ms : elle sera plafonnee (le retard mesure est plus grand : verifie le pilote audio, voir Diagnostic)."
+    return max(0, min(ms, MAX_LEAD_MS)), text
+
+
+def emission_command(x: int = 0, y: int = 0, clics: int = 20, python: str | None = None) -> list[str]:
+    """Commande qui lance l'emission de calibration dans un processus a part (la fenetre de calibration se met en plein ecran en (x, y))."""
+    return [python or sys.executable, str(Path(__file__).resolve()), "emettre", "--x", str(int(x)), "--y", str(int(y)), "--clics", str(int(clics))]
 
 
 # --- Emission : clic par le haut-parleur, flash a la detection ------------------------------------------------------------------

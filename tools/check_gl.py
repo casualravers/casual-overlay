@@ -1053,6 +1053,7 @@ def check_gui() -> None:
                     gui_random_steps(c, s, out)
                     gui_bgvideo_steps(c, s, out)
                     gui_diag_steps(c, s, out)
+                    gui_calib_steps(c, s, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -1430,6 +1431,10 @@ def check_gui() -> None:
     check(out.get("doodle_gui") == (1, 0.0, 1.0, 0.0), "doodles (GUI): case Recuperer les medias dans Affichage, desactivee par defaut, pilote doodle_on", str(out.get("doodle_gui")))
     check(out.get("diag_gui") == (True, True, True, "Button", "Diagnostic"),
           "diagnostic (GUI): bouton Diagnostic (Affichage) qui montre le rapport", str(out.get("diag_gui")))
+    check(out.get("calib_btn") == ("Button", "Calibrer...") and out.get("calib_open") == (True, True) and out.get("calib_emit") == ([(1920, 0)], True),
+          "calibration (GUI): le bouton Calibrer... ouvre une seule fenetre, lance l'emission sur l'ecran indique", str((out.get("calib_btn"), out.get("calib_open"), out.get("calib_emit"))))
+    check(out.get("calib_found") == (87, "normal", True, True) and out.get("calib_applied") == (0.0, 87.0, 87.0) and out.get("calib_reset") == 0.0,
+          "calibration (GUI): l'analyse de la video propose l'avance mesuree (87 ms) et le bouton la regle sur le curseur et dans les reglages", str((out.get("calib_found"), out.get("calib_applied"), out.get("calib_reset"))))
     bm = out.get("bgv_modes", {})
     check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
                  "video": (False, False, True, "video")},
@@ -2799,6 +2804,20 @@ def check_calibration() -> None:
     from engine import audio as au
     import calibrer_avance as ca
     import mesure_latence as ml
+    # --- lot 6 : conseil pour le bouton « Calibrer... » et commande d'emission
+    good = {"flashes": 6, "clicks": 6, "summary": {"n": 6, "median": 87.4, "min": 82.0, "max": 93.0, "p95": 92.0, "missed": 0, "advance_ms": 87, "spread_ms": 10.0, "resolution_ms": 8.3}}
+    ms, txt = ca.advice(good)
+    check(ms == 87 and "AVANCE recommandee : 87 ms" in txt, "calibration: l'avance proposee est la mediane mesuree", f"{ms}")
+    big = {"flashes": 6, "clicks": 6, "summary": dict(good["summary"], advance_ms=340, median=340.0)}
+    ms2, txt2 = ca.advice(big)
+    check(ms2 == 200 and "plafonnee" in txt2, "calibration: une avance au-dela de 200 ms est plafonnee a la plage du reglage, avec une remarque", f"{ms2}")
+    few = {"flashes": 2, "clicks": 2, "summary": dict(good["summary"], n=2)}
+    none = {"flashes": 0, "clicks": 4, "summary": {"n": 0, "missed": 4}}
+    check(ca.advice(few)[0] is None and "au moins 3" in ca.advice(few)[1] and ca.advice(none)[0] is None and "Calibration impossible" in ca.advice(none)[1],
+          "calibration: moins de 3 mesures ou aucun flash : pas d'avance proposee, avec la raison")
+    cmd = ca.emission_command(1920, 0, 12, python="py")
+    check(cmd[0] == "py" and cmd[1].endswith("calibrer_avance.py") and cmd[2:] == ["emettre", "--x", "1920", "--y", "0", "--clics", "12"],
+          "calibration: la commande d'emission porte l'ecran et le nombre de clics", str(cmd))
     # --- age d'un bloc a la capture (horloge du pilote)
     ti = NS(inputBufferAdcTime=10.000, currentTime=10.060)
     check(abs(au.capture_age(ti, 512, 48000.0) - (0.060 - 512 / 48000.0)) < 1e-9,
@@ -3138,6 +3157,16 @@ def check_bands_pulse() -> None:
           "sources: pulsation perdue ou grille sans evenement = la couche se tait")
     check(abs(al.layer_levels(dict(sp, react_m=0.5), "pouls")[2] - 0.5) < 1e-9, "sources: le master de reactivite s'applique aussi aux sources de pulsation")
     check(all(s in al.LABELS for s in al.SOURCES), "sources: chaque source a son libelle")
+    # --- lot 6 : « elan » (montee du son), groupes de menu, cycles sur la pulsation
+    rs = {"bass": 0, "high": 0, "beat": 0, "since_beat": 9, "band_rise": [0.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+    check(al.layer_levels(rs, "elan") == (0.5, 0.5, 0.0, al.NO_KICK) and al.layer_levels(dict(rs, band_rise=[9.0] * 8), "elan")[0] == 1.0
+          and al.layer_levels({"bass": 0, "high": 0, "beat": 0, "since_beat": 9}, "elan") == (0.0, 0.0, 0.0, al.NO_KICK),
+          "sources: elan = la plus forte montee d'enveloppe parmi les bandes (plafonnee a 1), rien sans bandes")
+    check([s for g in al.SOURCE_GROUPS for s in g] == list(al.SOURCES), "sources: les groupes du menu couvrent toutes les sources, dans l'ordre")
+    from core.pulse import cycle_seconds
+    check(cycle_seconds(14.0, 16, 0.5, True) == 8.0 and cycle_seconds(14.0, 0, 0.5, True) == 14.0 and cycle_seconds(14.0, 16, 0.5, False) == 14.0
+          and cycle_seconds(14.0, 16, None, True) == 14.0 and cycle_seconds(14.0, 16, 0.0, True) == 14.0,
+          "cycles sur la pulsation: N temps x la periode quand elle est calee ou libre, sinon la duree en secondes (0 temps = comme avant)")
     # --- reglages : les nouvelles sources sont des valeurs valides, la respiration est dans la table
     cp = gl.coerce_params({"src_bg": "croches", "src_logo": "sub", "breath_pulse": 3.0})
     check(cp.get("src_bg") == "croches" and cp.get("src_logo") == "sub" and cp.get("breath_pulse") == 1.0 and gl.coerce_params({"src_bg": "n'importe quoi"}).get("src_bg") != "n'importe quoi",
@@ -5850,6 +5879,41 @@ def check_diagnostics() -> None:
     check(bp.find_base_python().joinpath("python.exe").exists(), "portable: installation Python de base retrouvee")
 
 
+def gui_calib_steps(c, s, out) -> None:
+    """Lot 6 : le bouton « Calibrer... » (onglet Affichage) ouvre la fenetre, lance l'emission, analyse une video (simulee) et regle l'avance."""
+    import types as _types
+    import calibrer_avance as ca
+    calls: list = []
+    fake = _types.SimpleNamespace(
+        advice=ca.advice,
+        emission_command=lambda x, y: (calls.append((x, y)), [sys.executable, "-c", "pass"])[1],
+        analyse_video=lambda path, log=None: {"rows": [], "clicks": 6, "flashes": 6, "summary": {"n": 6, "median": 87.4, "min": 82.0, "max": 93.0, "p95": 92.0, "missed": 0,
+                                                                                                "advance_ms": 87, "spread_ms": 10.0, "resolution_ms": 8.3}})
+    root = c["root"]
+    out["calib_btn"] = (c["calib_btn"].winfo_class(), c["calib_btn"].cget("text"))
+    top = c["calib_open"](fake)
+    out["calib_open"] = (top is not None and bool(top.winfo_exists()), c["calib_open"](fake) is top)         # un second clic ramene la meme fenetre
+    d = top.calib
+    d["x"].set("1920")
+    d["y"].set("0")
+    d["emit"]()
+    out["calib_emit"] = (calls, "Emission lancee" in d["result"].get())
+    before = float(s.params["sync_lead_ms"])
+    d["analyse"]("fausse_video.mp4")
+    t_end = time.monotonic() + 3.0
+    while d["found"]["ms"] is None and time.monotonic() < t_end:
+        root.update()
+        time.sleep(0.02)
+    out["calib_found"] = (d["found"]["ms"], str(d["apply_btn"].cget("state")), "87 ms" in d["apply_btn"].cget("text"), "AVANCE recommandee : 87 ms" in d["result"].get())
+    d["apply"]()
+    root.update()
+    out["calib_applied"] = (before, float(s.params["sync_lead_ms"]), c["lead_var"].get())
+    c["lead_var"].set(0)
+    root.update()
+    top.destroy()
+    out["calib_reset"] = float(s.params["sync_lead_ms"])
+
+
 def gui_diag_steps(c, s, out) -> None:
     text = c["diag_report"]()
     out["diag_gui"] = (text.startswith("Diagnostic casual-overlay"), "Resultat" in text, "OpenGL" not in text or True,
@@ -6238,7 +6302,7 @@ def check_audio_layers_pure() -> None:
     check(al.layer_levels(st, "kick") == (0.0, 0.0, 0.9, 0.2), "sources: kick = seulement ce qui part des kicks")
     check(al.layer_levels(st, "rien") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: rien = la couche ne reagit plus")
     check(al.layer_levels(st, "n'importe quoi") == al.layer_levels(st, "tout") and al.valid(None) == "tout", "sources: valeur inconnue = tout")
-    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False] + [False] * (len(al.BAND_SOURCES) + len(al.PULSE_GRIDS)),
+    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False] + [False] * (len(al.BAND_SOURCES) + 1 + len(al.PULSE_GRIDS)),
           "sources: has_kick (auto est resolue avant ; les bandes fines et la pulsation n'ont pas de kick)")
     st2 = dict(st, hit=0.7, since_hit=0.05, beat_bg=0.4, since_bg=0.6)
     check(al.layer_levels(st2, "frappes") == (0.0, 0.0, 0.7, 0.05) and al.layer_levels(st, "frappes") == (0.0, 0.0, 0.0, al.NO_KICK),

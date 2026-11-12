@@ -57,13 +57,112 @@ def install(c):
         audio_var.trace_add("write", on_audio_change)
 
     add_separator(zone_aff, "Synchro son / image")
-    c.param_slider(zone_aff, "Avance", "sync_lead_ms", 0, 200, 5,
+    lead_var = c.param_slider(zone_aff, "Avance", "sync_lead_ms", 0, 200, 5,
                    "Avance (ms) : sur un morceau regulier, les effets « sur kick » partent ce temps AVANT le kick detecte pour que la lumiere tombe avec le son "
                    "(la chaine micro, analyse, rendu, ecran et videoprojecteur retarde la lumiere). 0 = on reagit a la detection, comme avant. "
                    "La valeur se mesure avec tools/calibrer_avance.py (telephone en ralenti) ; propre a la salle et au materiel. "
                    "Sans pulsation calee (voyant ci-dessous) ou pendant une montee / cassure / drop, rien n'est predit : la reaction reste a la detection.")
     pulse_label = tk.Label(tab_aff, text="pulsation : -", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
     pulse_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(0, 2))
+
+    calib_state: dict = {"top": None}
+
+    def load_calibrator():
+        """tools/calibrer_avance.py, charge a la demande (la fenetre n'en depend pas au demarrage ; il est dans le dossier portable)."""
+        import importlib.util
+        path = Path(__file__).resolve().parent.parent / "tools" / "calibrer_avance.py"
+        spec = importlib.util.spec_from_file_location("calibrer_avance", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def open_calibration(ca=None) -> "tk.Toplevel | None":
+        """Fenetre « Calibrer l'avance » : lance l'emission (clic au haut-parleur, flash a la detection) sur l'ecran du videoprojecteur, lit la video du
+        telephone et propose l'avance mesuree. `ca` : module de calibration (injectable par les tests)."""
+        import threading
+        from tkinter import filedialog
+        old = calib_state.get("top")
+        if old is not None and old.winfo_exists():
+            old.lift()
+            return old
+        ca = ca or load_calibrator()
+        top = tk.Toplevel(root)
+        calib_state["top"] = top
+        top.title("Calibrer l'avance")
+        top.configure(bg=a2w.GUI_PANEL_BG)
+        top.transient(root)
+        tk.Label(top, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, justify="left", anchor="w", wraplength=440, text=(
+            "1. Mets les enceintes et le videoprojecteur comme en soiree.\n"
+            "2. Indique le coin haut gauche de l'ecran du videoprojecteur (x, y), puis lance l'emission : le programme joue un clic par seconde et "
+            "allume l'ecran en blanc quand il l'entend (Echap pour arreter).\n"
+            "3. Filme avec ton telephone, en ralenti (120 ou 240 images/s), l'ecran ET le haut-parleur dans le meme plan, une vingtaine de secondes.\n"
+            "4. Clique « Analyser la video... » : l'avance mesuree est proposee, puis appliquee au curseur.")).pack(padx=10, pady=(10, 6), anchor="w")
+        row = tk.Frame(top, bg=a2w.GUI_PANEL_BG)
+        row.pack(padx=10, anchor="w")
+        xv, yv = tk.StringVar(value=str(root.winfo_screenwidth())), tk.StringVar(value="0")
+        for text, var in (("x", xv), ("y", yv)):
+            tk.Label(row, text=text, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(side="left")
+            tk.Entry(row, textvariable=var, width=6).pack(side="left", padx=(2, 8))
+
+        def emit() -> None:
+            import subprocess
+            try:
+                cmd = ca.emission_command(int(xv.get() or 0), int(yv.get() or 0))
+                subprocess.Popen(cmd)
+                result_var.set("Emission lancee (fenetre blanche / noire en plein ecran). Filme, puis reviens ici.")
+            except Exception as exc:
+                result_var.set(f"Emission impossible : {exc}")
+
+        found: dict = {"ms": None}
+        result_var = tk.StringVar(value="")
+        apply_btn = tk.Button(top, text="Appliquer l'avance", state="disabled")
+
+        def analyse(path: str | None = None) -> None:
+            path = path or filedialog.askopenfilename(parent=top, title="Video du telephone", filetypes=[("Video", "*.mp4 *.mov *.mkv *.avi"), ("Tous", "*.*")])
+            if not path:
+                return
+            result_var.set("Analyse en cours...")
+
+            def work() -> None:
+                try:
+                    ms, text = ca.advice(ca.analyse_video(path, log=lambda *_a: None))
+                except Exception as exc:
+                    ms, text = None, f"Analyse impossible : {exc}"
+                try:
+                    root.after(0, lambda: done(ms, text))
+                except Exception:
+                    pass
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def done(ms, text) -> None:
+            if not top.winfo_exists():
+                return
+            found["ms"] = ms
+            result_var.set(text)
+            apply_btn.configure(state="normal" if ms is not None else "disabled", text=f"Appliquer l'avance ({ms} ms)" if ms is not None else "Appliquer l'avance")
+
+        def apply() -> None:
+            if found["ms"] is not None:
+                lead_var.set(found["ms"])
+                result_var.set(result_var.get() + f"\nAvance reglee a {found['ms']} ms.")
+
+        apply_btn.configure(command=apply)
+        btns = tk.Frame(top, bg=a2w.GUI_PANEL_BG)
+        btns.pack(padx=10, pady=8, anchor="w")
+        emit_btn = tk.Button(btns, text="Lancer l'emission", command=emit)
+        analyse_btn = tk.Button(btns, text="Analyser la video...", command=analyse)
+        emit_btn.pack(side="left", padx=(0, 6))
+        analyse_btn.pack(side="left", padx=(0, 6))
+        apply_btn.pack(in_=btns, side="left", padx=(0, 6))
+        tk.Label(top, textvariable=result_var, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, justify="left", anchor="w", wraplength=440).pack(padx=10, pady=(0, 10), anchor="w")
+        top.calib = {"emit": emit, "analyse": analyse, "apply": apply, "apply_btn": apply_btn, "result": result_var, "found": found, "x": xv, "y": yv, "done": done}
+        return top
+
+    calib_btn = tk.Button(tab_aff, text="Calibrer...", command=open_calibration)
+    calib_btn.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(0, 2))
+    Tooltip(calib_btn, "Mesure le retard reel de TA installation (micro, ordinateur, ecran, videoprojecteur) avec la camera d'un telephone en ralenti, "
+                       "puis regle l'avance. A refaire si le materiel ou la salle change.")
 
     add_separator(zone_aff, "Affichage")
     frame = tk.Frame(tab_aff)                      # barres debug (H) et rechargement des shaders (R) : touches de la fenetre de rendu seulement
@@ -156,4 +255,4 @@ def install(c):
     status_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
 
     import types
-    return types.SimpleNamespace(pulse_label=pulse_label, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)
+    return types.SimpleNamespace(pulse_label=pulse_label, calib_btn=calib_btn, open_calibration=open_calibration, lead_var=lead_var, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)
