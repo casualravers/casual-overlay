@@ -14,7 +14,7 @@ from core import sessionlog
 from core import doodles
 from core import qrcode
 from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
-from core.pulse import swell as pulse_swell
+from core.pulse import cycle_seconds, swell as pulse_swell
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceiling
@@ -752,6 +752,7 @@ class Renderer:
             state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat", "hit", "beat_bg", "beat_logo") if k in state}}
             if "bands" in state:                                       # les bandes fines (lot 5) suivent aussi le master de reactivite
                 state["bands"] = [float(v) * react_m for v in state["bands"]]
+                state["band_rise"] = [float(v) * react_m for v in state.get("band_rise", ())]
             state["react_m"] = react_m                                 # ... et les sources de pulsation (elles n'ont pas d'enveloppe dans `state`)
         bass, high, beat = state["bass"], state["high"], state["beat"]
         # Sources audio par couche : le fond et le logo peuvent reagir a des parties differentes du son (lie : le logo suit la source du fond).
@@ -779,7 +780,9 @@ class Renderer:
         raw_dt = dt
         dt *= tempo
         # Respiration (overlay et fond en opposition de phase), cycle de teinte, phases de la composition : integres image par image.
-        self._breath_t += dt / max(float(p["breath_period"]), 1.0)
+        pul0 = state.get("pulse") or {}
+        pul_ok, pul_period = pul0.get("state") in ("cale", "libre"), float(pul0.get("period_ms", 0.0)) / 1000.0
+        self._breath_t += dt / max(cycle_seconds(float(p["breath_period"]), float(p["breath_beats"]), pul_period, pul_ok), 1.0)
         wave = 0.5 + 0.5 * math.sin(2.0 * math.pi * self._breath_t)
         breath = 0.5 * _unit(p["phase_breath"])                         # respiration de la phase (ambiance / cassure), en plus de celle des reglages
         ov = _unit(p["overlay_master"]) * _unit(p["phase_overlay"]) * _unit(p.get("text_fade", 1.0)) * (1.0 - max(_unit(p["breath_overlay"]), breath) * wave)      # presence de l'overlay (0 = efface)
@@ -853,7 +856,7 @@ class Renderer:
         # Fonte acide: phase integree (changer la periode ne fait pas sauter l'animation). Triangle 0 -> 1 -> 0 avec
         # un palier intact et un palier dissous, adouci: le logo reste lisible un moment, puis fond, puis se reforme.
         m_react = max(float(p["melt_react"]), 0.0)
-        self._melt_t += dt / max(float(p["melt_period"]), 1.0) * (1.0 + m_react * float(lg_bass) * 3.0)
+        self._melt_t += dt / max(cycle_seconds(float(p["melt_period"]), float(p["melt_beats"]), pul_period, pul_ok), 1.0) * (1.0 + m_react * float(lg_bass) * 3.0)
         self._melt_clock += dt
         tri = 1.0 - abs(2.0 * (self._melt_t % 1.0) - 1.0)
         s_ = min(max((tri - 0.15) / 0.7, 0.0), 1.0)

@@ -24,14 +24,17 @@ BAND_SOURCES = {"sub": (0,), "corps": (2, 3), "presence": (4, 5), "air": (6, 7)}
 # nom -> (subdivisions par temps, un evenement sur N) : « pouls » = chaque temps, « croches » = 2 par temps, « doubles » = 4 par temps,
 # « mesure » = 1 temps sur 4, « phrase8 / 16 / 32 » = 1 temps sur 8 / 16 / 32 (#85)
 PULSE_GRIDS = {"pouls": (1, 1), "croches": (2, 1), "doubles": (4, 1), "mesure": (1, 4), "phrase8": (1, 8), "phrase16": (1, 16), "phrase32": (1, 32)}
-SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto", *BAND_SOURCES, *PULSE_GRIDS)
+SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto", *BAND_SOURCES, "elan", *PULSE_GRIDS)
+# Menus : les sources par famille, une ligne de separation entre deux familles (voir gui_effects.source_menu)
+SOURCE_GROUPS = (("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto"), (*BAND_SOURCES, "elan"), tuple(PULSE_GRIDS))
+RISE_REF = 3.0              # montee d'enveloppe (unites / s) qui donne un « elan » de 1
 DEFAULT = "tout"
 PULSE_DECAY_S = 0.20        # decroissance de l'enveloppe d'un evenement de pulsation (comme celle du kick)
 NO_KICK = 1000.0            # « since » d'une couche sans attaque : l'onde de choc est eteinte depuis longtemps
 LAYERS = ("bg", "logo")
 
 LABELS = {"tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick", "frappes": "Frappes", "rien": "Rien", "auto": "Auto",
-          "sub": "Sub-basses", "corps": "Corps (150-1000 Hz)", "presence": "Presence (1-5 kHz)", "air": "Air (5-12 kHz)",
+          "elan": "Elan (montee du son)", "sub": "Sub-basses", "corps": "Corps (150-1000 Hz)", "presence": "Presence (1-5 kHz)", "air": "Air (5-12 kHz)",
           "pouls": "Pouls (chaque temps)", "croches": "Pouls x2 (croches)", "doubles": "Pouls x4 (doubles)", "mesure": "Mesure (1 temps sur 4)",
           "phrase8": "Phrase (1 temps sur 8)", "phrase16": "Phrase (1 temps sur 16)", "phrase32": "Phrase (1 temps sur 32)"}
 
@@ -92,6 +95,10 @@ def layer_levels(state: dict, source, layer: str = "bg") -> tuple[float, float, 
         bands = state.get("bands")
         v = max((float(bands[i]) for i in BAND_SOURCES[source] if bands is not None and i < len(bands)), default=0.0)
         return (v, 0.0, 0.0, NO_KICK) if source == "sub" else (v, v, 0.0, NO_KICK)
+    if source == "elan":                # la MONTEE du son : la plus forte pente montante parmi les bandes fines (un son qui gonfle, une attaque, un riser)
+        rises = state.get("band_rise")
+        r = min(max((float(v) for v in rises), default=0.0) / RISE_REF, 1.0) if rises is not None else 0.0
+        return r, r, 0.0, NO_KICK
     if source in PULSE_GRIDS:           # la grille de la pulsation : des evenements reguliers meme sans kick sur chaque temps (silence si la pulsation est perdue)
         since = (state.get("pulse_since") or {}).get(source)
         if since is None:

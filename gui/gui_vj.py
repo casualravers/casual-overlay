@@ -550,7 +550,10 @@ def install(c):
             slider(f, 1, "breath_overlay", "Resp. overlay", 0, 100, 1, 100.0, "%", 0, "Respiration de l'overlay : sa presence oscille doucement (0 = aucune).")
             slider(f, 2, "breath_bg", "Resp. fond", 0, 100, 1, 100.0, "%", 0, "Respiration du fond, en opposition de phase avec l'overlay (0 = aucune).")
             slider(f, 3, "breath_period", "Periode", 2, 30, 1, 1.0, " s", 8, "Periode de la respiration, en secondes.")
-            slider(f, 6, "breath_pulse", "Resp. pulsation", 0, 100, 1, 100.0, "%", 0,
+            slider(f, (4, 3), "breath_beats", "Temps", 0, 64, 1, 1.0, "", 0,
+                   "Periode de la respiration lente (« Periode » ci-dessus) en TEMPS de la pulsation : un cycle dure ce nombre de temps de la musique (16 = quatre mesures), quel que soit le BPM. 0 = la periode en secondes ci-dessus. "
+                   "Demande une pulsation calee ou libre.")
+            slider(f, (4, 0), "breath_pulse", "Pulsation", 0, 100, 1, 100.0, "%", 0,
                    "Respiration sur la pulsation : la presence de l'overlay, la luminosite du fond et sa derive suivent le temps (creux entre deux temps, sommet sur le temps) et le corps des basses. "
                    "Courbe douce, pas un clignotement. Demande une pulsation calee (voyant de l'onglet Affichage) ; sinon elle suit seulement les basses. 0 = aucune.")
             slider(f, 5, "trans_time", "Transition", 0, 3, 0.1, 1.0, " s", 0.8, "Duree de la transition quand la scene change (VJ, touche, tirage) : l'ancienne image se fond dans la nouvelle. "

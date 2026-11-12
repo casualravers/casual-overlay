@@ -49,6 +49,14 @@ def swell(phase: float | None, period_s: float = 0.5, lead_s: float = 0.0) -> fl
     return 0.5 + 0.5 * math.cos(2.0 * math.pi * ph)
 
 
+def cycle_seconds(seconds: float, beats: float, pulse_period_s: float | None, usable: bool) -> float:
+    """Duree d'un cycle lent (fonte, respiration) : `beats` temps de la pulsation quand elle est calee ou libre, sinon `seconds` (le reglage en secondes,
+    comme avant). `beats` = 0 : toujours `seconds`. Le cycle prend ainsi la cadence du morceau (la fonte dure 16 temps, quel que soit le BPM)."""
+    if float(beats) >= 0.5 and usable and pulse_period_s and pulse_period_s > 0.0:
+        return float(beats) * float(pulse_period_s)
+    return float(seconds)
+
+
 class PulseClock:
     def __init__(self) -> None:
         self.period = 0.5
