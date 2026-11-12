@@ -534,6 +534,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         state = analyzer.latest()
         s.status["phase"] = core_phase.apply_to_params(params, state.get("phase"))          # multiplicateurs de la phase du morceau (lus par le rendu)
         s.status["phase_info"] = state.get("phase")
+        s.status["audio_age_ms"] = state.get("audio_age_ms", 0.0)                         # retard de capture + attente de l'analyse (voir engine.audio)
         size = window.framebuffer_size()
         sample = args.stats or frame_i % 8 == 0
         frame_i += 1
@@ -596,8 +597,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         if now - last_title >= 0.5:
             fps = win_frames / (now - last_title)
             s.status["fps"] = fps
+            age = float(s.status.get("audio_age_ms", 0.0) or 0.0)
             glfw.set_window_title(handle, f"casual-overlay GL - {fps:.0f} fps - int {params['master']:.1f}"
-                                          f" - sens {params['sensitivity']:.2f}")
+                                          f" - sens {params['sensitivity']:.2f}" + (f" - son {age:.0f} ms" if age > 0.0 else ""))
             last_title = now
             win_frames = 0
         if args.stats and now - last_stats >= 5.0:
@@ -605,7 +607,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             print(f"[stats] {frames / span:.1f} fps | video {(reader.frames_read - last_read) / span:.1f} frames/s "
                   f"| upload {up_ms / max(up_n, 1):.2f} ms ({up_n / span:.1f}/s) "
                   f"| gpu {gpu_ms / max(gpu_n, 1):.2f} ms | pire intervalle {max_gap * 1000:.0f} ms "
-                  f"| kicks {analyzer.beats - last_beats}", flush=True)
+                  f"| kicks {analyzer.beats - last_beats} | son {analyzer.audio_age_ms:.0f} ms (stable {analyzer.audio_age_floor_ms:.0f})", flush=True)
             max_gap = 0.0
             last_stats, frames, up_ms, up_n, gpu_ms, gpu_n = now, 0, 0.0, 0, 0.0, 0
             last_beats = analyzer.beats

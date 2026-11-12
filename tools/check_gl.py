@@ -2792,6 +2792,85 @@ def measure_latency_isolated(kicks: int, timeout: float = 120.0) -> dict:
     return json.loads(text[text.index("{"):])
 
 
+def check_calibration() -> None:
+    """Lot 1 de la spec synchro son / image : horodatage de capture, retard de capture publie, lecture d'une video de calibration."""
+    print("Synchro son / image : horodatage de capture et calibration a la camera")
+    from types import SimpleNamespace as NS
+    from engine import audio as au
+    import calibrer_avance as ca
+    import mesure_latence as ml
+    # --- age d'un bloc a la capture (horloge du pilote)
+    ti = NS(inputBufferAdcTime=10.000, currentTime=10.060)
+    check(abs(au.capture_age(ti, 512, 48000.0) - (0.060 - 512 / 48000.0)) < 1e-9,
+          "capture_age: instant du callback moins fin du bloc (horodatage du pilote)", str(au.capture_age(ti, 512, 48000.0)))
+    check(au.capture_age(NS(inputBufferAdcTime=0.0, currentTime=0.0), 512, 48000.0) == 0.0 and au.capture_age(None, 512, 48000.0) == 0.0
+          and au.capture_age(NS(inputBufferAdcTime=10.0, currentTime=9.0), 512, 48000.0) == 0.0
+          and au.capture_age(NS(inputBufferAdcTime=1.0, currentTime=50.0), 512, 48000.0) == 0.0,
+          "capture_age: temps absents, negatifs ou absurdes = 0 (le bloc est date au callback, comme avant)")
+    # --- tampon : instant de capture de chaque echantillon
+    ring = au.RingBuffer(1 << 14)
+    check(ring.time_at(0, 48000.0) is None, "tampon: sans bloc, aucun instant")
+    ring.write(np.zeros(480, dtype=np.float32), 100.0)               # echantillons 0..479, le dernier capte a t = 100,000
+    ring.write(np.zeros(480, dtype=np.float32), 100.010)             # 480..959, dernier a 100,010
+    check(abs(ring.time_at(960, 48000.0) - 100.010) < 1e-9 and abs(ring.time_at(480, 48000.0) - 100.0) < 1e-9
+          and abs(ring.time_at(720, 48000.0) - 100.005) < 1e-9 and abs(ring.time_at(1440, 48000.0) - 100.020) < 1e-9,
+          "tampon: instant de capture par echantillon (fin de bloc, milieu, apres le dernier bloc)")
+    # --- retard de capture publie, sans la gigue du fil d'analyse
+    ring2 = au.RingBuffer(1 << 16)
+    an = au.AudioAnalyzer(ring2, au.FeatureExtractor(48000))
+    rng = np.random.default_rng(5)
+    t_end, worst, last_age = 200.0, 0.0, 0.0
+    for k in range(400):
+        t_end += 512 / 48000.0
+        ring2.write(np.zeros(512, dtype=np.float32), t_end)
+        now = t_end + 0.045 + float(rng.uniform(0.0, 0.012))                 # capture 45 ms + gigue d'ordonnancement jusqu'a 12 ms
+        t_eff = an._audio_time(ring2.total, 48000.0, now, 512 / 48000.0)
+        if k > 20:
+            worst = max(worst, abs(t_eff - (t_end + 0.045)))
+    check(worst < 0.002 and abs(an.audio_age_floor_ms - 45.0) < 0.6 and 45.0 <= an.audio_age_ms <= 58.0,
+          "analyse: kicks dates a l'instant de capture + retard stable (la gigue de 12 ms disparait), retard publie ~45 ms",
+          str((worst, an.audio_age_floor_ms, an.audio_age_ms)))
+    check("audio_age_ms" in an.latest() and "audio_age_floor_ms" in an.latest(), "analyse: le retard de capture est publie dans l'etat")
+    bare = au.AudioAnalyzer(au.RingBuffer(1 << 12), au.FeatureExtractor(48000))
+    check(bare._audio_time(0, 48000.0, 5.0, 0.01) == 5.0, "analyse: sans bloc ecrit, l'instant du traitement (comme avant)")
+    # --- diagnostic : pilote MME
+    from engine import diagnostics as dg
+    mk = lambda api: NS(query_devices=lambda kind=None: ({"name": "Micro X", "hostapi": 0, "default_low_input_latency": 0.09} if kind == "input"
+                                                          else [{"max_input_channels": 2, "name": "Micro X"}]),
+                        query_hostapis=lambda i=None: {"name": api})
+    mme, wasapi = dg.check_microphone(mk("MME")), dg.check_microphone(mk("Windows WASAPI"))
+    check(mme.level == "warn" and "MME" in mme.hint and wasapi.level == "ok" and "90 ms" in wasapi.detail,
+          "diagnostic: pilote MME = avertissement, latence d'entree annoncee affichee", f"{mme.level} {wasapi.detail}")
+    # --- video de calibration synthetique : clics au son, flashs a l'image
+    rate, fps, delay = 48000, 240.0, 0.087
+    n = int(rate * 12.0)
+    audio = (rng.standard_normal(n) * 0.002).astype(np.float32)
+    starts = [1.0 + k for k in range(8)]
+    for s0 in starts:
+        i0 = int(s0 * rate)
+        audio[i0:i0 + 4800] += ml.kick_wave(np.arange(4800) / rate, np).astype(np.float32)
+    times = np.arange(int(12.0 * fps)) / fps
+    luma = np.full(len(times), 0.1)
+    for s0 in starts[:-1]:                                               # le dernier clic n'a pas de flash (non detecte)
+        luma[(times >= s0 + delay) & (times < s0 + delay + 0.12)] = 0.9
+    clicks = ca.find_clicks(audio, rate)
+    flashes = ca.find_flashes(times, luma)
+    check(len(clicks) == 8 and all(abs(c - s0) < 0.004 for c, s0 in zip(clicks, starts)),
+          "calibration: les 8 clics sont retrouves a 4 ms pres", str(clicks))
+    check(len(flashes) == 7 and all(abs(f - (s0 + delay)) <= 1.0 / fps + 1e-9 for f, s0 in zip(flashes, starts)),
+          "calibration: les 7 flashs sont retrouves a une image pres", str(flashes))
+    rows = ca.match_events(clicks, flashes)
+    rec = ca.recommend(rows, 1.0 / fps)
+    check(rec["n"] == 7 and rec["missed"] == 1 and abs(rec["advance_ms"] - 87.0) <= 8.0 and rec["spread_ms"] < 10.0
+          and abs(rec["resolution_ms"] - 1000.0 / fps) < 1e-6,
+          "calibration: retard median 87 ms retrouve, le clic sans flash est compte, resolution = une image", str(rec))
+    check(ca.find_flashes(times, np.full(len(times), 0.3)) == [] and ca.find_clicks(np.zeros(rate, dtype=np.float32), rate) == []
+          and ca.find_flashes([], []) == [],
+          "calibration: image sans contraste ou piste muette = aucun evenement (pas de faux chiffre)")
+    check("impossible" in ca.report({"summary": {}, "clicks": 3, "flashes": 0}) and f"AVANCE recommandee : {rec['advance_ms']} ms" in ca.report(
+          {"summary": rec, "clicks": 8, "flashes": 7}), "calibration: le rapport dit pourquoi il echoue, ou l'avance recommandee")
+
+
 def check_latence() -> None:
     print("Mesure de latence audio -> image (tools/mesure_latence.py)")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -10071,7 +10150,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration")
 
 
 def main() -> None:
@@ -10158,6 +10237,7 @@ def main() -> None:
     check_gui()
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
+    check_calibration()
     check_latence()
     check_beat_grid()
     check_playback()
