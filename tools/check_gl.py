@@ -2871,6 +2871,64 @@ def check_calibration() -> None:
           {"summary": rec, "clicks": 8, "flashes": 7}), "calibration: le rapport dit pourquoi il echoue, ou l'avance recommandee")
 
 
+def check_bench_kick() -> None:
+    """Lot 2 de la spec synchro son / image : le banc du detecteur de kick (appariement, metriques, fichiers, corpus synthetique, non-regression)."""
+    print("Banc du detecteur de kick")
+    import json as _json
+    import wave as _wave
+    import bench_kick as bk
+    # --- appariement : fenetre [vrai - 30 ms, vrai + 90 ms], un kick vrai ne sert qu'une fois, un double n'est pas un faux kick isole
+    truth = [1.0, 2.0, 3.0, 4.0]
+    m = bk.match([1.03, 2.2, 3.0, 3.06, 5.0], truth)
+    check(m["tp"] == 2 and m["fn"] == 2 and m["doubles"] == 1 and m["fp"] == 3,
+          "appariement: 1.03 et 3.0 justes, 2.2 trop tard (faux), 3.06 = double, 5.0 = faux ; 2 kicks manques", str({k: v for k, v in m.items() if k != "errors"}))
+    check(abs(m["errors"][0] - 0.03) < 1e-9 and abs(m["errors"][1]) < 1e-9, "appariement: erreur de position = detecte - vrai", str(m["errors"]))
+    mm = bk.metrics([1.025, 2.025, 3.025, 4.025], truth, 60.0)
+    check(mm["rappel"] == 1.0 and mm["precision"] == 1.0 and mm["f1"] == 1.0 and mm["erreur_mediane_ms"] == 25.0 and mm["faux_par_minute"] == 0.0,
+          "metriques: detection parfaite = F1 1, erreur 25 ms, aucun faux", str(mm))
+    mm = bk.metrics([1.0, 9.0, 11.0, 12.0], [1.0, 2.0], 60.0)
+    check(mm["rappel"] == 0.5 and mm["precision"] == 0.25 and mm["faux_par_minute"] == 3.0, "metriques: kick manque, faux kicks par minute", str(mm))
+    # --- fichiers : verite (liste seule ou dictionnaire), WAV 16 bits relu, pre-annotation signalee comme telle
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        sig, truth_s = bk._pattern(48000, 124, 8.0, 1, (0, 4, 8, 12))
+        wav = d / "morceau.wav"
+        with _wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(48000)
+            w.writeframes((np.clip(sig, -1, 1) * 32767).astype("<i2").tobytes())
+        x, rate = bk.read_audio(wav)
+        check(rate == 48000 and len(x) == len(sig) and float(np.max(np.abs(x - sig))) < 1e-3, "banc: un WAV 16 bits est relu a l'identique", f"{rate} Hz {len(x)}")
+        (d / "liste.kicks.json").write_text(_json.dumps([2.0, 1.0]), encoding="utf-8")
+        check(bk.read_truth(d / "liste.kicks.json") == ([1.0, 2.0], "main"), "banc: verite en liste seule (triee), source = main")
+        out = bk.annotate(wav)
+        got, src = bk.read_truth(out)
+        check(out.name == "morceau.kicks.json" and src == "detecteur" and len(got) >= 8, "banc: la pre-annotation ecrit .kicks.json et dit que la source est le detecteur", f"{len(got)} kicks, {src}")
+        (d / "morceau.kicks.json").write_text(_json.dumps({"kicks": truth_s}), encoding="utf-8")
+        items = bk.bench_folder(d)
+        check(len(items) == 1 and items[0]["sensibilites"]["1"]["rappel"] >= 0.85, "banc: --dossier lit les morceaux qui ont une verite et les mesure",
+              str(items[0]["sensibilites"]["1"] if items else None))
+    # --- corpus synthetique : non-regression a la sensibilite 1 (les chiffres du detecteur d'aujourd'hui, avec de la marge)
+    items = bk.bench_synthetic((1.0,), 15.0)
+    by = {it["nom"]: it["sensibilites"]["1"] for it in items}
+    for name in ("house 124 BPM", "techno 132 BPM (grondement)", "breakbeat 140 BPM", "lent 100 BPM", "telephone (coupe sous 250 Hz, -30 dB)"):
+        r = by[name]
+        check(r["rappel"] >= 0.9 and r["precision"] >= 0.95, f"banc: {name}: au moins 90 % des kicks, 95 % de justes", f"rappel {r['rappel']} precision {r['precision']}")
+    r = by["kick sature, plein niveau"]
+    check(r["rappel"] >= 0.8 and r["precision"] >= 0.95, "banc: kick sature plein niveau: au moins 80 % des kicks", f"rappel {r['rappel']} precision {r['precision']}")
+    med = [by[n]["erreur_mediane_ms"] for n in by if by[n]["kicks"] and by[n]["erreur_mediane_ms"] is not None and by[n]["rappel"] > 0.5]
+    check(med and 10 <= float(np.median(med)) <= 45, "banc: retard median de datation entre 10 et 45 ms (la valeur que le lot 3 doit faire baisser)", str(med))
+    check(by["sans kick : nappe ambiante"]["faux_par_minute"] == 0.0, "banc: une nappe ambiante sans kick ne declenche rien", str(by["sans kick : nappe ambiante"]))
+    bass = by["kick sur basse continue"]
+    check(bass["rappel"] < 0.5, "banc: limite connue : kick sur basse continue manque a la sensibilite 1 (le banc le chiffre au lieu de le cacher)", str(bass["rappel"]))
+    sig, rate, truth_b = bk.synthetic_corpus(seconds=15.0)["kick sur basse continue"]
+    hi = bk.metrics(bk.replay(sig, rate, 2.5), truth_b, 15.0)
+    check(hi["rappel"] >= 0.9 and hi["precision"] >= 0.9, "banc: ... et la sensibilite 2.5 le rattrape", f"rappel {hi['rappel']} precision {hi['precision']}")
+    txt = bk.report(items, (1.0,))
+    check("Diagnostic" in txt and "TOTAL" in txt and "sans kick" in txt, "banc: le rapport donne le tableau, le total et le diagnostic")
+
+
 def check_latence() -> None:
     print("Mesure de latence audio -> image (tools/mesure_latence.py)")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -10150,7 +10208,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick")
 
 
 def main() -> None:
@@ -10238,6 +10296,7 @@ def main() -> None:
     os.environ.pop("CASUAL_MODES_PYTHON", None)
     check_render()
     check_calibration()
+    check_bench_kick()
     check_latence()
     check_beat_grid()
     check_playback()
