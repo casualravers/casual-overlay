@@ -8,11 +8,29 @@ uniform vec2 u_grid;           // taille de la grille, en cellules
 uniform vec2 u_fk;             // (F, K) du modele
 uniform vec3 u_seeds[4];       // germes : position normalisee (origine HAUT gauche), rayon en cellules
 uniform int u_nseeds;
+// Zones (formes, vides) : u_zoned = (F, K) lu dans la carte calculee une fois par image (rd_zone.frag) ; sinon u_fk partout (origine).
+uniform int u_zoned;
+uniform sampler2D u_zone;      // carte (F, K) par cellule
+uniform int u_sym;             // 0 aucune, 1 miroir gauche-droite, 2 miroir haut-bas, 3 quatre quadrants, 4 rotation
+uniform float u_free;          // liberte 0..1
+uniform float u_free_noise;    // amplitude du bruit de V a liberte 1 (0 si l'etat est en 16 bits : il serait perdu)
+uniform int u_step;            // compteur de pas : le bruit de V change a chaque pas
 
 in vec2 v_uv;
 out vec4 f_color;
 
+float zhash(vec2 c) {                                       // hachage sans sin
+    vec3 p3 = fract(vec3(c.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 zone_fk() {
+    return u_zoned > 0 ? texture(u_zone, v_uv).rg : u_fk;
+}
+
 void main() {
+    vec2 fk = zone_fk();
     vec2 c = texture(u_state, v_uv).rg;
     vec2 lap = -c;
     lap += 0.2 * (texture(u_state, v_uv + vec2(u_texel.x, 0.0)).rg + texture(u_state, v_uv - vec2(u_texel.x, 0.0)).rg
@@ -22,8 +40,11 @@ void main() {
     float u = c.r;
     float v = c.g;
     float uvv = u * v * v;
-    u += 1.0 * lap.r - uvv + u_fk.x * (1.0 - u);
-    v += 0.5 * lap.g + uvv - (u_fk.x + u_fk.y) * v;
+    u += 1.0 * lap.r - uvv + fk.x * (1.0 - u);
+    v += 0.5 * lap.g + uvv - (fk.x + fk.y) * v;
+    if (u_sym > 0 && u_free > 0.0) {                          // sans lui, un etat symetrique le resterait : motif strictement en miroir
+        v += u_free * u_free_noise * (zhash(gl_FragCoord.xy + vec2(17.0, 31.0) * float(u_step % 4096)) - 0.5);
+    }
     vec2 p = vec2(v_uv.x, 1.0 - v_uv.y);
     for (int i = 0; i < 4; i++) {
         if (i >= u_nseeds) {

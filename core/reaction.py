@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+from typing import NamedTuple
 
 # (F, K) : taches qui se repoussent et se divisent jusqu'a remplir l'ecran (valeur classique ; mesure en RG32F : 238 taches, aucun contact,
 # motif toujours actif apres 12000 pas). En RG16F elle semblait ne jamais se diviser : c'etait un artefact d'arrondi (voir engine/reaction.py).
@@ -15,11 +16,44 @@ MAZE = (0.0290, 0.0570)         # (F, K) : taches soudees en lignes sinueuses (l
 BASE_GRID = (384, 216)          # grille de simulation a l'echelle 1 (independante de la fenetre)
 STEPS_PER_S = 600.0             # pas de simulation par seconde a vitesse 1
 MAX_STEPS = 24                  # plafond par image (au-dela, l'exces est jete : pas de retard qui s'accumule)
+SCALE_MIN, SCALE_MAX = 0.3, 2.0     # taille du motif (grille de 1280 x 720 a 0,3 : lignes tres fines)
+# Cellules x pas au plus par image : une grille fine (1280 x 720 = 11 fois plus de cellules qu'a l'echelle 1) ne peut pas faire autant de
+# pas par image. Mesure (Radeon integree) : 0,85 ns par cellule et par pas, soit ~4,2 ms a 5 millions ; a l'echelle 0,3 la simulation tourne
+# alors a ~5 pas par image (300 / s au lieu de 600 : le motif evolue deux fois moins vite), a l'echelle 0,5 a 10 pas (inchange).
+MAX_CELL_STEPS = 5_000_000
+RESIZE_MIN_S = 0.4              # echelle automatisee : au plus un changement de taille de la grille par ce delai
 SEED_COUNT = 40                 # germes de l'etat initial
 SEED_RADIUS = 3.0               # rayon d'un germe, en cellules
 KICK_SEEDS = 3                  # germes semes par kick
 DEAD_LEVEL = 0.002              # moyenne de V sous laquelle le motif est considere eteint
 WATCH_S = 2.0                   # periode du garde-fou anti-extinction
+RESEED_DELAY_S = 0.4            # symetrie ou branches changees : le motif repart des germes apres ce delai sans nouveau changement
+
+# Zones de formes et symetries de colonisation (docs/plans/2026-11-01-labyrinthe-evolution-design.md).
+# (F, K) : grosses plages pleines percees de trous (une seule masse connexe, ~50 % de l'image). Trouve par balayage (tools/rd_sweep.py,
+# RG32F, 6000 pas) : couverture 0,49, motif toujours actif, chemin lignes -> taches vivant ; voisins sains de tous cotes (0,048 ; 0,060,
+# plus proche des 65 % vises, n'est qu'a 0,001 en K de l'envahissement total : ecarte). La bande de transition est etroite : au-dessus de
+# F 0,04, K 0,058 ou moins remplit tout l'ecran.
+BLOB = (0.0440, 0.0600)
+SYM_MODES = ("none", "mirror_lr", "mirror_tb", "quad", "rot")
+ZONE_CELLS = (5, 3)             # reseau periodique du bruit des zones, en cellules sur la grille (~un tiers de la hauteur)
+ZONE_SPEED = 0.08               # cycles de derive des zones par seconde a bg_rd_drift = 1
+FREE_NOISE = 1e-3               # bruit asymetrique ajoute a V a chaque pas, x Liberte (seulement avec une symetrie)
+FREE_ZONE = 0.35                # part du bruit non replie dans la carte des zones, x Liberte
+FREE_JITTER = 0.04              # decalage max d'une copie de germe (fraction de la hauteur), x Liberte
+LAYER_SPREAD = 0.05             # ecart des seuils des couches a bg_rd_layers = 1 (V plafonne vers 0,35 : 0,30 garde la couche du dessus visible)
+MAX_PENDING_SEEDS = 32          # file des germes en attente (orbites), les plus anciens jetes au-dela
+# Zones vides et zones denses (bg_rd_void) : un bruit a grande echelle, independant de celui des formes, qui derive. Ou il depasse un
+# seuil, (F, K) glisse vers VOID_FK (au-dela de la limite d'existence du motif : la matiere s'eteint, progressivement sur le bord) ;
+# ou il est bas, la forme est tiree vers les grosses taches (DENSE_PULL).
+VOID_FK = (0.037, 0.071)
+VOID_CELLS = (3, 2)             # reseau periodique du bruit des vides, en cellules sur la grille (zones plus grandes que celles des formes)
+VOID_THR_OFF = 0.92             # seuil du bruit a Vide = 0 : au-dessus de presque tout le bruit (mesure : 0 % de vide)
+VOID_THR_FULL = 0.6             # seuil a Vide = 1 : un peu plus de la moitie de l'image vide (mesure sur 12 cycles de derive : 0,53)
+VOID_EDGE = 0.1                 # demi-largeur de la transition (bords progressifs : le motif s'amincit avant de disparaitre)
+DENSE_THR = 0.5                 # sous ce niveau de bruit, zone dense, x Vide (mesure : ~13 % de l'image strictement dense)
+DENSE_PULL = 0.9                # part de la forme tiree vers les taches dans une zone dense, a Vide = 1
+VOID_SPEED = 0.7                # vitesse de derive des vides par rapport a celle des formes
 
 
 def feed_kill(shape: float) -> tuple[float, float]:
@@ -28,10 +62,104 @@ def feed_kill(shape: float) -> tuple[float, float]:
     return (SPOTS[0] + (MAZE[0] - SPOTS[0]) * s, SPOTS[1] + (MAZE[1] - SPOTS[1]) * s) if 0.0 < s < 1.0 else (SPOTS if s == 0.0 else MAZE)
 
 
+class Zone(NamedTuple):
+    """Reglages des zones et de la symetrie pour un pas de simulation (mix 0 et sym none = comportement d'origine)."""
+    mix: float = 0.0            # variete des zones (ecart de forme autour de la forme de base)
+    t: float = 0.0              # temps de derive integre (cycles)
+    sym: str = "none"           # symetrie de colonisation (SYM_MODES)
+    branches: int = 4           # branches de la rotation
+    free: float = 0.0           # liberte de la symetrie
+    aspect: float = 16 / 9      # largeur / hauteur de la grille (rotations rondes a l'ecran)
+    void: float = 0.0           # zones vides (et denses) : 0 = tout est rempli comme avant
+
+
+def shape_feed_kill(s: float) -> tuple[float, float]:
+    """(F, K) sur l'axe interne 0..2 : 0 = points, 1 = lignes, 2 = taches (lineaire par morceaux, borne). Sur 0..1 : exactement feed_kill."""
+    s = min(max(float(s), 0.0), 2.0)
+    if s <= 1.0:
+        return feed_kill(s)
+    if s == 2.0:
+        return BLOB
+    t = s - 1.0
+    return (MAZE[0] + (BLOB[0] - MAZE[0]) * t, MAZE[1] + (BLOB[1] - MAZE[1]) * t)
+
+
+def void_threshold(void: float) -> float:
+    """Seuil du bruit des vides : decroit de VOID_THR_OFF (aucun vide) a VOID_THR_FULL ; `void` borne a 0..1."""
+    v = min(max(float(void), 0.0), 1.0)
+    return VOID_THR_OFF + (VOID_THR_FULL - VOID_THR_OFF) * v
+
+
+def orbit_size(sym: str, branches: int) -> int:
+    """Nombre de copies d'un germe pour une symetrie (branches de la rotation bornees a 2..8)."""
+    if sym == "rot":
+        return min(max(int(branches), 2), 8)
+    return {"mirror_lr": 2, "mirror_tb": 2, "quad": 4}.get(sym, 1)
+
+
+def base_seed_count(sym: str, branches: int) -> int:
+    """Germes de base de l'etat initial : ~SEED_COUNT au total une fois repetes en orbite."""
+    return max(1, round(SEED_COUNT / orbit_size(sym, branches)))
+
+
+def _orbit(x: float, y: float, sym: str, branches: int, aspect: float) -> list[tuple[float, float]]:
+    if sym == "mirror_lr":
+        return [(x, y), (1.0 - x, y)]
+    if sym == "mirror_tb":
+        return [(x, y), (x, 1.0 - y)]
+    if sym == "quad":
+        return [(x, y), (1.0 - x, y), (x, 1.0 - y), (1.0 - x, 1.0 - y)]
+    if sym == "rot":
+        n = orbit_size(sym, branches)
+        dx, dy = (x - 0.5) * aspect, y - 0.5                 # coordonnees isotropes : rotation bien ronde a l'ecran
+        out = []
+        for i in range(n):
+            a = 2.0 * math.pi * i / n
+            ca, sa = math.cos(a), math.sin(a)
+            out.append((0.5 + (dx * ca - dy * sa) / aspect, 0.5 + dx * sa + dy * ca))
+        return out
+    return [(x, y)]
+
+
+def colonize(points, sym: str, branches: int, free: float, aspect: float, salt: int) -> list[tuple[float, float, float]]:
+    """Germes (x, y, rayon) : chaque point repete en orbite selon la symetrie ; la Liberte decale position et rayon de chaque copie
+    (deterministe pour `salt`). Sans symetrie, les points sont rendus tels quels avec le rayon par defaut (Liberte sans effet)."""
+    if sym not in SYM_MODES[1:]:
+        return [(x, y, SEED_RADIUS) for x, y in points]
+    free = min(max(float(free), 0.0), 1.0)
+    rng = random.Random(salt)
+    out = []
+    for x, y in points:
+        for ox, oy in _orbit(x, y, sym, branches, aspect):
+            jx, jy, jr = (rng.uniform(-1.0, 1.0) for _ in range(3))
+            if free > 0.0:
+                ox += FREE_JITTER * free * jx / aspect
+                oy += FREE_JITTER * free * jy
+            out.append((ox % 1.0, oy % 1.0, SEED_RADIUS * (1.0 + 0.3 * free * jr)))
+    return out
+
+
+def queue_seeds(pending: list, new: list) -> list:
+    """File des germes en attente (orbites : plus de 4 par kick) : ajout a la fin, au plus MAX_PENDING_SEEDS, les plus recents gardes."""
+    return (list(pending) + list(new))[-MAX_PENDING_SEEDS:]
+
+
 def grid_size(scale: float) -> tuple[int, int]:
-    """Taille de la grille pour une echelle (0,5..2) : plus grande echelle = grille plus petite = motif plus gros a l'ecran."""
-    s = min(max(float(scale), 0.5), 2.0)
+    """Taille de la grille pour une echelle (0,3..2) : plus grande echelle = grille plus petite = motif plus gros a l'ecran."""
+    s = min(max(float(scale), SCALE_MIN), SCALE_MAX)
     return round(BASE_GRID[0] / s), round(BASE_GRID[1] / s)
+
+
+def step_load(scale: float) -> float:
+    """Charge GPU de la simulation a 60 images/s rapportee a l'echelle 1 (10 pas sur 384 x 216) : 1 a l'echelle 1, ~4 a 0,5, ~5 a 0,3
+    (les pas par image sont plafonnes par MAX_CELL_STEPS)."""
+    w, h = grid_size(scale)
+    return min(10, max_steps(w * h)) * w * h / (10.0 * BASE_GRID[0] * BASE_GRID[1])
+
+
+def max_steps(cells: int) -> int:
+    """Pas par image au plus pour une grille de `cells` cellules (au moins 1, au plus MAX_STEPS)."""
+    return max(1, min(MAX_STEPS, MAX_CELL_STEPS // max(int(cells), 1)))
 
 
 def initial_seeds(seed: int, count: int = SEED_COUNT) -> list[tuple[float, float]]:
@@ -46,8 +174,9 @@ def kick_seeds(kick_index: int, count: int = KICK_SEEDS) -> list[tuple[float, fl
     return [(rng.random(), rng.random()) for _ in range(count)]
 
 
-def steps_for(acc: float, dt: float, speed: float, energy: float) -> tuple[int, float]:
-    """Pas a faire pour cette image et reste de l'accumulateur. `dt` deja multiplie par le master du tempo."""
+def steps_for(acc: float, dt: float, speed: float, energy: float, cells: int | None = None) -> tuple[int, float]:
+    """Pas a faire pour cette image et reste de l'accumulateur. `dt` deja multiplie par le master du tempo ; `cells` = taille de la
+    grille (plafonne les pas d'une grille fine, voir MAX_CELL_STEPS ; None = plafond MAX_STEPS seul)."""
     acc += max(dt, 0.0) * STEPS_PER_S * max(speed, 0.0) * (1.0 + max(energy, 0.0))
     whole = math.floor(acc)
-    return min(whole, MAX_STEPS), acc - whole
+    return min(whole, MAX_STEPS if cells is None else max_steps(cells)), acc - whole

@@ -182,19 +182,21 @@ vec3 stochastic_pattern(vec2 p) {
     return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
 }
 
-float rd_layer(vec2 p, float angle) {
+float rd_layer(vec2 p, float angle, float thr) {
     float ar = u_res.x / max(u_res.y, 1.0);
     vec2 q = p + u_rd.x * vec2(cos(angle) / ar, sin(angle));     // decalage isotrope a l'ecran
     float v = texture(u_rd_tex, vec2(q.x, 1.0 - q.y)).g;
     float w = max(u_rd.y * 4.0, 0.02);                            // bord net sans crenelage (V varie vite pres du seuil)
-    return smoothstep(0.25 - w, 0.25 + w, v);
+    return smoothstep(thr - w, thr + w, v);
 }
 
 vec3 labyrinth_pattern(vec2 p) {
+    // u_rd.z = ecart des seuils (bg_rd_layers) : couche 1 (dessous) epaisse, couche 3 (dessus) fine = liseres emboites visibles meme
+    // sans ecart ; a 0 les trois seuils valent 0,25 (rendu d'origine).
     vec3 col = u_rd_ground;
-    col = mix(col, u_rd_c1, rd_layer(p, 1.5707963));
-    col = mix(col, u_rd_c2, rd_layer(p, 3.6651914));
-    col = mix(col, u_rd_c3, rd_layer(p, 5.7595865));
+    col = mix(col, u_rd_c1, rd_layer(p, 1.5707963, max(0.25 - u_rd.z, 0.05)));
+    col = mix(col, u_rd_c2, rd_layer(p, 3.6651914, 0.25));
+    col = mix(col, u_rd_c3, rd_layer(p, 5.7595865, 0.25 + u_rd.z));
     return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
 }
 
