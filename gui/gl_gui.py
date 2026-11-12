@@ -65,7 +65,7 @@ import gui_colors
 import gui_gates
 from core import controls as core_controls
 from core import params as core_params
-from core import safety, scenes, sessionlog, uistats
+from core import explain, safety, scenes, sessionlog, uistats
 
 STATS = uistats.Stats(log=sessionlog.event)           # duree des operations de l'interface et gels du fil Tk (rapport : menu « reglages VJ »)
 REFRESH_MS = 500
@@ -1391,7 +1391,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         s=s,
         send=send,
         tab_aff=tab_aff,
+        param_slider=param_slider,
         zone_aff=zone_aff))
+    pulse_label = gui_audio_ctl.pulse_label
     auto_master_var = gui_audio_ctl.auto_master_var
     remote_box = gui_audio_ctl.remote_box
     bars = gui_audio_ctl.bars
@@ -2312,6 +2314,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         for name, item in bars.items():
             meter.coords(item, 52, meter.coords(item)[1], 52 + 200 * min(max(state[name], 0.0), 1.0),
                          meter.coords(item)[3])
+        pulse_label.config(text=explain.pulse_text(state.get("pulse"), float(params.get("sync_lead_ms", 0.0))))
         bgv_status.set(s.status.get("bgvideo", ""))
         n_mosaic = int(s.status.get("mosaic", 0))
         mosaic_label.config(text=(f"{n_mosaic} doodle{'s' if n_mosaic > 1 else ''} dans la mosaique" if n_mosaic

@@ -56,8 +56,17 @@ def install(c):
 
         audio_var.trace_add("write", on_audio_change)
 
+    add_separator(zone_aff, "Synchro son / image")
+    c.param_slider(zone_aff, "Avance", "sync_lead_ms", 0, 200, 5,
+                   "Avance (ms) : sur un morceau regulier, les effets « sur kick » partent ce temps AVANT le kick detecte pour que la lumiere tombe avec le son "
+                   "(la chaine micro, analyse, rendu, ecran et videoprojecteur retarde la lumiere). 0 = on reagit a la detection, comme avant. "
+                   "La valeur se mesure avec tools/calibrer_avance.py (telephone en ralenti) ; propre a la salle et au materiel. "
+                   "Sans pulsation calee (voyant ci-dessous) ou pendant une montee / cassure / drop, rien n'est predit : la reaction reste a la detection.")
+    pulse_label = tk.Label(tab_aff, text="pulsation : -", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
+    pulse_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(0, 2))
+
     add_separator(zone_aff, "Affichage")
-    frame = tk.Frame(tab_aff)                        # barres debug (H) et rechargement des shaders (R) : touches de la fenetre de rendu seulement
+    frame = tk.Frame(tab_aff)                      # barres debug (H) et rechargement des shaders (R) : touches de la fenetre de rendu seulement
     frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     for text, cmd in (("Plein ecran", "fullscreen"), ("Sauver reglages", "save")):
         tk.Button(frame, text=text, command=lambda c=cmd: send(c)).pack(side="left", padx=(0, 6))
@@ -147,4 +156,4 @@ def install(c):
     status_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
 
     import types
-    return types.SimpleNamespace(remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)
+    return types.SimpleNamespace(pulse_label=pulse_label, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)

@@ -98,6 +98,7 @@ TABLE: tuple[Param, ...] = (
     _p("strobe_div", 4, 2, 16, scope="room", doc="Strobe leger : un eclair tous les N kicks (4 = un kick sur quatre, soit un par mesure)."),
     _p("trans_time", 0.8, 0.0, 3.0, scope="room", doc="Duree de la transition au changement de scene, en secondes (0 = pas de transition : l'ancien flash du VJ, rien a la main)."),
     _p("trans_kind", "fade", choices=("fade", "zoom"), scope="room", doc="Style de la transition de scene : fondu enchaine (fade) ou zoom avec aberration (zoom)."),
+    _p("sync_lead_ms", 0.0, 0.0, 200.0, scope="room", doc="Avance (ms) : sur un morceau regulier, les effets « sur kick » partent ce temps AVANT le kick detecte pour que la lumiere tombe avec le son ; 0 = on reagit a la detection (mesurer avec tools/calibrer_avance.py)."),
     _p("strobe_dark", 1.0, 0.05, 1.0, scope="room", doc="Seuil de luminosite du strobe : il ne blanchit que les parties de l'image plus sombres que ce seuil (1 = toute l'image)."),
     _p("strobe_kind", "strobe", choices=("strobe", "foudre"), scope="room", doc="Ce que fait le strobe : eclairs blancs (strobe) ou arbre de lumiere fractal declenche par les kicks (foudre)."),
     _p("foudre_amount", 0.7, 0.0, 1.5, scope="room", doc="Foudre : intensite de la lumiere."),

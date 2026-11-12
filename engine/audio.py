@@ -12,6 +12,7 @@ from collections import deque
 
 from core.onset import FastAttack, OnsetDetector, WideRise
 from core.phase import PhaseTracker
+from core.pulse import LeadGate, PulseClock
 from core.rhythm import Rhythm
 from engine.deps import np, sd
 
@@ -425,6 +426,11 @@ class AudioAnalyzer:
         self.beats = 0
         self.rhythm = Rhythm()                  # BPM et drop, nourris ici (kick par kick) : independants de la projection
         self.phase = PhaseTracker()             # phases du morceau (silence, ambiance, groove, montee, cassure, pic), nourries ici elles aussi
+        self.pulse = PulseClock()               # horloge de pulsation calee sur les kicks reels (lot 4 : declenchement en avance)
+        self.gate = LeadGate()
+        self.lead_s = 0.0                       # « Avance » en secondes (reglage sync_lead_ms, ecrit par la boucle de rendu) ; 0 = on reagit a la detection
+        self.pulse_info: dict = {"state": "absente", "confidence": 0.0, "phase": None, "period_ms": 0.0, "delta_ms": 0.0, "lead_ms": 0.0,
+                                 "predicting": False, "predicted": 0, "reactive": 0}
         self._last_total = 0
         self._ages: deque = deque()             # (instant du traitement, retard de capture) sur AGE_FLOOR_S : leur plus petit = le retard stable
         self.audio_age_ms = 0.0                 # age du dernier echantillon analyse quand l'analyse en parle (capture + attente du fil), lisse
@@ -472,6 +478,18 @@ class AudioAnalyzer:
             now = time.monotonic()
             levels, beat = self.extractor.process(window, dt, now)
             edges = {name: bool(levels.pop("edge_" + name, False)) for name in EDGES}
+            fire = beat                                                  # l'effet « sur kick » part : a la detection, ou en avance (voir core/pulse.py)
+            try:
+                t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
+                self.rhythm.update(t_audio, levels, beat)
+                self.phase.update(t_audio, levels, beat, self.rhythm.state, self.rhythm.bpm)
+                fire = self._lead_step(t_audio, beat)
+            except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
+                fire = beat
+            if fire != beat:                                             # les kicks des couches a sensibilite 1 sont ce meme kick : ils suivent
+                for name in ("bg", "logo"):
+                    if abs(self.extractor.layer_sens.get(name, 1.0) - 1.0) < 1e-6:
+                        edges[name] = fire
             with self.lock:
                 self.levels = levels
                 for name, hit in edges.items():
@@ -479,15 +497,20 @@ class AudioAnalyzer:
                         self.t_edge[name] = now
                         if name == "hit":
                             self.hits += 1
-                if beat:
+                if fire:
                     self.t_beat = now
                     self.beats += 1
-            try:
-                t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
-                self.rhythm.update(t_audio, levels, beat)
-                self.phase.update(t_audio, levels, beat, self.rhythm.state, self.rhythm.bpm)
-            except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
-                pass
+
+    def _lead_step(self, t_audio: float, beat: bool) -> bool:
+        """Pulsation et avance : alimente l'horloge (kicks reels) et dit si l'effet « sur kick » part maintenant. Avance 0 : exactement la detection."""
+        rhythm = self.rhythm
+        self.pulse.update(t_audio, beat, rhythm.bpm)
+        allowed = rhythm.state == "idle" and getattr(self.phase, "phase", "groove") in ("groove", "pic")      # montee, cassure, drop : reactif
+        fire = self.gate.step(t_audio, self.pulse, beat, max(float(self.lead_s), 0.0), allowed)
+        self.pulse_info = {"state": self.pulse.state, "confidence": round(self.pulse.confidence, 2), "phase": self.pulse.phase(t_audio),
+                           "period_ms": self.pulse.period * 1000.0, "delta_ms": self.gate.delta_ms, "lead_ms": min(max(self.lead_s, 0.0), 0.6 * self.pulse.period) * 1000.0,
+                           "predicting": self.gate.predicting(self.pulse, max(float(self.lead_s), 0.0), allowed), "predicted": self.gate.predicted, "reactive": self.gate.reactive}
+        return fire
 
     def latest(self) -> dict:
         with self.lock:
@@ -500,6 +523,7 @@ class AudioAnalyzer:
         state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
         state["audio_age_ms"] = self.audio_age_ms             # retard de capture + attente du fil d'analyse (0 sans horodatage de capture)
         state["audio_age_floor_ms"] = self.audio_age_floor_ms
+        state["pulse"] = dict(self.pulse_info)                 # pulsation calee / libre / perdue, ecart prediction - detection (voir core/pulse.py)
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since
         state["beat"] = math.exp(-since / BEAT_DECAY_TAU_S) if t_beat is not None else 0.0

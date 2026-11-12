@@ -497,6 +497,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
         analyzer.extractor.hit_sens = float(params.get("hit_sensitivity", 1.0))                 # frappes aigues
+        analyzer.lead_s = float(params.get("sync_lead_ms", 0.0)) / 1000.0                       # avance des effets sur kick (lot 4)
         analyzer.extractor.layer_sens = {"bg": float(params.get("sens_bg", 1.0)), "logo": float(params.get("sens_logo", 1.0))}      # kick par couche
 
         u0 = time.perf_counter()

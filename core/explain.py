@@ -55,3 +55,18 @@ def phase_measures_text(info: dict | None) -> str:
         return "mesures : -"
     return (f"mesures : kicks {_fr(info['kicks'], 1)}/s | energie x{_fr(info.get('energy', 1.0))} | "
             f"mediums + aigus x{_fr(info.get('top8', 1.0))} (8 s) x{_fr(info.get('top20', 1.0))} (20 s) | calme {round(100 * float(info.get('calm', 0.0)))} %")
+
+
+def pulse_text(info: dict | None, lead_ms: float = 0.0) -> str:
+    """Voyant de la pulsation (lot 4) : « pulsation calee, avance 80 ms : les effets partent en avance (ecart prediction - detection +3 ms) »."""
+    if not info:
+        return "pulsation : -"
+    state = str(info.get("state", "absente"))
+    names = {"cale": "calee", "libre": "libre (en cours d'accrochage)", "perdue": "perdue", "absente": "pas encore de BPM fiable"}
+    text = "pulsation " + names.get(state, state)
+    if lead_ms <= 0.0:
+        return text + " | avance 0 : les effets suivent la detection"
+    if info.get("predicting"):
+        delta = float(info.get("delta_ms", 0.0))
+        return text + f" | avance {round(lead_ms)} ms : effets en avance (ecart prediction - detection {delta:+.0f} ms)"
+    return text + f" | avance {round(lead_ms)} ms en attente : reaction a la detection tant que la pulsation n'est pas calee et reguliere"
