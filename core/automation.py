@@ -9,6 +9,8 @@ import random
 
 from core.controls import effective_tempo
 
+MIN_PERIOD_S = 0.3              # periode de courbe la plus courte (curseur « Vitesse » de l'editeur)
+
 # --- Automations de reglages ------------------------------------------------------------
 # Meme principe que "Variation automatique" d'audio2wave (voir son CLAUDE.md): chaque reglage
 # automatise suit sa PROPRE courbe (AUTOMATION_POINTS points de controle boucles, interpoles
@@ -161,7 +163,7 @@ class AutomationEngine:
             points = entry["points"]
             n = len(points)
             start = self._start.setdefault(key, now)
-            pos = ((now - start) / max(0.5, float(entry["period"])) % 1.0) * n
+            pos = ((now - start) / max(MIN_PERIOD_S, float(entry["period"])) % 1.0) * n
             i0 = int(pos) % n
             frac = pos - int(pos)
             v = points[i0] + (points[(i0 + 1) % n] - points[i0]) * frac

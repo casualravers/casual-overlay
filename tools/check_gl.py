@@ -6513,6 +6513,20 @@ def check_automation() -> None:
           "par defaut: effets et fond animes, position/taille/opacite du logo laisses fixes", f"{len(enabled)} actives")
     periods = [default[k]["period"] for k in enabled]
     check(len(set(periods)) == len(periods), "periodes des automations actives toutes differentes (pas de repetition)")
+    a2w_dir = str(Path(__file__).resolve().parent.parent / "sources" / "audio2wave")
+    if a2w_dir not in sys.path:
+        sys.path.insert(0, a2w_dir)
+    try:
+        import audio2wave_live as lv_
+        import audio2wave_snap as sn_
+        for mod in (lv_, sn_):
+            lo, hi = mod.AUTOMATE_PERIOD_MIN_S, mod.AUTOMATE_PERIOD_MAX_S
+            round_trip = all(abs(mod.pos_to_period(mod.period_to_pos(p)) - p) < 1e-6 * p for p in (0.3, 1.0, 3.0, 10.0, 127.0, 400.0))
+            check(lo == 0.3 and hi == 400.0 and round_trip and mod.period_to_pos(hi) == 0.0 and abs(mod.period_to_pos(lo) - 1000.0) < 1e-9
+                  and mod.period_to_pos(1.0) > mod.period_to_pos(3.0) > mod.period_to_pos(30.0),
+                  f"curseur Vitesse ({mod.__name__}) : de 400 s a 0,3 s (10x plus rapide qu'avant), echelle logarithmique, aller-retour exact")
+    except ImportError as exc:
+        check(False, "curseur Vitesse : modules audio2wave importables", str(exc))
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
     check(len(specs) == 30 and all(k in specs and default[k]["enabled"] for k in rd_auto)
