@@ -412,8 +412,15 @@ les basses).
   Liberte 0 = miroir parfait qui ne se defait jamais (calcul deterministe). **Un motif deja installe ne prend pas la symetrie** (elle ne vit que dans les germes) : changer `bg_rd_sym` (ou `bg_rd_branches` en rotation) relance donc le motif des germes (`Renderer._rd_sig` / `_rd_want`, apres `RESEED_DELAY_S` 0,4 s de stabilite pour qu'un curseur en mouvement ne relance pas a chaque cran) ; variete, liberte, forme, derive et epaisseur (automatisables) ne relancent jamais. Germes en file (`queue_seeds`, 32 au plus, 4 par pas ; 4 sans symetrie
   comme avant). **Epaisseur des couches** (`bg_rd_layers`, `LAYER_SPREAD` 0,05) : seuils 0,20 / 0,25 / 0,30, couche 1 (dessous) epaisse, couche 3
   (dessus) fine : liseres emboites visibles meme sans ecart (V plafonne vers 0,35 : un seuil plus haut fait disparaitre la couche du dessus).
-  **Valeurs neutres** (mix 0, layers 0, sym none) = simulation et image identiques bit pour bit a la version d'avant. Automations actives par
-  defaut : forme, ecart, variete, epaisseur, liberte (pas taille, derive, symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0.
+  **Zones vides et denses** (`bg_rd_void`, curseur « Vide », 0 par defaut ; contre la monotonie d'un motif qui remplit toujours tout l'ecran) : un
+  second bruit a grande echelle (`VOID_CELLS` 3 x 2, autre graine, derive a `VOID_SPEED` x celle des formes), dans `rd_zone.frag` ; au-dessus du seuil
+  `void_threshold(void)` (0,92 -> 0,6 : ~0 % a ~53 % de vide, mesure sur 12 cycles de derive) (F, K) glisse vers `VOID_FK` (0,037 ; 0,071), au-dela de la
+  limite d'existence du motif : la matiere s'eteint, et le bord s'amincit en points epars (`VOID_EDGE`) ; sous `DENSE_THR` 0,5 (~13 % de l'image) la
+  forme est tiree vers les taches (`DENSE_PULL`, x Vide : nid d'abeille, plus de matiere). Les vides suivent la symetrie (bruit replie, Liberte). Une
+  zone qui se libere est recolonisee par les bords et les germes des kicks (ceux tombes dans un vide meurent). `u_zoned` (rd_step.frag) = carte lue
+  si mix > 0 ou void > 0 ; a 0 partout : bit pour bit l'ancien comportement. **Valeurs neutres** (mix 0, layers 0, sym none, void 0) = simulation et
+  image identiques bit pour bit a la version d'avant. Automations actives par defaut : forme, ecart, variete, epaisseur, liberte, vide (0,15 a 0,6,
+  periode 107 s ; pas taille, derive, symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0.
   `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
   `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, relance a la symetrie, rafale, epaisseur).
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**

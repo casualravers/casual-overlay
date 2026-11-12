@@ -660,7 +660,8 @@ class Renderer:
             self.rd.ensure(float(p["bg_rd_scale"]))
             gw, gh = self.rd.size
             sym, branches, free = str(p["bg_rd_sym"]), int(p["bg_rd_branches"]), float(p["bg_rd_free"])
-            zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh)
+            zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh,
+                                 void=float(p["bg_rd_void"]))
             sig = (sym, branches if sym == "rot" else 0)
             if not self._rd_active:                    # activation : repart d'un etat seme propre (germes en orbite si symetrie)
                 self.rd.reset(self.rd.seed, zone)

@@ -615,7 +615,7 @@ def check_gui() -> None:
             root.update_idletasks()
             out["rd_written"] = params["bg_rd_scale"]
             out["rd_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False))
-                              for lb in ("Variete", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
+                              for lb in ("Variete", "Vide", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
             for w in gg.row_of_label(c["rd_box"], "Variete", panels=False):
                 for x in gg.leaves(w):
                     if x.winfo_class() == "Scale":
@@ -1515,9 +1515,9 @@ def check_gui() -> None:
           and all(gl_.get(lb) == off for lb in ("Couleurs 1 / 2", "Angle du degrade", "Taille des carreaux", "Contraste du damier", "Cadence du damier")),
           "palette labyrinthe: teinte, vitesse et reaction actives, couleurs du duo, angle et damier grises", str(gl_))
     check(out.get("rd_written") == 1.5, "palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
-    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 6 and out.get("rd_mix_written") == 0.4
+    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 7 and out.get("rd_mix_written") == 0.4
           and out.get("rd_sym_written") == "rot",
-          "palette labyrinthe: variete, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
+          "palette labyrinthe: variete, vide, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
           str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"))))
     check(out.get("rd_branch_mirror") == off and out.get("rd_branch_rot") == on
           and all(v == on for v in (out.get("rd_others_none") or {"x": off}).values()),
@@ -6498,11 +6498,11 @@ def check_automation() -> None:
     periods = [default[k]["period"] for k in enabled]
     check(len(set(periods)) == len(periods), "periodes des automations actives toutes differentes (pas de repetition)")
     from core import params_schema as ps_
-    rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free")
-    check(len(specs) == 28 and all(k in specs and default[k]["enabled"] for k in rd_auto)
+    rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
+    check(len(specs) == 29 and all(k in specs and default[k]["enabled"] for k in rd_auto)
           and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto)
           and not any(k in specs for k in ("bg_rd_scale", "bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
-          "labyrinthe: 5 automations actives par defaut, plages dans celles des reglages, ni taille, ni derive, ni symetrie", str(len(specs)))
+          "labyrinthe: 6 automations actives par defaut, plages dans celles des reglages, ni taille, ni derive, ni symetrie", str(len(specs)))
 
     def fresh():
         p = copy.deepcopy(gl.DEFAULT_PARAMS)
@@ -8306,15 +8306,15 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 13 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 14 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
-          and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5,
-          "labyrinthe: 13 reglages du fond (zones, couches, symetrie), valeurs par defaut neutres")
+          and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0,
+          "labyrinthe: 14 reglages du fond (zones, vides, couches, symetrie), valeurs par defaut neutres")
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
-    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free")
+    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void")
     old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
     for k in new_rd:
         old_scene.get("fond", {}).pop(k, None)
@@ -8490,6 +8490,31 @@ def check_rd_zones() -> None:
     sim(1.0, 500, rc.Zone(mix=0.8), grown)
     gc = float((grown.read_v() > 0.25).mean())
     check(0.05 < gc < 0.9, "zones : taille du motif changee avec des zones actives, motif toujours vivant", f"couverture {gc:.2f}")
+    # ---- zones vides (et denses)
+    cov0 = float((sim(0.8, 6000).read_v() > 0.25).mean())
+    rv = sim(0.8, 6000, rc.Zone(void=1.0))
+    v1 = rv.read_v()
+    cov1 = float((v1 > 0.25).mean())
+    check(0.05 < cov1 < 0.7 * cov0, "vide : a 1, une partie de l'image reste sans matiere et le motif reste vivant", f"couverture {cov0:.2f} -> {cov1:.2f}")
+    hh, ww = v1.shape
+    fkmap = np.frombuffer(rv.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[::-1]          # meme sens que read_v (haut en premier)
+    dead = fkmap[:, :, 1] > rc.VOID_FK[1] - 0.004
+    check(dead.mean() > 0.2 and float(v1[dead].mean()) < 0.02 and float(v1[~dead].mean()) > 0.05,
+          "vide : la matiere s'eteint dans les zones vides et reste ailleurs", f"vide {dead.mean():.2f}, V {v1[dead].mean():.3f} / {v1[~dead].mean():.3f}")
+    dense = (fkmap[:, :, 0] > 0.0415) & (fkmap[:, :, 1] < 0.0625)
+    alive = ~dead & ~dense
+    check(dense.mean() > 0.03 and float((v1[dense] > 0.25).mean()) > 1.3 * float((v1[alive] > 0.25).mean()),
+          "vide : les zones denses concentrent plus de matiere que le reste",
+          f"dense {dense.mean():.2f}, couverture {float((v1[dense] > 0.25).mean()):.2f} contre {float((v1[alive] > 0.25).mean()):.2f}")
+    sym_r = sim(0.8, 40, rc.Zone(void=1.0, sym="mirror_lr", free=0.0))
+    ks = np.frombuffer(sym_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    free_r = sim(0.8, 40, rc.Zone(void=1.0, sym="mirror_lr", free=1.0))
+    kf = np.frombuffer(free_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    check(float(np.abs(ks - ks[:, ::-1]).max()) < 1e-5 and float(np.abs(kf - kf[:, ::-1]).max()) > 1e-3,
+          "vide : les vides suivent la symetrie (miroir parfait a liberte 0, desymetrises par la liberte)")
+    k_t2 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=2.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    k_t0 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=0.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    check(float(np.abs(k_t2 - k_t0).mean()) > 5e-4, "vide : les zones vides derivent avec le temps")
 
 
 def check_rd_symmetry() -> None:
@@ -8603,6 +8628,11 @@ def check_bg_labyrinthe() -> None:
     check(abs(z2 - z1).max() == 0 and rz0._rd_zone_t == zt, "labyrinthe: tempo a 0 = zones figees elles aussi (derive arretee)")
     _r, flat_layers = run(bg_rd_layers=0.0)
     check(abs(flat_layers - a).max() == 0, "labyrinthe: epaisseur des couches 0 = image d'origine")
+    _r, voided = run(frames=120, bg_rd_void=1.0)
+    _r, filled = run(frames=120)
+    ground = lambda img: float((img.max(axis=2) < 40).mean())
+    check(ground(voided) > ground(filled) + 0.1, "labyrinthe: Vide = des zones sans matiere (beaucoup plus de fond visible)",
+          f"fond visible {ground(filled):.2f} -> {ground(voided):.2f}")
     def visible(img):
         """Part des pixels de chaque couche (rouge = 1, vert = 2, bleu = 3 ; couche 3 posee par-dessus)."""
         return [float(((img[:, :, c] > 180) & (img[:, :, (c + 1) % 3] < 80) & (img[:, :, (c + 2) % 3] < 80)).mean()) for c in range(3)]
@@ -8928,6 +8958,10 @@ def check_reaction_pure() -> None:
           "forme 0..2 : points, lignes, taches ; identique a feed_kill sur 0..1")
     mid = rc.shape_feed_kill(1.5)
     check(all(abs(a - (b + c) / 2) < 1e-12 for a, b, c in zip(mid, rc.MAZE, rc.BLOB)), "forme 1,5 : milieu lignes / taches")
+    thr = [rc.void_threshold(v) for v in (0.0, 0.25, 0.5, 0.75, 1.0)]
+    check(thr[0] >= 0.9 and thr[-1] == rc.VOID_THR_FULL and all(a > b for a, b in zip(thr, thr[1:]))
+          and rc.void_threshold(-2) == thr[0] and rc.void_threshold(9) == thr[-1],
+          "vide: seuil du bruit decroissant, presque aucune zone vide a 0 (seuil au-dessus du bruit), borne a 0..1", str(thr))
     check([rc.orbit_size(s, 6) for s in rc.SYM_MODES] == [1, 2, 2, 4, 6] and rc.orbit_size("rot", 20) == 8 and rc.orbit_size("rot", 1) == 2,
           "taille des orbites, branches bornees 2..8")
     pts = rc.initial_seeds(3, 10)

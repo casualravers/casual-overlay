@@ -123,7 +123,8 @@ def install(c):
     param_slider(rz, "Taille du motif", "bg_rd_scale", 0.5, 2.0, 0.05, "Epaisseur des lignes et des taches.")
     param_slider(rz, "Ecart des couches", "bg_rd_offset", 0.0, 0.05, 0.002, "Decalage entre les 3 couleurs.")
     param_slider(rz, "Variete", "bg_rd_mix", 0.0, 1.0, 0.05, "Points, lignes et taches melanges par zones.")
-    param_slider(rz, "Derive", "bg_rd_drift", 0.0, 1.0, 0.05, "Vitesse de deplacement des zones de formes.")
+    param_slider(rz, "Vide", "bg_rd_void", 0.0, 1.0, 0.05, "Zones sans matiere (et zones denses) qui derivent.")
+    param_slider(rz, "Derive", "bg_rd_drift", 0.0, 1.0, 0.05, "Vitesse de deplacement des zones (formes et vides).")
     param_slider(rz, "Epaisseur des couches", "bg_rd_layers", 0.0, 1.0, 0.05, "Couche 1 large dessous, couche 3 fine dessus.")
     param_radio(rz, "Symetrie", "bg_rd_sym", (("Aucune", "none"), ("Miroir G-D", "mirror_lr"), ("Miroir H-B", "mirror_tb"),
                                                ("Quadrants", "quad"), ("Rotation", "rot")),

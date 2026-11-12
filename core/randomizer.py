@@ -255,7 +255,7 @@ def random_background_params(rng: random.Random) -> dict:
         h = rng.random()
         hues = (h, (h + rng.uniform(0.2, 0.4)) % 1.0, (h + rng.uniform(0.6, 0.8)) % 1.0)      # trois teintes espacees d'au moins 0,2
         values.update({"bg_rd_shape": round(rng.uniform(0.2, 0.9), 2), "bg_rd_scale": round(rng.uniform(0.7, 1.5), 2),
-                       "bg_rd_offset": round(rng.uniform(0.0, 0.03), 3), "bg_rd_mix": round(rng.uniform(0.0, 0.9), 2),
+                       "bg_rd_offset": round(rng.uniform(0.0, 0.03), 3), "bg_rd_mix": round(rng.uniform(0.0, 0.9), 2), "bg_rd_void": round(rng.uniform(0.0, 0.8), 2),
                        "bg_rd_layers": round(rng.uniform(0.0, 0.8), 2), "bg_rd_drift": round(rng.uniform(0.1, 0.8), 2),
                        "bg_rd_sym": rng.choice(("mirror_lr", "mirror_tb", "quad", "rot")) if rng.random() < 1 / 3 else "none",
                        "bg_rd_branches": rng.randint(3, 6), "bg_rd_free": round(rng.uniform(0.2, 0.8), 2)})

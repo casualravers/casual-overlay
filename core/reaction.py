@@ -37,6 +37,17 @@ FREE_ZONE = 0.35                # part du bruit non replie dans la carte des zon
 FREE_JITTER = 0.04              # decalage max d'une copie de germe (fraction de la hauteur), x Liberte
 LAYER_SPREAD = 0.05             # ecart des seuils des couches a bg_rd_layers = 1 (V plafonne vers 0,35 : 0,30 garde la couche du dessus visible)
 MAX_PENDING_SEEDS = 32          # file des germes en attente (orbites), les plus anciens jetes au-dela
+# Zones vides et zones denses (bg_rd_void) : un bruit a grande echelle, independant de celui des formes, qui derive. Ou il depasse un
+# seuil, (F, K) glisse vers VOID_FK (au-dela de la limite d'existence du motif : la matiere s'eteint, progressivement sur le bord) ;
+# ou il est bas, la forme est tiree vers les grosses taches (DENSE_PULL).
+VOID_FK = (0.037, 0.071)
+VOID_CELLS = (3, 2)             # reseau periodique du bruit des vides, en cellules sur la grille (zones plus grandes que celles des formes)
+VOID_THR_OFF = 0.92             # seuil du bruit a Vide = 0 : au-dessus de presque tout le bruit (mesure : 0 % de vide)
+VOID_THR_FULL = 0.6             # seuil a Vide = 1 : un peu plus de la moitie de l'image vide (mesure sur 12 cycles de derive : 0,53)
+VOID_EDGE = 0.1                 # demi-largeur de la transition (bords progressifs : le motif s'amincit avant de disparaitre)
+DENSE_THR = 0.5                 # sous ce niveau de bruit, zone dense, x Vide (mesure : ~13 % de l'image strictement dense)
+DENSE_PULL = 0.9                # part de la forme tiree vers les taches dans une zone dense, a Vide = 1
+VOID_SPEED = 0.7                # vitesse de derive des vides par rapport a celle des formes
 
 
 def feed_kill(shape: float) -> tuple[float, float]:
@@ -53,6 +64,7 @@ class Zone(NamedTuple):
     branches: int = 4           # branches de la rotation
     free: float = 0.0           # liberte de la symetrie
     aspect: float = 16 / 9      # largeur / hauteur de la grille (rotations rondes a l'ecran)
+    void: float = 0.0           # zones vides (et denses) : 0 = tout est rempli comme avant
 
 
 def shape_feed_kill(s: float) -> tuple[float, float]:
@@ -64,6 +76,12 @@ def shape_feed_kill(s: float) -> tuple[float, float]:
         return BLOB
     t = s - 1.0
     return (MAZE[0] + (BLOB[0] - MAZE[0]) * t, MAZE[1] + (BLOB[1] - MAZE[1]) * t)
+
+
+def void_threshold(void: float) -> float:
+    """Seuil du bruit des vides : decroit de VOID_THR_OFF (aucun vide) a VOID_THR_FULL ; `void` borne a 0..1."""
+    v = min(max(float(void), 0.0), 1.0)
+    return VOID_THR_OFF + (VOID_THR_FULL - VOID_THR_OFF) * v
 
 
 def orbit_size(sym: str, branches: int) -> int:

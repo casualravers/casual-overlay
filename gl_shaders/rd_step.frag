@@ -8,8 +8,8 @@ uniform vec2 u_grid;           // taille de la grille, en cellules
 uniform vec2 u_fk;             // (F, K) du modele
 uniform vec3 u_seeds[4];       // germes : position normalisee (origine HAUT gauche), rayon en cellules
 uniform int u_nseeds;
-// Zones de formes : u_mix > 0 = (F, K) lu dans la carte calculee une fois par image (rd_zone.frag) ; u_mix = 0 = u_fk partout (origine).
-uniform float u_mix;           // variete des zones
+// Zones (formes, vides) : u_zoned = (F, K) lu dans la carte calculee une fois par image (rd_zone.frag) ; sinon u_fk partout (origine).
+uniform int u_zoned;
 uniform sampler2D u_zone;      // carte (F, K) par cellule
 uniform int u_sym;             // 0 aucune, 1 miroir gauche-droite, 2 miroir haut-bas, 3 quatre quadrants, 4 rotation
 uniform float u_free;          // liberte 0..1
@@ -26,7 +26,7 @@ float zhash(vec2 c) {                                       // hachage sans sin
 }
 
 vec2 zone_fk() {
-    return u_mix > 0.0 ? texture(u_zone, v_uv).rg : u_fk;
+    return u_zoned > 0 ? texture(u_zone, v_uv).rg : u_fk;
 }
 
 void main() {

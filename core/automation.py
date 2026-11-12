@@ -37,6 +37,7 @@ AUTOMATION_SPECS: dict[str, tuple] = {
     "bg_rd_mix":        ("Variete des zones", 0.2, 0.9, "triangle", 97, True),
     "bg_rd_layers":     ("Epaisseur des couches", 0.1, 0.8, "sinus", 101, True),
     "bg_rd_free":       ("Liberte de la symetrie", 0.2, 0.8, "sinus", 103, True),
+    "bg_rd_void":       ("Vide du labyrinthe", 0.15, 0.6, "sinus", 107, True),
     "logo_x":           ("Position X", 0.35, 0.65, "sinus", 43, False),
     "logo_y":           ("Position Y", 0.42, 0.58, "sinus", 31, False),
     "logo_scale":       ("Taille (image)", 0.30, 0.42, "sinus", 13, False),
