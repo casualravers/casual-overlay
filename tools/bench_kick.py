@@ -44,9 +44,13 @@ DEFAULT_SENS = (1.0,)
 
 # --- rejeu et mesure -----------------------------------------------------------------------------------------------
 
+FAST = True                    # detecteur d'attaque rapide (lot 3) actif ; `--sans-rapide` pour comparer avec la FFT seule
+
+
 def replay(signal, rate: int, sensitivity: float = 1.0, hop: int = HOP) -> list[float]:
     """Instants (s) des kicks detectes, a vitesse simulee. Meme boucle que le fil d'analyse : un tampon glissant de 2048 echantillons."""
     ex = FeatureExtractor(rate, sensitivity=sensitivity)
+    ex.fast_attack = FAST
     x = np.asarray(signal, dtype=np.float32)
     win = ex.win_size
     got: list[float] = []
@@ -338,7 +342,10 @@ def main(argv=None) -> int:
     ap.add_argument("--sensibilites", default="1", help="liste separee par des virgules (defaut 1)")
     ap.add_argument("--json", help="ecrit le resultat dans ce fichier (comparable d'une version a l'autre)")
     ap.add_argument("--duree", type=float, default=30.0, help="duree du corpus synthetique, en secondes")
+    ap.add_argument("--sans-rapide", action="store_true", help="coupe le detecteur d'attaque rapide (FFT seule : comparer avant / apres le lot 3)")
     a = ap.parse_args(argv)
+    global FAST
+    FAST = not a.sans_rapide
     if a.commande_ou_fichier and a.commande_ou_fichier[0] == "annoter":
         for f in a.commande_ou_fichier[1:]:
             print("ecrit", annotate(Path(f)), "(a corriger a la main avant de s'en servir)")

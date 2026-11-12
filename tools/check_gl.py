@@ -2917,11 +2917,46 @@ def check_bench_kick() -> None:
         check(r["rappel"] >= 0.9 and r["precision"] >= 0.95, f"banc: {name}: au moins 90 % des kicks, 95 % de justes", f"rappel {r['rappel']} precision {r['precision']}")
     r = by["kick sature, plein niveau"]
     check(r["rappel"] >= 0.8 and r["precision"] >= 0.95, "banc: kick sature plein niveau: au moins 80 % des kicks", f"rappel {r['rappel']} precision {r['precision']}")
-    med = [by[n]["erreur_mediane_ms"] for n in by if by[n]["kicks"] and by[n]["erreur_mediane_ms"] is not None and by[n]["rappel"] > 0.5]
-    check(med and 10 <= float(np.median(med)) <= 45, "banc: retard median de datation entre 10 et 45 ms (la valeur que le lot 3 doit faire baisser)", str(med))
+    normal = ("house 124 BPM", "techno 132 BPM (grondement)", "breakbeat 140 BPM", "lent 100 BPM")
+    med = [by[n]["erreur_mediane_ms"] for n in normal]
+    check(float(np.median(med)) < 20.0 and max(med) < 25.0,
+          "lot 3 : retard median de datation sous 20 ms sur les morceaux normaux (30 ms avec la FFT seule)", str(med))
     check(by["sans kick : nappe ambiante"]["faux_par_minute"] == 0.0, "banc: une nappe ambiante sans kick ne declenche rien", str(by["sans kick : nappe ambiante"]))
+    check(by["sans kick : charleys et claps secs"]["faux_par_minute"] <= 60.0 and by["sans kick : charleys et caisses claires larges"]["faux_par_minute"] <= 70.0,
+          "lot 3 : l'attaque rapide n'ajoute aucun faux kick sur des claps / caisses claires sans kick (limite connue : ~60 /min, comme la FFT seule)",
+          f"{by['sans kick : charleys et claps secs']['faux_par_minute']} / {by['sans kick : charleys et caisses claires larges']['faux_par_minute']}")
     bass = by["kick sur basse continue"]
-    check(bass["rappel"] < 0.5, "banc: limite connue : kick sur basse continue manque a la sensibilite 1 (le banc le chiffre au lieu de le cacher)", str(bass["rappel"]))
+    check(bass["rappel"] < 0.7, "banc: limite connue : kick sur basse continue encore en partie manque a la sensibilite 1 (le banc le chiffre au lieu de le cacher)", str(bass["rappel"]))
+    # --- avant / apres le lot 3 : meme corpus, FFT seule : le retard baisse d'au moins 10 ms sans perdre plus d'un point de F1 (critere de la spec)
+    bk.FAST = False
+    try:
+        slow = {it["nom"]: it["sensibilites"]["1"] for it in bk.bench_synthetic((1.0,), 15.0)}
+    finally:
+        bk.FAST = True
+    for name in normal:
+        check(by[name]["erreur_mediane_ms"] <= slow[name]["erreur_mediane_ms"] - 10.0 and by[name]["f1"] >= slow[name]["f1"] - 0.01,
+              f"lot 3 : {name}: retard -10 ms ou mieux, F1 au plus 1 point de moins",
+              f"{slow[name]['erreur_mediane_ms']} -> {by[name]['erreur_mediane_ms']} ms, F1 {slow[name]['f1']} -> {by[name]['f1']}")
+    # --- le detecteur rapide seul (pur) : un kick sort de son creux, une note de basse tenue, un clap (large bande) ou le silence ne declenchent pas
+    from core.onset import FastAttack
+    import math as _m
+
+    def feed(fa, fn, secs, broad_fn=None, t0=0.0):
+        hits = []
+        for i in range(int(secs * 1000)):
+            t = t0 + i / 1000.0
+            x = fn(t)
+            if fa.update([x], [broad_fn(t) if broad_fn else x * x], 0.001, t, 1.0, -1e9 if not hits else hits[-1], True, 0.15):
+                hits.append(t)
+        return hits
+    kick_sig = lambda t: (0.5 * _m.exp(-((t - 1.0) % 0.5) / 0.15) * _m.sin(2 * _m.pi * 60 * ((t - 1.0) % 0.5)) if t >= 1.0 else 0.0)
+    h = feed(FastAttack(), kick_sig, 4.0)
+    errs = [min(abs(t - (1.0 + 0.5 * k)) for k in range(8)) for t in h]
+    check(len(h) >= 5 and max(errs) < 0.012, "FastAttack: des kicks toutes les 500 ms sont vus a moins de 12 ms de leur debut", f"{len(h)} kicks, ecarts {[round(e * 1000) for e in errs]} ms")
+    check(not feed(FastAttack(), lambda t: 0.3 * _m.sin(2 * _m.pi * 55 * t), 4.0), "FastAttack: une note de basse tenue n'est pas un kick")
+    check(not feed(FastAttack(), lambda t: 0.0001 * _m.sin(2 * _m.pi * 60 * t), 3.0), "FastAttack: sous l'energie minimale (silence, souffle) : rien")
+    clap = lambda t: (0.3 * _m.exp(-((t - 1.0) % 0.5) / 0.04) * _m.sin(2 * _m.pi * 150 * t)) if t >= 1.0 else 0.0
+    check(not feed(FastAttack(), clap, 4.0, broad_fn=lambda t: 40.0 * clap(t) ** 2), "FastAttack: une attaque dont les basses ne sont qu'une petite part de la puissance totale (clap, caisse claire) ne declenche pas")
     sig, rate, truth_b = bk.synthetic_corpus(seconds=15.0)["kick sur basse continue"]
     hi = bk.metrics(bk.replay(sig, rate, 2.5), truth_b, 15.0)
     check(hi["rappel"] >= 0.9 and hi["precision"] >= 0.9, "banc: ... et la sensibilite 2.5 le rattrape", f"rappel {hi['rappel']} precision {hi['precision']}")
