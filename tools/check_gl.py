@@ -2964,6 +2964,127 @@ def check_bench_kick() -> None:
     check("Diagnostic" in txt and "TOTAL" in txt and "sans kick" in txt, "banc: le rapport donne le tableau, le total et le diagnostic")
 
 
+def check_pulse() -> None:
+    """Lot 4 de la spec synchro son / image : horloge de pulsation (PLL) et declenchement predit (avance)."""
+    print("Horloge de pulsation et avance")
+    import random as _random
+    from core.pulse import LeadGate, PulseClock
+    rg = _random.Random(3)
+    STEP = 0.0107                                           # un pas d'analyse (bloc de 512 a 48 kHz)
+
+    def run(kicks, seconds, lead=0.0, bpm=None, allowed=lambda t: True, jitter=0.004, latency=0.016, clock=None, gate=None):
+        """Fait defiler le temps par pas d'analyse ; chaque kick vrai est detecte `latency` apres son debut (+ gigue). Rend (horloge, portail, instants de declenchement)."""
+        clock = clock or PulseClock()
+        gate = gate or LeadGate()
+        pend = sorted(k + latency + rg.uniform(-jitter, jitter) for k in kicks)
+        fires, t, i = [], 0.0, 0
+        while t < seconds:
+            kick = False
+            while i < len(pend) and pend[i] <= t:
+                kick, i = True, i + 1
+            clock.update(t, kick, bpm(t) if callable(bpm) else bpm)
+            if gate.step(t, clock, kick, lead, allowed(t)):
+                fires.append(t)
+            t += STEP
+        return clock, gate, fires
+
+    P = 60.0 / 124
+    floor = [k * P for k in range(1, 61)]                   # 4 sur le temps a 124 BPM, 30 s
+    c, g, f = run(floor, 30.0, bpm=124.0)
+    check(c.state == "cale" and c.confidence > 0.9 and abs(c.period - P) < 0.003,
+          "horloge: 4 sur le temps a 124 BPM : calee, confiance haute, periode a 3 ms pres", f"{c.state} {c.confidence:.2f} {c.period * 1000:.1f} ms")
+    nxt = c.next_beat(30.0)
+    exp_t = min(((k * P + 0.016) for k in range(1, 80) if k * P + 0.016 > 30.0))
+    check(abs(nxt - exp_t) < 0.012, "horloge: le prochain temps predit tombe a moins de 12 ms du vrai (detection comprise)", f"{(nxt - exp_t) * 1000:.1f} ms")
+    # un kick manque ne decale pas, un kick en trop (contretemps) est ignore pour la phase
+    miss = [k for n, k in enumerate(floor) if n not in (12, 13, 14)]
+    c2, _, _ = run(miss, 20.0, bpm=124.0)
+    c3, _, _ = run(sorted(floor + [k + P / 2 for k in floor[:30]]), 20.0, bpm=124.0)
+    ref, _, _ = run(floor, 20.0, bpm=124.0)
+    check(abs(c2.next_beat(20.0) - ref.next_beat(20.0)) < 0.015 and c2.state == "cale",
+          "horloge: trois kicks manques de suite ne decalent pas la phase", f"{abs(c2.next_beat(20.0) - ref.next_beat(20.0)) * 1000:.1f} ms")
+    check(abs(c3.next_beat(20.0) - ref.next_beat(20.0)) < 0.015 and c3.state == "cale",
+          "horloge: des kicks sur les contretemps (hors fenetre) sont ignores pour la phase", f"{abs(c3.next_beat(20.0) - ref.next_beat(20.0)) * 1000:.1f} ms")
+    # plus de kick : tourne quelques mesures, puis perdue
+    c4, _, _ = run(floor[:20], 12.0, bpm=124.0)             # arret des kicks apres ~10 s
+    c4b, _, _ = run(floor[:20], 30.0, bpm=124.0)
+    check(c4.confidence > 0.0 and c4.state in ("libre", "cale") and c4b.state in ("absente", "perdue") and c4b.confidence < 0.1,
+          "horloge: sans kick elle tourne quelques mesures (confiance qui baisse), puis la confiance retombe", f"{c4.state} {c4.confidence:.2f} -> {c4b.state} {c4b.confidence:.2f}")
+    # sans BPM fiable : pas d'horloge ; changement de tempo : la periode suit
+    c5, _, _ = run(floor, 10.0, bpm=None)
+    check(c5.state == "absente", "horloge: sans BPM fiable (indication du rythme), pas d'horloge", c5.state)
+    P2 = 60.0 / 140
+    sw = floor[:20] + [floor[19] + k * P2 for k in range(1, 40)]
+    c6, _, _ = run(sw, 25.0, bpm=lambda t: 124.0 if t < floor[19] + 1.0 else 140.0)
+    check(abs(c6.period - P2) < 0.004 and c6.state in ("libre", "cale"), "horloge: un changement de tempo (124 -> 140) reprend la periode", f"{c6.period * 1000:.1f} ms vs {P2 * 1000:.1f}")
+    # --- avance : le declenchement part `lead` avant la detection attendue, une seule fois par kick
+    lead = 0.080
+    c, g, fires = run(floor, 30.0, lead=lead, bpm=124.0)
+    late = [t for t in fires if t > 10.0]
+    errs = [min(abs((t + lead) - (k * P + 0.016)) for k in range(1, 70)) for t in late]
+    check(len(late) >= 38 and max(errs) < 0.025 and g.predicted >= 30,
+          "avance 80 ms: les effets partent 80 ms avant le kick detecte (a 25 ms pres : un pas d'analyse + gigue)", f"{len(late)} declenchements, pire ecart {max(errs) * 1000:.0f} ms, {g.predicted} predits")
+    gaps = [b - a for a, b in zip(late, late[1:])]
+    check(min(gaps) > 0.4 * P, "avance: jamais deux declenchements pour le meme kick (pas de double eclair)", f"plus petit ecart {min(gaps) * 1000:.0f} ms")
+    # kick imprevu (contretemps) : declenche tout de suite, comme sans avance
+    extra = sorted(floor + [floor[30] + P / 2])
+    _, g2, fires2 = run(extra, 25.0, lead=lead, bpm=124.0)
+    check(any(abs(t - (floor[30] + P / 2 + 0.016)) < 0.03 for t in fires2) and g2.reactive >= 1, "avance: un kick que la pulsation n'attendait pas reagit a la detection reelle", f"{g2.reactive}")
+    # garde-fous : avance 0 = comportement d'avant (declenchement a la detection), pulsation non calee / interdite = detection reelle
+    _, g0, f0 = run(floor, 20.0, lead=0.0, bpm=124.0)
+    check(g0.predicted == 0 and len([t for t in f0 if t > 8.0]) >= 20 and all(min(abs(t - (k * P + 0.016)) for k in range(1, 70)) < 0.02 for t in f0),
+          "avance 0: les effets partent a la detection reelle, rien n'est predit", f"{g0.predicted}")
+    _, gl, fl = run(floor, 20.0, lead=lead, bpm=None)
+    check(gl.predicted == 0 and len(fl) >= 20, "avance: sans pulsation calee (pas de BPM fiable), detection reelle", f"{gl.predicted} predits, {len(fl)} declenchements")
+    _, gb, fb = run(floor, 20.0, lead=lead, bpm=124.0, allowed=lambda t: t < 8.0 or t > 12.0)
+    inside = [t for t in fb if 8.0 < t < 12.0]
+    check(len(inside) >= 6 and all(min(abs(t - (k * P + 0.016)) for k in range(1, 70)) < 0.02 for t in inside),
+          "avance: montee / cassure / drop (non permis) : detection reelle pendant ce temps", f"{len(inside)} declenchements")
+    # breakbeat : un kick sur deux ou irregulier = pulsation pas assez fiable pour predire (sinon des eclairs sur des temps vides)
+    brk = [k * P + off for k in range(1, 60) for off in ((0.0,) if k % 3 else (P / 2,))]
+    brk = [k for n, k in enumerate(sorted(brk)) if n % 2 == 0]
+    _, gbk, fbk = run(brk, 30.0, lead=lead, bpm=124.0)
+    check(len(fbk) <= len(brk) + 1, "avance: jamais plus de declenchements que de kicks (pas d'eclair sur un temps sans kick)", f"{len(fbk)} pour {len(brk)} kicks")
+    # lead plafonne a 60 % de la periode
+    _, gbig, fbig = run(floor, 20.0, lead=1.0, bpm=124.0)
+    # --- branchement dans l'analyseur (sans fil) : avance 0 = detection ; avance > 0 et pulsation calee = en avance ; voyant
+    from engine import audio as au
+    from core import explain as ex
+    an = au.AudioAnalyzer(au.RingBuffer(), au.FeatureExtractor(48000))
+    an.rhythm.bpm, an.phase.phase = 124.0, "groove"
+
+    def drive(analyzer, lead):
+        analyzer.lead_s = lead
+        fired, t, i = [], 0.0, 0
+        pend = [k + 0.016 for k in floor]
+        while t < 25.0:
+            kick = False
+            while i < len(pend) and pend[i] <= t:
+                kick, i = True, i + 1
+            if analyzer._lead_step(t, kick):
+                fired.append(t)
+            t += STEP
+        return fired
+    f0 = drive(an, 0.0)
+    check(an.gate.predicted == 0 and an.pulse_info["state"] == "cale" and len(f0) >= 38 and an.pulse_info["predicting"] is False,
+          "analyseur: avance 0 = detection reelle ; l'horloge se cale quand meme sur les kicks", f"{an.pulse_info['state']} {len(f0)} {an.gate.predicted}")
+    an2 = au.AudioAnalyzer(au.RingBuffer(), au.FeatureExtractor(48000))
+    an2.rhythm.bpm, an2.phase.phase = 124.0, "groove"
+    f1 = drive(an2, 0.080)
+    check(an2.pulse_info["predicting"] and an2.gate.predicted >= 30 and abs(an2.pulse_info["lead_ms"] - 80.0) < 1e-6,
+          "analyseur: avance 80 ms et pulsation calee : les effets partent en avance", str(an2.pulse_info))
+    an3 = au.AudioAnalyzer(au.RingBuffer(), au.FeatureExtractor(48000))
+    an3.rhythm.bpm, an3.phase.phase = 124.0, "ambiance"
+    drive(an3, 0.080)
+    check(an3.gate.predicted == 0, "analyseur: hors groove / pic (ambiance, montee...), rien n'est predit", str(an3.gate.predicted))
+    check("calee" in ex.pulse_text({"state": "cale", "predicting": True, "delta_ms": 3.0}, 80.0) and "en avance" in ex.pulse_text({"state": "cale", "predicting": True, "delta_ms": 3.0}, 80.0)
+          and "en attente" in ex.pulse_text({"state": "libre", "predicting": False}, 80.0) and "suivent la detection" in ex.pulse_text({"state": "cale"}, 0.0)
+          and ex.pulse_text(None) == "pulsation : -", "voyant de la pulsation : calee / en avance, en attente, avance 0")
+    check(an2.latest().get("pulse", {}).get("state") == "cale", "analyseur: latest() publie l'etat de la pulsation")
+    steady = [t for t in fbig if t > 10.0]
+    check(len(steady) >= 15 and min(b - a for a, b in zip(steady, steady[1:])) > 0.9 * P, "avance: une avance enorme est plafonnee (60 % de la periode), toujours un declenchement par kick", f"{len(steady)}")
+
+
 def check_latence() -> None:
     print("Mesure de latence audio -> image (tools/mesure_latence.py)")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -10243,7 +10364,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse")
 
 
 def main() -> None:
@@ -10332,6 +10453,7 @@ def main() -> None:
     check_render()
     check_calibration()
     check_bench_kick()
+    check_pulse()
     check_latence()
     check_beat_grid()
     check_playback()
