@@ -40,6 +40,15 @@ REFRACTORY = 0.15
 MAX_LEAD_FRAC = 0.6        # l'avance ne depasse jamais 60 % de la periode
 
 
+def swell(phase: float | None, period_s: float = 0.5, lead_s: float = 0.0) -> float:
+    """Courbe douce de la respiration sur la pulsation : 1 sur le temps, 0 a mi-chemin du suivant (cosinus : jamais de saut). `lead_s` :
+    l'avance, pour que le sommet tombe sur le temps ENTENDU (l'horloge est calee sur la detection, qui est en retard sur le son)."""
+    if phase is None or period_s <= 0.0:
+        return 0.5
+    ph = (phase + lead_s / period_s) % 1.0
+    return 0.5 + 0.5 * math.cos(2.0 * math.pi * ph)
+
+
 class PulseClock:
     def __init__(self) -> None:
         self.period = 0.5

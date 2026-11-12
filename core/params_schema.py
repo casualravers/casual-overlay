@@ -27,6 +27,8 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
+from core import audio_layers
+
 SCOPES = ("look", "bg", "room", "state", "device")
 
 
@@ -53,8 +55,8 @@ TABLE: tuple[Param, ...] = (
     _p("fx_link", 1.0, 0.0, 1.0, doc="1 = le logo subit les memes effets que le fond ; 0 = effets propres (fxl_*)."),
     _p("fxl_on", [1, 1, 1, 1], 0, 1, doc="Interrupteurs des 4 effets de la couche logo (fx_link = 0)."),
     _p("fxl_int", [1.0, 1.0, 1.0, 1.0], 0.0, 2.0, doc="Intensites des 4 effets de la couche logo."),
-    _p("src_bg", "auto", choices=("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto"), doc="Partie du son qui pilote le fond (effets, animations)."),
-    _p("src_logo", "auto", choices=("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto"), doc="Partie du son qui pilote le logo (effets, reactions, halo, fonte, cellules) ; ignore tant que fx_link = 1 (le logo suit alors la source du fond)."),
+    _p("src_bg", "auto", choices=audio_layers.SOURCES, doc="Partie du son qui pilote le fond (effets, animations) : une bande, les attaques, ou la grille de la pulsation."),
+    _p("src_logo", "auto", choices=audio_layers.SOURCES, doc="Partie du son qui pilote le logo (effets, reactions, halo, fonte, cellules) ; ignore tant que fx_link = 1 (le logo suit alors la source du fond)."),
     _p("sens_bg", 1.0, 0.25, 4.0, doc="Sensibilite du kick propre au fond (x la sensibilite generale) ; 1 = le kick commun."),
     _p("sens_logo", 1.0, 0.25, 4.0, doc="Sensibilite du kick propre au logo (x la sensibilite generale) ; 1 = le kick commun."),
     _p("lag_bg", 0.0, 0.0, 0.5, doc="Retard (secondes) de la reaction du fond au son."),
@@ -73,6 +75,7 @@ TABLE: tuple[Param, ...] = (
     _p("breath_overlay", 0.0, 0.0, 1.0, scope="room", doc="Respiration de l'overlay : sa presence oscille entre 1 - valeur et 1."),
     _p("breath_bg", 0.0, 0.0, 1.0, scope="room", doc="Respiration du fond, en opposition de phase avec celle de l'overlay."),
     _p("breath_period", 8.0, 1.0, 60.0, scope="room", doc="Periode de la respiration, en secondes."),
+    _p("breath_pulse", 0.0, 0.0, 1.0, scope="room", doc="Respiration sur la pulsation : la presence de l'overlay, la luminosite et la derive du fond suivent la phase de la pulsation (courbe douce, creux entre les temps) et l'enveloppe des basses ; un seul reglage d'amplitude, 0 = coupe."),
     _p("auto_phase", 1.0, 0.0, 1.0, scope="room", doc="Phases auto : le visuel suit les phases du morceau (ambiance, groove, montee, cassure, pic) tout seul."),
     _p("phase_tempo", 1.0, 0.0, 2.0, scope="state", doc="Multiplicateur de tempo de la phase en cours (ecrit par la boucle de rendu)."),
     _p("phase_react", 1.0, 0.0, 3.0, scope="state", doc="Multiplicateur de reactivite de la phase en cours."),

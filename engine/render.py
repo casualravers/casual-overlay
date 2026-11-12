@@ -14,6 +14,7 @@ from core import sessionlog
 from core import doodles
 from core import qrcode
 from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
+from core.pulse import swell as pulse_swell
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceiling
@@ -275,6 +276,7 @@ class Renderer:
         self._strobe_len = STROBE_FLASH_S                                           # duree du dernier eclair (plus courte pour ceux de la montee a cadence elevee)
         self.strobe_fired = 0                                                       # eclairs acceptes (compteur : la mesure de latence le lit)
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
+        self._bp_swell = 0.5                                                          # respiration sur la pulsation : valeur du dernier rendu (0..1)
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
         self.sources_now = ("tout", "tout", False, False)                              # (fond, logo, fond en auto, logo en auto) : affiche dans l'interface
         self.strobe_info: tuple[str, float] | None = None                            # (raison, instant) du dernier eclair : affiche dans l'interface
@@ -748,6 +750,9 @@ class Renderer:
         tempo = effective_tempo(p)                                      # master x phase du morceau (tres lent en ambiance)
         if react_m != 1.0:
             state = {**state, **{k: float(state[k]) * react_m for k in ("bass", "mid", "high", "rms", "beat", "hit", "beat_bg", "beat_logo") if k in state}}
+            if "bands" in state:                                       # les bandes fines (lot 5) suivent aussi le master de reactivite
+                state["bands"] = [float(v) * react_m for v in state["bands"]]
+            state["react_m"] = react_m                                 # ... et les sources de pulsation (elles n'ont pas d'enveloppe dans `state`)
         bass, high, beat = state["bass"], state["high"], state["beat"]
         # Sources audio par couche : le fond et le logo peuvent reagir a des parties differentes du son (lie : le logo suit la source du fond).
         linked = float(p["fx_link"]) >= 0.5
@@ -779,6 +784,18 @@ class Renderer:
         breath = 0.5 * _unit(p["phase_breath"])                         # respiration de la phase (ambiance / cassure), en plus de celle des reglages
         ov = _unit(p["overlay_master"]) * _unit(p["phase_overlay"]) * _unit(p.get("text_fade", 1.0)) * (1.0 - max(_unit(p["breath_overlay"]), breath) * wave)      # presence de l'overlay (0 = efface)
         bg_level = _unit(p["bg_master"]) * _unit(p["phase_bg"]) * (1.0 - max(_unit(p["breath_bg"]), breath) * (1.0 - wave))
+        # Respiration sur la pulsation (lot 5) : creux entre les temps, sommet sur le temps ENTENDU ; sans pulsation calee, l'enveloppe des basses.
+        bp = _unit(p["breath_pulse"])
+        self._bp_swell = 0.5
+        if bp > 0.0:
+            pul = state.get("pulse") or {}
+            if pul.get("state") in ("cale", "libre") and pul.get("phase_now") is not None:
+                sw = pulse_swell(pul["phase_now"], float(pul.get("period_ms", 500.0)) / 1000.0, float(state.get("lead_s", 0.0)))
+            else:
+                sw = min(max(float(bass), 0.0), 1.0)
+            self._bp_swell = sw
+            ov *= 1.0 - bp * 0.5 * (1.0 - sw)                           # l'overlay respire : jusqu'a -50 % entre deux temps
+            bg_level *= 1.0 - bp * 0.3 * (1.0 - min(max(float(bass), 0.0), 1.0))       # le fond suit le corps des basses
         self._hue_phase = (self._hue_phase + dt * (float(p["hue_cycle"]) + float(p["phase_hue"]))) % 360.0
         spec = _unit(p["hue_spectrum"])
         if spec > 0.0:                                                  # graves = chaud, aigus = froid, suivi lisse (0,5 s) pour ne pas clignoter
@@ -870,7 +887,7 @@ class Renderer:
         if mosaic_on:
             self._mosaic_atlas().use(4)
         react = max(float(p["bg_react"]), 0.0)
-        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_au[0]) * 1.5)
+        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_au[0]) * 1.5) * (1.0 + _unit(p["breath_pulse"]) * 0.8 * (self._bp_swell - 0.5))      # derive du fond : respire avec la pulsation
         self._bg_flip_t += dt * float(p["bg_flip"])
         self._sto_flick += dt * react * float(bg_au[1]) * 6.0     # aigus : renouvellements de rang par seconde et par point
         flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0)

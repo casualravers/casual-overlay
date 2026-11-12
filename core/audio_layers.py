@@ -18,12 +18,22 @@ from __future__ import annotations
 import math
 from collections import deque
 
-SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto")
+# Lot 5 de la spec synchro son / image : sources par BANDE FINE (enveloppes continues, `state["bands"]`) et par PULSATION (grille de temps de
+# `core/pulse.py`, `state["pulse_since"]`) en plus des sources par attaque ci-dessus.
+BAND_SOURCES = {"sub": (0,), "corps": (2, 3), "presence": (4, 5), "air": (6, 7)}      # nom -> indices des bandes (voir engine.audio.BANDS8), la plus forte compte
+# nom -> (subdivisions par temps, un evenement sur N) : « pouls » = chaque temps, « croches » = 2 par temps, « doubles » = 4 par temps,
+# « mesure » = 1 temps sur 4, « phrase8 / 16 / 32 » = 1 temps sur 8 / 16 / 32 (#85)
+PULSE_GRIDS = {"pouls": (1, 1), "croches": (2, 1), "doubles": (4, 1), "mesure": (1, 4), "phrase8": (1, 8), "phrase16": (1, 16), "phrase32": (1, 32)}
+SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto", *BAND_SOURCES, *PULSE_GRIDS)
 DEFAULT = "tout"
+PULSE_DECAY_S = 0.20        # decroissance de l'enveloppe d'un evenement de pulsation (comme celle du kick)
 NO_KICK = 1000.0            # « since » d'une couche sans attaque : l'onde de choc est eteinte depuis longtemps
 LAYERS = ("bg", "logo")
 
-LABELS = {"tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick", "frappes": "Frappes", "rien": "Rien", "auto": "Auto"}
+LABELS = {"tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick", "frappes": "Frappes", "rien": "Rien", "auto": "Auto",
+          "sub": "Sub-basses", "corps": "Corps (150-1000 Hz)", "presence": "Presence (1-5 kHz)", "air": "Air (5-12 kHz)",
+          "pouls": "Pouls (chaque temps)", "croches": "Pouls x2 (croches)", "doubles": "Pouls x4 (doubles)", "mesure": "Mesure (1 temps sur 4)",
+          "phrase8": "Phrase (1 temps sur 8)", "phrase16": "Phrase (1 temps sur 16)", "phrase32": "Phrase (1 temps sur 32)"}
 
 # Source « auto » : chaque couche prend la source que le tableau donne pour la phase du morceau en cours (core/phase.py). (fond, logo)
 AUTO_TABLE = {
@@ -78,6 +88,16 @@ def layer_levels(state: dict, source, layer: str = "bg") -> tuple[float, float, 
         return 0.0, 0.0, beat, since
     if source == "frappes":             # seulement les attaques des aigus : charleys, claps (rythme secondaire)
         return 0.0, 0.0, float(state.get("hit", 0.0)), float(state.get("since_hit", NO_KICK))
+    if source in BAND_SOURCES:          # une bande fine : son enveloppe continue (le corps du son, pas seulement l'impact), sans attaque
+        bands = state.get("bands")
+        v = max((float(bands[i]) for i in BAND_SOURCES[source] if bands is not None and i < len(bands)), default=0.0)
+        return (v, 0.0, 0.0, NO_KICK) if source == "sub" else (v, v, 0.0, NO_KICK)
+    if source in PULSE_GRIDS:           # la grille de la pulsation : des evenements reguliers meme sans kick sur chaque temps (silence si la pulsation est perdue)
+        since = (state.get("pulse_since") or {}).get(source)
+        if since is None:
+            return 0.0, 0.0, 0.0, NO_KICK
+        env = math.exp(-max(float(since), 0.0) / PULSE_DECAY_S) * float(state.get("react_m", 1.0))
+        return 0.8 * env, 0.0, env, float(since)
     return 0.0, 0.0, 0.0, NO_KICK
 
 
