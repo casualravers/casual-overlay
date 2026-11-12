@@ -9,6 +9,8 @@ import random
 
 from core.controls import effective_tempo
 
+MIN_PERIOD_S = 0.3              # periode de courbe la plus courte (curseur « Vitesse » de l'editeur)
+
 # --- Automations de reglages ------------------------------------------------------------
 # Meme principe que "Variation automatique" d'audio2wave (voir son CLAUDE.md): chaque reglage
 # automatise suit sa PROPRE courbe (AUTOMATION_POINTS points de controle boucles, interpoles
@@ -31,6 +33,14 @@ AUTOMATION_SPECS: dict[str, tuple] = {
     "bg_tile":          ("Taille des carreaux", 50.0, 150.0, "sinus", 29, True),
     "bg_checker":       ("Contraste du damier", 0.06, 0.32, "sinus", 23, True),
     "bg_flip":          ("Cadence du damier", 0.5, 3.5, "triangle", 47, True),
+    # Palette labyrinthe : plages resserrees dans la zone ou le motif reste vivant ; ni taille (recopie de l'etat), ni symetrie (brutal).
+    "bg_rd_shape":      ("Forme du labyrinthe", 0.3, 0.9, "sinus", 73, True),
+    "bg_rd_offset":     ("Ecart des couches", 0.004, 0.030, "sinus", 89, True),
+    "bg_rd_mix":        ("Variete des zones", 0.2, 0.9, "triangle", 97, True),
+    "bg_rd_layers":     ("Epaisseur des couches", 0.1, 0.8, "sinus", 101, True),
+    "bg_rd_free":       ("Liberte de la symetrie", 0.2, 0.8, "sinus", 103, True),
+    "bg_rd_void":       ("Vide du labyrinthe", 0.15, 0.6, "sinus", 107, True),
+    "bg_rd_scale":      ("Taille du motif", 0.6, 1.6, "sinus", 127, False),     # coupee par defaut : chaque changement de taille floute un peu le motif
     "logo_x":           ("Position X", 0.35, 0.65, "sinus", 43, False),
     "logo_y":           ("Position Y", 0.42, 0.58, "sinus", 31, False),
     "logo_scale":       ("Taille (image)", 0.30, 0.42, "sinus", 13, False),
@@ -153,7 +163,7 @@ class AutomationEngine:
             points = entry["points"]
             n = len(points)
             start = self._start.setdefault(key, now)
-            pos = ((now - start) / max(0.5, float(entry["period"])) % 1.0) * n
+            pos = ((now - start) / max(MIN_PERIOD_S, float(entry["period"])) % 1.0) * n
             i0 = int(pos) % n
             frac = pos - int(pos)
             v = points[i0] + (points[(i0 + 1) % n] - points[i0]) * frac

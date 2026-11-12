@@ -258,9 +258,13 @@ class Renderer:
         self._sto_flick = 0.0                      # palette stochastique : phase integree du scintillement (aigus)
         self.rd: ReactionDiffusion | None = None   # palette labyrinthe : simulation creee au premier besoin
         self._rd_acc = 0.0                         # reste de l'accumulateur de pas de simulation
+        self._rd_zone_t = 0.0                      # temps de derive des zones de formes (integre, tempo compris)
+        self.rd_note = ""                          # message de la palette labyrinthe pour l'interface (s.status["rd"])
         self._rd_beats: int | None = None          # compteur de kicks deja semes
         self._rd_pending: list = []                # germes des kicks en attente d'un pas (motif fige : tempo ou vitesse a 0)
         self._rd_active = False                    # palette active a l'image precedente
+        self._rd_sig: tuple = ()                   # (symetrie, branches) du motif en place : la symetrie ne vit que dans les germes
+        self._rd_want: tuple | None = None         # (signature voulue, instant) tant qu'elle n'est pas restee stable RESEED_DELAY_S
         self._bg_clock = 0.0
         self.noise = NoiseDrive()
         self._strobe_last, self._strobe_beats, self._strobe_seen = -10.0, 0, 0     # strobe : dernier eclair, kicks vus, appuis vus
@@ -653,24 +657,44 @@ class Renderer:
         if active:
             if self.rd is None:
                 self.rd = ReactionDiffusion(self.ctx, self.vbo, self.shader_dir)
-            self.rd.ensure(float(p["bg_rd_scale"]))
-            if not self._rd_active:                    # activation : repart d'un etat seme propre
-                self.rd.reset(self.rd.seed)
+            self.rd.ensure(float(p["bg_rd_scale"]), t)
+            gw, gh = self.rd.size
+            sym, branches, free = str(p["bg_rd_sym"]), int(p["bg_rd_branches"]), float(p["bg_rd_free"])
+            zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh,
+                                 void=float(p["bg_rd_void"]))
+            sig = (sym, branches if sym == "rot" else 0)
+            if not self._rd_active:                    # activation : repart d'un etat seme propre (germes en orbite si symetrie)
+                self.rd.reset(self.rd.seed, zone)
                 self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
+                self._rd_sig, self._rd_want = sig, None
+            elif sig != self._rd_sig:                  # un motif deja installe ne prend pas la symetrie : il repart des germes
+                if self._rd_want is None or self._rd_want[0] != sig:      # (apres un delai : un curseur en mouvement ne relance pas a chaque cran)
+                    self._rd_want = (sig, t)
+                elif t - self._rd_want[1] >= reaction.RESEED_DELAY_S:
+                    self.rd.reset(self.rd.seed, zone)
+                    self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
+                    self._rd_sig, self._rd_want = sig, None
+            else:
+                self._rd_want = None
             bass = react * float(bg_au[0])
             if kicks_on and self._rd_beats is not None:
+                new = []
                 for k in range(self._rd_beats + 1, beats + 1):
-                    self._rd_pending += reaction.kick_seeds(k)
-                self._rd_pending = self._rd_pending[-4:]          # au plus 4 germes en attente (les plus recents)
+                    new += reaction.colonize(reaction.kick_seeds(k), sym, branches, free, gw / gh, salt=k)
+                # sans symetrie : au plus 4 germes en attente comme avant (comportement d'origine) ; avec : file bornee des orbites
+                self._rd_pending = reaction.queue_seeds(self._rd_pending, new)[-(4 if sym == "none" else reaction.MAX_PENDING_SEEDS):]
             self._rd_beats = beats
-            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass)
-            if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes attendent le prochain pas
-                self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending)
-                self._rd_pending = []
-            self.rd.watch(t)
+            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass, gw * gh)
+            if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes et les zones attendent
+                self._rd_zone_t += dt * reaction.ZONE_SPEED * float(p["bg_rd_drift"])
+                zone = zone._replace(t=self._rd_zone_t)
+                self._rd_pending = self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending, zone)
+            self.rd.watch(t, zone)
+            self.rd_note = "" if self.rd.dtype == "f4" or sym == "none" else "Liberte sans effet : etat de la simulation en 16 bits"
             self.rd.texture.use(6)
             w, h = self.rd.size
-            self._set(sp, "u_rd", (float(p["bg_rd_offset"]) * (1.0 + 1.5 * react * float(bg_au[2])), 0.5 / h, 0.0, 0.0))
+            self._set(sp, "u_rd", (float(p["bg_rd_offset"]) * (1.0 + 1.5 * react * float(bg_au[2])), 0.5 / h,
+                                  float(p["bg_rd_layers"]) * reaction.LAYER_SPREAD, 0.0))
             for key, name in (("bg_rd_color1", "u_rd_c1"), ("bg_rd_color2", "u_rd_c2"), ("bg_rd_color3", "u_rd_c3"), ("bg_rd_ground", "u_rd_ground")):
                 self._set(sp, name, hex_to_rgb(p[key], DEFAULT_PARAMS[key]))
         else:

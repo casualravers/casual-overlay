@@ -186,11 +186,27 @@ AUTOMATE_DEFAULT_PERIOD_S = 10.0  # duree par defaut d'un cycle complet, avant r
 # passage : un cycle complet par seconde etait un exces facile a atteindre par
 # erreur (justement a cause de l'inversion), une fois la direction corrigee la
 # valeur la plus rapide n'a plus besoin d'etre aussi extreme.
-AUTOMATE_PERIOD_MIN_S = 3.0
+AUTOMATE_PERIOD_MIN_S = 0.3          # 10x plus rapide que l'ancien minimum (3 s) : demande explicite
 # 400 s (~6,5 min), 10x plus lent que le plafond precedent (40 s) -- demande
 # explicite ("permet aux courbes d'automation d'avoir une vitesse de
 # variation 10 fois plus lente encore").
 AUTOMATE_PERIOD_MAX_S = 400.0
+
+
+def period_to_pos(period: float) -> float:
+    """Position (0..1000) du curseur « Vitesse » pour une periode : echelle LOGARITHMIQUE (0 = MAX_S, le plus lent ; 1000 = MIN_S, le plus rapide),
+    sinon 0,3 s a 3 s tiendraient sur un seul pixel du curseur."""
+    p = min(max(float(period), AUTOMATE_PERIOD_MIN_S), AUTOMATE_PERIOD_MAX_S)
+    return 1000.0 * math.log(AUTOMATE_PERIOD_MAX_S / p) / math.log(AUTOMATE_PERIOD_MAX_S / AUTOMATE_PERIOD_MIN_S)
+
+
+def pos_to_period(pos: float) -> float:
+    """Periode (secondes) pour une position du curseur « Vitesse » (reciproque de period_to_pos)."""
+    return AUTOMATE_PERIOD_MAX_S * (AUTOMATE_PERIOD_MIN_S / AUTOMATE_PERIOD_MAX_S) ** (min(max(float(pos), 0.0), 1000.0) / 1000.0)
+
+
+def period_text(period: float) -> str:
+    return f"{period:.1f} s/cycle" if period < 10 else f"{period:.0f} s/cycle"
 AUTOMATE_CANVAS_W = 220          # taille du petit editeur de courbe (Canvas), en pixels
 AUTOMATE_CANVAS_H = 90
 
@@ -2463,8 +2479,33 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
                             "complet en secondes.")
         # from_=MAX, to=MIN (pas l'inverse) : la gauche du curseur est le plus lent,
         # la droite le plus rapide, voir AUTOMATE_PERIOD_MIN_S/MAX_S plus haut.
-        tk.Scale(speed_row, from_=AUTOMATE_PERIOD_MAX_S, to=AUTOMATE_PERIOD_MIN_S, resolution=1,
-                orient="horizontal", variable=state["period"], length=140, showvalue=False,
+        # Curseur logarithmique (period_to_pos) : variable de position a part, gardee en phase avec state["period"] dans les deux sens
+        # (un preset ou la courbe peut changer la periode sans toucher au curseur).
+        speed_pos = tk.DoubleVar(value=period_to_pos(state["period"].get()))
+        syncing = {"on": False}
+
+        def pos_changed(*_args: object) -> None:
+            if syncing["on"]:
+                return
+            syncing["on"] = True
+            try:
+                state["period"].set(pos_to_period(speed_pos.get()))
+            finally:
+                syncing["on"] = False
+
+        def period_changed(*_args: object) -> None:
+            if syncing["on"]:
+                return
+            syncing["on"] = True
+            try:
+                speed_pos.set(period_to_pos(state["period"].get()))
+            finally:
+                syncing["on"] = False
+
+        speed_pos.trace_add("write", pos_changed)
+        sync_id = state["period"].trace_add("write", period_changed)
+        tk.Scale(speed_row, from_=0, to=1000, resolution=0.1,
+                orient="horizontal", variable=speed_pos, length=140, showvalue=False,
                 ).pack(side="left", padx=(8, 0))
         # `showvalue=True` afficherait juste "40" a l'extremite lente -- un chiffre
         # brut et eleve la ou l'utilisateur s'attend a une "vitesse" minimale, lu
@@ -2473,11 +2514,11 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         # Une etiquette separee avec l'unite ("40 s/cycle") lit le meme chiffre
         # comme une DUREE, ou un grand nombre = un cycle long = lent se comprend
         # sans repasser par la tooltip.
-        speed_value_label = tk.Label(speed_row, width=9)
+        speed_value_label = tk.Label(speed_row, width=11)
         speed_value_label.pack(side="left", padx=(6, 0))
 
         def update_speed_label(*_args: object) -> None:
-            speed_value_label.config(text=f"{state['period'].get():.0f} s/cycle")
+            speed_value_label.config(text=period_text(state['period'].get()))
 
         # `state["period"]` (le DoubleVar) survit d'une ouverture de l'editeur a
         # l'autre (voir plus haut : seuls les widgets sont recrees), donc la trace
@@ -2489,6 +2530,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
 
         def on_close() -> None:
             state["period"].trace_remove("write", trace_id)
+            state["period"].trace_remove("write", sync_id)
             state["editor"] = None
             state["canvas"] = None
             win.destroy()
@@ -2496,6 +2538,10 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         win.protocol("WM_DELETE_WINDOW", on_close)
         tk.Button(win, text="Fermer", command=on_close).pack(pady=(0, 12))
         state["editor"] = win
+        win.lift()                                   # la fenetre s'ouvrait derriere les reglages : au premier plan, avec le focus
+        win.attributes("-topmost", True)
+        win.after(300, lambda: win.attributes("-topmost", False) if win.winfo_exists() else None)
+        win.focus_force()
 
     def add_entry(label: str, attr: str, width_chars: int = 18, panel: str = "left",
                  tooltip: str | None = None) -> tk.StringVar:
@@ -2947,7 +2993,7 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         for attr, state in automation.items():
             if not state["enabled"].get():
                 continue
-            period = max(0.5, state["period"].get())
+            period = max(AUTOMATE_PERIOD_MIN_S, state["period"].get())
             points = state["points"]
             n = len(points)
             elapsed = now - state["start"]

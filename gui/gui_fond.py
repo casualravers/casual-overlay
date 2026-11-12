@@ -119,12 +119,18 @@ def install(c):
     rd_box.grid(row=pz.next_row(), column=0, columnspan=3, sticky="new")
     rd_box.columnconfigure(2, weight=1)
     rz = Zone(rd_box)
-    param_slider(rz, "Forme", "bg_rd_shape", 0.0, 1.0, 0.05,
-                 "0 = taches qui se repoussent (jamais collees) ; 1 = taches soudees en lignes sinueuses (labyrinthe). "
-                 "Avec la reaction a l'audio, les basses poussent vers les lignes.")
-    param_slider(rz, "Taille du motif", "bg_rd_scale", 0.5, 2.0, 0.05, "Epaisseur des lignes et des taches (le motif se redimensionne sans repartir de zero).")
-    param_slider(rz, "Ecart des couches", "bg_rd_offset", 0.0, 0.05, 0.002,
-                 "Decalage des trois couches colorees (0 = confondues). Le kick l'ouvre un instant.")
+    param_slider(rz, "Forme", "bg_rd_shape", 0.0, 1.0, 0.05, "Taches (0) ou lignes de labyrinthe (1).")
+    param_slider(rz, "Taille du motif", "bg_rd_scale", 0.3, 2.0, 0.05, "Epaisseur des lignes et des taches.")
+    param_slider(rz, "Ecart des couches", "bg_rd_offset", 0.0, 0.05, 0.002, "Decalage entre les 3 couleurs.")
+    param_slider(rz, "Variete", "bg_rd_mix", 0.0, 1.0, 0.05, "Points, lignes et taches melanges par zones.")
+    param_slider(rz, "Vide", "bg_rd_void", 0.0, 1.0, 0.05, "Zones sans matiere (et zones denses) qui derivent.")
+    param_slider(rz, "Derive", "bg_rd_drift", 0.0, 1.0, 0.05, "Vitesse de deplacement des zones (formes et vides).")
+    param_slider(rz, "Epaisseur des couches", "bg_rd_layers", 0.0, 1.0, 0.05, "Couche 1 large dessous, couche 3 fine dessus.")
+    param_radio(rz, "Symetrie", "bg_rd_sym", (("Aucune", "none"), ("Miroir G-D", "mirror_lr"), ("Miroir H-B", "mirror_tb"),
+                                               ("Quadrants", "quad"), ("Rotation", "rot")),
+                tooltip="Symetrie de la croissance. Changer ce reglage relance le motif.")
+    param_slider(rz, "Branches", "bg_rd_branches", 2, 8, 1, "Nombre de branches (actif avec Symetrie = Rotation).")
+    param_slider(rz, "Liberte", "bg_rd_free", 0.0, 1.0, 0.05, "0 = symetrie stricte, 1 = motif libre.")
     for label, key in (("Couche 1", "bg_rd_color1"), ("Couche 2", "bg_rd_color2"), ("Couche 3", "bg_rd_color3"), ("Fond", "bg_rd_ground")):
         color_row(rz, label, key)
 

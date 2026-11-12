@@ -1164,6 +1164,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         holder = compact_scale(z.parent, lo, hi, step, var, length)
         scale = holder.scale
         holder.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        if tooltip:                                 # l'info-bulle suit aussi le curseur, pas seulement son libelle
+            Tooltip(holder, tooltip)
         if auto_key:
             add_auto(z, r, auto_key, var)
         return scale
@@ -1185,6 +1187,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         frame.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         for text, value in choices:
             tk.Radiobutton(frame, text=text, variable=var, value=value).pack(side="left")
+        if tooltip:
+            Tooltip(frame, tooltip)
         return var
 
     def color_row(z: Zone, label: str, key: str, tooltip: str | None = None,
@@ -1411,7 +1415,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
               lambda: palette_var.get() == "duo" or (palette_var.get() == "stochastique" and sto_field_var.get() != "noise"))
     gates.add(pal_rows("Teinte", "Vitesse", "Reaction a l'audio"), lambda: palette_var.get() != "test")
     gates.add(pal_rows("Taille des carreaux", "Contraste du damier", "Cadence du damier"), lambda: palette_var.get() in ("classic", "duo"))
-    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var):
+    rd_sym_var = synced["bg_rd_sym"]
+    # cherche dans rd_box : dans pattern_box, la ligne de Branches serait rd_box entier (tout le bloc grise, symetrie comprise)
+    gates.add(gui_gates.row_of_label(rd_box, "Branches", panels=False), lambda: rd_sym_var.get() == "rot")
+    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 
