@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 
-from core.onset import OnsetDetector, WideRise
+from core.onset import FastAttack, OnsetDetector, WideRise
 from core.phase import PhaseTracker
 from core.rhythm import Rhythm
 from engine.deps import np, sd
@@ -90,6 +90,10 @@ class FeatureExtractor:
         # Rythme secondaire et kicks par couche (sensibilites propres) : reglees par la boucle de rendu a chaque image.
         self.hit_sens = 1.0
         self.layer_sens = {"bg": 1.0, "logo": 1.0}
+        self.fast_attack = True                      # detecteur d'attaque rapide (temporel) en plus de la FFT ; False = comportement d'avant (banc, comparaisons)
+        self.fast = FastAttack()
+        self._fast_group = max(1, int(round(rate / 1000.0)))       # blocs de ~1 ms : le signal des basses est ramene a ~1 kHz avant le detecteur rapide
+        self._fast_carry = np.zeros(0, dtype=np.float32)
         self.det_hit = OnsetDetector(HIT_MIN, HIT_REFRACTORY_S)
         self.det_layer = {name: OnsetDetector(KICK_MIN, KICK_REFRACTORY_S) for name in self.layer_sens}
 
@@ -115,7 +119,8 @@ class FeatureExtractor:
             self.smooth[name] += (n - self.smooth[name]) * _coef(dt, tau)
             levels[name] = self.smooth[name]
 
-        beat = self._detect_kick(raw["bass"], dt, now)
+        fast = self._fast_attack(samples, dt, now)
+        beat = self._detect_kick(raw["bass"], dt, now, fast)
         levels["edge_hit"] = self.det_hit.update(raw["high"], dt, now, max(self.sensitivity, 0.05) * self.hit_sens)
         for name, det in self.det_layer.items():          # kick de la couche : le kick commun a sensibilite 1, sinon son detecteur
             mult = self.layer_sens[name]
@@ -126,7 +131,25 @@ class FeatureExtractor:
         levels["raw_mid"], levels["raw_high"], levels["raw_rms"] = raw["mid"], raw["high"], raw["rms"]       # bruts (hors auto-gain) pour les phases du morceau
         return levels, beat
 
-    def _detect_kick(self, b: float, dt: float, now: float) -> bool:
+    def _fast_attack(self, samples, dt: float, now: float) -> bool:
+        """Attaque rapide : les echantillons NEUFS (ceux du dernier pas, dt secondes) ramenes a ~1 kHz puis passes au detecteur temporel."""
+        if not self.fast_attack:
+            return False
+        n = min(int(round(dt * self.rate)), len(samples))
+        if n <= 0:
+            return False
+        x = np.concatenate((self._fast_carry, samples[len(samples) - n:]))
+        g = self._fast_group
+        m = len(x) // g
+        self._fast_carry = x[m * g:]
+        if m == 0:
+            return False
+        blocks = x[:m * g].reshape(m, g)
+        chunk = blocks.mean(axis=1).tolist()
+        broad = (blocks * blocks).mean(axis=1).tolist()
+        return self.fast.update(chunk, broad, g / self.rate, now, self.sensitivity, self.last_beat, self.elapsed + dt > KICK_WARMUP_S, KICK_REFRACTORY_S)
+
+    def _detect_kick(self, b: float, dt: float, now: float, fast: bool = False) -> bool:
         """Kick = energie basses nettement au-dessus d'une ligne de base glissante :
         b - base > k * ecart-type ET b > base * ratio (seuil adaptatif, donc insensible
         au niveau du micro), avec periode refractaire. `sensitivity` > 1 abaisse les seuils.
@@ -149,6 +172,8 @@ class FeatureExtractor:
                 and dev > k * std)
         rise = self.wide_rise.check(self._wide, dt, now, s, self.last_beat, self.elapsed > KICK_WARMUP_S, KICK_REFRACTORY_S)
         if rise and not beat:                             # montee rapide sur la bande large : telephone sans basses, kick sature a longue queue
+            beat = True
+        if fast and not beat:                             # attaque rapide (temporelle) : le meme kick, quelques ms apres son debut au lieu de ~30
             beat = True
         if beat:
             self.last_beat = now
