@@ -618,7 +618,37 @@ def drop_cover(root, cover, delay_ms: int = 350) -> None:
     root.after(delay_ms, gone)
 
 
-REVEAL_MAX_S = 12.0                    # attente maximale du panneau etendu avant de reveler quand meme
+def clear_topmost(root) -> None:
+    """Rend la fenetre des reglages « non toujours au premier plan » au niveau de Windows : apres l'ecran de chargement
+    (Toplevel `-topmost` sur la meme racine) elle gardait WS_EX_TOPMOST alors que Tk annoncait `-topmost 0`, et elle
+    recouvrait ses propres info-bulles (Toplevel sans decoration, normales). Un aller-retour True / False resynchronise."""
+    try:
+        root.attributes("-topmost", True)
+        root.attributes("-topmost", False)
+    except tk.TclError:
+        pass
+
+
+def install_tooltip_on_top(live) -> None:
+    """Les info-bulles d'audio2wave (`Tooltip._show`) passent au premier plan quand elles s'affichent : une fenetre
+    qui serait restee au-dessus ne les cache plus. Posee une fois (marque `_casual_top`), sans toucher a audio2wave."""
+    tip = getattr(live, "Tooltip", None)
+    if tip is None or getattr(tip, "_casual_top", False):
+        return
+    original = tip._show
+
+    def show(self, evt=None):
+        original(self, evt)
+        try:
+            if self.tip is not None:
+                self.tip.attributes("-topmost", True)
+        except Exception:
+            pass
+    tip._show = show
+    tip._casual_top = True
+
+
+REVEAL_MAX_S = 12.0                   # attente maximale du panneau etendu avant de reveler quand meme
 REVEAL_DELAY_MS = 700                  # la mise en page se fixe (`layout["settled"]` : 400 ms) avant d'afficher la fenetre
 
 
@@ -630,6 +660,7 @@ def run_gui(s, live, on_ready=None, boot=None) -> None:
     transparente puis revelee (`reveal`) une fois sa mise en page stabilisee."""
     require_audio2wave_api(live)
     root = boot.root if boot is not None else tk.Tk()
+    install_tooltip_on_top(live)
     if boot is not None:
         root.deiconify()                                   # affichee mais transparente (alpha 0) : mise en page normale, invisible
         STATS.on_enter = boot.on_section
@@ -653,6 +684,7 @@ def run_gui(s, live, on_ready=None, boot=None) -> None:
                 root.attributes("-alpha", 1.0)
                 root.lift()
                 root.focus_force()
+                clear_topmost(root)
             except tk.TclError:
                 pass
             boot.close()
