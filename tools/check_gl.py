@@ -8500,10 +8500,12 @@ def check_rd_zones() -> None:
         return
     vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
 
-    def sim(shape, steps, zone=None, r=None):
+    def sim(shape, steps, zone=None, r=None, scale=1.0):
+        # `scale` > 1 : grille plus petite (1,5 = 256 x 144, 44 % des cellules) pour les longues simulations : le rendu logiciel de l'integration
+        # continue fait le cout de ce test (les assertions sont statistiques et ne dependent pas de la finesse de la grille).
         if r is None:
             r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
-            r.ensure(1.0)
+            r.ensure(scale)
             r.reset(0)
         for _ in range(steps // 20):
             r.step(20, shape, zone=zone)
@@ -8531,8 +8533,8 @@ def check_rd_zones() -> None:
         covers.append(float((r.read_v() > 0.25).mean()))
     check(all(0.05 < c < 0.9 for c in covers), "zones : le motif reste vivant partout pendant la derive",
           f"couverture {min(covers):.2f} .. {max(covers):.2f}")
-    _l, flat = rd_components(sim(1.0, 6000).read_v() > 0.25)
-    _l, zoned = rd_components(sim(1.0, 6000, rc.Zone(mix=0.9)).read_v() > 0.25)
+    _l, flat = rd_components(sim(1.0, 6000, scale=1.5).read_v() > 0.25)
+    _l, zoned = rd_components(sim(1.0, 6000, rc.Zone(mix=0.9), scale=1.5).read_v() > 0.25)
     check(max(zoned) >= 1.5 * max(flat), "zones : une partie de l'image s'agglomere en grosses taches",
           f"plus grande composante {max(zoned)} contre {max(flat)}")
     grown = sim(1.0, 1000, rc.Zone(mix=0.8))
@@ -10078,6 +10080,20 @@ def main() -> None:
             sys.exit(1)
         print("Toutes les verifications pures passent.")
         return
+    durations: dict = {}
+
+    def timed(fn):
+        def inner(*a, **k):
+            t0 = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                durations[fn.__name__] = durations.get(fn.__name__, 0.0) + time.perf_counter() - t0
+        inner.__name__ = fn.__name__
+        return inner
+
+    for _name in [n for n, v in list(globals().items()) if n.startswith("check_") and callable(v)]:
+        globals()[_name] = timed(globals()[_name])
     check_reader()
     check_features()
     check_features_phone()
@@ -10159,6 +10175,8 @@ def main() -> None:
             print("  " + line)
     except Exception:
         pass
+    print("Verifications les plus longues (information, secondes) : " + ", ".join(
+        f"{n} {d:.0f}" for n, d in sorted(durations.items(), key=lambda kv: -kv[1])[:14]))
     drop_screen_dependent()
     if failures:
         print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
