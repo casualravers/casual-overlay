@@ -6,6 +6,7 @@
 uniform sampler2D u_video;      // rawvideo rgb24, PREMIERE ligne = haut de l'image
 uniform sampler2D u_logo;       // rgba premultiplie, premiere ligne = haut
 uniform vec2  u_res;            // taille du cadre en pixels
+uniform vec4  u_video_crop;     // partie de u_video lue : decalage xy, part zw (0, 0, 1, 1 = toute l'image ; enregistrement vertical / carre = rognee au centre)
 uniform vec4  u_logo_rect;      // centre x, centre y (origine HAUT gauche, 0..1), demi-largeur, demi-hauteur (uv)
 uniform vec2  u_logo_cs;         // cos, sin de la rotation autour du centre (seuls les doodles pivotent ; sin = 0 : droit)
 uniform float u_logo_on;        // 1 si un logo est charge
@@ -429,6 +430,6 @@ void main() {
     }
 
     // Couche FOND: video ffmpeg ou motif genere.
-    vec3 col = (u_bg_mode > 0.5) ? background_pattern(p) : texture(u_video, p).rgb;
+    vec3 col = (u_bg_mode > 0.5) ? background_pattern(p) : texture(u_video, u_video_crop.xy + p * u_video_crop.zw).rgb;
     f_color = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

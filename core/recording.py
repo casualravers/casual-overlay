@@ -83,6 +83,19 @@ def fit_rect(src: tuple[int, int], dst: tuple[int, int]) -> tuple[int, int, int,
     return ((dw - w) // 2, (dh - h) // 2, w, h)
 
 
+def cover_uv(src: tuple[int, int], dst: tuple[int, int]) -> tuple[float, float, float, float]:
+    """(decalage x, decalage y, part x, part y) de la texture `src` a lire pour remplir un cadre `dst` en ROGNANT au centre (rapport garde, rien
+    d'ecrase) : coordonnee lue = decalage + position dans le cadre x part. Meme rapport, ou une taille nulle : (0, 0, 1, 1), l'image entiere."""
+    sw, sh = src
+    dw, dh = dst
+    if min(sw, sh, dw, dh) <= 0:
+        return (0.0, 0.0, 1.0, 1.0)
+    ratio = (dw / dh) / (sw / sh)
+    if ratio < 1.0:                     # cadre plus etroit que la texture : on garde une bande verticale au centre
+        return (0.5 - 0.5 * ratio, 0.0, ratio, 1.0)
+    return (0.0, 0.5 - 0.5 / ratio, 1.0, 1.0 / ratio)
+
+
 def audio_offset(t_video0: float, t_audio0: float, delay_ms: float) -> float:
     """Decalage (secondes) de l'audio dans le fichier : l'instant du premier echantillon moins celui de la premiere image, plus le delai de
     synchro (le visuel reagit apres le son : l'audio est retarde pour que l'effet tombe dessus). Positif = audio retarde."""

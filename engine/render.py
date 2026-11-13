@@ -21,7 +21,7 @@ from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceil
 from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
 from core import reaction
-from core.recording import fit_rect
+from core.recording import cover_uv as fit_cover, fit_rect
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.reaction import ReactionDiffusion
 from engine.video import LogoVideo
@@ -306,6 +306,7 @@ class Renderer:
         self.video_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.video_tex.repeat_x = self.video_tex.repeat_y = False
         self.mode_tex = None               # texture d'un mode Snap / Ridge dessine en GL (engine.native_modes) : remplace le flux video
+        self.video_cover = False           # vrai pendant un enregistrement : le fond (flux, video, mode) est rogne au centre a un cadre d'un autre rapport, jamais ecrase
 
         self.logo_tex = None
         self.logo_aspect = 1.0
@@ -881,6 +882,8 @@ class Renderer:
         self._set(sp, "u_video", 0)
         self._set(sp, "u_logo", 1)
         self._set(sp, "u_res", (float(width), float(height)))
+        src_tex = self.mode_tex or self.video_tex
+        self._set(sp, "u_video_crop", fit_cover(src_tex.size, (width, height)) if self.video_cover else (0.0, 0.0, 1.0, 1.0))
         self._set(sp, "u_logo_rect", rect)
         self._set(sp, "u_logo_on", 1.0 if self.has_logo else 0.0)
         self._set(sp, "u_logo_straight", 1.0 if self.logo_video is not None else 0.0)

@@ -430,6 +430,7 @@ class RecordingRun:
         self.tex = ctx.texture(self.size, 4)
         self.tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.fbo = ctx.framebuffer(color_attachments=[self.tex])
+        renderer.video_cover = True          # vertical / carre : le fond 16:9 est rogne au centre, pas ecrase dans le cadre
 
     def finish_frame(self, now: float, screen, screen_size: tuple[int, int]) -> None:
         """Apres le rendu de l'image : l'ecrit (une fois, ou plusieurs si le rendu a du retard : la duree reste juste), puis la copie dans la fenetre."""
@@ -439,6 +440,7 @@ class RecordingRun:
         self.renderer.blit_fit(screen, self.tex, self.size, screen_size)
 
     def release(self) -> None:
+        self.renderer.video_cover = False
         self.fbo.release()
         self.tex.release()
 

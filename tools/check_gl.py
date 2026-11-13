@@ -3216,6 +3216,14 @@ def check_recording() -> None:
     check(rec.fit_rect((1080, 1920), (1280, 720)) == (437, 0, 405, 720) and rec.fit_rect((1080, 1920), (540, 960)) == (0, 0, 540, 960)
           and rec.fit_rect((1920, 1080), (640, 640)) == (0, 140, 640, 360) and rec.fit_rect((1080, 1920), (0, 0)) == (0, 0, 0, 0),
           "fenetre: l'image enregistree est copiee en gardant son rapport (bandes noires), fenetre reduite a rien = rien", str(rec.fit_rect((1080, 1920), (1280, 720))))
+    cv_ = rec.cover_uv((1280, 720), (1080, 1920))
+    close_ = lambda a, b: all(abs(x - y) < 1e-6 for x, y in zip(a, b))
+    check(close_(cv_, (0.5 - 0.5 * 0.5625 / (16 / 9), 0.0, 0.5625 / (16 / 9), 1.0))
+          and close_(rec.cover_uv((1280, 720), (1920, 1080)), (0.0, 0.0, 1.0, 1.0))
+          and close_(rec.cover_uv((1280, 720), (1080, 1080)), (0.21875, 0.0, 0.5625, 1.0))
+          and close_(rec.cover_uv((720, 1280), (1920, 1080)), (0.0, 0.5 - 0.5 * 0.5625 / (16 / 9), 1.0, 0.5625 / (16 / 9)))
+          and close_(rec.cover_uv((1280, 720), (0, 0)), (0.0, 0.0, 1.0, 1.0)),
+          "vertical / carre: le fond 16:9 est rogne au centre (rapport garde), pas ecrase ; meme rapport ou taille nulle = image entiere", str(cv_))
 
     # --- decalage de l'audio
     check(abs(rec.audio_offset(10.0, 10.05, 40.0) - 0.09) < 1e-9, "decalage audio: demarre apres l'image + delai de 40 ms = +90 ms")
@@ -3740,6 +3748,33 @@ def check_recording_render() -> None:
     ctl.after_draw(T0, win, WIN)
     direct.draw(other, WIN, state(1.0), params, 1.0)
     check(target is win and size == WIN and not ctl.active and read(win, WIN).tobytes() == read(other, WIN).tobytes(), "sans enregistrement: rendu direct vers la fenetre, image identique")
+
+    # --- 5b. vertical : le fond 16:9 (flux, video, mode) est ROGNE au centre, pas ecrase ; retour a l'image entiere a la fin
+    VID, VERT = (160, 90), (90, 160)
+    grad = np.zeros((VID[1], VID[0], 3), np.uint8)
+    grad[:, :, 0] = (np.arange(VID[0]) * 255 // (VID[0] - 1)).astype(np.uint8)        # rouge = position horizontale dans la video
+    grad[:, :, 1] = 128
+    rv = gl.Renderer(ctx, VID, None)
+    rv.video_tex.write(grad.tobytes(), alignment=1)
+    idle = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 10.0}
+    pv = gl.load_params() | {"bg_mode": "live", "holo_on": 0.0, "auto_phase": 0}
+    vfbo = fbo_of(VERT)
+
+    def red_edges():
+        rv.draw(vfbo, VERT, idle, pv, 1.0)
+        im = read(vfbo, VERT).astype(int)
+        return int(im[:, 2, 0].mean()), int(im[:, -3, 0].mean())
+    squashed = red_edges()
+    rec_ = types.SimpleNamespace(size=VERT)
+    run_ = er.RecordingRun(ctx, rv, rec_)
+    cropped = red_edges()
+    run_.release()
+    back = red_edges()
+    ox, _, sx, _ = er.core_rec.cover_uv(VID, VERT)
+    want = (round(ox * 255), round((ox + sx) * 255))
+    check(squashed[0] < 15 and squashed[1] > 240 and abs(cropped[0] - want[0]) <= 10 and abs(cropped[1] - want[1]) <= 10 and back == squashed,
+          "vertical: pendant l'enregistrement le fond est rogne au centre (rapport garde), hors enregistrement il remplit le cadre comme avant",
+          f"hors rec {squashed}, en rec {cropped} (attendu ~{want}), apres {back}")
 
     # --- 6. rendu en retard : images dupliquees, comptees
     s, ctl, spies, renderer, calls = make()
