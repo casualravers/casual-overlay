@@ -15,8 +15,8 @@ uniform float u_high;
 uniform float u_rms;
 uniform float u_beat;         // enveloppe 1 -> 0 apres chaque kick
 uniform float u_since_beat;   // secondes depuis le dernier kick
-uniform vec4 u_au_bg;         // audio vu par la couche fond / logo (basses, aigus, kick, secondes depuis le kick)
-uniform vec4 u_au_logo;
+uniform vec4 u_au_bg[4];      // audio vu par la couche fond / logo, UN vecteur par effet (0 ondulation, 1 onde de choc, 2 glitch, 3 aberration) : basses, aigus, kick, secondes depuis le kick
+uniform vec4 u_au_logo[4];
 // Noise : une "musique imaginaire" au hasard, ajoutee a l'audio reel pour les effets coches (u_nz_fx = wobble, onde,
 // aberration, glitch). u_nz = houle 0..1, u_nz_beat = enveloppe du dernier coup, u_nz_since = secondes depuis ce coup,
 // u_nz_amount = force (deja appliquee a u_nz / u_nz_beat).
@@ -80,13 +80,13 @@ float hash(vec2 p) {
 // Les quatre effets appliques a UNE couche (texture premultipliee: les 4 canaux suivent les memes UV).
 // Aberration chromatique: chaque canal de couleur vient de son propre decalage; l'alpha est le plus
 // grand des trois, pour ne pas laisser de frange sombre sur les bords d'un logo.
-// `au` = audio vu par cette couche (voir core/audio_layers.py) : x = basses, y = aigus, z = enveloppe du kick, w = secondes depuis le kick.
-vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 au) {
+// `au[i]` = audio vu par l'effet i de cette couche (voir core/audio_layers.py) : x = basses, y = aigus, z = enveloppe du kick, w = secondes depuis le kick.
+vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 au[4]) {
     float aspect = u_res.x / u_res.y;
     vec2 uv = cuv;
 
     // 1. Wobble : ondulation sinusoidale des UV, amplitude = basses.
-    float bass_e = max(au.x, u_nz * u_nz_fx.x);
+    float bass_e = max(au[0].x, u_nz * u_nz_fx.x);
     uv += fx.x * bass_e * 0.012 *
           vec2(sin(uv.y * 18.0 + u_time * 2.3), cos(uv.x * 14.0 + u_time * 1.9));
 
@@ -94,8 +94,8 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 a
     vec2 d = (uv - center) * vec2(aspect, 1.0);
     float dist = length(d);
     // Onde de choc: celle du dernier kick reel, ou du dernier coup du noise s'il est plus recent et coche.
-    bool by_noise = u_nz_fx.y > 0.5 && u_nz_amount > 0.001 && u_nz_since < au.w;
-    float since = by_noise ? u_nz_since : au.w;
+    bool by_noise = u_nz_fx.y > 0.5 && u_nz_amount > 0.001 && u_nz_since < au[1].w;
+    float since = by_noise ? u_nz_since : au[1].w;
     float strength = by_noise ? u_nz_amount : 1.0;
     float radius = since * 0.9;
     float w = (dist - radius) / 0.07;
@@ -104,7 +104,7 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 a
     uv += (d / max(dist, 1e-4)) / vec2(aspect, 1.0) * ring * 0.05 * fx.y * strength;
 
     // 3. Glitch : bandes horizontales decalees, hash quantifie dans le temps, declenche par seuil.
-    float trig = max(step(0.55, au.z) * au.z, step(0.85, au.y) * au.y * 0.6);
+    float trig = max(step(0.55, au[2].z) * au[2].z, step(0.85, au[2].y) * au[2].y * 0.6);
     trig = max(trig, step(0.45, u_nz_beat) * u_nz_beat * u_nz_fx.w);          // coups du noise
     float g = max(trig * fx.w, u_flash * 0.9);        // le flash du VJ declenche aussi des bandes de glitch
     if (g > 0.001) {
@@ -120,7 +120,7 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 a
     // `disp` (halo holographique) deforme le fond avec une legere dispersion spectrale: le rouge est
     // pousse plus loin que le bleu, d'ou les franges irisees. Toujours le niveau 0 des mipmaps (la couche
     // logo en a pour le halo): rien n'est flou.
-    float beat_e = max(au.z, u_nz_beat * u_nz_fx.z);
+    float beat_e = max(au[3].z, u_nz_beat * u_nz_fx.z);
     vec2 off = (uv - center) * 0.022 * beat_e * fx.z;
     vec4 sr = textureLod(tex, uv + off + disp * 1.35, 0.0);
     vec4 sg = textureLod(tex, uv + disp, 0.0);

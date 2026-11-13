@@ -186,7 +186,7 @@ class EffectBank:
 
     def __init__(self) -> None:
         self._mix = {layer: [SourceMixer() for _ in EFFECTS] for layer in LAYERS}
-        self._dose = {layer: [0.0] * len(EFFECTS) for layer in LAYERS}
+        self._dose: dict[str, list[float | None]] = {layer: [None] * len(EFFECTS) for layer in LAYERS}       # None : pas encore de dosage, la premiere cible est prise tout de suite
         self._info: dict[str, list[tuple[str, str, float]]] = {layer: [] for layer in LAYERS}
 
     def levels(self, now: float, dt: float, state: dict, layer: str, assign: dict, kick_layer: str, fade: bool = True) -> list:
@@ -197,8 +197,9 @@ class EffectBank:
             source, dose = assign.get(effect, REST)
             drift = dose == DERIVE
             target = 0.0 if drift else min(max(float(dose), 0.0), 1.0)
-            self._dose[layer][i] += (target - self._dose[layer][i]) * a
-            d = self._dose[layer][i]
+            prev = self._dose[layer][i]
+            d = target if prev is None else prev + (target - prev) * a
+            self._dose[layer][i] = d
             bass, high, beat, since = self._mix[layer][i].levels(now, state, source, kick_layer, fade)
             vec = [bass * d, high * d, beat * d, since] if d >= DOSE_OFF else [0.0, 0.0, 0.0, NO_KICK]
             if drift and effect in ("wobble", "chroma"):

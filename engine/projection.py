@@ -545,6 +545,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         else:
             renderer.draw(ctx.screen, size, state, params, now - t0)
         s.status["sources"] = renderer.sources_now                                    # voyants de l'interface : sources par couche, dernier eclair
+        s.status["fx_now"] = renderer.fx_now                                          # effets actifs par couche (reactivite par effet, mode auto)
         s.status["strobe_info"] = renderer.strobe_info
         s.status["rd"] = renderer.rd_note                                              # palette labyrinthe : liberte sans effet en 16 bits
         s.status["foudre"] = renderer.bolt.stats()                      # voyant du mode Foudre : segments, pointes, pouls

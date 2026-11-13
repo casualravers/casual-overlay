@@ -6525,6 +6525,13 @@ def check_effets_auto() -> None:
         for vec in bank3.levels(t, 1 / 60.0, st, "bg", a, "bg"):
             bad = bad or any(math.isnan(x) or x < 0.0 or (i < 3 and x > 1.0 + 1e-9) for i, x in enumerate(vec))
     check(not bad, "effets auto: aller-retour rapide repos / plein: aucune valeur negative, hors plage ou NaN")
+    from core import explain
+    txt = explain.fx_line({"bg": [("wobble", "basses", 0.6), ("ripple", "kick", 0.5)], "logo": []})
+    check("fond : ondulation <- basses 60 %, choc <- kick 50 %" in txt and "logo : tout au repos" in txt, "effets auto: le voyant nomme les effets actifs avec leur source et leur dosage", txt)
+    check("derive lente" in explain.fx_line({"bg": [("wobble", "derive", 0.1)], "logo": None}) and "logo" not in explain.fx_line({"bg": [("wobble", "derive", 0.1)], "logo": None}),
+          "effets auto: la derive est dite, une couche qui n'est pas en auto par effet n'est pas citee")
+    check("source de la couche" in explain.fx_line(None) and "source de la couche" in explain.fx_line({"bg": None, "logo": None}),
+          "effets auto: pas de mode auto par effet = le voyant le dit (reglage a la main ou phase inconnue)")
     b4 = al.EffectBank()
     b4.levels(0.0, 1 / 60.0, st, "bg", dict(rest, glitch=("aigus", 1.0)), "bg", fade=False)
     for k in range(240):
@@ -6610,15 +6617,47 @@ def check_audio_layers() -> None:
     groove_st = dict(bass_only, phase={"name": "groove"})
     check(changed(render(groove_st, **wob_auto), still) > 2000 and r.sources_now[:2] == ("basses", "aigus") and r.sources_now[2:] == (True, True),
           "auto: en groove le fond suit les basses (et le voyant le dit)")
-    r.draw(fbo, size, dict(bass_only, phase={"name": "peak"}), dict(base, **wob_auto), 5.0)
-    mid_img = read_target(ctx, fbo, size).astype(int)
-    r.draw(fbo, size, dict(bass_only, phase={"name": "peak"}), dict(base, **wob_auto), 7.0)
-    end_img = read_target(ctx, fbo, size).astype(int)
-    check(changed(mid_img, still) > 2000 and changed(end_img, still) == 0 and r.sources_now[:2] == ("kick", "kick"),
-          "auto: au pic le fond passe sur le kick (fondu d'abord, puis les basses seules ne font plus onduler)")
-    r._src_mix = (SourceMixer(), SourceMixer())
-    check(changed(render(dict(bass_only, phase={"name": "silence"}), **wob_auto), still) == 0 and r.sources_now[:2] == ("rien", "rien"),
-          "auto: en silence le fond ne reagit a rien")
+    # Reactivite par effet (spec 2026-11-13) : le tableau donne a CHAQUE effet sa source. Ruling : ces deux verifications d'avant (un seul vecteur par couche,
+    # « au pic le fond est sur le kick », « en silence le fond ne reagit a rien ») ne decrivent plus le mode auto : au pic le fond ondule sur les basses
+    # (ondulation <- basses, onde de choc <- kick) ; en silence il garde une derive lente, mais ne reagit plus a la musique.
+    from core.audio_layers import EffectBank
+
+    def fresh_bank():
+        r._src_mix = (SourceMixer(), SourceMixer())
+        r._layer_filters = (LayerFilter(), LayerFilter())
+        r._fx_bank = EffectBank()
+        r._fx_filters = {layer: [LayerFilter() for _ in range(4)] for layer in ("bg", "logo")}
+    fresh_bank()
+    peak_img = render(dict(bass_only, phase={"name": "peak"}), **wob_auto)
+    fx_bg = {e: s for e, s, _d in (r.fx_now["bg"] or [])}
+    check(changed(peak_img, still) > 2000 and fx_bg.get("wobble") == "basses" and fx_bg.get("ripple") == "kick" and r.sources_now[:2] == ("kick", "kick"),
+          "effets auto: au pic le fond ondule sur les basses et l'onde de choc suit le kick (le voyant le dit)", str(r.fx_now))
+    fresh_bank()
+    sil_a = render(dict(bass_only, phase={"name": "silence"}), **wob_auto)
+    fresh_bank()
+    sil_b = render(dict(bass_only, bass=0.0, phase={"name": "silence"}), **wob_auto)
+    check(changed(sil_a, sil_b) == 0 and changed(sil_a, still) > 0 and [x[1] for x in r.fx_now["bg"]] == ["derive"],
+          "effets auto: en silence le fond ne reagit plus a la musique (basses ou pas, meme image) mais garde sa derive lente", str(r.fx_now["bg"]))
+    # un effet au repos laisse l'image intacte pendant que les autres agissent ; le logo est decale du fond
+    fresh_bank()
+    groove_bass = dict(bass_only, phase={"name": "groove"})
+    gb = render(groove_bass, **wob_auto)
+    mg = (gb[:, :, :3] > 240).all(axis=2)
+    check(changed(gb, still) > 2000 and int((m0 != mg).sum()) == 0,
+          "effets auto: en groove les basses font onduler le fond mais pas le logo (lie : il a sa propre colonne du tableau)")
+    fresh_bank()
+    check(changed(render(dict(hit, phase={"name": "groove"}), src_bg="auto", **ab), still) == 0,
+          "effets auto: en groove un kick seul ne declenche pas l'aberration (fond au repos, logo sur les frappes / aigus)")
+    fresh_bank()
+    tap = dict(bass_only, bass=0.0, phase={"name": "groove"}, hit=0.9, since_hit=0.1)
+    check(changed(render(tap, src_bg="auto", **ab), still) > 50, "effets auto: en groove une frappe aigue declenche l'aberration du logo")
+    fresh_bank()
+    check(changed(render(dict(bass_only, phase={"name": "inconnue"}), **wob_auto), still) > 2000 and r.fx_now == {"bg": None, "logo": None},
+          "effets auto: phase inconnue = comportement d'avant (un vecteur par couche, comme tout)")
+    fresh_bank()
+    check(changed(render(groove_bass, src_bg="basses", **wob), still) > 2000 and r.fx_now == {"bg": None, "logo": None},
+          "effets auto: source choisie a la main = les quatre effets lisent le vecteur de la couche (comportement d'avant)")
+    fresh_bank()
     r._src_mix = (SourceMixer(), SourceMixer())
     check(changed(render(dict(bass_only), **wob_auto), still) > 2000 and r.sources_now[:2] == ("tout", "tout"),
           "auto: sans phase connue, repli sur tout")
