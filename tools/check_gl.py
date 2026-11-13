@@ -1440,6 +1440,9 @@ def check_gui() -> None:
     check(out.get("doodle_gui") == (1, 0.0, 1.0, 0.0), "doodles (GUI): case Recuperer les medias dans Affichage, desactivee par defaut, pilote doodle_on", str(out.get("doodle_gui")))
     check(out.get("diag_gui") == (True, True, True, "Button", "Diagnostic"),
           "diagnostic (GUI): bouton Diagnostic (Affichage) qui montre le rapport", str(out.get("diag_gui")))
+    check(out.get("bug_gui") == (True, "Rapport de bug", True, True, True, True),
+          "rapport de bug (GUI): bouton a cote de Diagnostic ; annuler n'ecrit rien ; le zip a fluidite, diagnostic, systeme et la description ; message",
+          str(out.get("bug_gui")))
     hs = out.get("aff_height") or [(0, 0, 0), (1, 1, 1)]
     check(hs[0] == hs[1], "onglet Affichage: un voyant de pulsation ou un statut tres long ne change pas la hauteur de l'onglet (rien ne decale)", str(hs))
     print(f"  (information) hauteur voulue de l'onglet Affichage : {hs[0][0]} px")
@@ -7071,6 +7074,28 @@ def gui_diag_steps(c, s, out) -> None:
     if boxes:
         boxes[0].invoke()
     out["doodle_gui"] = (len(boxes), before, on, float(s.params["doodle_on"]))
+    # --- rapport de bug (issue #136) : bouton a cote de Diagnostic ; description demandee ; zip ecrit dans un fil ; annuler = rien
+    import zipfile
+    bug_dir = Path(tempfile.mkdtemp(prefix="casual-bug-gui-"))
+    msg_before = s.status.get("msg")                # une etape suivante lit le message du statut : on le rend a la fin
+    s.bug_out_dir = bug_dir
+    s.bug_ask = lambda: None                       # annuler
+    c["bug_btn"].invoke()
+    cancelled = list(bug_dir.glob("*.zip"))
+    s.bug_ask = lambda: "les infobulles ne s'affichent pas"
+    path = c["bug_report"](wait=True)
+    names, readme = [], ""
+    if path and Path(path).is_file():
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            readme = z.read("LISEZMOI.txt").decode("utf-8")
+    out["bug_gui"] = (c["bug_btn"].master == c["diag_btn"].master, c["bug_btn"].cget("text"), not cancelled,
+                      {"fluidite.txt", "diagnostic.txt", "systeme.json"} <= set(names), "infobulles" in readme, "Rapport" in str(s.status.get("msg", "")))
+    del s.bug_out_dir, s.bug_ask
+    if msg_before is None:
+        s.status.pop("msg", None)
+    else:
+        s.status["msg"] = msg_before
 
 
 def make_test_video(path: Path, size: str = "320x240", seconds: int = 2) -> None:

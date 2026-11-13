@@ -26,6 +26,10 @@ son remede (`[ERREUR]` : le programme ne peut pas demarrer ; `[ATTENTION]` : il 
 tourne au lancement : une erreur arrete le programme avec ce message au lieu d'une trace d'erreur, les avertissements sont
 resumes dans la fenetre de reglages (ligne des scenes) et le rapport complet est dans **Affichage et analyse > Diagnostic**.
 
+**Rapport de bug** : bouton **Rapport de bug** (onglet *Affichage*, a cote de Diagnostic) ou `python audio2wave_gl.py --rapport-bug "ce qui
+s'est passe"` (si la fenetre ne demarre plus) : un zip `casual-bug-AAAA-MM-JJ_HHhMM.zip` sur le Bureau avec le journal, les plantages, le
+diagnostic, les ecrans, la fluidite de l'interface et les reglages, **sans cle ni jeton**. Il est prive : a lire, ou a donner a Claude.
+
 ## Installation (developpement)
 
 Prerequis : Python 3.12 (3.14 n'a pas encore de wheel `moderngl`), `ffmpeg` dans le PATH.

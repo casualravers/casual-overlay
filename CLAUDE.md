@@ -185,6 +185,7 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   `args.diag_checks` garde le resultat. GUI : `scene_msg` affiche une fois `summary_line` ; bouton **Diagnostic** (section *Affichage et analyse*,
   `diagnostic_report`) = verifications refaites sauf OpenGL (resultat du demarrage : pas de second contexte GL pendant le rendu),
   dans `choice_dialog`.
+- **Rapport de bug** (issue #136, `core/bugreport.py` pur + `engine/bugreport.py` ; bouton **Rapport de bug** de l'onglet *Affichage*, `--rapport-bug [DESCRIPTION]`, `tools/rapport_bug.py`) : zip prive `casual-bug-AAAA-MM-JJ_HHhMM.zip` sur le Bureau (dossier donne par Windows, OneDrive compris ; sinon `~/.audio2wave/rapports/`) : `LISEZMOI.txt` (description, version, installation, URL du depot SANS sa requete, notes), journaux (2 derniers Mo), plantages, `diagnostic.txt` (sans second contexte OpenGL depuis la GUI), `systeme.json` (moniteurs lus par Windows, fenetre de reglages, projection, temps GPU), `fluidite.txt` (GUI seulement), `gl_params` / `autosave.precedent` / `masters` passes par `redact` (cle contenant key / token / secret / password / anon = `***`), `scenes_resume.json`. Jamais : `depot.json`, un JSON invalide (non masquable), `scenes.json` complet, presets, medias. Version = commit git, sinon fichier `VERSION` ecrit par `build_portable.py`. Description demandee par `s.bug_ask` (tests) ; `s.bug_out_dir` (tests) remplace le Bureau. `check_gl.py` : `check_bugreport` (pur, six secrets plantes), `check_bugreport_cli`, `gui_diag_steps`.
 - **Version portable** (`build_portable.py`, stdlib, Windows) : un dossier `dist/casual-overlay-portable/` = `python/` (copie de
   l'installation Python de base du venv, sans Doc / tests / pip, avec tcl/tk, + `site-packages` du `.venv`), les `.py`, `gl_shaders/`,
   `asset/` (fichiers du dossier et de `asset/images/`, ni `animations/` ni `videos/` perso), `audio2wave/` (leurs `*.py`, copie de `sources/audio2wave/`), `ffmpeg/` (ffmpeg.exe +
@@ -211,6 +212,7 @@ python audio2wave_gl.py --gui [--projeter]             # reglages seuls ; bouton
 python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
 python tools/check_gl.py                                     # verifications hors materiel
 python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ffmpeg, OpenGL, micro...)
+python audio2wave_gl.py --rapport-bug "description"   # zip de diagnostic sur le Bureau (journal, plantages, reglages sans secrets)
 python tools/build_portable.py --zip                         # dossier portable (Python + ffmpeg + audio2wave dedans)
 ```
 

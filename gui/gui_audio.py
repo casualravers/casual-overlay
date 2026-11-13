@@ -130,6 +130,66 @@ def install(c):
     diag_btn.pack(side="left", padx=(0, 6))
     Tooltip(diag_btn, "Verifie ce PC : ffmpeg, OpenGL, micro, modules Python (glisser-deposer...), audio2wave, dossier des reglages.")
 
+    def bug_report(wait: bool = False):
+        """Rapport de bug (issue #136) : demande une description (None = annule), ecrit le zip dans un fil, puis ouvre l'Explorateur dessus.
+        `s.bug_ask` (tests) remplace la question, `s.bug_out_dir` (tests) le Bureau et coupe l'Explorateur. `wait` : attend la fin (tests)."""
+        import subprocess
+        import threading
+        from tkinter import simpledialog
+        from engine import bugreport
+        from gl_gui import STATS
+        ask = getattr(s, "bug_ask", None) or (lambda: simpledialog.askstring(
+            "Rapport de bug", "Ce qui s'est passe (facultatif) :", parent=root))
+        text = ask()
+        if text is None:
+            return None
+        system = bugreport.system_info(root, s)           # lu ici : Tk ne se touche que depuis son fil
+        fluidity = "\n".join(STATS.report(16))
+        out_dir = getattr(s, "bug_out_dir", None)
+        result: dict = {}
+
+        def work():
+            try:
+                diag = diagnostic_report()                 # sans second contexte OpenGL (resultat du demarrage)
+            except Exception as exc:
+                diag = f"Diagnostic impossible : {exc}"
+            try:
+                result["path"], result["notes"] = bugreport.make_report(text, out_dir=out_dir, diag=diag, system=system, fluidity=fluidity)
+            except OSError as exc:
+                result["error"] = str(exc)
+
+        def finish():
+            if "error" in result:
+                s.status["msg"] = f"Rapport de bug impossible : {result['error']}"
+                return
+            s.status["msg"] = f"Rapport de bug ecrit : {result['path'].name} (sur le Bureau)" if out_dir is None else f"Rapport de bug ecrit : {result['path'].name}"
+            if out_dir is None:
+                try:
+                    subprocess.Popen(["explorer", f"/select,{result['path']}"])
+                except OSError:
+                    pass
+
+        worker = threading.Thread(target=work, name="rapport-bug", daemon=True)
+        worker.start()
+        if wait:
+            worker.join(120)
+            finish()
+            return result.get("path")
+        s.status["msg"] = "Rapport de bug en cours..."
+
+        def poll():
+            if worker.is_alive():
+                root.after(150, poll)
+            else:
+                finish()
+        root.after(150, poll)
+        return None
+
+    bug_btn = tk.Button(frame, text="Rapport de bug", command=bug_report)
+    bug_btn.pack(side="left", padx=(0, 6))
+    Tooltip(bug_btn, "Ecrit sur le Bureau un zip pour diagnostiquer un probleme : journal, plantages, diagnostic, ecrans, fluidite, "
+                     "reglages (sans cle ni jeton). Prive : a lire ou a donner a Claude.")
+
     auto_master_var = tk.IntVar(value=int(float(params["auto_master"]) >= 0.5))
     bind_param("auto_master", auto_master_var, float)
     frame = tk.Frame(tab_aff)
@@ -200,4 +260,4 @@ def install(c):
     status_label.pack(side="left", padx=(10, 0), anchor="n")
 
     import types
-    return types.SimpleNamespace(pulse_label=pulse_label, lead_label=lead_label, lead_gate=lead_gate, lead_mode=lead_mode, lead_var=lead_var, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)
+    return types.SimpleNamespace(pulse_label=pulse_label, lead_label=lead_label, lead_gate=lead_gate, lead_mode=lead_mode, lead_var=lead_var, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, bug_btn=bug_btn, bug_report=bug_report, meter=meter, status_label=status_label)
