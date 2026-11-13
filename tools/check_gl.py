@@ -1431,6 +1431,9 @@ def check_gui() -> None:
     check(out.get("doodle_gui") == (1, 0.0, 1.0, 0.0), "doodles (GUI): case Recuperer les medias dans Affichage, desactivee par defaut, pilote doodle_on", str(out.get("doodle_gui")))
     check(out.get("diag_gui") == (True, True, True, "Button", "Diagnostic"),
           "diagnostic (GUI): bouton Diagnostic (Affichage) qui montre le rapport", str(out.get("diag_gui")))
+    hs = out.get("aff_height") or [(0, 0, 0), (1, 1, 1)]
+    check(hs[0] == hs[1], "onglet Affichage: un voyant de pulsation ou un statut tres long ne change pas la hauteur de l'onglet (rien ne decale)", str(hs))
+    print(f"  (information) hauteur voulue de l'onglet Affichage : {hs[0][0]} px")
     check(out.get("calib_btn") == ("Button", "Calibrer...") and out.get("calib_open") == (True, True) and out.get("calib_emit") == ([(1920, 0)], True),
           "calibration (GUI): le bouton Calibrer... ouvre une seule fenetre, lance l'emission sur l'ecran indique", str((out.get("calib_btn"), out.get("calib_open"), out.get("calib_emit"))))
     check(out.get("calib_found") == (87, "normal", True, True) and out.get("calib_applied") == (0.0, 87.0, 87.0) and out.get("calib_reset") == 0.0,
@@ -5940,6 +5943,16 @@ def gui_calib_steps(c, s, out) -> None:
         analyse_video=lambda path, log=None: {"rows": [], "clicks": 6, "flashes": 6, "summary": {"n": 6, "median": 87.4, "min": 82.0, "max": 93.0, "p95": 92.0, "missed": 0,
                                                                                                 "advance_ms": 87, "spread_ms": 10.0, "resolution_ms": 8.3}})
     root = c["root"]
+    # onglet Affichage : les textes qui changent (voyant de pulsation, statut) ont une hauteur FIXE ; rien ne decale le reste de l'onglet (issue #128)
+    tab = c["pulse_label"].master
+    heights = []
+    for text in ("pulsation : -", "pulsation calee | avance 80 ms : effets en avance (ecart prediction - detection +3 ms) " * 3):
+        for key in ("pulse_label", "status_label"):
+            c[key].config(text=text)
+        root_ = c["root"]
+        root_.update_idletasks()
+        heights.append((tab.winfo_reqheight(), c["pulse_label"].winfo_reqheight(), c["status_label"].winfo_reqheight()))
+    out["aff_height"] = heights
     out["calib_btn"] = (c["calib_btn"].winfo_class(), c["calib_btn"].cget("text"))
     top = c["calib_open"](fake)
     out["calib_open"] = (top is not None and bool(top.winfo_exists()), c["calib_open"](fake) is top)         # un second clic ramene la meme fenetre
@@ -5968,7 +5981,11 @@ def gui_diag_steps(c, s, out) -> None:
     text = c["diag_report"]()
     out["diag_gui"] = (text.startswith("Diagnostic casual-overlay"), "Resultat" in text, "OpenGL" not in text or True,
                        c["diag_btn"].winfo_class(), c["diag_btn"].cget("text"))
-    boxes = [w for w in c["aff_frame"].winfo_children() if w.winfo_class() == "Checkbutton" and w.cget("text") == "Recuperer les medias"]
+    def _desc(w):                                  # la case est dans une ligne de l'onglet (meme ligne que les automations : gain de hauteur)
+        for ch in w.winfo_children():
+            yield ch
+            yield from _desc(ch)
+    boxes = [w for w in _desc(c["aff_frame"]) if w.winfo_class() == "Checkbutton" and w.cget("text") == "Recuperer les medias"]
     before = float(s.params["doodle_on"])
     if boxes:
         boxes[0].invoke()
