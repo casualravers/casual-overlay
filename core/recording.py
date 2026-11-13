@@ -37,6 +37,12 @@ AAC_BYTES_PER_S = 40_000                                       # 320 kb/s : esti
 X264_ARGS =["-c:v", "libx264", "-preset", "veryfast", "-crf", "17"]
 
 
+def format_label(name: str) -> str:
+    """« vertical_hd » -> « vertical hd 720x1280 » (voyant et info-bulles)."""
+    w, h = FORMATS[clean_format(name)]
+    return f"{clean_format(name).replace('_', ' ')} {w}x{h}"
+
+
 def clean_fps(value) -> int:
     """30 ou 60 : tout ce qui n'est pas un nombre, ou est sous 45, donne 30."""
     try:
@@ -73,7 +79,7 @@ def fit_rect(src: tuple[int, int], dst: tuple[int, int]) -> tuple[int, int, int,
     if min(sw, sh, dw, dh) <= 0:
         return (0, 0, 0, 0)
     scale = min(dw / sw, dh / sh)
-    w, h = max(1, int(sw * scale)), max(1, int(sh * scale))
+    w, h = min(dw, max(1, round(sw * scale))), min(dh, max(1, round(sh * scale)))          # round : int() donnait 639 pour 1920 * (640 / 1920)
     return ((dw - w) // 2, (dh - h) // 2, w, h)
 
 

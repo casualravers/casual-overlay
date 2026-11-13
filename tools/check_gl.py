@@ -1054,6 +1054,7 @@ def check_gui() -> None:
                     gui_bgvideo_steps(c, s, out)
                     gui_diag_steps(c, s, out)
                     gui_calib_steps(c, s, out)
+                    gui_rec_steps(c, s, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -1438,6 +1439,16 @@ def check_gui() -> None:
           "calibration (GUI): le bouton Calibrer... ouvre une seule fenetre, lance l'emission sur l'ecran indique", str((out.get("calib_btn"), out.get("calib_open"), out.get("calib_emit"))))
     check(out.get("calib_found") == (87, "normal", True, True) and out.get("calib_applied") == (0.0, 87.0, 87.0) and out.get("calib_reset") == 0.0,
           "calibration (GUI): l'analyse de la video propose l'avance mesuree (87 ms) et le bouton la regle sur le curseur et dans les reglages", str((out.get("calib_found"), out.get("calib_applied"), out.get("calib_reset"))))
+    rg = out.get("rec_gui") or {}
+    check(rg.get("idle") == ("\u25cf Enregistrer", "normal", True) and rg.get("recording") == ("\u25a0 Arreter", "normal", True) and rg.get("after") == ("\u25cf Enregistrer", True),
+          "onglet Rec (GUI): bouton Enregistrer / Arreter et voyant (pret, REC en cours, retour au repos)", str((rg.get("idle"), rg.get("recording"), rg.get("after"))))
+    check(rg.get("closed") == ("disabled", "Ouvre la projection pour enregistrer.") and rg.get("nofmpeg") == ("disabled", "ffmpeg introuvable : enregistrement impossible."),
+          "onglet Rec (GUI): projection fermee ou sans ffmpeg, bouton grise avec la raison", str((rg.get("closed"), rg.get("nofmpeg"))))
+    check(len(set(rg.get("heights") or [(0, 0), (1, 1)])) == 1, "onglet Rec (GUI): un voyant court ou tres long ne change ni la hauteur du voyant ni celle de l'onglet (rien ne decale)", str(rg.get("heights")))
+    check(rg.get("sent") == "rec" and rg.get("values") == ("vertical_hd", 60.0, "materiel", 120.0, "C:/clips test/mes videos", "D:/autre dossier"),
+          "onglet Rec (GUI): le bouton envoie la commande au fil GL ; format, cadence, encodeur, delai et dossier (selecteur ou saisie) vont dans les reglages", str((rg.get("sent"), rg.get("values"))))
+    check(rg.get("palette") == (True, "Enregistrement : demarrer / arreter", "rec") and rg.get("help") and rg.get("tab_icon"),
+          "onglet Rec (GUI): commande de la palette Ctrl+K, touche E dans l'aide, icone de l'onglet", str((rg.get("palette"), rg.get("help"), rg.get("tab_icon"))))
     bm = out.get("bgv_modes", {})
     check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
                  "video": (False, False, True, "video")},
@@ -3191,7 +3202,7 @@ def check_recording() -> None:
 
     # --- copie dans la fenetre : meme rapport que l'enregistrement, bandes noires
     check(rec.fit_rect((1080, 1920), (1280, 720)) == (437, 0, 405, 720) and rec.fit_rect((1080, 1920), (540, 960)) == (0, 0, 540, 960)
-          and rec.fit_rect((1920, 1080), (640, 640)) == (0, 160, 640, 360) and rec.fit_rect((1080, 1920), (0, 0)) == (0, 0, 0, 0),
+          and rec.fit_rect((1920, 1080), (640, 640)) == (0, 140, 640, 360) and rec.fit_rect((1080, 1920), (0, 0)) == (0, 0, 0, 0),
           "fenetre: l'image enregistree est copiee en gardant son rapport (bandes noires), fenetre reduite a rien = rien", str(rec.fit_rect((1080, 1920), (1280, 720))))
 
     # --- decalage de l'audio
@@ -3261,6 +3272,20 @@ def check_recording() -> None:
     check(all(ps.BY_KEY[k].scope == "device" for k in ("rec_format", "rec_fps", "rec_dir", "rec_delay_ms", "rec_encoder")), "schema: portee device (sauve, hors presets et scenes)")
     check(ps.validate("rec_fps", 999) == (True, 60) and ps.validate("rec_fps", 5) == (True, 30) and ps.validate("rec_delay_ms", 999) == (True, 300.0) and ps.validate("rec_format", "x")[0] is False
           and ps.validate("rec_encoder", "x")[0] is False and ps.validate("rec_encoder", "materiel")[0] is True, "schema: valeurs hors plage ramenees, enums inconnus refuses")
+
+    # --- texte et bouton de l'onglet Rec
+    check(rec.format_label("vertical_hd") == "vertical hd 720x1280" and rec.format_label("n'importe quoi") == "vertical 1080x1920", "libelle de format: nom et taille, inconnu = vertical")
+    base = dict(status=None, projection_open=True, ffmpeg_ok=True, done=None, fmt_label="vertical 1080x1920", fps=30, audio_name="Interface audio")
+    tx, on = ex.rec_panel(False, **base)
+    check(on and tx == "Pret : vertical 1080x1920, 30 images/s, son : Interface audio", "onglet Rec: pret, avec le format, la cadence et l'entree audio", tx)
+    check(ex.rec_panel(False, **{**base, "audio_name": None})[0].endswith("sans son (aucune entree audio)"), "onglet Rec: sans entree audio, le dit")
+    check(ex.rec_panel(False, **{**base, "projection_open": False}) == ("Ouvre la projection pour enregistrer.", False)
+          and ex.rec_panel(False, **{**base, "ffmpeg_ok": False}) == ("ffmpeg introuvable : enregistrement impossible.", False), "onglet Rec: projection fermee ou ffmpeg absent = bouton grise avec la raison")
+    tx, on = ex.rec_panel(False, **{**base, "done": {"path": "C:\\Users\\Jean\\Vid\u00e9os\\casual-2026-11-13_22h05m09s.mp4", "warning": None}})
+    check(tx.endswith("\nDernier fichier : casual-2026-11-13_22h05m09s.mp4"), "onglet Rec: dernier fichier ecrit (nom seul)", tx)
+    check("sans fichier : disque" in ex.rec_panel(False, **{**base, "done": {"path": None, "warning": "disque"}})[0], "onglet Rec: dernier essai sans fichier + raison")
+    tx, on = ex.rec_panel(True, **{**base, "status": {"seconds": 83.0, "bytes": 412_000_000, "peak_db": -3.0, "dropped": 0, "encoder": "libx264", "warning": "Plus de son depuis 2 s"}, "projection_open": False})
+    check(on and tx == "REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264\nPlus de son depuis 2 s", "onglet Rec: pendant l'enregistrement, le voyant et l'avertissement ; le bouton reste actif pour arreter", tx)
 
     # --- voyant
     t = ex.rec_status_text(83.0, 412_000_000, -3.0, 0, "libx264")
@@ -5490,7 +5515,7 @@ def gui_expand_steps(c, s, out) -> None:
     tabs = [nb for nb in walk_(mpanel) if nb.winfo_class() == "TNotebook"]
     tab_names = [tabs[0].tab(i, "text") for i in range(tabs[0].index("end"))] if tabs else []
     bar_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() in ("Button", "Menubutton")]
-    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique", "Affichage"] and len(knobs) >= 18,
+    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique", "Affichage", "Rec"] and len(knobs) >= 18,
                              got == (1.5, 0.5, 0.4, 0.3, 90.0), list_right,
                              not any(t.startswith(("Strobe", "Verrou", "Teinte", "Reac", "Tempo", "Overlay", "Fond", "Montee")) for t in bar_texts),
                              any(w.winfo_class() == "Button" and w.cget("text").startswith("Strobe") for w in walk_(mpanel)),
@@ -6515,6 +6540,90 @@ def check_diagnostics() -> None:
     check((dst / "a" / "x.py").exists() and not (dst / "a" / "x.pyc").exists() and not (dst / "a" / "tests").exists(),
           "portable: copie sans les .pyc ni les dossiers exclus")
     check(bp.find_base_python().joinpath("python.exe").exists(), "portable: installation Python de base retrouvee")
+
+
+def gui_rec_steps(c, s, out) -> None:
+    """Onglet « Rec » du panneau de controle (issue #140) : bouton (actif, grise, « Arreter »), voyant de hauteur fixe, reglages, dossier, palette, aide."""
+    import types as _types
+    import gl_gui as gg_
+    root, params = c["root"], s.params
+    ui = c["vj_ui"]
+    nb = ui["tabs"][0]
+    names = [nb.tab(i, "text") for i in range(nb.index("end"))]
+    nb.select(names.index("Rec"))
+    root.update()
+    btn, label, refresh = ui["rec_btn"], ui["rec_label"], ui["rec_refresh"]
+    def walk_(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_(ch)
+
+    def widget(cls, text):
+        return next((w for w in walk_(nb.nametowidget(nb.select())) if w.winfo_class() == cls and w.cget("text") == text), None)
+    saved = {k: params[k] for k in ("rec_format", "rec_fps", "rec_encoder", "rec_delay_ms", "rec_dir")}
+    ffmpeg_before = ui["rec_cache"].get("ffmpeg")
+    proj = getattr(s, "projection", None)
+    was_on = getattr(proj, "on", None)
+    refresh()
+    closed = (str(btn.cget("state")), label.cget("text"))                      # projection fermee : bouton grise avec la raison
+    if proj is not None:
+        proj.on = True                                                         # la projection s'ouvre : le bouton devient actif
+    refresh()
+    idle = (btn.cget("text"), str(btn.cget("state")), label.cget("text").startswith("Pret : "))
+    # hauteur fixe : un voyant court, un voyant tres long (avertissements) = meme hauteur d'onglet et de voyant
+    heights = []
+    s.recording = _types.SimpleNamespace(active=True)
+    for warn in (None, "Plus de son depuis 3 s : la carte son est-elle branchee ? " * 6):
+        s.status["rec"] = {"seconds": 83.0, "bytes": 412_000_000, "peak_db": -3.0, "dropped": 0, "encoder": "libx264", "warning": warn}
+        refresh()
+        root.update_idletasks()
+        heights.append((nb.nametowidget(nb.select()).winfo_reqheight(), label.winfo_reqheight()))
+    recording = (btn.cget("text"), str(btn.cget("state")), label.cget("text").startswith("REC 01:23 | 412 Mo | crete -3 dBFS"))
+    s.recording = None
+    s.status.pop("rec", None)
+    refresh()
+    after = (btn.cget("text"), label.cget("text").startswith("Pret : "))
+    # ffmpeg absent : bouton grise avec la raison
+    ui["rec_cache"]["ffmpeg"] = False
+    refresh()
+    nofmpeg = (str(btn.cget("state")), label.cget("text"))
+    ui["rec_cache"]["ffmpeg"] = ffmpeg_before if ffmpeg_before is not None else True
+    refresh()
+    # un clic envoie la commande au fil GL
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    btn.invoke()
+    sent = s.commands.get_nowait() if not s.commands.empty() else None
+    # reglages : format, cadence, encodeur, delai, dossier
+    widget("Radiobutton", "Vertical HD").invoke()
+    widget("Radiobutton", "60 i/s").invoke()
+    widget("Radiobutton", "Materiel").invoke()
+    knob = next(w for w in walk_(nb.nametowidget(nb.select())) if w.winfo_class() == "Scale" and str(w.cget("to")) in ("300.0", "300"))
+    knob.set(120)
+    root.tk.call(knob.cget("command"), "120")                                  # un curseur Tk n'appelle sa commande que s'il est affiche : l'onglet peut ne pas l'etre ici
+    ui["rec_ask_dir"] = lambda: "C:/clips test/mes videos"
+    widget("Button", "Parcourir...").invoke()
+    chosen_dir = params["rec_dir"]
+    ui["rec_dir_var"].set("  D:/autre dossier  ")
+    values = (params["rec_format"], float(params["rec_fps"]), params["rec_encoder"], float(params["rec_delay_ms"]), chosen_dir, params["rec_dir"])
+    # palette et aide
+    pc = c["palette"]
+    labels = [lab for lab, _kw, _fn in pc.items()]
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    chosen = pc.choose("enregistrement")
+    via_palette = s.commands.get_nowait() if not s.commands.empty() else None
+    tab_idx = names.index("Rec")
+    if proj is not None and was_on is not None:
+        proj.on = was_on
+    out["rec_gui"] = {"closed": closed, "idle": idle, "recording": recording, "after": after, "nofmpeg": nofmpeg, "heights": heights, "sent": sent, "values": values,
+                      "palette": (any(l.startswith("Enregistrement") for l in labels), chosen, via_palette), "help": "E : enregistrer" in gg_.SHORTCUTS_HELP,
+                      "tab_icon": bool(str(nb.tab(tab_idx, "image")))}
+    for key, val in saved.items():
+        params[key] = val
+    ui["rec_dir_var"].set(saved["rec_dir"])
+    nb.select(0)
+    root.update()
 
 
 def gui_calib_steps(c, s, out) -> None:

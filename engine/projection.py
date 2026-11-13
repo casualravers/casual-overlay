@@ -603,6 +603,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             gpu_ms += elapsed
             gpu_n += 1
             warning = guard.update(elapsed, time.monotonic(), params)
+            if recording.active:
+                warning = None                  # l'avertissement compare au budget de l'AFFICHAGE (60 Hz) ; l'enregistrement a le sien (images dupliquees)
             s.status["gpu_ms"], s.status["gpu_budget_ms"] = guard.avg, guard.budget_ms       # lus par la securite GPU du VJ (core.safety)
             if warning:
                 s.status["perf"] = warning

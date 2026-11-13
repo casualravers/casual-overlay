@@ -498,6 +498,7 @@ SHORTCUTS_HELP = (
     "Haut / Bas : sensibilite du kick\n"
     "R : recharger shaders et reglages\n"
     "P : sauver les reglages\n"
+    "E : enregistrer une video + audio (onglet Rec)\n"
     "\n"
     "Mode VJ :\n"
     "X : PANIQUE (coupe effets, strobe, montee,\n"

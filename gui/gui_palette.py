@@ -28,6 +28,13 @@ def install(c):
         gl.strobe_press(c.params)
         c.root.after(90, lambda: gl.strobe_release(c.params))
 
+    def rec_toggle() -> None:
+        projection = getattr(c, "projection", None)
+        if projection is not None and not projection.running():
+            c.s.status["msg"] = "Ouvre la projection pour enregistrer."
+            return
+        c.s.commands.put("rec")                          # le fil GL demarre ou arrete (meme commande que le bouton de l'onglet Rec et la touche E)
+
     def items() -> list[tuple[str, str, object]]:
         """[(libelle, mots-cles, action)] : les actions fixes d'abord, puis scenes du set actif, sets, presets overlay et fond."""
         out: list[tuple[str, str, object]] = [
@@ -46,6 +53,7 @@ def install(c):
             ("Mode scene : scenes en grosses touches, plein ecran", "stage portable penombre", c.open_stage),
             ("Aide : raccourcis clavier", "help ?", c.help_window),
             ("Projection : demarrer / fermer", "ecran fenetre gl", c.toggle_projection),
+            ("Enregistrement : demarrer / arreter", "rec video audio clip film enregistrer", rec_toggle),
         ]
         rows = scene_book.rows()
         for r in rows:
