@@ -75,7 +75,7 @@ ailleurs, logo jamais hors cadre, shader invalide refuse sans perdre l'ancien).
   (2) **`SCREEN_DEPENDENT`** = tests qui supposent un grand ecran (mise en page large, fenetre sous 700 px...) : sur un ecran de moins de 1500 x 900 (le serveur est en 1024 x 768) ils sont ecartes, avec la liste affichee. Ajouter un test de mise en page : l'inscrire dans l'une des deux listes s'il en depend.
   Le job ecrit aussi la **latence logicielle** (`tools/mesure_latence.py`) dans le resume du run : indicatif, jamais un seuil (serveur partage).
 - `portable` (~1 min) : `tools/build_portable.py --no-ffmpeg` dans un venv neuf, qui verifie le dossier fabrique (diagnostic + rendu synthetique de 3 s avec SON Python) : un module oublie dans `APP_FILES` s'y voit.
-Piege rencontre : rejouer `check_gui()` dans le meme processus bloque (fenetre Tk et fils d'audio de la premiere passe) et la partie GUI n'est pas autonome (elle depend de l'etat laisse par les verifications d'avant) : on relance donc la suite entiere, jamais un morceau.
+Piege rencontre : rejouer `check_gui()` dans le meme processus bloque (fenetre Tk et fils d'audio de la premiere passe) et la partie GUI n'est pas autonome (elle depend de l'etat laisse par les verifications d'avant) : on relance donc toute la suite (ou son groupe, `--groupe gui`), jamais un morceau de `check_gui` ; les autres verifications se relancent seules (`--seulement`).
 Controle visuel : `--screenshot fichier.png --max-seconds N` (avec `--hud`).
 
 Non verifie automatiquement (demande le materiel) : touches clavier (F, H, R, P, 1-5, +/-),

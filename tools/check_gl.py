@@ -3862,11 +3862,14 @@ def check_claude_md() -> None:
     present = sorted(p_.stem for p_ in fiches_dir.glob("*.md")) if fiches_dir.is_dir() else []
     missing = [f for f in CLAUDE_FICHES if f not in present]
     check(not missing, "fiches: les 11 fiches par theme existent dans docs/fonctions/", str(missing))
-    cited = set(re.findall(r"docs/fonctions/([a-z0-9-]+)\.md", text))
+    m_ = re.search(r"^## Fonctionnalites : index des fiches\n(.*?)(?=^## )", text, re.S | re.M)
+    index_txt = m_.group(1) if m_ else ""                  # seule la section de l'index compte (une fiche citee ailleurs ne remplace pas sa ligne d'index)
+    check(bool(index_txt), "index: la racine a une section « Fonctionnalites : index des fiches »")
+    cited = set(re.findall(r"docs/fonctions/([a-z0-9-]+)\.md", index_txt))
     check(not [c_ for c_ in cited if c_ not in present], "index: chaque fiche citee par CLAUDE.md existe", str(sorted(cited - set(present))))
     check(present and not [p_ for p_ in present if p_ not in cited], "index: chaque fiche de docs/fonctions/ est citee par CLAUDE.md", str(sorted(set(present) - cited)))
     bad = []
-    for d_ in ("core", "engine", "gui", "tools"):
+    for d_ in ("core", "engine", "gui", "tools", "gl_shaders"):
         f_ = base / d_ / "CLAUDE.md"
         if not f_.is_file():
             bad.append(f"{d_}/CLAUDE.md absent")
@@ -3875,7 +3878,10 @@ def check_claude_md() -> None:
         if not refs:
             bad.append(f"{d_}/CLAUDE.md ne pointe vers aucune fiche")
         bad += [f"{d_}/CLAUDE.md -> {r_}.md introuvable" for r_ in refs if r_ not in present]
-    check(not bad, "pointeurs: core/, engine/, gui/, tools/ ont leur CLAUDE.md, qui ne pointe que vers des fiches existantes", str(bad))
+        for link_ in re.findall(r"\]\(([^)\s]*docs/fonctions/[a-z0-9-]+\.md)\)", f_.read_text(encoding="utf-8")):
+            if not (f_.parent / link_).resolve().is_file():
+                bad.append(f"{d_}/CLAUDE.md : lien {link_} ne se resout pas depuis {d_}/")
+    check(not bad, "pointeurs: core/, engine/, gui/, tools/, gl_shaders/ ont leur CLAUDE.md, qui ne pointe (par des liens qui se resolvent) que vers des fiches existantes", str(bad))
 
 
 def check_lead_auto() -> None:
