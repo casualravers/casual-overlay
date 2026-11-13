@@ -32,7 +32,7 @@ def install(c):
     zone_aff = c.zone_aff
 
     add_separator(zone_aff, "Analyse audio (effets)")
-    audio_choices = gl.AudioController.input_choices() if not s.audio.synthetic else []
+    audio_choices = gl.AudioController.input_choices(s.audio.name) if not s.audio.synthetic else []
     if not audio_choices:
         tk.Label(tab_aff, text=s.audio.name, fg=a2w.GUI_MUTED_FG, wraplength=300, justify="left").grid(
             row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
@@ -54,7 +54,36 @@ def install(c):
             except Exception as exc:
                 s.status["msg"] = f"Entree refusee: {exc}"
 
-        audio_var.trace_add("write", on_audio_change)
+        def refill_menu() -> None:
+            """A l'ouverture du menu : relit les peripheriques (micro branche depuis le lancement). Pas pendant un enregistrement
+            (la reinitialisation coupe le flux un instant)."""
+            rec = getattr(s, "recording", None)
+            if rec is not None and rec.active:
+                return
+            try:
+                if not s.audio.refresh_devices():
+                    return
+                fresh = gl.AudioController.input_choices(s.audio.name)
+            except Exception:
+                return
+            if not fresh:
+                return
+            labels.clear()
+            labels.update({label: idx for idx, label in fresh})
+            inner = menu["menu"]
+            inner.delete(0, "end")
+            for label in labels:
+                inner.add_command(label=label, command=lambda v=label: audio_var.set(v))
+            current_now = next((label for idx, label in fresh if s.audio.name in label), None)
+            if current_now is not None and audio_var.get() != current_now:
+                audio_var.trace_remove("write", trace_id[0])           # l'entree courante n'a pas change : pas de rebascule
+                audio_var.set(current_now)
+                trace_id[0] = audio_var.trace_add("write", on_audio_change)
+
+        trace_id = [None]
+        menu["menu"].configure(postcommand=refill_menu)
+
+        trace_id[0] = audio_var.trace_add("write", on_audio_change)
 
     add_separator(zone_aff, "Synchro son / image")
     # Avance : automatique (estimee en direct, core.latency) par defaut, ou manuelle (curseur). Plus de calibration au telephone dans l'interface
