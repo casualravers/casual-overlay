@@ -3938,6 +3938,47 @@ def check_bugreport() -> None:
     check(v1 == "1231ef4 du 2026-11-13" and v2 == "9f9f9f9 du 2026-11-01" and v3 == "inconnue", "version: git, sinon fichier VERSION, sinon inconnue", str((v1, v2, v3)))
 
 
+def check_bugreport_cli() -> None:
+    """Rapport de bug par la ligne de commande (`--rapport-bug`, utile si la GUI ne demarre plus) et `engine.bugreport.make_report`."""
+    print("Rapport de bug (ligne de commande)")
+    import json
+    import shutil
+    import subprocess
+    import zipfile
+    from datetime import datetime
+    import engine.bugreport as eb
+    d = _bug_settings_dir()
+    # --- make_report : Bureau introuvable = <reglages>/rapports ; deux rapports dans la meme minute = deux fichiers
+    now = datetime(2026, 11, 13, 22, 0)
+    p1, _ = eb.make_report("a", settings=d, diag="diag", system={"python": "3.12"}, now=now, desktop=lambda: None)
+    p2, _ = eb.make_report("b", settings=d, diag="diag", system={"python": "3.12"}, now=now, desktop=lambda: None)
+    check(p1.parent == d / "rapports" and p1.is_file() and p2.is_file() and p1 != p2,
+          "sans Bureau: le zip va dans <reglages>/rapports ; deux rapports dans la meme minute = deux fichiers", f"{p1} {p2}")
+    info = eb.system_info()
+    check(isinstance(info.get("python"), str) and isinstance(info.get("moniteurs"), list) and info.get("portable") in ("portable", "venv", "python du systeme"),
+          "systeme: python, moniteurs, type d'installation", json.dumps(info)[:200])
+    # --- --rapport-bug avec un faux dossier personnel
+    home = Path(tempfile.mkdtemp(prefix="casual-home-"))
+    shutil.copytree(d, home / ".audio2wave")
+    out = Path(tempfile.mkdtemp(prefix="casual-out-"))
+    env = dict(os.environ, USERPROFILE=str(home), HOME=str(home))
+    res = subprocess.run([sys.executable, str(ROOT / "audio2wave_gl.py"), "--rapport-bug", "essai du rapport", "--rapport-dossier", str(out), "--synthetic"],
+                         capture_output=True, text=True, cwd=str(ROOT), env=env, timeout=180)
+    zips = list(out.glob("casual-bug-*.zip"))
+    ok = res.returncode == 0 and len(zips) == 1 and str(zips[0]) in res.stdout
+    names, blob, readme, sysinfo = [], b"", "", {}
+    if zips:
+        with zipfile.ZipFile(zips[0]) as z:
+            names = z.namelist()
+            blob = b"".join(z.read(n) for n in names)
+            readme = z.read("LISEZMOI.txt").decode("utf-8")
+            sysinfo = json.loads(z.read("systeme.json")) if "systeme.json" in names else {}
+    check(ok, "--rapport-bug: code 0, un zip dans le dossier demande, chemin imprime", (res.stdout + res.stderr)[-400:])
+    check("diagnostic.txt" in names and "Diagnostic casual-overlay" in blob.decode("utf-8", "replace") and "python" in sysinfo and "essai du rapport" in readme,
+          "--rapport-bug: diagnostic, systeme et description dans le zip", str(names))
+    check(not [i for i in range(1, 7) if f"SECRET{i}".encode() in blob], "--rapport-bug: aucun secret dans le zip")
+
+
 def check_lead_auto() -> None:
     """Avance estimee automatiquement (remplace la calibration manuelle) : somme des retards de la chaine, lissee, arrondie, lisible."""
     print("Avance automatique (estimation)")
@@ -11763,7 +11804,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_bugreport", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

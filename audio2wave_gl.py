@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "gui"))
 
 # Ecran de chargement le plus tot possible (les imports lourds ci-dessous prennent ~1,5 s) : seulement au lancement du programme avec --gui.
 _EARLY_BOOT = None
-if __name__ == "__main__" and "--gui" in sys.argv[1:] and not {"--list-devices", "--list-audio-devices", "--dry-run", "--diagnostic", "-h", "--help"} & set(sys.argv[1:]):
+if __name__ == "__main__" and "--gui" in sys.argv[1:] and not {"--list-devices", "--list-audio-devices", "--dry-run", "--diagnostic", "--rapport-bug", "-h", "--help"} & set(sys.argv[1:]):
     import gui_splash
     _EARLY_BOOT = gui_splash.start()           # None si Tk est indisponible : demarrage comme avant
 
@@ -184,6 +184,9 @@ def parse_args() -> argparse.Namespace:
                    help=f"Dossier d'audio2wave (defaut: {DEFAULT_A2W_DIR}, copie interne)")
     p.add_argument("--diagnostic", action="store_true",
                    help="Verifie ce PC (ffmpeg, OpenGL, micro, modules...) et quitte : code 1 s'il y a une erreur")
+    p.add_argument("--rapport-bug", nargs="?", const="", default=None, metavar="DESCRIPTION",
+                   help="Ecrit sur le Bureau un zip pour diagnostiquer un probleme (journal, plantages, diagnostic, reglages sans secrets) et quitte")
+    p.add_argument("--rapport-dossier", default=None, help=argparse.SUPPRESS)          # tests : dossier du zip au lieu du Bureau
     p.add_argument("--list-devices", action="store_true", help="Liste les entrees DirectShow et quitte")
     p.add_argument("--list-audio-devices", action="store_true", help="Liste les entrees sounddevice et quitte")
     p.add_argument("--dry-run", action="store_true", help="Affiche la commande ffmpeg sans rien lancer")
@@ -197,6 +200,10 @@ def main() -> None:
     args = parse_args()
     if args.diagnostic:
         sys.exit(diagnostics.run_cli(Path(args.a2w_dir), args.synthetic, args.gui))
+    if args.rapport_bug is not None:
+        from engine import bugreport
+        sys.exit(bugreport.run_cli(args.rapport_bug, Path(args.a2w_dir), args.synthetic,
+                                   Path(args.rapport_dossier) if args.rapport_dossier else None))
     boot = _EARLY_BOOT
     if boot is None and args.gui and not (args.list_audio_devices or args.list_devices or args.dry_run or args.diagnostic):
         import gui_splash
