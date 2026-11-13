@@ -62,7 +62,9 @@ def install(c):
                    "(la chaine micro, analyse, rendu, ecran et videoprojecteur retarde la lumiere). 0 = on reagit a la detection, comme avant. "
                    "La valeur se mesure avec tools/calibrer_avance.py (telephone en ralenti) ; propre a la salle et au materiel. "
                    "Sans pulsation calee (voyant ci-dessous) ou pendant une montee / cassure / drop, rien n'est predit : la reaction reste a la detection.")
-    pulse_label = tk.Label(tab_aff, text="pulsation : -", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
+    # Hauteur FIXE (2 lignes) : le texte du voyant change avec l'etat de la pulsation ; une ligne qui en prenait 2 ou 3 faisait bouger toute la section
+    # (regle de l'interface : rien ne decale ce que l'utilisateur vise). Texte long : voir `explain.pulse_text` (une phrase, 2 lignes au plus a cette largeur).
+    pulse_label = tk.Label(tab_aff, text="pulsation : -", fg=a2w.GUI_MUTED_FG, anchor="nw", justify="left", wraplength=360, height=2)
     pulse_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(0, 2))
 
     calib_state: dict = {"top": None}
@@ -159,16 +161,16 @@ def install(c):
         top.calib = {"emit": emit, "analyse": analyse, "apply": apply, "apply_btn": apply_btn, "result": result_var, "found": found, "x": xv, "y": yv, "done": done}
         return top
 
-    calib_btn = tk.Button(tab_aff, text="Calibrer...", command=open_calibration)
-    calib_btn.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(0, 2))
-    Tooltip(calib_btn, "Mesure le retard reel de TA installation (micro, ordinateur, ecran, videoprojecteur) avec la camera d'un telephone en ralenti, "
-                       "puis regle l'avance. A refaire si le materiel ou la salle change.")
-
     add_separator(zone_aff, "Affichage")
     frame = tk.Frame(tab_aff)                      # barres debug (H) et rechargement des shaders (R) : touches de la fenetre de rendu seulement
     frame.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     for text, cmd in (("Plein ecran", "fullscreen"), ("Sauver reglages", "save")):
         tk.Button(frame, text=text, command=lambda c=cmd: send(c)).pack(side="left", padx=(0, 6))
+    # Calibrer et Diagnostic sont sur la meme ligne que Plein ecran / Sauver (une ligne par bouton rendait l'onglet bien trop haut)
+    calib_btn = tk.Button(frame, text="Calibrer...", command=open_calibration)
+    calib_btn.pack(side="left", padx=(0, 6))
+    Tooltip(calib_btn, "Mesure le retard reel de TA installation (micro, ordinateur, ecran, videoprojecteur) avec la camera d'un telephone en ralenti, "
+                       "puis regle l'avance. A refaire si le materiel ou la salle change.")
 
     def diagnostic_report() -> str:
         """Rapport du diagnostic : verifications refaites maintenant, sauf OpenGL (resultat du demarrage : on n'ouvre pas un
@@ -182,9 +184,9 @@ def install(c):
             checks.insert(next((i for i, x in enumerate(checks) if x.name == "Micro"), len(checks)), gl_check)
         return diagnostics.format_report(checks)
 
-    diag_btn = tk.Button(tab_aff, text="Diagnostic",
+    diag_btn = tk.Button(frame, text="Diagnostic",
                          command=lambda: choice_dialog(root, "Diagnostic", diagnostic_report(), ["Fermer"]))
-    diag_btn.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    diag_btn.pack(side="left", padx=(0, 6))
     Tooltip(diag_btn, "Verifie ce PC : ffmpeg, OpenGL, micro, modules Python (glisser-deposer...), audio2wave, dossier des reglages.")
 
     auto_master_var = tk.IntVar(value=int(float(params["auto_master"]) >= 0.5))
@@ -206,8 +208,8 @@ def install(c):
 
     doodle_var = tk.IntVar(value=int(float(params.get("doodle_on", 0.0)) >= 0.5))
     bind_param("doodle_on", doodle_var, float)
-    doodle_check = tk.Checkbutton(tab_aff, text="Recuperer les medias", variable=doodle_var)
-    doodle_check.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    doodle_check = tk.Checkbutton(frame, text="Recuperer les medias", variable=doodle_var)         # meme ligne que les automations (gain de hauteur)
+    doodle_check.pack(side="left", padx=(8, 0))
     Tooltip(doodle_check, "Recupere les doodles deposes sur le site (config : ~/.audio2wave/depot.json) et les affiche par-dessus la projection. "
                           "Seuls les fichiers apparus apres l'activation sont montres. Jamais enregistre dans un preset ni une scene.")
 
@@ -242,8 +244,10 @@ def install(c):
     remote_box = tk.Frame(tab_aff)                 # la ligne de la telecommande telephone (remplie par gui_remote)
     remote_box.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
-    meter = tk.Canvas(tab_aff, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
-    meter.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 2))
+    meter_row = tk.Frame(tab_aff)                  # mesures a gauche, statut a droite : une seule ligne, de hauteur fixe (le texte du statut ne decale plus rien)
+    meter_row.grid(row=zone_aff.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=(SECTION_GAP, 4))
+    meter = tk.Canvas(meter_row, width=260, height=58, bg=a2w.GUI_PANEL_BG, highlightthickness=0)
+    meter.pack(side="left")
     bars = {}
     for i, (name, color) in enumerate((("bass", "#ff5a4d"), ("mid", "#66ff73"), ("high", "#66b3ff"),
                                        ("beat", "#ffe633"))):
@@ -251,8 +255,8 @@ def install(c):
         meter.create_text(4, y0 + 5, text=name, anchor="w", fill=a2w.GUI_MUTED_FG, font=a2w.GUI_FONT_SMALL)
         bars[name] = meter.create_rectangle(52, y0, 52, y0 + 10, fill=color, width=0)
 
-    status_label = tk.Label(tab_aff, text="", fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=320)
-    status_label.grid(row=zone_aff.next_row(), column=0, columnspan=2, sticky="we", padx=ROW_PADX, pady=(4, 6))
+    status_label = tk.Label(meter_row, text="", fg=a2w.GUI_MUTED_FG, anchor="nw", justify="left", wraplength=230, width=32, height=5)
+    status_label.pack(side="left", padx=(10, 0), anchor="n")
 
     import types
     return types.SimpleNamespace(pulse_label=pulse_label, calib_btn=calib_btn, open_calibration=open_calibration, lead_var=lead_var, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, meter=meter, status_label=status_label)
