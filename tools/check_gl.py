@@ -3157,6 +3157,107 @@ def check_pulse() -> None:
     check(len(steady) >= 15 and min(b - a for a, b in zip(steady, steady[1:])) > 0.9 * P, "avance: une avance enorme est plafonnee (60 % de la periode), toujours un declenchement par kick", f"{len(steady)}")
 
 
+def check_recording() -> None:
+    """Enregistrement video + audio (issue #140) : logique pure (planification des images, decalage audio, noms, commandes ffmpeg, encodeur, crete, voyant, reglages)."""
+    print("Enregistrement video + audio (logique pure)")
+    import random as _random
+    from datetime import datetime
+    from core import explain as ex
+    from core import params_schema as ps
+    from core import recording as rec
+
+    check(rec.FORMATS == {"vertical": (1080, 1920), "vertical_hd": (720, 1280), "horizontal": (1920, 1080), "carre": (1080, 1080)}, "formats: vertical, vertical_hd, horizontal, carre", str(rec.FORMATS))
+
+    # --- planification des images : l'image numero k tombe a t0 + k / fps
+    check(rec.frames_due(0.0, 0.0, 30, 0) == 1, "images: la premiere part tout de suite")
+    check(rec.frames_due(0.0, 0.0334, 30, 1) == 1, "images: a l'heure de la suivante = une image")
+    check(rec.frames_due(0.0, 0.10, 30, 1) == 3, "images: en retard, l'image precedente est dupliquee (3 a ecrire)", str(rec.frames_due(0.0, 0.10, 30, 1)))
+    check(rec.frames_due(0.0, 0.01, 30, 5) == 0 and rec.frames_due(5.0, 4.0, 30, 0) == 0, "images: en avance (ou avant le depart) = rien, jamais negatif")
+    check(rec.frames_due(0.0, 0.05, 60, 1) == 3 and rec.frames_due(0.0, 0.0168, 60, 1) == 1, "images: meme logique a 60 images/s (pas d'erreur d'arrondi a l'instant exact)")
+    rg = _random.Random(7)
+    for fps in (30, 60):
+        t, sent, ok = 0.0, 0, True
+        for _ in range(2000):
+            t += rg.uniform(0.001, 0.12)
+            n = rec.frames_due(0.0, t, fps, sent)
+            ok = ok and n >= 0
+            sent += n
+        check(ok and sent == int(t * fps + 1e-9) + 1, f"images: pas de rendu irregulier, le compte final suit l'horloge ({fps} i/s)", f"{sent} pour {t:.2f} s")
+    try:
+        rec.frames_due(0.0, 1.0, 0, 0)
+        check(False, "images: cadence nulle refusee")
+    except ValueError:
+        check(True, "images: cadence nulle refusee")
+
+    # --- decalage de l'audio
+    check(abs(rec.audio_offset(10.0, 10.05, 40.0) - 0.09) < 1e-9, "decalage audio: demarre apres l'image + delai de 40 ms = +90 ms")
+    check(abs(rec.audio_offset(10.0, 9.9, 40.0) + 0.06) < 1e-9, "decalage audio: demarre avant l'image = negatif (-60 ms)")
+
+    # --- nom de fichier
+    now = datetime(2026, 11, 13, 22, 5, 9)
+    folder = os.path.join("C:\\", "Users", "Jean Dupont", "Vid\u00e9os", "casual overlay")
+    first = rec.output_name(now, folder, exists=lambda p: False)
+    check(os.path.basename(first) == "casual-2026-11-13_22h05m09s.mp4" and os.path.dirname(first) == folder, "nom: date et heure, dossier avec espaces et accents conserve", first)
+    taken = {first}
+    second = rec.output_name(now, folder, exists=lambda p: p in taken)
+    taken.add(second)
+    third = rec.output_name(now, folder, exists=lambda p: p in taken)
+    check(os.path.basename(second).endswith("s-2.mp4") and os.path.basename(third).endswith("s-3.mp4"), "nom: deux enregistrements dans la meme seconde = suffixes -2, -3", f"{second} {third}")
+
+    # --- commandes ffmpeg
+    def pair(cmd, a, b):
+        return any(cmd[i] == a and cmd[i + 1] == b for i in range(len(cmd) - 1))
+
+    v = rec.video_command("ffmpeg", (1080, 1920), 30, "libx264", "out.mkv")
+    check(v[0] == "ffmpeg" and v[-1] == "out.mkv" and pair(v, "-f", "rawvideo") and pair(v, "-pix_fmt", "rgb24") and pair(v, "-s", "1080x1920") and pair(v, "-r", "30") and pair(v, "-i", "-"),
+          "video: entree rawvideo rgb24 de la bonne taille et cadence sur l'entree standard", " ".join(v))
+    check(pair(v, "-vf", "vflip") and "-an" in v and pair(v, "-pix_fmt", "yuv420p") and pair(v, "-g", "30"), "video: image retournee (lecture OpenGL), sans audio, yuv420p, une image cle par seconde")
+    check(pair(v, "-colorspace", "bt709") and pair(v, "-color_primaries", "bt709") and pair(v, "-color_trc", "bt709"), "video: etiquettes bt709 (base connue pour l'etalonnage)")
+    check(pair(v, "-c:v", "libx264") and pair(v, "-preset", "veryfast") and pair(v, "-crf", "17"), "video: x264 veryfast crf 17")
+    vh = rec.video_command("ffmpeg", (720, 1280), 60, "h264_nvenc", "o.mkv")
+    check(pair(vh, "-c:v", "h264_nvenc") and "-crf" not in vh and pair(vh, "-g", "60") and pair(vh, "-s", "720x1280"), "video: encodeur materiel sans crf, cadence 60 -> image cle toutes les 60")
+
+    m = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 44100, 2, 0.09, "o.mp4")
+    ia = m.index("a.raw")
+    check(m[ia - 1] == "-i" and pair(m[:ia], "-f", "f32le") and pair(m[:ia], "-ar", "44100") and pair(m[:ia], "-ac", "2") and pair(m[:ia], "-itsoffset", "0.090"),
+          "assemblage: audio brut f32le (frequence et canaux d'origine) decale de +90 ms", " ".join(m))
+    check(pair(m, "-c:v", "copy") and pair(m, "-c:a", "aac") and pair(m, "-b:a", "320k") and pair(m[ia:], "-ar", "48000") and pair(m, "-movflags", "+faststart") and m[-1] == "o.mp4",
+          "assemblage: video recopiee, audio AAC 320 kb/s 48 kHz, faststart")
+    mn = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 48000, 2, -0.06, "o.mp4")
+    check("-itsoffset" not in mn and pair(mn[:mn.index("a.raw")], "-ss", "0.060"), "assemblage: audio en avance = on coupe son debut (-ss), pas de decalage", " ".join(mn))
+    m0 = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 48000, 2, 0.0, "o.mp4")
+    check("-itsoffset" not in m0 and "-ss" not in m0, "assemblage: decalage nul = ni -itsoffset ni -ss")
+
+    # --- choix de l'encodeur
+    check(rec.choose_encoder(["libx264", "h264_nvenc"], lambda e: True) == "libx264", "encodeur: x264 par defaut, meme si un encodeur materiel existe")
+    check(rec.choose_encoder(["libx264", "h264_amf", "h264_nvenc"], lambda e: True, hardware=True) == "h264_nvenc", "encodeur: materiel demande = premier liste et teste (ordre nvenc, amf, qsv)")
+    check(rec.choose_encoder(["libx264", "h264_amf", "h264_nvenc"], lambda e: e == "h264_amf", hardware=True) == "h264_amf", "encodeur: un encodeur materiel dont l'essai echoue est saute")
+    check(rec.choose_encoder(["libx264", "h264_nvenc"], lambda e: False, hardware=True) == "libx264" and rec.choose_encoder([], lambda e: True, hardware=True) == "libx264",
+          "encodeur: aucun materiel utilisable = x264")
+
+    # --- crete et alertes
+    check(rec.peak_db(1.0) == 0.0 and abs(rec.peak_db(0.5) + 6.0206) < 0.001 and rec.peak_db(0.0) == -120.0 and rec.peak_db(1e-9) == -120.0, "crete: 1 = 0 dBFS, 0,5 = -6 dBFS, silence = plancher -120")
+    check(rec.clipped(1.0) and rec.clipped(0.9995) and not rec.clipped(0.9), "crete: saturation a partir de 0,999")
+    w = rec.drop_warning(3, 100)
+    check(w is not None and "vertical_hd" in w and rec.drop_warning(2, 100) is None and rec.drop_warning(0, 0) is None, "alerte: au-dela de 2 % d'images dupliquees, elle propose vertical_hd", str(w))
+
+    # --- reglages
+    check(rec.clean_fps(30) == 30 and rec.clean_fps(60) == 60 and rec.clean_fps(45) == 60 and rec.clean_fps(0) == 30 and rec.clean_fps("x") == 30, "reglage: cadence ramenee a 30 ou 60")
+    check(rec.clean_format("carre") == "carre" and rec.clean_format("autre") == "vertical", "reglage: format inconnu = vertical")
+    check(rec.resolve_dir("~/Videos/casual-overlay") == os.path.expanduser(os.path.join("~", "Videos", "casual-overlay")) and rec.resolve_dir("") == rec.resolve_dir(rec.DEFAULT_DIR), "reglage: dossier developpe (~), vide = defaut")
+    check(ps.BY_KEY["rec_format"].default == "vertical" and ps.BY_KEY["rec_fps"].default == 30 and ps.BY_KEY["rec_delay_ms"].default == 40.0 and ps.BY_KEY["rec_encoder"].default == "libx264"
+          and ps.BY_KEY["rec_dir"].default == rec.DEFAULT_DIR, "schema: valeurs par defaut (vertical, 30, 40 ms, libx264, dossier Videos)")
+    check(all(ps.BY_KEY[k].scope == "device" for k in ("rec_format", "rec_fps", "rec_dir", "rec_delay_ms", "rec_encoder")), "schema: portee device (sauve, hors presets et scenes)")
+    check(ps.validate("rec_fps", 999) == (True, 60) and ps.validate("rec_fps", 5) == (True, 30) and ps.validate("rec_delay_ms", 999) == (True, 300.0) and ps.validate("rec_format", "x")[0] is False
+          and ps.validate("rec_encoder", "x")[0] is False and ps.validate("rec_encoder", "materiel")[0] is True, "schema: valeurs hors plage ramenees, enums inconnus refuses")
+
+    # --- voyant
+    t = ex.rec_status_text(83.0, 412_000_000, -3.0, 0, "libx264")
+    check(t == "REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264", "voyant: duree, taille, crete, doublons, encodeur", t)
+    check(ex.rec_status_text(3725.0, 0, -120.0, 4, "h264_amf").startswith("REC 1:02:05 | 0 Mo | pas de signal") and "SATURE" in ex.rec_status_text(5.0, 1, 0.0, 0, "libx264"),
+          "voyant: plus d'une heure, pas de signal, saturation signalee")
+
+
 def check_bands_pulse() -> None:
     """Lot 5 de la spec synchro son / image : enveloppes continues par bande, sources de bande et de pulsation, respiration sur la pulsation."""
     print("Bandes fines, sources de pulsation et respiration")
@@ -10713,7 +10814,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_recording", "check_groupes")
 
 
 SUITE = (
@@ -10726,7 +10827,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_recording", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

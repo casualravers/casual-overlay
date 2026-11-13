@@ -83,6 +83,17 @@ def phase_measures_text(info: dict | None) -> str:
             f"mediums + aigus x{_fr(info.get('top8', 1.0))} (8 s) x{_fr(info.get('top20', 1.0))} (20 s) | calme {round(100 * float(info.get('calm', 0.0)))} %")
 
 
+def rec_status_text(seconds: float, size_bytes: int, peak_db: float, dropped: int, encoder: str) -> str:
+    """Voyant de l'enregistrement : « REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264 »."""
+    total = int(seconds)
+    clock = f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}" if total >= 3600 else f"{total // 60:02d}:{total % 60:02d}"
+    if peak_db <= -119.0:
+        level = "pas de signal"
+    else:
+        level = f"crete {round(peak_db)} dBFS" + (" SATURE" if peak_db >= -0.1 else "")
+    return f"REC {clock} | {round(size_bytes / 1e6)} Mo | {level} | images dupliquees {dropped} | {encoder}"
+
+
 def pulse_text(info: dict | None, lead_ms: float = 0.0) -> str:
     """Voyant de la pulsation (lot 4) : « pulsation calee, avance 80 ms : les effets partent en avance (ecart prediction - detection +3 ms) »."""
     if not info:
