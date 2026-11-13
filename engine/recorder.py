@@ -17,6 +17,7 @@ from typing import Callable
 
 from core import recording as core_rec
 from core import sessionlog
+from core.latency import effective_lead_ms
 from engine.deps import moderngl, np
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # pas de fenetre de console qui clignote sous Windows
@@ -486,7 +487,7 @@ class RecordingControl:
         src = getattr(getattr(self.s, "audio", None), "src", None)
         audio_input = src if src is not None and hasattr(src, "tap") and hasattr(src, "rate") else None        # l'entree synthetique n'a pas de point d'ecoute
         recorder = self._factory(ffmpeg, str(params.get("rec_dir", core_rec.DEFAULT_DIR)), params.get("rec_format", core_rec.DEFAULT_FORMAT),
-                                 params.get("rec_fps", 30), core_rec.effective_delay_ms(float(params.get("rec_delay_ms", 40.0)), float(params.get("sync_lead_ms", 0.0))), audio_input=audio_input,
+                                 params.get("rec_fps", 30), core_rec.effective_delay_ms(float(params.get("rec_delay_ms", 40.0)), effective_lead_ms(params)), audio_input=audio_input,
                                  hardware=params.get("rec_encoder") == "materiel")
         try:
             recorder.start()

@@ -1053,7 +1053,7 @@ def check_gui() -> None:
                     gui_random_steps(c, s, out)
                     gui_bgvideo_steps(c, s, out)
                     gui_diag_steps(c, s, out)
-                    gui_calib_steps(c, s, out)
+                    gui_lead_steps(c, s, out)
                     gui_rec_steps(c, s, out)
                 except Exception:
                     import traceback
@@ -1440,10 +1440,11 @@ def check_gui() -> None:
     hs = out.get("aff_height") or [(0, 0, 0), (1, 1, 1)]
     check(hs[0] == hs[1], "onglet Affichage: un voyant de pulsation ou un statut tres long ne change pas la hauteur de l'onglet (rien ne decale)", str(hs))
     print(f"  (information) hauteur voulue de l'onglet Affichage : {hs[0][0]} px")
-    check(out.get("calib_btn") == ("Button", "Calibrer...") and out.get("calib_open") == (True, True) and out.get("calib_emit") == ([(1920, 0)], True),
-          "calibration (GUI): le bouton Calibrer... ouvre une seule fenetre, lance l'emission sur l'ecran indique", str((out.get("calib_btn"), out.get("calib_open"), out.get("calib_emit"))))
-    check(out.get("calib_found") == (87, "normal", True, True) and out.get("calib_applied") == (0.0, 87.0, 87.0) and out.get("calib_reset") == 0.0,
-          "calibration (GUI): l'analyse de la video propose l'avance mesuree (87 ms) et le bouton la regle sur le curseur et dans les reglages", str((out.get("calib_found"), out.get("calib_applied"), out.get("calib_reset"))))
+    lg = out.get("lead_gui") or {}
+    check(lg.get("auto") == ("auto", 1.0, "disabled", "Avance auto : 85 ms = son 22 + detection 15 + image 23 + affichage ~25 (suppose)") and lg.get("no_calib"),
+          "avance (GUI): Auto par defaut, curseur manuel grise, estimation detaillee lisible ; plus de bouton Calibrer", str((lg.get("auto"), lg.get("no_calib"))))
+    check(lg.get("manual") == (0.0, "normal", "Avance manuelle : 30 ms (estimation auto : 85 ms)") and lg.get("back") == (1.0, "disabled"),
+          "avance (GUI): Manuelle active le curseur et rappelle l'estimation ; retour a Auto", str((lg.get("manual"), lg.get("back"))))
     rg = out.get("rec_gui") or {}
     check(rg.get("idle") == ("\u25cf Enregistrer", "normal", True) and rg.get("recording") == ("\u25a0 Arreter", "normal", True) and rg.get("after") == ("\u25cf Enregistrer", True),
           "onglet Rec (GUI): bouton Enregistrer / Arreter et voyant (pret, REC en cours, retour au repos)", str((rg.get("idle"), rg.get("recording"), rg.get("after"))))
@@ -3798,6 +3799,49 @@ def check_recording_render() -> None:
     ctl.close()
     check(True, "fermer deux fois est sans effet")
     shutil.rmtree(root, ignore_errors=True)
+
+
+def check_lead_auto() -> None:
+    """Avance estimee automatiquement (remplace la calibration manuelle) : somme des retards de la chaine, lissee, arrondie, lisible."""
+    print("Avance automatique (estimation)")
+    from core import latency as lat
+    from core import explain as ex
+    from core import params_schema as ps
+    # --- la somme : son mesure + detection (banc) + image (une periode d'ecran + GPU) + affichage suppose
+    parts = lat.estimate(capture_ms=22.0, refresh_hz=60.0, gpu_ms=6.0)
+    check(parts["son"] == 22.0 and parts["detection"] == lat.DETECT_MS and abs(parts["image"] - (1000 / 60 + 6.0)) < 1e-6 and parts["affichage"] == lat.DISPLAY_MS
+          and abs(parts["total"] - (22 + lat.DETECT_MS + 1000 / 60 + 6 + lat.DISPLAY_MS)) < 1e-6,
+          "estimation: son + detection + image (periode d'ecran + GPU) + affichage suppose", str(parts))
+    check(lat.estimate(capture_ms=0.0, refresh_hz=60.0, gpu_ms=0.0, fallback_capture_ms=31.0)["son"] == 31.0,
+          "estimation: sans horodatage du pilote, la latence annoncee par la carte son")
+    check(lat.estimate(capture_ms=900.0, refresh_hz=0.0, gpu_ms=500.0)["total"] == lat.MAX_MS and lat.estimate(0, 60, 0)["total"] >= 0,
+          "estimation: bornee (0..200 ms), un ecran sans frequence connue compte 60 Hz")
+    # --- lissage : valeur arrondie a 5 ms, mise a jour au plus une fois par seconde, ne tremble pas
+    est = lat.LeadEstimator()
+    check(est.value is None and est.parts is None, "estimateur: rien avant la premiere mesure")
+    est.update(0.0, 22.0, 60.0, 6.0)
+    v0 = est.value
+    check(v0 is not None and v0 % 5 == 0 and abs(v0 - parts["total"]) <= 2.5, "estimateur: premiere valeur prise tout de suite, arrondie a 5 ms", str(v0))
+    for k in range(1, 50):
+        est.update(k * 0.1, 22.0 + (3.0 if k % 2 else -3.0), 60.0, 6.0)               # gigue de +-3 ms
+    check(est.value == v0, "estimateur: une gigue de quelques ms ne change pas la valeur affichee", f"{v0} -> {est.value}")
+    for k in range(50, 200):
+        est.update(k * 0.1, 62.0, 60.0, 6.0)                                          # le retard du son monte de 40 ms
+    check(abs(est.value - (v0 + 40)) <= 5, "estimateur: un vrai changement (+40 ms) est suivi en quelques secondes", f"{v0} -> {est.value}")
+    # --- avance effective : auto (defaut) ou manuelle
+    check(ps.BY_KEY["sync_lead_auto"].default == 1.0 and ps.BY_KEY["sync_lead_auto"].scope == "room" and ps.BY_KEY["sync_lead_est"].scope == "state",
+          "schema: Avance auto par defaut (reglage de salle), estimation = etat du moment (jamais sauvee)")
+    check(lat.effective_lead_ms({"sync_lead_auto": 1.0, "sync_lead_est": 85.0, "sync_lead_ms": 30.0}) == 85.0
+          and lat.effective_lead_ms({"sync_lead_auto": 0.0, "sync_lead_est": 85.0, "sync_lead_ms": 30.0}) == 30.0
+          and lat.effective_lead_ms({"sync_lead_auto": 1.0, "sync_lead_ms": 30.0}) == 0.0,
+          "avance effective: auto = estimation (0 tant qu'il n'y en a pas), manuelle = curseur")
+    # --- texte lisible
+    t_auto = ex.lead_text(True, 30.0, est.value, lat.estimate(22.0, 60.0, 6.0))
+    t_man = ex.lead_text(False, 30.0, 85.0, lat.estimate(22.0, 60.0, 6.0))
+    check(t_auto.startswith("Avance auto : ") and "son 22" in t_auto and "detection" in t_auto and "image 23" in t_auto and "affichage ~25 (suppose)" in t_auto,
+          "texte: le detail de l'estimation (son, detection, image, affichage suppose)", t_auto)
+    check(t_man.startswith("Avance manuelle : 30 ms") and "85 ms" in t_man, "texte: en manuel, la valeur du curseur et l'estimation pour comparer", t_man)
+    check("projection" in ex.lead_text(True, 0.0, None, None), "texte: avant toute mesure (projection fermee), dit quand l'estimation viendra")
 
 
 def check_bands_pulse() -> None:
@@ -6696,49 +6740,40 @@ def gui_rec_steps(c, s, out) -> None:
     root.update()
 
 
-def gui_calib_steps(c, s, out) -> None:
-    """Lot 6 : le bouton « Calibrer... » (onglet Affichage) ouvre la fenetre, lance l'emission, analyse une video (simulee) et regle l'avance."""
-    import types as _types
-    import calibrer_avance as ca
-    calls: list = []
-    fake = _types.SimpleNamespace(
-        advice=ca.advice,
-        emission_command=lambda x, y: (calls.append((x, y)), [sys.executable, "-c", "pass"])[1],
-        analyse_video=lambda path, log=None: {"rows": [], "clicks": 6, "flashes": 6, "summary": {"n": 6, "median": 87.4, "min": 82.0, "max": 93.0, "p95": 92.0, "missed": 0,
-                                                                                                "advance_ms": 87, "spread_ms": 10.0, "resolution_ms": 8.3}})
+def gui_lead_steps(c, s, out) -> None:
+    """Avance (onglet Affichage) : mode Auto par defaut (curseur grise, estimation lisible), Manuelle (curseur actif) ; textes a hauteur fixe."""
     root = c["root"]
-    # onglet Affichage : les textes qui changent (voyant de pulsation, statut) ont une hauteur FIXE ; rien ne decale le reste de l'onglet (issue #128)
+    # onglet Affichage : les textes qui changent (voyant de pulsation, statut, estimation) ont une hauteur FIXE ; rien ne decale le reste de l'onglet (issue #128)
     tab = c["pulse_label"].master
     heights = []
     for text in ("pulsation : -", "pulsation calee | avance 80 ms : effets en avance (ecart prediction - detection +3 ms) " * 3):
-        for key in ("pulse_label", "status_label"):
+        for key in ("pulse_label", "status_label", "lead_label"):
             c[key].config(text=text)
-        root_ = c["root"]
-        root_.update_idletasks()
-        heights.append((tab.winfo_reqheight(), c["pulse_label"].winfo_reqheight(), c["status_label"].winfo_reqheight()))
+        root.update_idletasks()
+        heights.append((tab.winfo_reqheight(), c["pulse_label"].winfo_reqheight(), c["status_label"].winfo_reqheight(), c["lead_label"].winfo_reqheight()))
     out["aff_height"] = heights
-    out["calib_btn"] = (c["calib_btn"].winfo_class(), c["calib_btn"].cget("text"))
-    top = c["calib_open"](fake)
-    out["calib_open"] = (top is not None and bool(top.winfo_exists()), c["calib_open"](fake) is top)         # un second clic ramene la meme fenetre
-    d = top.calib
-    d["x"].set("1920")
-    d["y"].set("0")
-    d["emit"]()
-    out["calib_emit"] = (calls, "Emission lancee" in d["result"].get())
-    before = float(s.params["sync_lead_ms"])
-    d["analyse"]("fausse_video.mp4")
-    t_end = time.monotonic() + 3.0
-    while d["found"]["ms"] is None and time.monotonic() < t_end:
-        root.update()
-        time.sleep(0.02)
-    out["calib_found"] = (d["found"]["ms"], str(d["apply_btn"].cget("state")), "87 ms" in d["apply_btn"].cget("text"), "AVANCE recommandee : 87 ms" in d["result"].get())
-    d["apply"]()
-    root.update()
-    out["calib_applied"] = (before, float(s.params["sync_lead_ms"]), c["lead_var"].get())
-    c["lead_var"].set(0)
-    root.update()
-    top.destroy()
-    out["calib_reset"] = float(s.params["sync_lead_ms"])
+
+    def walk(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk(ch)
+    scale = next(w for w in walk(tab) if w.winfo_class() == "Scale" and str(w.cget("variable")) == str(c["lead_var"]))
+    radios = {w.cget("text"): w for w in walk(tab) if w.winfo_class() == "Radiobutton" and w.cget("text") in ("Auto", "Manuelle")}
+    saved = {k: s.params.get(k) for k in ("sync_lead_auto", "sync_lead_ms", "sync_lead_est")}
+    s.status["lead_parts"] = {"son": 22.0, "detection": 15.0, "image": 23.0, "affichage": 25.0, "total": 85.0}
+    s.params["sync_lead_est"] = 85.0
+    s.params["sync_lead_ms"] = 30.0
+    c["update_meter"]()
+    auto_state = (c["lead_mode"].get(), float(s.params["sync_lead_auto"]), str(scale.cget("state")), c["lead_label"].cget("text"))
+    radios["Manuelle"].invoke()
+    c["update_meter"]()
+    manual_state = (float(s.params["sync_lead_auto"]), str(scale.cget("state")), c["lead_label"].cget("text"))
+    radios["Auto"].invoke()
+    c["update_meter"]()
+    out["lead_gui"] = {"auto": auto_state, "manual": manual_state, "back": (float(s.params["sync_lead_auto"]), str(scale.cget("state"))),
+                       "no_calib": not any(getattr(w, "cget", None) and w.winfo_class() == "Button" and "Calibrer" in str(w.cget("text")) for w in walk(tab))}
+    s.status.pop("lead_parts", None)
+    s.params.update(saved)
 
 
 def gui_diag_steps(c, s, out) -> None:
@@ -11477,7 +11512,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_recording", "check_recorder_audio", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_groupes")
 
 
 SUITE = (
@@ -11490,7 +11525,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

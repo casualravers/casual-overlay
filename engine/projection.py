@@ -11,6 +11,7 @@ import time
 from core import params as core_params, params_schema, sessionlog
 from core.automation import AutomationEngine, set_fx_link
 from core import phase as core_phase
+from core.latency import LeadEstimator, effective_lead_ms
 from core.textcycle import TextCycle, text_at, texts_of
 from core.controls import panic, strobe_press, strobe_release
 from core.params import FX_NAMES, load_params, save_params
@@ -470,6 +471,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     last_restarts = 0
     last_beats = 0
     text_cycle = TextCycle()
+    lead_est = LeadEstimator()             # Avance automatique : son mesure + detection + image + affichage suppose (core.latency)
+    frame_dt = None                        # periode d'image mesuree (lissee), pour l'estimation
+    prev_t_lead = 0.0
     refresh = glfw.get_video_mode(window.monitor).refresh_rate or 60
     cap = refresh * 1.02 if args.fps_cap is None else args.fps_cap
     period = 1.0 / cap if cap > 0 else 0.0
@@ -513,7 +517,19 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
         analyzer.extractor.hit_sens = float(params.get("hit_sensitivity", 1.0))                 # frappes aigues
-        analyzer.lead_s = float(params.get("sync_lead_ms", 0.0)) / 1000.0                       # avance des effets sur kick (lot 4)
+        try:
+            src_ = getattr(s.audio, "src", None)
+            fallback_ = float(src_.latency_ms()) if src_ is not None and hasattr(src_, "latency_ms") else 0.0       # sans horodatage du pilote
+        except Exception:
+            fallback_ = 0.0
+        if 0.0 < now - prev_t_lead < 0.5:
+            frame_dt = (now - prev_t_lead) if frame_dt is None else frame_dt + 0.05 * ((now - prev_t_lead) - frame_dt)
+        prev_t_lead = now
+        hz_ = 1.0 / frame_dt if frame_dt else refresh
+        if lead_est.update(now, analyzer.audio_age_floor_ms, hz_, guard.avg, fallback_) is not None:
+            params["sync_lead_est"] = lead_est.value
+            s.status["lead_parts"] = dict(lead_est.parts)
+        analyzer.lead_s = effective_lead_ms(params) / 1000.0                                   # avance des effets sur kick (lot 4) : auto ou manuelle
         analyzer.extractor.layer_sens = {"bg": float(params.get("sens_bg", 1.0)), "logo": float(params.get("sens_logo", 1.0))}      # kick par couche
 
         u0 = time.perf_counter()

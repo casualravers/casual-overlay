@@ -116,6 +116,18 @@ def rec_panel(recording: bool, status: dict | None, projection_open: bool, ffmpe
     return text, True
 
 
+def lead_text(auto: bool, manual_ms: float, est_ms: float | None, parts: dict | None) -> str:
+    """Ligne de l'Avance (onglet Affichage) : « Avance auto : 85 ms = son 22 + detection 15 + image 23 + affichage ~25 (suppose) », ou en manuel
+    « Avance manuelle : 30 ms (estimation auto : 85 ms) »."""
+    if est_ms is None or not parts:
+        est = "estimee quand la projection est ouverte"
+        return f"Avance auto : {est}" if auto else f"Avance manuelle : {round(manual_ms)} ms (estimation auto : quand la projection est ouverte)"
+    if not auto:
+        return f"Avance manuelle : {round(manual_ms)} ms (estimation auto : {round(est_ms)} ms)"
+    return (f"Avance auto : {round(est_ms)} ms = son {round(parts['son'])} + detection {round(parts['detection'])} + image {round(parts['image'])}"
+            f" + affichage ~{round(parts['affichage'])} (suppose)")
+
+
 def pulse_text(info: dict | None, lead_ms: float = 0.0) -> str:
     """Voyant de la pulsation (lot 4) : « pulsation calee, avance 80 ms : les effets partent en avance (ecart prediction - detection +3 ms) »."""
     if not info:
