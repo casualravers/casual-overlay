@@ -21,6 +21,7 @@ from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceil
 from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
 from core.params import DEFAULT_PARAMS
 from core import reaction
+from core.recording import fit_rect
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.reaction import ReactionDiffusion
 from engine.video import LogoVideo
@@ -328,6 +329,7 @@ class Renderer:
         self._mosaic_t = 0.0                       # temps integre du renouvellement des vignettes
         self._qr = ("", None, 0)                   # QR de la projection : (adresse, texture, cote en modules marge comprise)
         self._qr_prog = self._qr_vao = None
+        self._blit_prog = self._blit_vao = None
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
@@ -733,6 +735,30 @@ class Renderer:
         self.ctx.disable(moderngl.BLEND)
         self._qr_vao.render(moderngl.TRIANGLE_STRIP)
         target.viewport = (0, 0, width, height)
+
+    _BLIT_VERT = ("#version 330\nin vec2 in_pos; out vec2 uv;\n"
+                  "void main() { uv = in_pos * 0.5 + 0.5; gl_Position = vec4(in_pos, 0.0, 1.0); }\n")
+    _BLIT_FRAG = ("#version 330\nuniform sampler2D u_tex; in vec2 uv; out vec4 o;\n"
+                  "void main() { o = vec4(texture(u_tex, uv).rgb, 1.0); }\n")
+
+    def blit_fit(self, target, tex, src_size: tuple[int, int], dst_size: tuple[int, int]) -> None:
+        """Copie `tex` (orientation OpenGL, `src_size`) dans `target` (`dst_size`) en gardant son rapport, bandes noires de chaque cote (l'enregistrement
+        s'affiche ainsi dans la fenetre, quelle que soit sa forme). Fenetre reduite a rien : rien."""
+        x, y, w, h = fit_rect(src_size, dst_size)
+        if w <= 0 or h <= 0:
+            return
+        if self._blit_prog is None:
+            self._blit_prog = self.ctx.program(vertex_shader=self._BLIT_VERT, fragment_shader=self._BLIT_FRAG)
+            self._blit_vao = self.ctx.vertex_array(self._blit_prog, [(self.vbo, "2f", "in_pos")])
+        target.use()
+        target.viewport = (0, 0, dst_size[0], dst_size[1])
+        target.clear(0.0, 0.0, 0.0, 1.0)
+        target.viewport = (x, y, w, h)
+        tex.use(0)
+        self._blit_prog["u_tex"].value = 0
+        self.ctx.disable(moderngl.BLEND)
+        self._blit_vao.render(moderngl.TRIANGLE_STRIP)
+        target.viewport = (0, 0, dst_size[0], dst_size[1])
 
     @staticmethod
     def _set(prog, name: str, value) -> None:

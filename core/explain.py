@@ -83,6 +83,39 @@ def phase_measures_text(info: dict | None) -> str:
             f"mediums + aigus x{_fr(info.get('top8', 1.0))} (8 s) x{_fr(info.get('top20', 1.0))} (20 s) | calme {round(100 * float(info.get('calm', 0.0)))} %")
 
 
+def rec_status_text(seconds: float, size_bytes: int, peak_db: float, dropped: int, encoder: str) -> str:
+    """Voyant de l'enregistrement : « REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264 »."""
+    total = int(seconds)
+    clock = f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}" if total >= 3600 else f"{total // 60:02d}:{total % 60:02d}"
+    if peak_db <= -119.0:
+        level = "pas de signal"
+    else:
+        level = f"crete {round(peak_db)} dBFS" + (" SATURE" if peak_db >= -0.1 else "")
+    return f"REC {clock} | {round(size_bytes / 1e6)} Mo | {level} | images dupliquees {dropped} | {encoder}"
+
+
+def rec_panel(recording: bool, status: dict | None, projection_open: bool, ffmpeg_ok: bool, done: dict | None, fmt_label: str, fps: int,
+              audio_name: str | None) -> tuple[str, bool]:
+    """(texte du voyant, bouton actif) de l'onglet « Rec » : pendant l'enregistrement le voyant et l'avertissement en cours ; sinon pourquoi on ne peut pas
+    enregistrer (projection fermee, ffmpeg absent), ou ce qui va etre enregistre et le dernier fichier ecrit."""
+    if recording:
+        st = status or {}
+        text = rec_status_text(float(st.get("seconds", 0.0)), int(st.get("bytes", 0)), float(st.get("peak_db", -120.0)), int(st.get("dropped", 0)),
+                               str(st.get("encoder", "libx264")))
+        if st.get("warning"):
+            text += "\n" + str(st["warning"])
+        return text, True
+    if not projection_open:
+        return "Ouvre la projection pour enregistrer.", False
+    if not ffmpeg_ok:
+        return "ffmpeg introuvable : enregistrement impossible.", False
+    text = f"Pret : {fmt_label}, {fps} images/s, " + (f"son : {audio_name}" if audio_name else "sans son (aucune entree audio)")
+    if done:
+        path = done.get("path")
+        text += "\n" + (f"Dernier fichier : {str(path).replace(chr(92), '/').rsplit('/', 1)[-1]}" if path else f"Dernier essai sans fichier : {done.get('warning') or '-'}")
+    return text, True
+
+
 def pulse_text(info: dict | None, lead_ms: float = 0.0) -> str:
     """Voyant de la pulsation (lot 4) : « pulsation calee, avance 80 ms : les effets partent en avance (ecart prediction - detection +3 ms) »."""
     if not info:

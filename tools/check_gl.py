@@ -1054,6 +1054,7 @@ def check_gui() -> None:
                     gui_bgvideo_steps(c, s, out)
                     gui_diag_steps(c, s, out)
                     gui_calib_steps(c, s, out)
+                    gui_rec_steps(c, s, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -1318,7 +1319,7 @@ def check_gui() -> None:
           str(out.get("x_foudre_ui")))
     check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc, decharge de la foudre", str(out.get("x_build")))
     check(out.get("x_silence") == (True,) * 3, "phases auto (GUI): la case ecrit auto_phase", str(out.get("x_silence")))
-    check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
+    check(out.get("x_panic") == (True, True, True, True), "panique (GUI): plus de bouton PANIQUE dans la barre (REC a sa place) ; la palette coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
@@ -1438,6 +1439,18 @@ def check_gui() -> None:
           "calibration (GUI): le bouton Calibrer... ouvre une seule fenetre, lance l'emission sur l'ecran indique", str((out.get("calib_btn"), out.get("calib_open"), out.get("calib_emit"))))
     check(out.get("calib_found") == (87, "normal", True, True) and out.get("calib_applied") == (0.0, 87.0, 87.0) and out.get("calib_reset") == 0.0,
           "calibration (GUI): l'analyse de la video propose l'avance mesuree (87 ms) et le bouton la regle sur le curseur et dans les reglages", str((out.get("calib_found"), out.get("calib_applied"), out.get("calib_reset"))))
+    rg = out.get("rec_gui") or {}
+    check(rg.get("idle") == ("\u25cf Enregistrer", "normal", True) and rg.get("recording") == ("\u25a0 Arreter", "normal", True) and rg.get("after") == ("\u25cf Enregistrer", True),
+          "onglet Rec (GUI): bouton Enregistrer / Arreter et voyant (pret, REC en cours, retour au repos)", str((rg.get("idle"), rg.get("recording"), rg.get("after"))))
+    check(rg.get("closed") == ("disabled", "Ouvre la projection pour enregistrer.") and rg.get("nofmpeg") == ("disabled", "ffmpeg introuvable : enregistrement impossible."),
+          "onglet Rec (GUI): projection fermee ou sans ffmpeg, bouton grise avec la raison", str((rg.get("closed"), rg.get("nofmpeg"))))
+    check(len(set(rg.get("heights") or [(0, 0), (1, 1)])) == 1, "onglet Rec (GUI): un voyant court ou tres long ne change ni la hauteur du voyant ni celle de l'onglet (rien ne decale)", str(rg.get("heights")))
+    check(rg.get("sent") == "rec" and rg.get("values") == ("vertical_hd", 60.0, "materiel", 120.0, "C:/clips test/mes videos", "D:/autre dossier"),
+          "onglet Rec (GUI): le bouton envoie la commande au fil GL ; format, cadence, encodeur, delai et dossier (selecteur ou saisie) vont dans les reglages", str((rg.get("sent"), rg.get("values"))))
+    check(rg.get("bar") == (("● REC", "disabled"), ("■ 01:23", "normal"), "rec"),
+          "bouton REC de la barre (a la place de PANIQUE): grise projection fermee, temps ecoule pendant l'enregistrement, un clic envoie la commande", str(rg.get("bar")))
+    check(rg.get("palette") == (True, "Enregistrement : demarrer / arreter", "rec") and rg.get("help") and rg.get("tab_icon"),
+          "onglet Rec (GUI): commande de la palette Ctrl+K, touche E dans l'aide, icone de l'onglet", str((rg.get("palette"), rg.get("help"), rg.get("tab_icon"))))
     bm = out.get("bgv_modes", {})
     check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
                  "video": (False, False, True, "video")},
@@ -3155,6 +3168,626 @@ def check_pulse() -> None:
     check(an2.latest().get("pulse", {}).get("state") == "cale", "analyseur: latest() publie l'etat de la pulsation")
     steady = [t for t in fbig if t > 10.0]
     check(len(steady) >= 15 and min(b - a for a, b in zip(steady, steady[1:])) > 0.9 * P, "avance: une avance enorme est plafonnee (60 % de la periode), toujours un declenchement par kick", f"{len(steady)}")
+
+
+def check_recording() -> None:
+    """Enregistrement video + audio (issue #140) : logique pure (planification des images, decalage audio, noms, commandes ffmpeg, encodeur, crete, voyant, reglages)."""
+    print("Enregistrement video + audio (logique pure)")
+    import random as _random
+    from datetime import datetime
+    from core import explain as ex
+    from core import params_schema as ps
+    from core import recording as rec
+
+    check(rec.FORMATS == {"vertical": (1080, 1920), "vertical_hd": (720, 1280), "horizontal": (1920, 1080), "carre": (1080, 1080)}, "formats: vertical, vertical_hd, horizontal, carre", str(rec.FORMATS))
+
+    # --- planification des images : l'image numero k tombe a t0 + k / fps
+    check(rec.frames_due(0.0, 0.0, 30, 0) == 1, "images: la premiere part tout de suite")
+    check(rec.frames_due(0.0, 0.0334, 30, 1) == 1, "images: a l'heure de la suivante = une image")
+    check(rec.frames_due(0.0, 0.10, 30, 1) == 3, "images: en retard, l'image precedente est dupliquee (3 a ecrire)", str(rec.frames_due(0.0, 0.10, 30, 1)))
+    check(rec.frames_due(0.0, 0.01, 30, 5) == 0 and rec.frames_due(5.0, 4.0, 30, 0) == 0, "images: en avance (ou avant le depart) = rien, jamais negatif")
+    check(rec.frames_due(0.0, 0.05, 60, 1) == 3 and rec.frames_due(0.0, 0.0168, 60, 1) == 1, "images: meme logique a 60 images/s (pas d'erreur d'arrondi a l'instant exact)")
+    rg = _random.Random(7)
+    for fps in (30, 60):
+        t, sent, ok = 0.0, 0, True
+        for _ in range(2000):
+            t += rg.uniform(0.001, 0.12)
+            n = rec.frames_due(0.0, t, fps, sent)
+            ok = ok and n >= 0
+            sent += n
+        check(ok and sent == int(t * fps + 1e-9) + 1, f"images: pas de rendu irregulier, le compte final suit l'horloge ({fps} i/s)", f"{sent} pour {t:.2f} s")
+    try:
+        rec.frames_due(0.0, 1.0, 0, 0)
+        check(False, "images: cadence nulle refusee")
+    except ValueError:
+        check(True, "images: cadence nulle refusee")
+
+    # --- copie dans la fenetre : meme rapport que l'enregistrement, bandes noires
+    check(rec.fit_rect((1080, 1920), (1280, 720)) == (437, 0, 405, 720) and rec.fit_rect((1080, 1920), (540, 960)) == (0, 0, 540, 960)
+          and rec.fit_rect((1920, 1080), (640, 640)) == (0, 140, 640, 360) and rec.fit_rect((1080, 1920), (0, 0)) == (0, 0, 0, 0),
+          "fenetre: l'image enregistree est copiee en gardant son rapport (bandes noires), fenetre reduite a rien = rien", str(rec.fit_rect((1080, 1920), (1280, 720))))
+
+    # --- decalage de l'audio
+    check(abs(rec.audio_offset(10.0, 10.05, 40.0) - 0.09) < 1e-9, "decalage audio: demarre apres l'image + delai de 40 ms = +90 ms")
+    check(abs(rec.audio_offset(10.0, 9.9, 40.0) + 0.06) < 1e-9, "decalage audio: demarre avant l'image = negatif (-60 ms)")
+
+    # --- nom de fichier
+    now = datetime(2026, 11, 13, 22, 5, 9)
+    folder = os.path.join("C:\\", "Users", "Jean Dupont", "Vid\u00e9os", "casual overlay")
+    first = rec.output_name(now, folder, exists=lambda p: False)
+    check(os.path.basename(first) == "casual-2026-11-13_22h05m09s.mp4" and os.path.dirname(first) == folder, "nom: date et heure, dossier avec espaces et accents conserve", first)
+    taken = {first}
+    second = rec.output_name(now, folder, exists=lambda p: p in taken)
+    taken.add(second)
+    third = rec.output_name(now, folder, exists=lambda p: p in taken)
+    check(os.path.basename(second).endswith("s-2.mp4") and os.path.basename(third).endswith("s-3.mp4"), "nom: deux enregistrements dans la meme seconde = suffixes -2, -3", f"{second} {third}")
+
+    # --- commandes ffmpeg
+    def pair(cmd, a, b):
+        return any(cmd[i] == a and cmd[i + 1] == b for i in range(len(cmd) - 1))
+
+    v = rec.video_command("ffmpeg", (1080, 1920), 30, "libx264", "out.mkv")
+    check(v[0] == "ffmpeg" and v[-1] == "out.mkv" and pair(v, "-f", "rawvideo") and pair(v, "-pix_fmt", "rgb24") and pair(v, "-s", "1080x1920") and pair(v, "-r", "30") and pair(v, "-i", "-"),
+          "video: entree rawvideo rgb24 de la bonne taille et cadence sur l'entree standard", " ".join(v))
+    check(pair(v, "-vf", "vflip") and "-an" in v and pair(v, "-pix_fmt", "yuv420p") and pair(v, "-g", "30"), "video: image retournee (lecture OpenGL), sans audio, yuv420p, une image cle par seconde")
+    check(pair(v, "-colorspace", "bt709") and pair(v, "-color_primaries", "bt709") and pair(v, "-color_trc", "bt709")
+          and any(a.startswith("h264_metadata=") and "colour_primaries=1" in a and "transfer_characteristics=1" in a and "matrix_coefficients=1" in a for a in v),
+          "video: etiquettes bt709 (base connue pour l'etalonnage), ecrites dans le flux H.264")
+    check(pair(v, "-c:v", "libx264") and pair(v, "-preset", "veryfast") and pair(v, "-crf", "17"), "video: x264 veryfast crf 17")
+    vh = rec.video_command("ffmpeg", (720, 1280), 60, "h264_nvenc", "o.mkv")
+    check(pair(vh, "-c:v", "h264_nvenc") and "-crf" not in vh and pair(vh, "-g", "60") and pair(vh, "-s", "720x1280"), "video: encodeur materiel sans crf, cadence 60 -> image cle toutes les 60")
+
+    m = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 44100, 2, 0.09, "o.mp4")
+    ia = m.index("a.raw")
+    check(m[ia - 1] == "-i" and pair(m[:ia], "-f", "f32le") and pair(m[:ia], "-ar", "44100") and pair(m[:ia], "-ac", "2") and "-itsoffset" not in m and pair(m, "-af", "adelay=90:all=1"),
+          "assemblage: audio brut f32le (frequence et canaux d'origine), retarde de 90 ms par du silence (adelay)", " ".join(m))
+    check(pair(rec.mux_command("ffmpeg", "v", "a", 48000, 2, 0.0, "o", duration_s=3.0), "-t", "3.000") and "-t" not in m, "assemblage: la duree de la video coupe le tout (-t)")
+    check(pair(m, "-c:v", "copy") and pair(m, "-c:a", "aac") and pair(m, "-b:a", "320k") and pair(m[ia:], "-ar", "48000") and pair(m, "-movflags", "+faststart") and m[-1] == "o.mp4",
+          "assemblage: video recopiee, audio AAC 320 kb/s 48 kHz, faststart")
+    mn = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 48000, 2, -0.06, "o.mp4")
+    check("-af" not in mn and pair(mn[:mn.index("a.raw")], "-ss", "0.060"), "assemblage: audio en avance = on coupe son debut (-ss), pas de silence ajoute", " ".join(mn))
+    m0 = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 48000, 2, 0.0, "o.mp4")
+    check("-af" not in m0 and "-ss" not in m0 and "-itsoffset" not in m0, "assemblage: decalage nul = ni silence ajoute ni coupe")
+
+    rm = rec.remux_command("ffmpeg", "v.mkv", "o.mp4")
+    check(pair(rm, "-i", "v.mkv") and pair(rm, "-c", "copy") and pair(rm, "-movflags", "+faststart") and rm[-1] == "o.mp4" and "-itsoffset" not in rm, "assemblage sans audio: video recopiee, faststart")
+
+    # --- choix de l'encodeur
+    check(rec.choose_encoder(["libx264", "h264_nvenc"], lambda e: True) == "libx264", "encodeur: x264 par defaut, meme si un encodeur materiel existe")
+    check(rec.choose_encoder(["libx264", "h264_amf", "h264_nvenc"], lambda e: True, hardware=True) == "h264_nvenc", "encodeur: materiel demande = premier liste et teste (ordre nvenc, amf, qsv)")
+    check(rec.choose_encoder(["libx264", "h264_amf", "h264_nvenc"], lambda e: e == "h264_amf", hardware=True) == "h264_amf", "encodeur: un encodeur materiel dont l'essai echoue est saute")
+    check(rec.choose_encoder(["libx264", "h264_nvenc"], lambda e: False, hardware=True) == "libx264" and rec.choose_encoder([], lambda e: True, hardware=True) == "libx264",
+          "encodeur: aucun materiel utilisable = x264")
+
+    # --- crete et alertes
+    check(rec.peak_db(1.0) == 0.0 and abs(rec.peak_db(0.5) + 6.0206) < 0.001 and rec.peak_db(0.0) == -120.0 and rec.peak_db(1e-9) == -120.0, "crete: 1 = 0 dBFS, 0,5 = -6 dBFS, silence = plancher -120")
+    check(rec.clipped(1.0) and rec.clipped(0.9995) and not rec.clipped(0.9), "crete: saturation a partir de 0,999")
+    w = rec.drop_warning(3, 100)
+    check(w is not None and "vertical_hd" in w and rec.drop_warning(2, 100) is None and rec.drop_warning(0, 0) is None, "alerte: au-dela de 2 % d'images dupliquees, elle propose vertical_hd", str(w))
+
+    # --- reglages
+    check(rec.clean_fps(30) == 30 and rec.clean_fps(60) == 60 and rec.clean_fps(45) == 60 and rec.clean_fps(0) == 30 and rec.clean_fps("x") == 30, "reglage: cadence ramenee a 30 ou 60")
+    check(rec.clean_format("carre") == "carre" and rec.clean_format("autre") == "vertical", "reglage: format inconnu = vertical")
+    check(rec.resolve_dir("~/Videos/casual-overlay") == os.path.expanduser(os.path.join("~", "Videos", "casual-overlay")) and rec.resolve_dir("") == rec.resolve_dir(rec.DEFAULT_DIR), "reglage: dossier developpe (~), vide = defaut")
+    check(ps.BY_KEY["rec_format"].default == "vertical" and ps.BY_KEY["rec_fps"].default == 30 and ps.BY_KEY["rec_delay_ms"].default == 40.0 and ps.BY_KEY["rec_encoder"].default == "libx264"
+          and ps.BY_KEY["rec_dir"].default == rec.DEFAULT_DIR, "schema: valeurs par defaut (vertical, 30, 40 ms, libx264, dossier Videos)")
+    check(all(ps.BY_KEY[k].scope == "device" for k in ("rec_format", "rec_fps", "rec_dir", "rec_delay_ms", "rec_encoder")), "schema: portee device (sauve, hors presets et scenes)")
+    check(ps.validate("rec_fps", 999) == (True, 60) and ps.validate("rec_fps", 5) == (True, 30) and ps.validate("rec_delay_ms", 999) == (True, 300.0) and ps.validate("rec_format", "x")[0] is False
+          and ps.validate("rec_encoder", "x")[0] is False and ps.validate("rec_encoder", "materiel")[0] is True, "schema: valeurs hors plage ramenees, enums inconnus refuses")
+
+    # --- texte et bouton de l'onglet Rec
+    check(rec.format_label("vertical_hd") == "vertical hd 720x1280" and rec.format_label("n'importe quoi") == "vertical 1080x1920", "libelle de format: nom et taille, inconnu = vertical")
+    base = dict(status=None, projection_open=True, ffmpeg_ok=True, done=None, fmt_label="vertical 1080x1920", fps=30, audio_name="Interface audio")
+    tx, on = ex.rec_panel(False, **base)
+    check(on and tx == "Pret : vertical 1080x1920, 30 images/s, son : Interface audio", "onglet Rec: pret, avec le format, la cadence et l'entree audio", tx)
+    check(ex.rec_panel(False, **{**base, "audio_name": None})[0].endswith("sans son (aucune entree audio)"), "onglet Rec: sans entree audio, le dit")
+    check(ex.rec_panel(False, **{**base, "projection_open": False}) == ("Ouvre la projection pour enregistrer.", False)
+          and ex.rec_panel(False, **{**base, "ffmpeg_ok": False}) == ("ffmpeg introuvable : enregistrement impossible.", False), "onglet Rec: projection fermee ou ffmpeg absent = bouton grise avec la raison")
+    tx, on = ex.rec_panel(False, **{**base, "done": {"path": "C:\\Users\\Jean\\Vid\u00e9os\\casual-2026-11-13_22h05m09s.mp4", "warning": None}})
+    check(tx.endswith("\nDernier fichier : casual-2026-11-13_22h05m09s.mp4"), "onglet Rec: dernier fichier ecrit (nom seul)", tx)
+    check("sans fichier : disque" in ex.rec_panel(False, **{**base, "done": {"path": None, "warning": "disque"}})[0], "onglet Rec: dernier essai sans fichier + raison")
+    tx, on = ex.rec_panel(True, **{**base, "status": {"seconds": 83.0, "bytes": 412_000_000, "peak_db": -3.0, "dropped": 0, "encoder": "libx264", "warning": "Plus de son depuis 2 s"}, "projection_open": False})
+    check(on and tx == "REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264\nPlus de son depuis 2 s", "onglet Rec: pendant l'enregistrement, le voyant et l'avertissement ; le bouton reste actif pour arreter", tx)
+
+    # --- voyant
+    t = ex.rec_status_text(83.0, 412_000_000, -3.0, 0, "libx264")
+    check(t == "REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264", "voyant: duree, taille, crete, doublons, encodeur", t)
+    check(ex.rec_status_text(3725.0, 0, -120.0, 4, "h264_amf").startswith("REC 1:02:05 | 0 Mo | pas de signal") and "SATURE" in ex.rec_status_text(5.0, 1, 0.0, 0, "libx264"),
+          "voyant: plus d'une heure, pas de signal, saturation signalee")
+
+
+def check_recorder_audio() -> None:
+    """Enregistrement (issue #140) : point d'ecoute stereo de la capture audio et fichier brut (`RawAudioWriter`)."""
+    print("Enregistrement : point d'ecoute audio et fichier brut")
+    import shutil
+    import types
+    import engine.audio as ea
+    import engine.recorder as er
+
+    rate, n = 48000, 512
+
+    def fake_device(channels, tap=None):
+        dev = ea.SoundDeviceInput.__new__(ea.SoundDeviceInput)            # sans ouvrir de peripherique
+        dev.rate, dev.channels, dev.ring, dev.tap, dev.tap_errors = rate, channels, ea.RingBuffer(1 << 14), tap, 0
+        return dev
+
+    info = types.SimpleNamespace(inputBufferAdcTime=0.0, currentTime=0.0)         # pilote sans horodatage : le bloc est date au callback
+    rg = np.random.default_rng(5)
+    blocks = [rg.uniform(-0.8, 0.8, (n, 2)).astype(np.float32) for _ in range(100)]
+
+    # --- point d'ecoute : les blocs stereo arrivent entiers, l'analyse mono ne change pas
+    got = []
+    dev = fake_device(2, tap=lambda block, t_end: got.append((block, t_end)))
+    ref = fake_device(2)
+    t0 = time.monotonic()
+    for b in blocks:
+        dev._callback(b, n, info, None)
+        ref._callback(b, n, info, None)
+    check(len(got) == 100 and all(np.array_equal(g[0], b) for g, b in zip(got, blocks)) and all(g[0].shape == (n, 2) for g in got), "tap: 100 blocs stereo recus tels quels")
+    check(got[-1][1] >= t0 and got[-1][1] <= time.monotonic() + 0.01 and all(b[1] >= a[1] for a, b in zip(got, got[1:])), "tap: chaque bloc est date (instant croissant, celui du callback)")
+    check(np.array_equal(dev.ring.latest(4096), ref.ring.latest(4096)) and abs(float(np.abs(dev.ring.latest(4096)).max())) > 0.1, "tap: l'analyse mono recoit les memes valeurs avec ou sans point d'ecoute")
+    got[0][0][0, 0] = 99.0
+    check(blocks[0][0, 0] != 99.0, "tap: le bloc recu est une copie (le tampon du pilote est reutilise)")
+    mono = fake_device(1, tap=lambda block, t_end: got.append((block, t_end)))
+    got.clear()
+    mono._callback(blocks[0][:, :1].copy(), n, info, None)
+    check(got[0][0].shape == (n, 2) and np.array_equal(got[0][0][:, 0], blocks[0][:, 0]) and np.array_equal(got[0][0][:, 1], blocks[0][:, 0]), "tap: un peripherique mono donne deux canaux identiques")
+
+    def boom(block, t_end):
+        raise RuntimeError("disque")
+    bad = fake_device(2, tap=boom)
+    bad._callback(blocks[0], n, info, None)
+    check(bad.tap_errors == 1 and np.abs(bad.ring.latest(n)).max() > 0.1, "tap: une erreur de l'enregistreur n'arrete pas l'analyse (compteur tap_errors)")
+
+    tmp = Path(tempfile.mkdtemp(prefix="casual-rec-"))
+
+    def read_raw(path):
+        return np.frombuffer(Path(path).read_bytes(), dtype="<f4").reshape(-1, 2)
+
+    # --- ecriture brute : fichier identique, premier instant, crete
+    base = 100.0
+    w = er.RawAudioWriter(str(tmp / "a.raw"), 2, rate)
+    for k, b in enumerate(blocks):
+        w.push(b, base + (k + 1) * n / rate)
+    w.close()
+    data = read_raw(tmp / "a.raw")
+    check(np.array_equal(data, np.concatenate(blocks)) and w.bytes_written == data.nbytes and w.lost == 0 and w.frames == 100 * n, "ecriture: fichier f32le entrelace identique aux blocs, rien de perdu",
+          f"{data.shape} {w.bytes_written}")
+    check(abs(w.t_first - base) < 1e-9, "ecriture: instant du premier echantillon", str(w.t_first))
+    check(abs(w.peak - float(np.abs(np.concatenate(blocks)).max())) < 1e-7, "ecriture: crete exacte")
+    w.close()
+    w.push(blocks[0], base + 99.0)
+    check(read_raw(tmp / "a.raw").shape[0] == 100 * n, "ecriture: fermer deux fois et pousser apres la fermeture sont sans effet")
+
+    # --- blocs manquants : du silence garde la duree
+    w = er.RawAudioWriter(str(tmp / "gap.raw"), 2, rate)
+    for k in range(10):
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    for k in range(15, 20):                                               # 5 blocs jamais arrives (carte debranchee un instant)
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    w.close()
+    data = read_raw(tmp / "gap.raw")
+    check(data.shape[0] == 20 * n and np.array_equal(data[:10 * n], np.concatenate(blocks[:10])) and not data[10 * n:15 * n].any() and np.array_equal(data[15 * n:], np.concatenate(blocks[15:20])),
+          "trou: 5 blocs manquants = 5 blocs de silence, le reste a sa place, duree juste", f"{data.shape}")
+
+    # --- ecriture trop lente : file pleine, blocs perdus, duree gardee
+    class Slow(er.RawAudioWriter):
+        def _write(self, handle, data):
+            time.sleep(0.03)
+            super()._write(handle, data)
+    w = Slow(str(tmp / "slow.raw"), 2, rate, max_queue=2)
+    for k in range(40):
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    w.close()
+    data = read_raw(tmp / "slow.raw")
+    check(w.lost >= 10 and abs(data.shape[0] - 40 * n) <= 2 and w.frames == data.shape[0],
+          "file pleine: les blocs perdus sont comptes (jamais de blocage du callback) et remplaces par du silence, y compris en fin de fichier", f"perdus {w.lost}, {data.shape[0]} echantillons pour {40 * n}")
+
+    # --- silence permanent : crete au plancher
+    w = er.RawAudioWriter(str(tmp / "z.raw"), 2, rate)
+    w.push(np.zeros((n, 2), np.float32), base + n / rate)
+    w.close()
+    check(w.peak == 0.0 and w.frames == n, "ecriture: silence = crete nulle")
+    # --- erreur d'ecriture (dossier disparu) : le fil ne meurt pas en silence, close() rend la main
+    w = er.RawAudioWriter(str(tmp / "absent" / "x.raw"), 2, rate)
+    for k in range(700):                                               # plus que la file (512) : un fil mort la remplirait et close() bloquerait
+        w.push(blocks[k % 100], base + (k + 1) * n / rate)
+    t_close = time.monotonic()
+    w.close()
+    check(w.error and time.monotonic() - t_close < 5, "ecriture impossible: l'erreur est gardee et close() ne bloque pas", str(w.error))
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_recorder() -> None:
+    """Enregistrement (issue #140) : `Recorder` (images a cadence constante, son brut, assemblage) avec le vrai ffmpeg ; horloge simulee, rien n'attend en temps reel."""
+    print("Enregistrement : Recorder et assemblage (ffmpeg reel)")
+    import json
+    import shutil
+    import subprocess
+    import types
+    from datetime import datetime
+    import engine.recorder as er
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        check(False, "ffmpeg et ffprobe disponibles")
+        return
+    SIZE, FPS, RATE, N, T0 = (320, 180), 30, 48000, 512, 1000.0
+    root = Path(tempfile.mkdtemp(prefix="casual-rec-"))
+    folder = root / "dossier été test"                                   # espaces et accents
+    BLACK, WHITE = bytes(SIZE[0] * SIZE[1] * 3), b"\xff" * (SIZE[0] * SIZE[1] * 3)
+
+    def new_input():
+        return types.SimpleNamespace(rate=RATE, channels=2, tap=None)
+
+    def make(inp=None, delay_ms=0.0, **kw):
+        kw.setdefault("now_fn", lambda: datetime(2026, 11, 13, 22, 5, 9))
+        kw.setdefault("free_bytes", lambda p: 50_000_000_000)
+        return er.Recorder(ffmpeg, str(folder), "carre", FPS, delay_ms, audio_input=inp, size=SIZE, **kw)
+
+    def audio_block(k, base, click_abs):
+        t = base + (np.arange(N) + k * N) / RATE
+        sig = 0.2 * np.sin(2 * np.pi * 220 * (t - base))
+        sig = np.where((t >= click_abs) & (t < click_abs + 0.01), 0.9, sig)       # un clic de 10 ms, tres au-dessus du son de fond
+        return np.stack([sig, sig], axis=1).astype(np.float32)
+
+    def record(rec, inp, seconds, flash_at=1.0, click_at=1.0, audio_lag=0.0, audio_stop=None):
+        """Joue `seconds` de video a cadence simulee ; le son arrive par blocs de 512 echantillons, date comme le fait le callback (instant de fin)."""
+        rec.start()
+        base, k = T0 + audio_lag, 0
+        for i in range(int(seconds * FPS)):
+            now = T0 + i / FPS
+            rec.write(WHITE if now - T0 >= flash_at else BLACK, rec.due(now))
+            while inp is not None and base + (k + 1) * N / RATE <= now + 1.0 / FPS:
+                if audio_stop is None or base + k * N / RATE < T0 + audio_stop:
+                    inp.tap(audio_block(k, base, T0 + click_at), base + (k + 1) * N / RATE)
+                k += 1
+        return rec
+
+    def probe(path):
+        out = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-show_entries",
+                              "format=duration:stream=codec_type,codec_name,pix_fmt,width,height,channels,sample_rate,start_time,color_space,color_primaries,color_transfer,nb_read_frames",
+                              "-of", "json", str(path)], capture_output=True, text=True).stdout
+        d = json.loads(out)
+        return float(d["format"]["duration"]), {s["codec_type"]: s for s in d["streams"]}
+
+    def decode(path, args):
+        return subprocess.run([ffmpeg, "-v", "error", "-i", str(path), *args, "-"], capture_output=True).stdout
+
+    def flash_time(path, streams):
+        gray = np.frombuffer(decode(path, ["-vf", "scale=8:4,format=gray", "-f", "rawvideo"]), np.uint8).reshape(-1, 32)
+        idx = int(np.argmax(gray.mean(axis=1) > 128))
+        return float(streams["video"].get("start_time", 0) or 0) + idx / FPS
+
+    def click_time(path, streams, with_start=True):
+        pcm = np.frombuffer(decode(path, ["-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le"]), np.float32)
+        idx = int(np.argmax(np.abs(pcm) > 0.5))
+        return (float(streams["audio"].get("start_time", 0) or 0) if with_start else 0.0) + idx / RATE
+
+    def leftovers():
+        return sorted(p.name for p in folder.iterdir() if ".tmp." in p.name) if folder.exists() else []
+
+    # --- 1. enregistrement nominal : 3 s, son et eclair au meme instant
+    inp = new_input()
+    rec = record(make(inp), inp, 3.0)
+    path = rec.stop()
+    dur, st = probe(path)
+    v, a = st["video"], st["audio"]
+    check(path and os.path.dirname(path) == str(folder) and os.path.basename(path) == "casual-2026-11-13_22h05m09s.mp4" and Path(path).is_file(), "fichier final: nom date, dossier avec espaces et accents", str(path))
+    check(abs(dur - 3.0) < 0.1 and int(v["nb_read_frames"]) == 90, "duree 3 s a 0,1 s pres, 90 images", f"{dur:.3f} s, {v['nb_read_frames']} images")
+    check(v["codec_name"] == "h264" and v["pix_fmt"] == "yuv420p" and (v["width"], v["height"]) == SIZE and a["codec_name"] == "aac" and int(a["channels"]) == 2 and int(a["sample_rate"]) == 48000,
+          "flux: h264 yuv420p de la bonne taille, aac stereo 48 kHz", f"{v['codec_name']} {v['pix_fmt']} {v['width']}x{v['height']} {a['codec_name']} {a['channels']} {a['sample_rate']}")
+    check(v.get("color_space") == "bt709" and v.get("color_primaries") == "bt709" and v.get("color_transfer") == "bt709", "flux: etiquettes bt709", str({k: v.get(k) for k in ("color_space", "color_primaries", "color_transfer")}))
+    gap = click_time(path, st) - flash_time(path, st)
+    check(abs(gap) < 0.06, "synchro: le clic et l'eclair sont au meme instant dans le fichier (moins de 60 ms)", f"ecart {1000 * gap:+.0f} ms")
+    status = rec.status()
+    check(leftovers() == [] and rec._proc.poll() is not None and status["frames"] == 90 and status["dropped"] == 0 and status["encoder"] == "libx264" and -3.0 < status["peak_db"] < 0.0 and not status["recording"],
+          "fin: aucun fichier temporaire, ffmpeg termine, voyant (90 images, 0 doublon, libx264, crete)", f"{leftovers()} {status}")
+    check(rec.stop() == path, "arreter deux fois rend le meme chemin sans erreur")
+
+    # --- 2. le son demarre 0,2 s apres la 1re image : le decalage le remet en place ; le delai de synchro retarde le son de 40 ms
+    inp = new_input()
+    rec = record(make(inp, delay_ms=40.0, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 10)), inp, 3.0, audio_lag=0.2)
+    path = rec.stop()
+    dur, st = probe(path)
+    gap = click_time(path, st) - flash_time(path, st)
+    check(0.02 < gap < 0.06, "synchro: son demarre en retard + delai de 40 ms = clic 40 ms apres l'eclair (a 20 ms pres)", f"ecart {1000 * gap:+.0f} ms")
+    pcm = np.frombuffer(decode(path, ["-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le"]), np.float32)
+    lead = int(np.argmax(np.abs(pcm) > 0.05)) / RATE
+    check(lead > 0.23 and float(st["audio"].get("start_time", 0) or 0) < 0.01 and abs(dur - 3.0) < 0.1,
+          "le retard est du silence dans les echantillons (le son ne commence qu'a 0,24 s), pas un horodatage que certains logiciels de montage lisent mal ; duree coupee a celle de la video",
+          f"debut du son a {lead:.3f} s, {dur:.2f} s")
+
+    # --- 3. le son demarre AVANT la 1re image : son debut est coupe
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 11)), inp, 3.0, audio_lag=-0.1)
+    path = rec.stop()
+    dur, st = probe(path)
+    gap = click_time(path, st) - flash_time(path, st)
+    check(abs(gap) < 0.06 and abs(dur - 3.0) < 0.1, "synchro: son demarre avant l'image = debut coupe, toujours aligne et de la bonne duree", f"ecart {1000 * gap:+.0f} ms, {dur:.2f} s")
+
+    # --- 4. le son disparait en cours de route : du silence garde la duree, un avertissement le dit
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 12)), inp, 3.0, audio_stop=1.5)
+    warn = rec.status(now=T0 + 3.0)["warning"]
+    path = rec.stop()
+    dur, st = probe(path)
+    alen = len(np.frombuffer(decode(path, ["-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le"]), np.float32)) / RATE
+    check(abs(dur - 3.0) < 0.1 and alen > 2.85 and warn and "son" in warn, "son coupe a 1,5 s: fichier de 3 s, audio complete par du silence, avertissement",
+          f"{dur:.2f} s, audio {alen:.2f} s, {warn}")
+
+    # --- 5. rendu en retard : images dupliquees, duree juste ; sans entree audio : video seule
+    rec = make(now_fn=lambda: datetime(2026, 11, 13, 22, 5, 13))
+    rec.start()
+    rec.write(BLACK, rec.due(T0))
+    late = rec.due(T0 + 0.10)
+    rec.write(WHITE, late)
+    for i in range(4, 31):
+        rec.write(WHITE, rec.due(T0 + i / FPS))
+    path = rec.stop()
+    dur, st = probe(path)
+    check(late == 3 and rec.status()["dropped"] == 2 and int(st["video"]["nb_read_frames"]) == rec.status()["frames"] == 31 and "audio" not in st and abs(dur - 31 / FPS) < 0.1,
+          "retard: 2 images dupliquees comptees, video a cadence constante (31 images), sans audio quand il n'y a pas d'entree", f"{late} {rec.status()} {dur:.2f} {list(st)}")
+    check("audio" in (rec.status()["warning"] or ""), "sans entree audio: l'avertissement le dit", str(rec.status()["warning"]))
+
+    # --- 6. entree audio branchee mais aucun son recu
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 14)), None, 1.0)
+    path = rec.stop()
+    dur, st = probe(path)
+    check(path and "audio" not in st and "aucun son" in (rec.status()["warning"] or "").lower(), "entree sans aucun bloc: video seule et avertissement", str(rec.status()["warning"]))
+
+    # --- 7. echec de l'assemblage : jamais de fichier sous le nom final, temporaires gardes
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 15)), inp, 1.0)
+    rec.mux_ffmpeg = "ffmpeg-inexistant-casual"
+    path = rec.stop()
+    names = leftovers()
+    check(path is None and not os.path.exists(rec.path) and any("video.tmp" in n for n in names) and any("audio.tmp" in n for n in names) and rec.status()["warning"],
+          "assemblage en echec: aucun fichier sous le nom final, video et audio temporaires conserves, avertissement", f"{path} {names}")
+
+    # --- 8. deux enregistrements dans la meme seconde
+    inp1, inp2 = new_input(), new_input()
+    same = lambda: datetime(2026, 11, 13, 23, 0, 0)
+    r1, r2 = make(inp1, now_fn=same), make(inp2, now_fn=same)
+    r1.start()
+    r2.start()
+    check(r1.path != r2.path and r2.path.endswith("s-2.mp4"), "meme seconde: le deuxieme fichier prend le suffixe -2", f"{r1.path} {r2.path}")
+    r1.write(BLACK, r1.due(T0))
+    r2.write(BLACK, r2.due(T0))
+    p1, p2 = r1.stop(), r2.stop()
+    check(p1 and p2 and p1 != p2 and Path(p1).is_file() and Path(p2).is_file(), "meme seconde: les deux fichiers sont ecrits")
+
+    # --- 9. disque : avertissement a l'ouverture, arret propre quand il se remplit, refus quand il est deja presque plein
+    low = make(new_input(), now_fn=lambda: datetime(2026, 11, 13, 23, 1, 0), free_bytes=lambda p: 1_500_000_000)
+    low.start()
+    check("Go" in (low.status()["warning"] or ""), "disque: moins de 2 Go libres = avertissement a l'ouverture", str(low.status()["warning"]))
+    low.stop()
+    state = {"n": 0}
+
+    def shrinking(p):
+        state["n"] += 1
+        return 50_000_000_000 if state["n"] == 1 else 50_000_000
+    rec = make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 2, 0), free_bytes=shrinking)
+    rec.start()
+    for i in range(90):
+        rec.write(BLACK, rec.due(T0 + i / FPS))
+    path = rec.stop()
+    dur, st = probe(path) if path else (0.0, {})
+    check(rec.should_stop and path and int(st["video"]["nb_read_frames"]) <= 40 and rec.status()["warning"], "disque qui se remplit: arret demande, ce qui est ecrit est assemble, avertissement",
+          f"{rec.status()['frames']} images, {rec.status()['warning']}")
+    try:
+        make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 3, 0), free_bytes=lambda p: 100_000_000).start()
+        check(False, "disque presque plein: l'enregistrement est refuse")
+    except er.RecorderError:
+        check(True, "disque presque plein: l'enregistrement est refuse")
+
+    # --- 10. encodeur materiel : essai raté = x264
+    tested = []
+    hw = make(None, hardware=True, listed_encoders=lambda: ["libx264", "h264_nvenc"], test_encoder=lambda e: tested.append(e) or False)
+    check(hw.pick_encoder() == "libx264" and tested == ["h264_nvenc"], "encodeur materiel demande mais l'essai echoue: x264", str(tested))
+    hw2 = make(None, hardware=True, listed_encoders=lambda: ["h264_nvenc"], test_encoder=lambda e: True)
+    check(hw2.pick_encoder() == "h264_nvenc", "encodeur materiel demande et fonctionnel: utilise")
+
+    # --- 11. aucune image : rien d'ecrit
+    rec = make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 4, 0))
+    rec.start()
+    check(rec.stop() is None and not [n for n in os.listdir(folder) if n.startswith("casual-2026-11-13_23h04")], "arret sans image: rien d'ecrit, rien de temporaire")
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def check_recording_render() -> None:
+    """Enregistrement (issue #140) : `RecordingControl`, ce que la boucle GL appelle, avec un contexte standalone (pas de fenetre glfw) : un seul `draw` par image,
+    vers la cible hors ecran ; l'image enregistree est celle d'un rendu de la meme taille ; la fenetre recoit une copie qui garde le rapport ; arrets propres."""
+    print("Enregistrement : rendu hors ecran et copie vers la fenetre")
+    import json
+    import math
+    import shutil
+    import subprocess
+    import types
+    from datetime import datetime
+    import engine.recorder as er
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    if not ffmpeg or not ffprobe:
+        check(False, "ffmpeg et ffprobe disponibles")
+        return
+    REC, WIN, FPS, T0 = (320, 568), (640, 360), 30, 1000.0
+    root = Path(tempfile.mkdtemp(prefix="casual-rec-"))
+    params = dict(gl.DEFAULT_PARAMS) | {"bg_mode": "pattern", "bg_palette": "duo", "auto_phase": 0, "holo_on": 0.0, "rec_dir": str(root)}
+
+    def state(t):
+        since = t % 0.5
+        return {"bass": 0.5 + 0.4 * math.sin(t * 1.3), "mid": 0.4, "high": 0.3, "rms": 0.5, "beat": math.exp(-since / 0.2), "since_beat": since}
+
+    def fbo_of(size):
+        return ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+
+    def read(fbo, size):
+        return np.frombuffer(fbo.read(components=3, alignment=1), np.uint8).reshape(size[1], size[0], 3)
+
+    counter = {"n": 0}
+
+    class Spy(er.Recorder):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.writes = []
+
+        def write(self, frame, count=1):
+            self.writes.append((frame, count))
+            super().write(frame, count)
+
+    def make(**extra):
+        """(session factice, controle, espions) : l'enregistreur est cree a petite taille, nom de fichier unique."""
+        spies = []
+
+        def factory(ffmpeg_, directory, fmt, fps, delay_ms, **kw):
+            counter["n"] += 1
+            r = Spy(ffmpeg_, directory, fmt, fps, delay_ms, size=REC, now_fn=lambda n=counter["n"]: datetime(2026, 11, 13, 12, n // 60, n % 60),
+                    free_bytes=extra.get("free_bytes", lambda p: 50_000_000_000), **kw)
+            spies.append(r)
+            return r
+        s = types.SimpleNamespace(audio=types.SimpleNamespace(src=types.SimpleNamespace(rate=48000, channels=2, tap=None)), status={})
+        renderer = gl.Renderer(ctx, REC, None)
+        calls = {"n": 0}
+        real_draw = renderer.draw
+
+        def counting(*a, **k):
+            calls["n"] += 1
+            return real_draw(*a, **k)
+        renderer.draw = counting
+        ctl = er.RecordingControl(s, ctx, renderer, which=extra.get("which", shutil.which), factory=factory)
+        return s, ctl, spies, renderer, calls
+
+    def frames(ctl, renderer, win, win_size, first, count, dt=1.0 / FPS):
+        for i in range(first, first + count):
+            target, size = ctl.frame_target(win, win_size)
+            renderer.draw(target, size, state(i * dt), params, i * dt)
+            ctl.after_draw(T0 + i * dt, win, win_size)
+
+    def probe(path):
+        out = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-show_entries", "stream=width,height,nb_read_frames", "-of", "json", str(path)], capture_output=True, text=True).stdout
+        return json.loads(out)["streams"][0]
+
+    win = fbo_of(WIN)
+
+    # --- 1. un seul draw par image, vers une cible de la taille du format ; l'image ecrite est celle d'un rendu de cette taille
+    s, ctl, spies, renderer, calls = make()
+    ctl.start(params)
+    check(ctl.active and len(spies) == 1, "demarrage: l'enregistrement est actif", str(s.status))
+    sizes = []
+    real_draw = renderer.draw
+
+    def spy_draw(target, size, *a, **k):
+        sizes.append(tuple(size))
+        return real_draw(target, size, *a, **k)
+    renderer.draw = spy_draw
+    frames(ctl, renderer, win, WIN, 0, 30)
+    check(len(sizes) == 30 and set(sizes) == {REC} and calls["n"] == 30, "rendu: un seul draw par image, a la taille du format (pas celle de la fenetre)", f"{set(sizes)} {calls['n']} appels")
+    ref = gl.Renderer(ctx, REC, None)
+    reffbo = fbo_of(REC)
+    same = True
+    for i, (frame, count) in enumerate(spies[0].writes[:10]):
+        ref.draw(reffbo, REC, state(i / FPS), params, i / FPS)
+        same = same and count == 1 and frame == reffbo.read(components=3, alignment=1)
+    check(len(spies[0].writes) == 30 and same, "image enregistree: octet pour octet celle d'un rendu de la meme taille", f"{len(spies[0].writes)} ecritures")
+
+    # --- 2. la fenetre recoit une copie qui garde le rapport (bandes noires)
+    img = read(win, WIN)
+    x, y, w, h = er.core_rec.fit_rect(REC, WIN)
+    cols = np.where(img.max(axis=(0, 2)) > 8)[0]
+    check(img[:, :x - 2].max() == 0 and img[:, x + w + 2:].max() == 0 and img[:, x + 3:x + w - 3].max() > 60 and abs((cols.max() - cols.min() + 1) - w) <= 4,
+          "fenetre: copie de l'image enregistree, rapport garde, bandes noires de chaque cote", f"image de {cols.min()} a {cols.max()}, attendu {x} a {x + w - 1}")
+
+    # --- 3. la fenetre change de taille en cours d'enregistrement : le fichier ne change pas
+    win2 = fbo_of((800, 600))
+    frames(ctl, renderer, win2, (800, 600), 30, 15)
+    check(all(len(f) == REC[0] * REC[1] * 3 for f, c in spies[0].writes) and len(spies[0].writes) == 45, "fenetre redimensionnee en cours: les images gardent la taille du format")
+
+    # --- 4. arret : assemblage en arriere-plan, fichier valide, voyant
+    ctl.stop()
+    ctl.close()
+    done = s.status.get("rec_done") or {}
+    st = probe(done["path"]) if done.get("path") else {}
+    check(not ctl.active and "rec" not in s.status and done.get("path") and Path(done["path"]).is_file() and (st.get("width"), st.get("height")) == REC and int(st.get("nb_read_frames", 0)) == 45,
+          "arret: fichier assemble de la bonne taille et du bon nombre d'images, voyant retire", f"{done} {st}")
+    check("sauve" in s.status.get("msg", "").lower(), "arret: message de fin dans le statut", s.status.get("msg", ""))
+
+    # --- 5. sans enregistrement : rien ne change (pixel pour pixel)
+    s, ctl, spies, renderer, calls = make()
+    direct = gl.Renderer(ctx, WIN, None)
+    other = fbo_of(WIN)
+    target, size = ctl.frame_target(win, WIN)
+    renderer.draw(target, size, state(1.0), params, 1.0)
+    ctl.after_draw(T0, win, WIN)
+    direct.draw(other, WIN, state(1.0), params, 1.0)
+    check(target is win and size == WIN and not ctl.active and read(win, WIN).tobytes() == read(other, WIN).tobytes(), "sans enregistrement: rendu direct vers la fenetre, image identique")
+
+    # --- 6. rendu en retard : images dupliquees, comptees
+    s, ctl, spies, renderer, calls = make()
+    ctl.start(params)
+    frames(ctl, renderer, win, WIN, 0, 10, dt=0.1)
+    check(spies[0].duplicated == 18 and spies[0].sent == 28, "rendu a 10 images/s pour 30 demandees: images dupliquees pour garder la duree", f"{spies[0].duplicated} doublons, {spies[0].sent} images")
+    ctl.close()
+
+    # --- 7. l'entree audio change en cours d'enregistrement : arret propre, fichier assemble
+    s, ctl, spies, renderer, calls = make()
+    ctl.start(params)
+    frames(ctl, renderer, win, WIN, 0, 10)
+    s.audio.src = types.SimpleNamespace(rate=44100, channels=2, tap=None)
+    frames(ctl, renderer, win, WIN, 10, 2)
+    ctl.close()
+    check(not ctl.active and "entree audio" in s.status.get("msg", "").lower() + " ".join(str(v) for v in s.status.get("rec_done", {}).values()).lower() and s.status.get("rec_done", {}).get("path"),
+          "entree audio changee: enregistrement arrete proprement, fichier assemble", str(s.status))
+
+    # --- 8. disque qui se remplit : le controle s'arrete seul
+    state_ = {"n": 0}
+
+    def shrinking(p):
+        state_["n"] += 1
+        return 50_000_000_000 if state_["n"] == 1 else 50_000_000
+    s, ctl, spies, renderer, calls = make(free_bytes=shrinking)
+    ctl.start(params)
+    frames(ctl, renderer, win, WIN, 0, 60)
+    ctl.close()
+    check(not ctl.active and spies[0].sent <= 40 and "disque" in (s.status.get("rec_done", {}).get("warning") or s.status.get("msg", "")).lower(),
+          "disque qui se remplit: l'enregistrement s'arrete seul et le fichier est assemble", str(s.status))
+
+    # --- 9. refus : ffmpeg absent, disque presque plein
+    s, ctl, spies, renderer, calls = make(which=lambda name: None)
+    ctl.start(params)
+    check(not ctl.active and spies == [] and "ffmpeg" in s.status.get("msg", ""), "ffmpeg absent: enregistrement refuse avec un message", s.status.get("msg", ""))
+    s, ctl, spies, renderer, calls = make(free_bytes=lambda p: 100_000_000)
+    ctl.start(params)
+    check(not ctl.active and "disque" in s.status.get("msg", "").lower(), "disque presque plein: enregistrement refuse avec un message", s.status.get("msg", ""))
+
+    # --- 9b. dossier inutilisable (lecteur absent, nom interdit) : un message, aucune exception
+    blocker = root / "un_fichier.txt"
+    blocker.write_text("x")
+    s, ctl, spies, renderer, calls = make()
+    try:
+        ctl.start({**params, "rec_dir": str(blocker / "sous-dossier")})
+        raised = None
+    except Exception as exc:
+        raised = exc
+    check(raised is None and not ctl.active and "dossier" in s.status.get("msg", "").lower(),
+          "dossier inutilisable: message clair, la projection ne tombe pas", f"{raised!r} {s.status.get('msg')}")
+
+    # --- 10. bascule et fermeture pendant un enregistrement
+    s, ctl, spies, renderer, calls = make()
+    ctl.toggle(params)
+    check(ctl.active, "bascule: un appui demarre")
+    ctl.toggle(params)
+    check(ctl.active, "double clic: la seconde bascule a moins de 0,6 s est ignoree (pas de demarrage + arret)")
+    frames(ctl, renderer, win, WIN, 0, 20)
+    ctl.close()                                         # fermeture de la projection en cours d'enregistrement : arret propre et assemblage
+    check(not ctl.active and Path(s.status["rec_done"]["path"]).is_file(), "fermeture de la projection pendant l'enregistrement: fichier assemble")
+    ctl.close()
+    check(True, "fermer deux fois est sans effet")
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def check_bands_pulse() -> None:
@@ -4905,7 +5538,7 @@ def gui_expand_steps(c, s, out) -> None:
     tabs = [nb for nb in walk_(mpanel) if nb.winfo_class() == "TNotebook"]
     tab_names = [tabs[0].tab(i, "text") for i in range(tabs[0].index("end"))] if tabs else []
     bar_texts = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() in ("Button", "Menubutton")]
-    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique", "Affichage"] and len(knobs) >= 18,
+    out["x_master_panel"] = (tab_names == ["Masters", "Live", "Audio", "Compo", "Auto", "Memoires", "Historique", "Affichage", "Rec"] and len(knobs) >= 18,
                              got == (1.5, 0.5, 0.4, 0.3, 90.0), list_right,
                              not any(t.startswith(("Strobe", "Verrou", "Teinte", "Reac", "Tempo", "Overlay", "Fond", "Montee")) for t in bar_texts),
                              any(w.winfo_class() == "Button" and w.cget("text").startswith("Strobe") for w in walk_(mpanel)),
@@ -4977,11 +5610,10 @@ def gui_expand_steps(c, s, out) -> None:
     params["fx_on"] = [1, 1, 1, 1, 1]
     vjc["state"]["running"] = True
     s.scene_lock = True
-    panic_btn = next((w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text") == "PANIQUE"), None)
-    if panic_btn is not None:
-        panic_btn.invoke()
+    bar_texts_ = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
+    c["palette"].choose("panique")                    # le bouton de la barre est maintenant REC : la panique passe par la palette (Ctrl+K), la console, le mode scene et la touche X
     root.update()
-    out["x_panic"] = (panic_btn is not None,
+    out["x_panic"] = ("PANIQUE" not in bar_texts_ and "\u25cf REC" in bar_texts_,
                       params["comp_sym"] == 0 and params["hue_master"] == 0.0 and params["build"] == 0.0 and params["strobe_on"] == 0.0
                       and params["auto_phase"] == 0.0 and params["holo_on"] == 0.0 and params["fx_on"] == [0] * 5,
                       vjc["state"]["running"] is False and not s.scene_lock, "PANIQUE" in c["scenes"]["msg"].get())
@@ -5930,6 +6562,95 @@ def check_diagnostics() -> None:
     check((dst / "a" / "x.py").exists() and not (dst / "a" / "x.pyc").exists() and not (dst / "a" / "tests").exists(),
           "portable: copie sans les .pyc ni les dossiers exclus")
     check(bp.find_base_python().joinpath("python.exe").exists(), "portable: installation Python de base retrouvee")
+
+
+def gui_rec_steps(c, s, out) -> None:
+    """Onglet « Rec » du panneau de controle (issue #140) : bouton (actif, grise, « Arreter »), voyant de hauteur fixe, reglages, dossier, palette, aide."""
+    import types as _types
+    import gl_gui as gg_
+    root, params = c["root"], s.params
+    ui = c["vj_ui"]
+    nb = ui["tabs"][0]
+    names = [nb.tab(i, "text") for i in range(nb.index("end"))]
+    nb.select(names.index("Rec"))
+    root.update()
+    btn, label, refresh = ui["rec_btn"], ui["rec_label"], ui["rec_refresh"]
+    def walk_(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_(ch)
+
+    def widget(cls, text):
+        return next((w for w in walk_(nb.nametowidget(nb.select())) if w.winfo_class() == cls and w.cget("text") == text), None)
+    saved = {k: params[k] for k in ("rec_format", "rec_fps", "rec_encoder", "rec_delay_ms", "rec_dir")}
+    ffmpeg_before = ui["rec_cache"].get("ffmpeg")
+    proj = getattr(s, "projection", None)
+    was_on = getattr(proj, "on", None)
+    refresh()
+    bar_btn = ui["rec_bar_btn"]
+    bar_closed = (bar_btn.cget("text"), str(bar_btn.cget("state")))
+    closed = (str(btn.cget("state")), label.cget("text"))                      # projection fermee : bouton grise avec la raison
+    if proj is not None:
+        proj.on = True                                                         # la projection s'ouvre : le bouton devient actif
+    refresh()
+    idle = (btn.cget("text"), str(btn.cget("state")), label.cget("text").startswith("Pret : "))
+    # hauteur fixe : un voyant court, un voyant tres long (avertissements) = meme hauteur d'onglet et de voyant
+    heights = []
+    s.recording = _types.SimpleNamespace(active=True)
+    for warn in (None, "Plus de son depuis 3 s : la carte son est-elle branchee ? " * 6):
+        s.status["rec"] = {"seconds": 83.0, "bytes": 412_000_000, "peak_db": -3.0, "dropped": 0, "encoder": "libx264", "warning": warn}
+        refresh()
+        root.update_idletasks()
+        heights.append((nb.nametowidget(nb.select()).winfo_reqheight(), label.winfo_reqheight()))
+    bar_rec = (bar_btn.cget("text"), str(bar_btn.cget("state")))
+    recording = (btn.cget("text"), str(btn.cget("state")), label.cget("text").startswith("REC 01:23 | 412 Mo | crete -3 dBFS"))
+    s.recording = None
+    s.status.pop("rec", None)
+    refresh()
+    after = (btn.cget("text"), label.cget("text").startswith("Pret : "))
+    # ffmpeg absent : bouton grise avec la raison
+    ui["rec_cache"]["ffmpeg"] = False
+    refresh()
+    nofmpeg = (str(btn.cget("state")), label.cget("text"))
+    ui["rec_cache"]["ffmpeg"] = ffmpeg_before if ffmpeg_before is not None else True
+    refresh()
+    # un clic envoie la commande au fil GL
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    btn.invoke()
+    sent = s.commands.get_nowait() if not s.commands.empty() else None
+    bar_btn.invoke()
+    bar_sent = s.commands.get_nowait() if not s.commands.empty() else None
+    # reglages : format, cadence, encodeur, delai, dossier
+    widget("Radiobutton", "Vertical HD").invoke()
+    widget("Radiobutton", "60 i/s").invoke()
+    widget("Radiobutton", "Materiel").invoke()
+    knob = next(w for w in walk_(nb.nametowidget(nb.select())) if w.winfo_class() == "Scale" and str(w.cget("to")) in ("300.0", "300"))
+    knob.set(120)
+    root.tk.call(knob.cget("command"), "120")                                  # un curseur Tk n'appelle sa commande que s'il est affiche : l'onglet peut ne pas l'etre ici
+    ui["rec_ask_dir"] = lambda: "C:/clips test/mes videos"
+    widget("Button", "Parcourir...").invoke()
+    chosen_dir = params["rec_dir"]
+    ui["rec_dir_var"].set("  D:/autre dossier  ")
+    values = (params["rec_format"], float(params["rec_fps"]), params["rec_encoder"], float(params["rec_delay_ms"]), chosen_dir, params["rec_dir"])
+    # palette et aide
+    pc = c["palette"]
+    labels = [lab for lab, _kw, _fn in pc.items()]
+    while not s.commands.empty():
+        s.commands.get_nowait()
+    chosen = pc.choose("enregistrement")
+    via_palette = s.commands.get_nowait() if not s.commands.empty() else None
+    tab_idx = names.index("Rec")
+    if proj is not None and was_on is not None:
+        proj.on = was_on
+    out["rec_gui"] = {"closed": closed, "idle": idle, "recording": recording, "after": after, "nofmpeg": nofmpeg, "heights": heights, "sent": sent, "values": values, "bar": (bar_closed, bar_rec, bar_sent),
+                      "palette": (any(l.startswith("Enregistrement") for l in labels), chosen, via_palette), "help": "E : enregistrer" in gg_.SHORTCUTS_HELP,
+                      "tab_icon": bool(str(nb.tab(tab_idx, "image")))}
+    for key, val in saved.items():
+        params[key] = val
+    ui["rec_dir_var"].set(saved["rec_dir"])
+    nb.select(0)
+    root.update()
 
 
 def gui_calib_steps(c, s, out) -> None:
@@ -10713,7 +11434,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_recording", "check_recorder_audio", "check_groupes")
 
 
 SUITE = (
@@ -10726,7 +11447,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -10741,7 +11462,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
+               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),

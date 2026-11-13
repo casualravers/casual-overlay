@@ -101,6 +101,7 @@ class Session:
         self.scene_requests: queue.SimpleQueue = queue.SimpleQueue()   # F1..F9 (fil GL) -> la GUI applique la scene
         self.preview_requests: queue.SimpleQueue = queue.SimpleQueue()  # chemins de fichiers d'apercu a ecrire (GUI -> fil GL, voir engine.preview)
         self.remote_requests: queue.SimpleQueue = queue.SimpleQueue()   # commandes validees de la telecommande telephone (fil HTTP -> fil Tk, voir gui_remote)
+        self.recording = None              # RecordingControl de la boucle GL (engine.recorder) tant que la projection est ouverte
 
 
 class NoDeviceManager(ProducerManager):

@@ -15,6 +15,7 @@ from core.textcycle import TextCycle, text_at, texts_of
 from core.controls import panic, strobe_press, strobe_release
 from core.params import FX_NAMES, load_params, save_params
 from engine.preview import PREVIEW_WIDTH, write_preview
+from engine.recorder import RecordingControl
 from engine.render import PerfGuard, Renderer, ShaderError, load_logo, render_text
 from engine.deps import PIL_Image, glfw, moderngl
 from engine.session import Session
@@ -222,6 +223,12 @@ def _gl_main(s: Session) -> None:
         s.renderer, s.window = renderer, window
         loop(s, window, ctx, renderer)
     finally:
+        if s.recording is not None:
+            try:
+                s.recording.close()                      # enregistrement en cours : arret propre et assemblage du MP4 (le contexte GL existe encore)
+            except Exception as exc:
+                sessionlog.event(f"Enregistrement : erreur a la fermeture : {exc}")
+            s.recording = None
         if getattr(s, "bgvideo", None) is not None:
             s.bgvideo.stop()
         if getattr(s.pysrc, "native", False):
@@ -286,10 +293,18 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
                 fs_watch["t0"], fs_watch["logged"] = now, False
                 sessionlog.event(f"Plein ecran corrige : il etait sur l'ecran des reglages ({gui}), renvoye sur le moniteur en ({window.mx},{window.my})")
 
+    recording = s.recording = RecordingControl(s, ctx, renderer)        # enregistrement video + audio (touche E, bouton de la GUI)
+
     def act(name: str) -> None:
         """Actions communes aux touches et aux commandes de la GUI (executees dans ce fil)."""
         if name == "quit":
             quit_flag["v"] = True
+        elif name == "rec":
+            recording.toggle(params)
+        elif name == "rec_start":
+            recording.start(params)
+        elif name == "rec_stop":
+            recording.stop()
         elif name == "fullscreen":
             if not window.fullscreen:
                 window.retarget(pick_monitor(args.monitor, gui_pt()), gui_pt())     # un projecteur branche depuis le lancement est pris en compte
@@ -415,6 +430,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     key_actions[glfw.KEY_PERIOD] = "tap"         # tap tempo (la GUI le gere)
     key_actions[glfw.KEY_COMMA] = "one"          # « Temps 1 » : ancre la grille du temps (la GUI le gere)
     key_actions[glfw.KEY_SLASH] = "help"         # aide des raccourcis (la GUI l'affiche)
+    key_actions[glfw.KEY_E] = "rec"              # enregistrement video + audio : demarre / arrete
     key_actions[glfw.KEY_RIGHT] = "vjnext"       # VJ : scene suivante
     for n in range(9):
         key_actions[getattr(glfw, f"KEY_F{n + 1}")] = f"scene{n}"       # F1..F9 : scenes
@@ -433,7 +449,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
 
     glfw.set_key_callback(handle, on_key)
     print("Echap quitte | F plein ecran | H barres debug | B fond live/motif | T automations | 1-5 effets (Maj+1-4: "
-          "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante | X PANIQUE | . tap tempo | / aide (avec --gui)")
+          "logo) | L lier fond/logo | C halo holographique | +/- intensite | haut/bas sensibilite kick | R recharge shaders | P sauve reglages | F1-F9 scenes | Espace VJ | -> scene suivante | X PANIQUE | . tap tempo | E enregistrer | / aide (avec --gui)")
     print(status_line())
 
     last_native = None
@@ -539,11 +555,13 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         size = window.framebuffer_size()
         sample = args.stats or frame_i % 8 == 0
         frame_i += 1
+        target, draw_size = recording.frame_target(ctx.screen, size)       # enregistrement : cible hors ecran du format (UN seul draw par image), sinon la fenetre
         if sample:
             with query:
-                renderer.draw(ctx.screen, size, state, params, now - t0)
+                renderer.draw(target, draw_size, state, params, now - t0)
         else:
-            renderer.draw(ctx.screen, size, state, params, now - t0)
+            renderer.draw(target, draw_size, state, params, now - t0)
+        recording.after_draw(now, ctx.screen, size)                           # ecrit l'image (doublons si retard) et la copie dans la fenetre
         s.status["sources"] = renderer.sources_now                                    # voyants de l'interface : sources par couche, dernier eclair
         s.status["fx_now"] = renderer.fx_now                                          # effets actifs par couche (reactivite par effet, mode auto)
         s.status["strobe_info"] = renderer.strobe_info
@@ -585,6 +603,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             gpu_ms += elapsed
             gpu_n += 1
             warning = guard.update(elapsed, time.monotonic(), params)
+            if recording.active:
+                warning = None                  # l'avertissement compare au budget de l'AFFICHAGE (60 Hz) ; l'enregistrement a le sien (images dupliquees)
             s.status["gpu_ms"], s.status["gpu_budget_ms"] = guard.avg, guard.budget_ms       # lus par la securite GPU du VJ (core.safety)
             if warning:
                 s.status["perf"] = warning

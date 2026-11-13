@@ -1,4 +1,4 @@
-"""Espace de controle global du Mode VJ : panneau a onglets (masters, strobe, audio, composition, auto, memoires, historique, affichage), historique des scenes, montee / drop, garde-fous (panique, tap tempo, aide, console, auto-sauvegarde).
+"""Espace de controle global du Mode VJ : panneau a onglets (masters, strobe, audio, composition, auto, memoires, historique, affichage, rec), historique des scenes, montee / drop, garde-fous (panique, tap tempo, aide, console, auto-sauvegarde).
 
 Extrait de `gl_gui.build_window` : le code a ete coupe tel quel (memes noms, meme indentation). Les noms dont il a besoin
 arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre utilise sont rendus par `install`.
@@ -6,11 +6,13 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 from __future__ import annotations
 
 from core import explain
+from core import recording as core_rec
 from core import scenes
 from core import sessionlog
 from tkinter import colorchooser, ttk
 import audio2wave_gl as gl
 import json
+import shutil
 import icons
 import skin
 import time
@@ -157,6 +159,48 @@ def install(c):
                 ph.configure(text=("phase : " + info["label"]) if info and float(params.get("auto_phase", 1.0)) >= 0.5 else "phase : -")
             except tk.TclError:
                 vj_ui.pop("phase", None)
+        rec_refresh()
+
+    rec_cache: dict = {}
+    vj_ui["rec_cache"] = rec_cache
+
+    def rec_refresh() -> None:
+        """Onglet « Rec » : texte et etat du bouton (grise sans projection ni ffmpeg, rouge « Arreter » pendant l'enregistrement) et voyant (hauteur fixe)."""
+        btn, label, bar_btn = vj_ui.get("rec_btn"), vj_ui.get("rec_label"), vj_ui.get("rec_bar_btn")
+        if btn is None and bar_btn is None:
+            return
+        try:
+            ctl = getattr(s, "recording", None)
+            recording = ctl is not None and ctl.active
+            if "ffmpeg" not in rec_cache:
+                rec_cache["ffmpeg"] = shutil.which("ffmpeg") is not None          # le dossier portable met ffmpeg\ sur le PATH des le lancement
+            src = getattr(s.audio, "src", None)
+            audio_name = s.audio.name if src is not None and hasattr(src, "tap") else None            # l'entree synthetique n'a pas de point d'ecoute
+            text, enabled = explain.rec_panel(recording, s.status.get("rec"), projection is None or projection.running(), rec_cache["ffmpeg"], s.status.get("rec_done"),
+                                              core_rec.format_label(params.get("rec_format", core_rec.DEFAULT_FORMAT)), core_rec.clean_fps(params.get("rec_fps", 30)), audio_name)
+            state = "normal" if enabled else "disabled"
+            if bar_btn is not None:                                                  # bouton de la barre (a la place de PANIQUE) : toujours present
+                secs = int(float((s.status.get("rec") or {}).get("seconds", 0.0)))
+                want_bar = f"\u25a0 {secs // 60:02d}:{secs % 60:02d}" if recording else "\u25cf REC"
+                try:
+                    if bar_btn.cget("text") != want_bar:
+                        bar_btn.configure(text=want_bar)
+                    if str(bar_btn.cget("state")) != state:
+                        bar_btn.configure(state=state)
+                except tk.TclError:
+                    vj_ui.pop("rec_bar_btn", None)
+            if btn is not None and label is not None:
+                want = "■ Arreter" if recording else "● Enregistrer"
+                if btn.cget("text") != want:
+                    btn.configure(text=want, bg="#c0392b" if recording else a2w.GUI_BG)
+                if str(btn.cget("state")) != state:
+                    btn.configure(state=state)
+                if label.cget("text") != text:
+                    label.configure(text=text)
+        except tk.TclError:
+            vj_ui.pop("rec_btn", None)
+            vj_ui.pop("rec_label", None)
+    vj_ui["rec_refresh"] = rec_refresh
 
     def sync_master_panel() -> None:
         """Curseurs et boutons radio relus depuis `params` (apres le rappel d'une memoire de masters)."""
@@ -633,6 +677,55 @@ def install(c):
             tab_aff.lift()
 
         new_tab("Affichage", fill_7)
+
+        # ---- Enregistrement video + audio : bouton, format, cadence, encodeur, delai audio, dossier, voyant (issue #140). Onglet a part : l'onglet Affichage est deja le
+        # plus haut, et c'est lui qui donne sa hauteur au panneau etendu.
+        def fill_8(f) -> None:
+            from tkinter import filedialog
+            rec_btn = button(f, "● Enregistrer", None, row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
+            rec_btn.configure(width=14, command=lambda: s.commands.put("rec"))          # le fil GL bascule (touche E dans la fenetre de rendu : meme commande)
+            vj_ui["rec_btn"] = rec_btn
+            Tooltip(rec_btn, "Enregistre ce que la projection affiche, avec le son de l'entree audio choisie (onglet Affichage), dans un MP4 pret a poster ou a monter. "
+                             "Touche E dans la fenetre de rendu. La fenetre de projection montre l'image enregistree : changer sa taille ne change pas le fichier.")
+            radios(f, "rec_format", (("Vertical", "vertical"), ("Vertical HD", "vertical_hd"), ("Horizontal", "horizontal"), ("Carre", "carre")), row=0, col=2, span=4,
+                   tip="Format de l'image : vertical 1080x1920 (TikTok, Reels), vertical HD 720x1280 (plus leger : pour les looks lourds comme les cellules, qui ne tiennent pas "
+                       "30 images/s en 1080x1920 sur un GPU integre), horizontal 1920x1080, carre 1080x1080. Pris au demarrage de l'enregistrement.")
+            radios(f, "rec_fps", (("30 i/s", 30), ("60 i/s", 60)), row=1, col=0, span=3,
+                   tip="Images par seconde. 60 ne tient pas en 1080x1920 sur un GPU integre (l'alerte « images dupliquees » le dira) : reserve-le au vertical HD.")
+            radios(f, "rec_encoder", (("x264", "libx264"), ("Materiel", "materiel")), row=1, col=3, span=3,
+                   tip="x264 : qualite previsible, le processeur fait le travail (par defaut). Materiel : nvenc, amf ou qsv s'ils fonctionnent sur ce PC, sinon x264.")
+            slider(f, (2, 0), "rec_delay_ms", "Delai audio", 0, 300, 5, 1.0, " ms", 40,
+                   "Retard du son par rapport a l'image dans le fichier : le visuel reagit apres le son (capture, analyse, rendu), donc le son est retarde pour que "
+                   "l'effet tombe dessus. 40 ms par defaut ; a regler en regardant un enregistrement (ou avec tools/calibrer_avance.py).")
+            dir_row = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
+            dir_row.grid(row=3, column=0, columnspan=6, sticky="we", padx=6, pady=(3, 0))
+            tk.Label(dir_row, text="Dossier", width=9, anchor="w", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).pack(side="left")
+            dir_var = tk.StringVar(value=str(params.get("rec_dir", core_rec.DEFAULT_DIR)))
+            dir_var.trace_add("write", lambda *_a: params.__setitem__("rec_dir", dir_var.get().strip()))
+            dir_entry = tk.Entry(dir_row, textvariable=dir_var, width=32)
+            dir_entry.pack(side="left", fill="x", expand=True)
+            vj_ui["rec_dir_var"] = dir_var
+
+            def ask_dir() -> str:
+                return filedialog.askdirectory(parent=root, initialdir=core_rec.resolve_dir(dir_var.get()), title="Dossier des enregistrements")
+            vj_ui["rec_ask_dir"] = ask_dir
+
+            def pick_dir() -> None:
+                chosen = vj_ui["rec_ask_dir"]()                                   # remplacable par les tests : jamais de fenetre bloquante
+                if chosen:
+                    dir_var.set(chosen)
+            dir_btn = tk.Button(dir_row, text="Parcourir...", command=pick_dir)
+            dir_btn.pack(side="left", padx=(6, 0))
+            Tooltip(dir_entry, "Dossier des fichiers MP4 (~ = ton dossier d'utilisateur). Cree s'il n'existe pas. Un nom de fichier unique est donne a chaque enregistrement (date et heure).")
+            # Voyant de HAUTEUR FIXE (4 lignes) : le texte change (pret, REC en cours, avertissements, dernier fichier) et ne doit rien decaler.
+            rec_label = tk.Label(f, text="", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="nw", justify="left", wraplength=430, width=60, height=4)
+            rec_label.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=(4, 0))
+            vj_ui["rec_label"] = rec_label
+            Tooltip(rec_label, "Pendant l'enregistrement : duree, taille (estimee), crete du son en dBFS (SATURE = le son a touche la pleine echelle : l'enregistrement est brut, "
+                               "baisse le niveau a la source), images dupliquees (le GPU n'a pas suivi) et encodeur. Les avertissements s'affichent dessous.")
+            rec_refresh()
+
+        new_tab("Rec", fill_8)
 
         # onglet garde d'une reconstruction a l'autre
         try:
