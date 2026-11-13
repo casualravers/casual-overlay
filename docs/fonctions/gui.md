@@ -271,11 +271,6 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   et `sync_widgets` part d'un instantane, passe deux fois et le remet dans `params`.
 - Trois sauvegardes distinctes : presets live, presets overlay, et `gl_params.json` (touche P / bouton
   "Sauver reglages", reglages courants recharges au lancement).
-- **Threads** : tkinter garde le fil principal, `gl_main()` (glfw + moderngl) tourne dans un
-  fil. **Tous les appels glfw partent du fil qui a fait `glfw.init()`** ; ce que la GUI veut
-  faire executer cote GL passe par `Session.commands` (file lue a chaque image), le reste
-  (`Session.params`, relu a chaque image) est ecrit directement. Fermer l'une des deux
-  fenetres ferme l'autre.
 - **Reglages logo / effets / fond motif / sensibilite** : `params` (dict), effet immediat.
   `--logo`, `--text`, `--logo-scale`, `--logo-pos`, `--sensitivity`, `--background` l'emportent sur les
   valeurs sauvees.
@@ -297,3 +292,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
   premier choix d'entree dans leur menu. En `--synthetic`, leur GUI s'affiche mais ses reglages sont
   ignores (message dans leur statut).
 - La resolution du rendu ffmpeg (`--render-size`) n'est pas reglable dans la GUI.
+
+- **Piege (modales)** : `a2w` (palette d'audio2wave) n'est pas un nom du module `gl_gui`, seulement un import local de `build_window` : une
+  modale de niveau module (`choice_dialog`, `keep_dialog`) qui l'utilise doit faire `import audio2wave as a2w` elle-meme. `choice_dialog`
+  plantait ainsi sans qu'aucun test le voie (ils remplacent les dialogues par `scene_ui`) ; `check_dialogs` ouvre les vraies modales.

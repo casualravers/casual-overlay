@@ -8,5 +8,6 @@ Regle : aucun import du moteur, de la GUI, de Tk, numpy, GL, PIL ni audio2wave (
 - `strobe_auto.py`, `foudre.py`, `controls.py` (strobe, montee) : [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md)
 - `controls.py` (panique, tap tempo), `sessionlog.py`, `autosave.py`, `palette.py` : [docs/fonctions/exploitation.md](../docs/fonctions/exploitation.md)
 - `reaction.py`, `playback.py` : [docs/fonctions/fond.md](../docs/fonctions/fond.md)
-- `textcycle.py`, `schedule.py`, `automation.py`, `params.py` (presets) : [docs/fonctions/logo.md](../docs/fonctions/logo.md)
+- `textcycle.py`, `schedule.py`, `automation.py` : [docs/fonctions/logo.md](../docs/fonctions/logo.md)
+- `params.py` (presets overlay / fond, `PresetBook`, `menu_layout`) : [docs/fonctions/gui.md](../docs/fonctions/gui.md)
 - `doodles.py`, `qrcode.py`, `recording.py`, `remote_auth.py`, `remote_state.py`, `setpack.py` : [docs/fonctions/medias-externes.md](../docs/fonctions/medias-externes.md)

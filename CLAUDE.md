@@ -143,6 +143,14 @@ Le moteur est dans [audio2wave_gl.py](audio2wave_gl.py) (le Python pur est dans 
   l'ancien programme** (jamais d'ecran noir sur scene pour une faute de frappe).
 - `spawn_producer()` : meme commande que `live.producer_command()`, mais stdout est un pipe
   Windows a **gros tampon** (16 Mo via `CreatePipe`), voir Pieges.
+- **Threads** : tkinter garde le fil principal, `gl_main()` (glfw + moderngl) tourne dans un
+  fil. **Tous les appels glfw partent du fil qui a fait `glfw.init()`** ; ce que la GUI veut
+  faire executer cote GL passe par `Session.commands` (file lue a chaque image), le reste
+  (`Session.params`, relu a chaque image) est ecrit directement. Fermer l'une des deux
+  fenetres ferme l'autre.
+- **Les boutons ne bougent pas** (regle de l'interface : rien ne decale ce que l'utilisateur vise, apres une action qui ajoute un element ou change un texte) : dans la barre des scenes, le bouton de projection (« Demarrer / Arreter ») et le bouton VJ (« ▶ VJ » / « ■ VJ  12 s ») ont une **largeur fixe** (`width`), et la place du **Verrou** est toujours reservee (bouton invisible tant qu'il n'est pas actif). Tout nouvel element dont le texte varie : largeur fixe ou emplacement reserve. **Messages** (`scene_msg` : scene appliquee, media, « allegee pour le GPU »...) : une ligne a part SOUS la barre (`scene_msg_label`, dans `scene_top`), plus dans la barre ou ils prenaient la place des touches. **Parties LIVE et OVERLAY** : la largeur de la colonne LIVE est la plus grande vue dans la session (`layout["live_w"]`, utilisee par `fit` et `swap_live_panel` ; Live, Snap, Ridge, Sphere et le fond genere n'ont pas la meme largeur naturelle, la colonne OVERLAY glissait a chaque bascule de mode : elle ne fait que grandir, une fois par mode) ; celle de la colonne OVERLAY aussi (`layout["right_w"]`, d'un onglet a l'autre) ; un champ de liste (`skin._render_field`) ne retrecit jamais (`sk["field_w"]`, minimum `FIELD_MIN_TEXT`) : ajouter ou supprimer un preset ne decale pas ses voisins. Test : « la partie LIVE garde une largeur constante ».
+- **Ajouter un reglage** : une ligne dans la table (defaut, plage, portee, doc) ; si c'est un curseur, l'ajouter a la GUI avec une plage
+  contenue dans celle de la table ; si c'est un reglage de salle, rien d'autre (les listes se mettent a jour toutes seules).
 
 ## Pieges rencontres
 
@@ -179,6 +187,7 @@ Le moteur est dans [audio2wave_gl.py](audio2wave_gl.py) (le Python pur est dans 
   Une nouvelle verification : son nom dans `SUITE` (sinon `check_groupes` echoue), et dans `PURES` si elle ne demande rien de materiel.
 - CI (`.github/workflows/check.yml`, `main` protegee) : jobs `pur`, `complet` (4 groupes en parallele, Mesa llvmpipe) et `portable`. Code de sortie 3 = seuls
   des tests de mise en page instables (`FRAGILES`) ont echoue, ils sont relances seuls ; `SCREEN_DEPENDENT` sont ecartes sur un petit ecran.
+- Deux lancements de `check_gl.py` en meme temps (deux sessions en parallele) font echouer les tests de mise en page : un seul a la fois.
 - Non verifie automatiquement (demande le materiel) : touches clavier, vrai videoprojecteur, phase du kick avec la vraie musique, latence acoustique.
 
 ## Fonctionnalites : index des fiches
