@@ -11,7 +11,7 @@ import time
 from collections import deque
 
 from core.audio_layers import PULSE_GRIDS
-from core.onset import FastAttack, OnsetDetector, WideRise
+from core.onset import FastAttack, KickClassifier, OnsetDetector, WideRise
 from core.phase import PhaseTracker
 from core.pulse import LeadGate, PulseClock
 from core.rhythm import Rhythm
@@ -30,6 +30,9 @@ RELEASE_TAU_S = 0.25         # lissage: relachement lent
 KICK_MIN = 0.0002            # energie basses minimale pour declarer un kick (0,002 avant : un telephone ou un micro eloigne n'atteignait jamais ce niveau)
 FLUX_BAND = (40.0, 6000.0)   # bande du flux d'attaques (tempo sans kick, voir core.tempo)
 KICK_WIDE = (20.0, 400.0)    # bande large du critere de montee rapide (voir core.onset.WideRise)
+ATTACK_BAND = (40.0, 8000.0)  # bande sur laquelle on decrit une attaque pour distinguer kick et caisse claire (core.onset.KickClassifier)
+ATTACK_HOLD_S = 0.02          # une attaque est classee ~30 ms apres sa detection, quand le spectre l'a vue en entier (seulement quand deux familles de sons existent)
+ATTACK_LOOKBACK = 4           # le spectre Â« d'avant Â» l'attaque : 4 pas d'analyse plus tot (~43 ms)
 # Regles par balayage sur signaux synthetiques (voir CLAUDE.md): a sensibilite 1.0, zero
 # faux positif sur bruit blanc constant, kicks francs detectes meme a -30 dB de micro.
 KICK_RATIO_EXTRA = 1.2       # seuil: energie basses > base * (1 + extra / sensibilite)
@@ -107,6 +110,15 @@ class FeatureExtractor:
         self.layer_sens = {"bg": 1.0, "logo": 1.0}
         self.fast_attack = True                      # detecteur d'attaque rapide (temporel) en plus de la FFT ; False = comportement d'avant (banc, comparaisons)
         self.fast = FastAttack()
+        self.classify = True                         # distingue kick et caisse claire (KickClassifier) ; False = comportement d'avant (banc)
+        self.kick_class = KickClassifier()
+        self._pending: tuple[float, object, bool] | None = None      # attaque en attente de classement : (instant, spectre d'avant, deja signalee)
+        self._mag_hist: deque = deque(maxlen=6)
+        top = int(np.searchsorted(freqs, ATTACK_BAND[1]))
+        self._att = slice(int(np.searchsorted(freqs, ATTACK_BAND[0])), top)
+        fa = freqs[self._att]
+        self._att_low = (fa < 150.0).astype(np.float32)
+        self.beat_path = ""
         self._fast_group = max(1, int(round(rate / 1000.0)))       # blocs de ~1 ms : le signal des basses est ramene a ~1 kHz avant le detecteur rapide
         self._fast_carry = np.zeros(0, dtype=np.float32)
         self.det_hit = OnsetDetector(HIT_MIN, HIT_REFRACTORY_S)
@@ -147,6 +159,10 @@ class FeatureExtractor:
             rises.append(min(max((self.b8_smooth[i] - prev) / dt, 0.0), RISE_MAX) if dt > 0 else 0.0)
         levels["bands"], levels["band_rise"] = bands, rises            # enveloppes continues par bande et leur montee (voir core.audio_layers.BAND_SOURCES)
         beat = self._detect_kick(raw["bass"], dt, now, fast)
+        spec = mag[self._att].copy()
+        if self.classify:
+            beat = self._classify(beat, spec, now)
+        self._mag_hist.append(spec)
         levels["edge_hit"] = self.det_hit.update(raw["high"], dt, now, max(self.sensitivity, 0.05) * self.hit_sens)
         for name, det in self.det_layer.items():          # kick de la couche : le kick commun a sensibilite 1, sinon son detecteur
             mult = self.layer_sens[name]
@@ -156,6 +172,31 @@ class FeatureExtractor:
         levels["raw_bass"] = raw["bass"]
         levels["raw_mid"], levels["raw_high"], levels["raw_rms"] = raw["mid"], raw["high"], raw["rms"]       # bruts (hors auto-gain) pour les phases du morceau
         return levels, beat
+
+    def _classify(self, candidate: bool, spec, now: float) -> bool:
+        """Attaque detectee -> kick ou pas. Tant que le morceau n'a pas deux familles de sons nettes, la detection part tout de suite (comme avant) et
+        sert seulement a apprendre ; sinon elle est retenue `ATTACK_HOLD_S`, decrite par le spectre qui vient d'apparaitre, et ne part que si c'est un kick."""
+        fire = False
+        if candidate and self._pending is None and len(self._mag_hist) >= ATTACK_LOOKBACK:
+            now_fire = not self.kick_class.armed
+            self._pending = (now, self._mag_hist[-ATTACK_LOOKBACK], now_fire)
+            fire = now_fire
+        elif self._pending is not None and now - self._pending[0] >= ATTACK_HOLD_S:
+            t0, pre, already = self._pending
+            self._pending = None
+            attack = np.maximum(spec - pre, 0.0)
+            total = float(attack.sum())
+            if total > 1e-9:
+                low = math.log10(float((attack * self._att_low).sum()) + 1e-6)
+                kick = self.kick_class.is_kick(low)
+                self.kick_class.observe(low)
+                if not already:
+                    fire = kick
+            elif not already:
+                fire = True
+        elif candidate:
+            fire = not self.kick_class.armed
+        return fire
 
     def _fast_attack(self, samples, dt: float, now: float) -> bool:
         """Attaque rapide : les echantillons NEUFS (ceux du dernier pas, dt secondes) ramenes a ~1 kHz puis passes au detecteur temporel."""
@@ -197,10 +238,13 @@ class FeatureExtractor:
                 and b > base * ratio
                 and dev > k * std)
         rise = self.wide_rise.check(self._wide, dt, now, s, self.last_beat, self.elapsed > KICK_WARMUP_S, KICK_REFRACTORY_S)
+        self.beat_path = "fft" if beat else ""             # quel critere a declenche (diagnostic du banc)
         if rise and not beat:                             # montee rapide sur la bande large : telephone sans basses, kick sature a longue queue
             beat = True
+            self.beat_path = "large"
         if fast and not beat:                             # attaque rapide (temporelle) : le meme kick, quelques ms apres son debut au lieu de ~30
             beat = True
+            self.beat_path = "rapide"
         if beat:
             self.last_beat = now
 
@@ -457,13 +501,13 @@ class AudioAnalyzer:
         self._pulse_wall: dict = {}             # nom de grille -> instant (monotonic) du dernier evenement
         self._pulse_usable = False
         self.pulse_events: dict = {}            # nom de grille -> nombre d'evenements emis (tests, diagnostic)
-        self.lead_s = 0.0                      # « Avance » en secondes (reglage sync_lead_ms, ecrit par la boucle de rendu) ; 0 = on reagit a la detection
+        self.lead_s = 0.0                      # Â« Avance Â» en secondes (reglage sync_lead_ms, ecrit par la boucle de rendu) ; 0 = on reagit a la detection
         self.pulse_info: dict = {"state": "absente", "confidence": 0.0, "phase": None, "period_ms": 0.0, "delta_ms": 0.0, "lead_ms": 0.0,
                                  "predicting": False, "predicted": 0, "reactive": 0}
         self._last_total = 0
         self._ages: deque = deque()             # (instant du traitement, retard de capture) sur AGE_FLOOR_S : leur plus petit = le retard stable
         self.audio_age_ms = 0.0                 # age du dernier echantillon analyse quand l'analyse en parle (capture + attente du fil), lisse
-        self.audio_age_floor_ms = 0.0           # idem sans la gigue d'ordonnancement : le retard de capture « de croisiere »
+        self.audio_age_floor_ms = 0.0           # idem sans la gigue d'ordonnancement : le retard de capture Â« de croisiere Â»
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -475,7 +519,7 @@ class AudioAnalyzer:
         self.ring.event.set()
 
     def _audio_time(self, total: int, rate: float, now: float, dt: float) -> float:
-        """Instant « sans gigue » de la fin de la fenetre analysee : instant de capture + le plus petit retard vu depuis AGE_FLOOR_S.
+        """Instant Â« sans gigue Â» de la fin de la fenetre analysee : instant de capture + le plus petit retard vu depuis AGE_FLOOR_S.
         Date les kicks du rythme (BPM, grille) a leur place dans le son, pas a l'heure ou le fil d'analyse a fini de les traiter.
         Sans horodatage de capture : `now`, comme avant."""
         t_end = self.ring.time_at(total, rate)
@@ -507,7 +551,7 @@ class AudioAnalyzer:
             now = time.monotonic()
             levels, beat = self.extractor.process(window, dt, now)
             edges = {name: bool(levels.pop("edge_" + name, False)) for name in EDGES}
-            fire = beat                                                  # l'effet « sur kick » part : a la detection, ou en avance (voir core/pulse.py)
+            fire = beat                                                  # l'effet Â« sur kick Â» part : a la detection, ou en avance (voir core/pulse.py)
             try:
                 t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
                 self.rhythm.update(t_audio, levels, beat)
@@ -533,7 +577,7 @@ class AudioAnalyzer:
     def _pulse_events(self, t_audio: float, lead: float) -> None:
         """Evenements de la grille de pulsation (temps, croches, doubles, mesure, phrases : `core.audio_layers.PULSE_GRIDS`), eux aussi en avance de `lead`.
         Un evenement = le franchissement de l'instant (temps predit - avance) ; l'instant de franchissement est garde pour `latest()` (`pulse_since`).
-        Pulsation absente ou perdue : plus d'evenement, les sources de pulsation se taisent (voyant : « perdue »)."""
+        Pulsation absente ou perdue : plus d'evenement, les sources de pulsation se taisent (voyant : Â« perdue Â»)."""
         clk = self.pulse
         usable = clk.anchor is not None and clk.confidence >= PULSE_USABLE
         self._pulse_usable = usable
@@ -554,14 +598,14 @@ class AudioAnalyzer:
                 if k - last > 2:
                     continue                                        # saut (horloge recreee, retard du fil) : pas de rafale
                 if n > 1:
-                    gi = grid.beat_index(clk.anchor + k * step) if grid.active else k       # « 1 temps sur N » : compte depuis le « 1 » de la grille si elle existe
+                    gi = grid.beat_index(clk.anchor + k * step) if grid.active else k       # Â« 1 temps sur N Â» : compte depuis le Â« 1 Â» de la grille si elle existe
                     if gi % n != 0:
                         continue
                 self._pulse_wall[name] = wall
                 self.pulse_events[name] = self.pulse_events.get(name, 0) + 1
 
     def _lead_step(self, t_audio: float, beat: bool) -> bool:
-        """Pulsation et avance : alimente l'horloge (kicks reels) et dit si l'effet « sur kick » part maintenant. Avance 0 : exactement la detection."""
+        """Pulsation et avance : alimente l'horloge (kicks reels) et dit si l'effet Â« sur kick Â» part maintenant. Avance 0 : exactement la detection."""
         rhythm = self.rhythm
         self.pulse.update(t_audio, beat, rhythm.bpm)
         allowed = rhythm.state == "idle" and getattr(self.phase, "phase", "groove") in ("groove", "pic")      # montee, cassure, drop : reactif
@@ -580,7 +624,7 @@ class AudioAnalyzer:
             state["beats"] = self.beats
             state["hits"] = self.hits
         state["phase"] = self.phase.snapshot()                  # phase du morceau et multiplicateurs lisses (voir core/phase.py)
-        state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le « 1 » de la grille (None sans grille)
+        state["beat_index"] = self.rhythm.beat_index          # numero de temps depuis le Â« 1 Â» de la grille (None sans grille)
         state["audio_age_ms"] = self.audio_age_ms             # retard de capture + attente du fil d'analyse (0 sans horodatage de capture)
         state["audio_age_floor_ms"] = self.audio_age_floor_ms
         pulse = dict(self.pulse_info)                          # pulsation calee / libre / perdue, ecart prediction - detection (voir core/pulse.py)

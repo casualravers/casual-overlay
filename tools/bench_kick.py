@@ -44,13 +44,19 @@ DEFAULT_SENS = (1.0,)
 
 # --- rejeu et mesure -----------------------------------------------------------------------------------------------
 
-FAST = True                    # detecteur d'attaque rapide (lot 3) actif ; `--sans-rapide` pour comparer avec la FFT seule
+CLASSIFY = True                # distinction kick / caisse claire (KickClassifier) active ; `--sans-classe` pour comparer
+FAST = True                  # detecteur d'attaque rapide (lot 3) actif ; `--sans-rapide` pour comparer avec la FFT seule
 
 
-def replay(signal, rate: int, sensitivity: float = 1.0, hop: int = HOP) -> list[float]:
-    """Instants (s) des kicks detectes, a vitesse simulee. Meme boucle que le fil d'analyse : un tampon glissant de 2048 echantillons."""
+def replay(signal, rate: int, sensitivity: float = 1.0, hop: int = HOP, with_bpm: bool = False):
+    """Instants (s) des kicks detectes, a vitesse simulee. Meme boucle que le fil d'analyse : un tampon glissant de 2048 echantillons.
+    `with_bpm` : rend aussi le BPM de `Rhythm` (mediane de la seconde moitie du morceau ; None s'il n'en a jamais donne)."""
+    from core.rhythm import Rhythm
+    rhythm = Rhythm() if with_bpm else None
+    seen: list[float] = []
     ex = FeatureExtractor(rate, sensitivity=sensitivity)
     ex.fast_attack = FAST
+    ex.classify = CLASSIFY
     x = np.asarray(signal, dtype=np.float32)
     win = ex.win_size
     got: list[float] = []
@@ -58,9 +64,15 @@ def replay(signal, rate: int, sensitivity: float = 1.0, hop: int = HOP) -> list[
     for i in range(0, len(x) - hop + 1, hop):
         buf = np.concatenate((buf[hop:], x[i:i + hop]))
         t = (i + hop) / rate
-        _levels, beat = ex.process(buf, hop / rate, t)
+        levels, beat = ex.process(buf, hop / rate, t)
         if beat:
             got.append(t)
+        if rhythm is not None:
+            rhythm.update(t, levels, bool(beat))
+            if t > len(x) / rate / 2.0 and rhythm.bpm is not None:
+                seen.append(rhythm.bpm)
+    if with_bpm:
+        return got, (statistics.median(seen) if seen else None)
     return got
 
 
@@ -121,7 +133,7 @@ def _kick(rate: int, saturated: bool = False):
 
 
 def _pattern(rate: int, bpm: float, seconds: float, seed: int, kick_steps, snare_steps=(), hats=True, offbeat_bass=True,
-             saturated: bool = False, rumble: float = 0.0, noise: float = 0.002, dry_snare: bool = False):
+             saturated: bool = False, rumble: float = 0.0, noise: float = 0.002, dry_snare: bool = False, snare_body: float = 0.0):
     """Morceau synthetique sur une grille de 16 doubles-croches. kick_steps = rangs de 0..15 qui portent un kick."""
     rg = np.random.default_rng(seed)
     out = np.zeros(int(rate * seconds))
@@ -150,6 +162,8 @@ def _pattern(rate: int, bpm: float, seconds: float, seed: int, kick_steps, snare
                 else:
                     nz = nz[:len(sk)]
                 put(0.3 * nz * np.exp(-sk / 0.04), at)
+                if snare_body:                                  # corps de la caisse claire : un ton de ~190 Hz, la ou un kick de telephone se refugie
+                    put(snare_body * np.sin(2 * np.pi * 190 * sk) * np.exp(-sk / 0.05), at)
             if hats and st % 2 == 0:
                 put(0.12 * np.diff(rg.standard_normal(len(hk)), prepend=0) * np.exp(-hk / 0.012), at)
             if offbeat_bass and st % 4 == 2:
@@ -186,6 +200,22 @@ def synthetic_corpus(rate: int = 48000, seconds: float = 30.0) -> dict:
     env = np.where((t % 0.5) < 0.1, np.sin(np.pi * (t % 0.5) / 0.1), 0.0)
     corpus["kick sur basse continue"] = ((0.15 * np.sin(2 * np.pi * 55 * t) + 0.3 * env * np.sin(2 * np.pi * 60 * t)
                                           + 0.002 * rg.standard_normal(len(t))).astype(np.float32), [i * 0.5 for i in range(int(seconds / 0.5) - 1)])
+    # kick + caisse claire (cas signale : le beat partait sur kick + snare, pas sur le kick seul) : rock (kick 1 et 3, snare 2 et 4),
+    # house avec snare sur les kicks des temps 2 et 4, et la meme chose au haut-parleur d'un telephone
+    rock = dict(kick_steps=(0, 8), snare_steps=(4, 12), offbeat_bass=False, snare_body=0.3)
+    house = dict(kick_steps=four, snare_steps=(4, 12), snare_body=0.3)
+    corpus["rock 100 BPM (kick 1 et 3, snare 2 et 4)"] = (*_pattern(rate, 100, seconds, 10, **rock), )
+    corpus["house 124 BPM + snare sur 2 et 4"] = (*_pattern(rate, 124, seconds, 11, **house), )
+    x, truth = _pattern(rate, 100, seconds, 12, **rock)
+    corpus["rock 100 BPM, telephone"] = (_phone(x, rate, 300.0, -30.0, 0.0008), truth)
+    x, truth = _pattern(rate, 124, seconds, 13, **house)
+    corpus["house + snare, telephone"] = (_phone(x, rate, 300.0, -30.0, 0.0008), truth)
+    corpus["dnb 174 BPM (kick 1 et 3 syncope, snare 2 et 4)"] = (*_pattern(rate, 174, seconds, 14, kick_steps=(0, 10), snare_steps=(4, 12),
+                                                                          offbeat_bass=False, snare_body=0.3), )
+    corpus["half-time 150 BPM (kick 1, snare 3)"] = (*_pattern(rate, 150, seconds, 15, kick_steps=(0, 7), snare_steps=(8,),
+                                                               offbeat_bass=False, snare_body=0.3), )
+    x, truth = _pattern(rate, 174, seconds, 16, kick_steps=(0, 10), snare_steps=(4, 12), offbeat_bass=False, snare_body=0.3)
+    corpus["dnb 174 BPM, telephone"] = (_phone(x, rate, 300.0, -30.0, 0.0008), truth)
     nokick, _ = _pattern(rate, 124, seconds, 8, (), snare_steps=(4, 12), offbeat_bass=False)
     corpus["sans kick : charleys et caisses claires larges"] = (nokick, [])
     dry, _ = _pattern(rate, 124, seconds, 9, (), snare_steps=(4, 12), offbeat_bass=False, dry_snare=True)
@@ -256,8 +286,23 @@ def bench_item(name: str, signal, rate: int, truth, sensitivities=DEFAULT_SENS, 
     duration = len(signal) / rate
     rows = {}
     for s in sensitivities:
-        rows[f"{s:g}"] = metrics(replay(signal, rate, s), truth, duration)
+        got, bpm = replay(signal, rate, s, with_bpm=True)
+        rows[f"{s:g}"] = metrics(got, truth, duration)
+        rows[f"{s:g}"]["bpm"] = round(bpm, 1) if bpm else None
+        rows[f"{s:g}"]["bpm_vrai"] = SYNTH_BPM.get(name)
     return {"nom": name, "duree_s": round(duration, 1), "verite": source, "sensibilites": rows}
+
+
+SYNTH_BPM = {"house 124 BPM": 124, "techno 132 BPM (grondement)": 132, "breakbeat 140 BPM": 140, "lent 100 BPM": 100,
+             "kick sature, plein niveau": 126, "telephone (coupe sous 250 Hz, -30 dB)": 126, "kick sur basse continue": 120,
+             "rock 100 BPM (kick 1 et 3, snare 2 et 4)": 100, "house 124 BPM + snare sur 2 et 4": 124,
+             "rock 100 BPM, telephone": 100, "house + snare, telephone": 124,
+             "dnb 174 BPM (kick 1 et 3 syncope, snare 2 et 4)": 174, "half-time 150 BPM (kick 1, snare 3)": 150, "dnb 174 BPM, telephone": 174}
+
+
+def bpm_ok(bpm, truth) -> bool:
+    """Le BPM est juste a 3 % pres (la moitie ou le double comptent comme faux : c'est l'erreur qu'on veut voir)."""
+    return bool(bpm and truth and abs(bpm / truth - 1.0) <= 0.03)
 
 
 def bench_synthetic(sensitivities=DEFAULT_SENS, seconds: float = 30.0) -> list[dict]:
@@ -311,13 +356,20 @@ def report(items: list[dict], sensitivities=DEFAULT_SENS) -> str:
             em = f"{m['erreur_mediane_ms']:.0f} ms" if m["erreur_mediane_ms"] is not None else "-"
             e95 = f"{m['erreur_p95_ms']:.0f} ms" if m["erreur_p95_ms"] is not None else "-"
             lines.append(f"  {it['nom'][:44]:44s} {m['kicks']:5d} {m['rappel']:7.2f} {m['precision']:7.2f} {m['f1']:6.2f} {em:>8s} {e95:>8s} "
-                         f"{m['doubles']:7d} {m['faux_par_minute']:8.1f}{note}")
+                         f"{m['doubles']:7d} {m['faux_par_minute']:8.1f}  {bpm_text(m)}{note}")
         t = summary(items, key)
         lines.append(f"  TOTAL (morceaux avec kicks) : rappel {t['rappel']:.2f}, precision {t['precision']:.2f}, F1 {t['f1']:.2f}, "
                      f"erreur mediane {t['erreur_mediane_ms']} ms, faux kicks sur passage sans kick : {t['faux_par_minute_sans_kick']} /min")
         lines.append("")
     lines.append(diagnosis(items, f"{sensitivities[0]:g}"))
     return "\n".join(lines)
+
+
+def bpm_text(m: dict) -> str:
+    if not m.get("bpm_vrai"):
+        return ""
+    got = m.get("bpm")
+    return f"BPM {got if got else '-'} / {m['bpm_vrai']} " + ("ok" if bpm_ok(got, m["bpm_vrai"]) else "FAUX")
 
 
 def diagnosis(items: list[dict], sens: str = "1") -> str:
@@ -343,9 +395,11 @@ def main(argv=None) -> int:
     ap.add_argument("--json", help="ecrit le resultat dans ce fichier (comparable d'une version a l'autre)")
     ap.add_argument("--duree", type=float, default=30.0, help="duree du corpus synthetique, en secondes")
     ap.add_argument("--sans-rapide", action="store_true", help="coupe le detecteur d'attaque rapide (FFT seule : comparer avant / apres le lot 3)")
+    ap.add_argument("--sans-classe", action="store_true", help="coupe la distinction kick / caisse claire (comparer avant / apres)")
     a = ap.parse_args(argv)
-    global FAST
+    global FAST, CLASSIFY
     FAST = not a.sans_rapide
+    CLASSIFY = not a.sans_classe
     if a.commande_ou_fichier and a.commande_ou_fichier[0] == "annoter":
         for f in a.commande_ou_fichier[1:]:
             print("ecrit", annotate(Path(f)), "(a corriger a la main avant de s'en servir)")
@@ -364,3 +418,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -14,6 +14,59 @@ def _coef(dt: float, tau: float) -> float:
     return 1.0 - math.exp(-dt / tau)
 
 
+class KickClassifier:
+    """Kick ou caisse claire ? Apprend, sur les dernieres attaques detectees, s'il y a DEUX familles de sons (avec et sans graves) et, si oui,
+    ecarte du kick celles qui n'ont pas de graves.
+
+    Chaque attaque est decrite par un seul nombre, calcule sur le spectre qui vient d'apparaitre (voir `FeatureExtractor`) : `low` = log10 de
+    l'energie nouvelle sous 150 Hz. Un kick en a beaucoup, une caisse claire (bruit large, corps vers 200 Hz) presque pas, et un kick pose sur une
+    caisse claire en a autant qu'un kick seul : il reste un kick. Ce qui change d'un systeme son a l'autre (un haut-parleur de telephone ne rend
+    presque plus de graves) est le NIVEAU de ce nombre, pas l'ecart entre les deux familles : on compare donc les attaques entre elles (coupure
+    d'Otsu) au lieu de fixer un seuil. Pas de deux familles nettes (ecart de moins de `GAP` decades ou de `GAP_STD` ecarts-types) : tout est kick,
+    comme avant (un morceau sans caisse claire, ou un kick d'accent plus faible, n'est jamais ecarte)."""
+
+    MAXN = 48                    # attaques gardees
+    MIN_EACH = 4                 # attaques minimum dans chaque famille
+    GAP = 0.8                    # ecart minimal entre les deux familles (decades : un facteur 6)
+    GAP_STD = 2.5                # ... et en ecarts-types
+
+    def __init__(self) -> None:
+        self.events: deque[float] = deque(maxlen=self.MAXN)
+        self.armed = False
+        self.thr = 0.0           # coupure : en dessous, ce n'est pas un kick
+
+    def reset(self) -> None:
+        self.events.clear()
+        self.armed = False
+
+    def observe(self, low: float) -> None:
+        self.events.append(float(low))
+        self._fit()
+
+    def _fit(self) -> None:
+        n = len(self.events)
+        self.armed = False
+        if n < 2 * self.MIN_EACH:
+            return
+        v = sorted(self.events)
+        best, best_k = -1.0, 0
+        for k in range(self.MIN_EACH, n - self.MIN_EACH + 1):
+            gap = sum(v[k:]) / (n - k) - sum(v[:k]) / k
+            between = k * (n - k) * gap * gap
+            if between > best:
+                best, best_k = between, k
+        lo, hi = v[:best_k], v[best_k:]
+        mlo, mhi = sum(lo) / len(lo), sum(hi) / len(hi)
+        std = math.sqrt((sum((x - mlo) ** 2 for x in lo) + sum((x - mhi) ** 2 for x in hi)) / n)
+        gap = mhi - mlo
+        if gap < self.GAP or gap < self.GAP_STD * max(std, 0.05):
+            return
+        self.armed = True
+        self.thr = 0.5 * (lo[-1] + hi[0])
+
+    def is_kick(self, low: float) -> bool:
+        return (not self.armed) or low >= self.thr
+
 class WideRise:
     """Critere de MONTEE RAPIDE sur une bande large (20-400 Hz) : l'energie vient de plus que tripler depuis son creux des 120 dernieres ms.
 
