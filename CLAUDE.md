@@ -1068,7 +1068,7 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    maintenant trois cellules sans `rowspan` : panneau d'audio2wave | trait | partie OVERLAY) ; (2) `ttk.Notebook` ne prend pas le theme sombre tout seul (`theme_use("clam")` + couleurs
    des onglets, filets clairs a neutraliser `bordercolor/lightcolor/darkcolor`) ; (3) un widget d'un onglet
    non affiche ne recoit pas les evenements clavier : les tests selectionnent l'onglet Logo avant de taper du texte.
-   **Fenetre redimensionnable et adaptative** (`resizable(True, True)`, minimum `MIN_WIN_W` x `MIN_WIN_H` = 940 x 420 ;
+   **Fenetre agrandie au lancement** (`reveal` de `run_gui` : `gl_gui.maximize`, etat « zoomed » de Windows, barre des taches visible ; `CASUAL_NO_MAXIMIZE=1` le coupe, `check_gl.py` le pose : les tests mesurent la fenetre a sa taille naturelle). Agrandie, elle garde sa taille : `set_expanded`, la poignee du panneau et la taille gardee pendant le VJ ne lui imposent plus de geometrie (`is_maximized` ; Windows l'ignorait deja, la garde sert ailleurs). `check_gl.py` : `gui_zoom_steps`. **Fenetre redimensionnable et adaptative** (`resizable(True, True)`, minimum `MIN_WIN_W` x `MIN_WIN_H` = 940 x 420 ;
    elle etait figee par un `root.resizable(False, False)` herite de `build_gui` d'audio2wave). Tout le contenu est dans
    une **page** (`page`, un frame dans `page_canvas`, avec son ascenseur et la molette) : rien n'est jamais coupe, et
    la page prend au moins la hauteur de son contenu. Trois etats, choisis par la largeur du canvas (`set_layout`,

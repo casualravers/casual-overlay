@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 
+os.environ.setdefault("CASUAL_NO_MAXIMIZE", "1")      # les tests mesurent la fenetre a sa taille naturelle (le vrai programme l'ouvre agrandie)
 os.environ.setdefault("CASUAL_NO_EXPAND", "1")        # les tests partent d'un panneau replie (le vrai programme etend le Mode VJ au lancement)
 import tempfile
 import time
@@ -1054,6 +1055,7 @@ def check_gui() -> None:
                     gui_bgvideo_steps(c, s, out)
                     gui_diag_steps(c, s, out)
                     gui_lead_steps(c, s, out)
+                    gui_zoom_steps(c, s, out)
                     gui_rec_steps(c, s, out)
                 except Exception:
                     import traceback
@@ -1440,6 +1442,8 @@ def check_gui() -> None:
     hs = out.get("aff_height") or [(0, 0, 0), (1, 1, 1)]
     check(hs[0] == hs[1], "onglet Affichage: un voyant de pulsation ou un statut tres long ne change pas la hauteur de l'onglet (rien ne decale)", str(hs))
     print(f"  (information) hauteur voulue de l'onglet Affichage : {hs[0][0]} px")
+    check(out.get("zoom") == (True, True, True, True),
+          "fenetre agrandie (defaut): ouvrir / fermer le panneau etendu et glisser la poignee la laissent agrandie, a la meme taille", str(out.get("zoom")))
     lg = out.get("lead_gui") or {}
     check(lg.get("auto") == ("auto", 1.0, "disabled", "Avance auto : 85 ms = son 22 + detection 15 + image 23 + affichage ~25 (suppose)") and lg.get("no_calib"),
           "avance (GUI): Auto par defaut, curseur manuel grise, estimation detaillee lisible ; plus de bouton Calibrer", str((lg.get("auto"), lg.get("no_calib"))))
@@ -6738,6 +6742,48 @@ def gui_rec_steps(c, s, out) -> None:
     ui["rec_dir_var"].set(saved["rec_dir"])
     nb.select(0)
     root.update()
+
+
+def gui_zoom_steps(c, s, out) -> None:
+    """Fenetre de reglages agrandie (defaut du vrai programme) : ouvrir / fermer le panneau etendu et glisser la poignee ne la font pas sortir de cet etat."""
+    import gl_gui as gg_
+    root = c["root"]
+    sc = c["scenes"]
+    was = root.geometry()
+    expanded = bool(getattr(s, "scenes_expanded", False))
+    sc["expand"](False)
+    root.update()
+    gg_.maximize(root)
+    root.update()
+    time.sleep(0.3)
+    root.update()
+    zoomed0, size0 = gg_.is_maximized(root), (root.winfo_width(), root.winfo_height())
+    sc["expand"](True)
+    root.update()
+    grip = next((w for w in _walk_all(root) if w.winfo_class() == "Label" and str(w.cget("text")) == "\u22ef"), None)
+    if grip is not None:
+        grip.event_generate("<ButtonPress-1>", rooty=500)
+        grip.event_generate("<B1-Motion>", rooty=560)
+        grip.event_generate("<ButtonRelease-1>", rooty=560)
+        root.update()
+    mid = (gg_.is_maximized(root), (root.winfo_width(), root.winfo_height()))
+    sc["expand"](False)
+    root.update()
+    time.sleep(0.2)
+    root.update()
+    out["zoom"] = (zoomed0, mid[0] and mid[1] == size0, gg_.is_maximized(root) and (root.winfo_width(), root.winfo_height()) == size0, grip is not None)
+    root.state("normal")
+    root.update()
+    root.geometry(was)
+    root.update()
+    sc["expand"](expanded)
+    root.update()
+
+
+def _walk_all(w):
+    yield w
+    for ch in w.winfo_children():
+        yield from _walk_all(ch)
 
 
 def gui_lead_steps(c, s, out) -> None:
