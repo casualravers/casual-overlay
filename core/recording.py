@@ -31,7 +31,10 @@ CLIP_LEVEL = 0.999                                             # crete (0..1) a 
 FLOOR_DB = -120.0
 AUDIO_RATE_OUT = 48000
 AUDIO_BITRATE = "320k"
-X264_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "17"]
+FREE_WARN_BYTES = 2_000_000_000                                # avertissement a l'ouverture sous 2 Go libres
+FREE_STOP_BYTES = 200_000_000                                  # arret propre (le fichier ecrit est assemble) sous 200 Mo libres
+AAC_BYTES_PER_S = 40_000                                       # 320 kb/s : estimation de la part audio dans la taille affichee
+X264_ARGS =["-c:v", "libx264", "-preset", "veryfast", "-crf", "17"]
 
 
 def clean_fps(value) -> int:
@@ -85,20 +88,33 @@ def video_command(ffmpeg: str, size: tuple[int, int], fps: int, encoder: str, ou
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-",
            "-an", "-vf", "vflip"]
     cmd += X264_ARGS if encoder == "libx264" else ["-c:v", encoder]
-    cmd += ["-pix_fmt", "yuv420p", "-g", str(fps), "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", out]
+    # Les etiquettes bt709 sont ecrites dans le flux H.264 (VUI) par `h264_metadata` : les options -color_primaries / -color_trc seules ne laissent que la matrice
+    # (mesure : le MP4 final disait « unknown » pour les primaires et le transfert) ; le filtre marche pour tous les encodeurs H.264 et survit a la recopie en MP4.
+    cmd += ["-pix_fmt", "yuv420p", "-g", str(fps), "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-bsf:v", "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1", out]
     return cmd
 
 
-def mux_command(ffmpeg: str, video: str, audio_raw: str, rate: int, channels: int, offset_s: float, out: str) -> list[str]:
-    """Assemblage : la video est recopiee, l'audio brut (`f32le`, frequence et canaux d'origine) est encode en AAC. `offset_s` > 0 retarde l'audio
-    (`-itsoffset`), < 0 coupe son debut (`-ss`)."""
+def mux_command(ffmpeg: str, video: str, audio_raw: str, rate: int, channels: int, offset_s: float, out: str, duration_s: float | None = None) -> list[str]:
+    """Assemblage : la video est recopiee, l'audio brut (`f32le`, frequence et canaux d'origine) est encode en AAC. `offset_s` > 0 retarde l'audio en
+    ajoutant du silence au debut (`adelay` : le retard est dans les echantillons, pas dans un decalage d'horodatage que `-itsoffset` perdait a l'ecriture
+    du MP4 et que certains logiciels de montage lisent mal), < 0 coupe son debut (`-ss`). `duration_s` coupe le tout a la duree de la video."""
     audio_in = ["-f", "f32le", "-ar", str(rate), "-ac", str(channels)]
-    if offset_s > 0:
-        audio_in += ["-itsoffset", f"{offset_s:.3f}"]
-    elif offset_s < 0:
+    delay = []
+    if offset_s < 0:
         audio_in += ["-ss", f"{-offset_s:.3f}"]
-    return [ffmpeg, "-y", "-loglevel", "error", "-i", video, *audio_in, "-i", audio_raw, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
-            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", str(AUDIO_RATE_OUT), "-movflags", "+faststart", out]
+    elif round(offset_s * 1000) > 0:
+        delay = ["-af", f"adelay={round(offset_s * 1000)}:all=1"]
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-i", video, *audio_in, "-i", audio_raw, "-map", "0:v", "-map", "1:a", "-c:v", "copy", *delay,
+           "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", str(AUDIO_RATE_OUT)]
+    if duration_s is not None:
+        cmd += ["-t", f"{duration_s:.3f}"]
+    return cmd + ["-movflags", "+faststart", out]
+
+
+def remux_command(ffmpeg: str, video: str, out: str) -> list[str]:
+    """Assemblage sans audio (aucune entree sonore, ou aucun son recu) : la video est recopiee dans un MP4 `faststart`."""
+    return [ffmpeg, "-y", "-loglevel", "error", "-i", video, "-c", "copy", "-movflags", "+faststart", out]
 
 
 def choose_encoder(listed: Iterable[str], tested: Callable[[str], bool], hardware: bool = False) -> str:

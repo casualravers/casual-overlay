@@ -6,10 +6,27 @@ Ce module contient les morceaux qui possedent des fils et des fichiers. La logiq
 """
 from __future__ import annotations
 
+import os
 import queue
+import shutil
+import subprocess
 import threading
+import time
+from datetime import datetime
+from typing import Callable
 
+from core import recording as core_rec
 from engine.deps import np
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # pas de fenetre de console qui clignote sous Windows
+QUEUE_FRAMES = 8                   # images en attente de l'encodeur : au-dela, le rendu attend (jamais d'image perdue en silence)
+QUEUE_TIMEOUT_S = 2.0              # un encodeur qui ne rend pas la main en 2 s est considere comme bloque : arret propre
+DISK_CHECK_S = 1.0                 # espace disque relu une fois par seconde de video
+SILENT_WARN_S = 1.0                # plus de son depuis cette duree : avertissement
+
+
+class RecorderError(Exception):
+    """Un enregistrement qui ne peut pas demarrer (message destine a l'utilisateur)."""
 
 GAP_S = 0.04                       # un trou de plus de 40 ms dans l'horodatage des blocs est comble par du silence (la gigue normale est de quelques ms)
 CHUNK_FRAMES = 1 << 16             # le silence d'un long trou est ecrit par morceaux (pas de gros tableau d'un coup)
@@ -56,12 +73,20 @@ class RawAudioWriter:
         except queue.Full:
             self.lost += 1
 
-    def close(self) -> None:
-        """Vide la file, comble le silence de fin et ferme le fichier. Sans effet la deuxieme fois."""
+    @property
+    def t_last_end(self) -> float | None:
+        """Instant de fin du dernier bloc recu (None tant qu'aucun n'est arrive) : l'enregistreur s'en sert pour dire que le son a disparu."""
+        return self._t_last_end
+
+    def close(self, end_t: float | None = None) -> None:
+        """Vide la file, comble le silence de fin et ferme le fichier. `end_t` : instant de fin de l'enregistrement (le son qui a disparu en
+        cours de route est complete en silence jusque-la). Sans effet la deuxieme fois."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+        if end_t is not None and self.t_first is not None and (self._t_last_end is None or end_t > self._t_last_end):
+            self._t_last_end = end_t
         self._queue.put(None)
         self._thread.join()
 
@@ -98,3 +123,248 @@ class RawAudioWriter:
                 self.frames += len(block)
             if self._t_last_end is not None and self.t_first is not None:
                 self._fill_to(handle, self._t_last_end)
+
+
+def list_encoders(ffmpeg: str) -> list[str]:
+    """Noms des encodeurs video que ffmpeg dit connaitre (`ffmpeg -encoders`) ; liste vide si la commande echoue."""
+    try:
+        out = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20, creationflags=_NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].startswith("V"):
+            names.append(parts[1])
+    return names
+
+
+def try_encoder(ffmpeg: str, encoder: str) -> bool:
+    """Un encodeur liste peut echouer sans le materiel : on encode une image noire pour voir."""
+    cmd = [ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2", "-frames:v", "1", "-c:v", encoder, "-f", "null", "-"]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=30, creationflags=_NO_WINDOW).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+class Recorder:
+    """Un enregistrement : images a cadence constante vers un ffmpeg, son stereo brut a cote, puis assemblage en un MP4.
+
+    Utilisation (fil GL) : `start()`, puis a chaque image affichee `n = due(now)` et, si `n > 0`, `write(image_rgb, n)` (l'image est ecrite `n` fois :
+    un rendu en retard duplique la precedente et la duree reste juste), enfin `stop()` qui rend le chemin du MP4 (ou None). Tout ce qui peut mal tourner est dit
+    dans `status()["warning"]` ; `should_stop` devient vrai quand l'enregistrement doit s'arreter de lui-meme (disque presque plein, encodeur bloque).
+
+    Fichiers : le dossier recoit `casual-....mp4`. Pendant l'enregistrement il y a des temporaires `casual-....video.tmp.mkv` et `....audio.tmp.raw` ; ils sont supprimes
+    apres un assemblage reussi et gardes sinon. Le MP4 est ecrit sous un nom provisoire puis renomme : jamais de fichier a moitie ecrit sous le bon nom.
+    Horloge : `now` (de `due`) et les instants des blocs audio sont sur la meme (time.monotonic dans le programme ; simulee dans les tests).
+    """
+
+    def __init__(self, ffmpeg: str, directory: str, fmt: str = "vertical", fps: int = 30, delay_ms: float = 40.0, audio_input=None, hardware: bool = False, *,
+                 size: tuple[int, int] | None = None, now_fn: Callable[[], datetime] = datetime.now, free_bytes: Callable[[str], int] | None = None,
+                 listed_encoders: Callable[[], list[str]] | None = None, test_encoder: Callable[[str], bool] | None = None):
+        self.ffmpeg = ffmpeg
+        self.mux_ffmpeg = ffmpeg                                  # separe pour que l'echec de l'assemblage se teste
+        self.directory = core_rec.resolve_dir(directory)
+        self.fmt = core_rec.clean_format(fmt)
+        self.fps = core_rec.clean_fps(fps)
+        self.size = tuple(size) if size else core_rec.FORMATS[self.fmt]
+        self.delay_ms = float(delay_ms)
+        self.audio_input = audio_input
+        self.hardware = hardware
+        self._now_fn = now_fn
+        self._free_bytes = free_bytes or (lambda p: shutil.disk_usage(p).free)
+        self._listed = listed_encoders or (lambda: list_encoders(self.ffmpeg))
+        self._tested = test_encoder or (lambda e: try_encoder(self.ffmpeg, e))
+        self.encoder = "libx264"
+        self.path = ""                                            # chemin final du MP4
+        self.should_stop = False
+        self.warning: str | None = None
+        self.sent = 0                                             # images ecrites (doublons compris)
+        self.duplicated = 0
+        self._t0: float | None = None                             # instant de la premiere image
+        self._proc = None
+        self._writer: RawAudioWriter | None = None
+        self._queue: queue.Queue = queue.Queue(maxsize=QUEUE_FRAMES)
+        self._thread: threading.Thread | None = None
+        self._video_error: str | None = None
+        self._log = None
+        self._next_disk_check = 0
+        self._started = False
+        self._result: str | None = None
+        self._stopped = False
+
+    # --- noms ------------------------------------------------------------------------------------------
+
+    def _tmp(self, kind: str, path: str | None = None) -> str:
+        base = (path or self.path)[:-len(".mp4")]
+        return f"{base}.{kind}.tmp.{ {'video': 'mkv', 'audio': 'raw', 'log': 'log', 'mux': 'mp4'}[kind] }"
+
+    # --- demarrage -------------------------------------------------------------------------------------
+
+    def pick_encoder(self) -> str:
+        return core_rec.choose_encoder(self._listed() if self.hardware else [], self._tested, self.hardware)
+
+    def start(self) -> None:
+        os.makedirs(self.directory, exist_ok=True)
+        free = self._free_bytes(self.directory)
+        if free < core_rec.FREE_STOP_BYTES:
+            raise RecorderError(f"Disque presque plein ({free / 1e6:.0f} Mo libres) : enregistrement impossible.")
+        if free < core_rec.FREE_WARN_BYTES:
+            self.warning = f"Moins de 2 Go libres ({free / 1e9:.1f} Go) : l'enregistrement s'arretera si le disque se remplit."
+        self.encoder = self.pick_encoder()
+        self.path = core_rec.output_name(self._now_fn(), self.directory, exists=lambda p: os.path.exists(p) or os.path.exists(self._tmp("video", p)))
+        open(self._tmp("video"), "wb").close()                    # reserve le nom (une autre session dans la meme seconde en prendra un autre)
+        self._log = open(self._tmp("log"), "wb")
+        try:
+            self._proc = subprocess.Popen(core_rec.video_command(self.ffmpeg, self.size, self.fps, self.encoder, self._tmp("video")),
+                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self._log, creationflags=_NO_WINDOW)
+        except OSError as exc:
+            self._log.close()
+            self._cleanup(("video", "log"))
+            raise RecorderError(f"ffmpeg ne demarre pas : {exc}") from exc
+        if self.audio_input is not None:
+            self._writer = RawAudioWriter(self._tmp("audio"), 2, int(self.audio_input.rate))
+            self.audio_input.tap = self._writer.push
+        self._thread = threading.Thread(target=self._video_run, name="rec-video", daemon=True)
+        self._thread.start()
+        self._started = True
+        self._next_disk_check = self.fps                          # premiere relecture apres une seconde d'images
+
+    # --- images ----------------------------------------------------------------------------------------
+
+    def due(self, now: float) -> int:
+        """Nombre d'images a ecrire a l'instant `now` (la premiere fixe l'instant zero de la video)."""
+        if self._t0 is None:
+            self._t0 = now
+        return core_rec.frames_due(self._t0, now, self.fps, self.sent)
+
+    def write(self, frame: bytes, count: int = 1) -> None:
+        """Ecrit `frame` (rgb24, premiere ligne en bas) `count` fois. Sans effet si l'enregistrement doit s'arreter."""
+        if not self._started or self._stopped or self.should_stop or count <= 0:
+            return
+        try:
+            self._queue.put((frame, count), timeout=QUEUE_TIMEOUT_S)
+        except queue.Full:
+            self._fail("L'encodeur ne suit plus : enregistrement arrete.")
+            return
+        self.sent += count
+        self.duplicated += count - 1
+        if self._video_error:
+            self._fail(self._video_error)
+        elif self.sent >= self._next_disk_check:
+            self._next_disk_check = self.sent + int(DISK_CHECK_S * self.fps)
+            free = self._free_bytes(self.directory)
+            if free < core_rec.FREE_STOP_BYTES:
+                self._fail(f"Disque presque plein ({free / 1e6:.0f} Mo libres) : enregistrement arrete, ce qui est ecrit est conserve.")
+
+    def _fail(self, message: str) -> None:
+        self.should_stop = True
+        self.warning = message
+
+    def _video_run(self) -> None:
+        proc = self._proc
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            if self._video_error:
+                continue                                          # on vide la file : le rendu ne doit pas rester bloque
+            frame, count = item
+            try:
+                for _ in range(count):
+                    proc.stdin.write(frame)
+            except (OSError, ValueError):
+                self._video_error = "L'encodeur s'est arrete : enregistrement arrete."
+
+    # --- etat ------------------------------------------------------------------------------------------
+
+    def status(self, now: float | None = None) -> dict:
+        """Ce que l'interface affiche : duree, taille (video ecrite + estimation de l'audio), crete, doublons, encodeur, avertissement."""
+        seconds = self.sent / self.fps
+        try:
+            size = os.path.getsize(self._tmp("video")) if self.path else 0
+        except OSError:
+            size = 0
+        peak = self._writer.peak if self._writer else 0.0
+        warning = self.warning
+        if warning is None and self.audio_input is None and self._started:
+            warning = "Pas d'entree audio : la video sera sans son."
+        if warning is None and self._writer is not None and self._writer.t_last_end is not None and not self._stopped:
+            silent = (time.monotonic() if now is None else now) - self._writer.t_last_end
+            if silent > SILENT_WARN_S:
+                warning = f"Plus de son depuis {silent:.0f} s : la carte son est-elle branchee ?"
+        warning = warning or core_rec.drop_warning(self.duplicated, self.sent)
+        return {"recording": self._started and not self._stopped, "seconds": seconds, "bytes": size + int(seconds * core_rec.AAC_BYTES_PER_S),
+                "peak_db": core_rec.peak_db(peak), "clipped": core_rec.clipped(peak), "dropped": self.duplicated, "frames": self.sent,
+                "encoder": self.encoder, "warning": warning, "path": self.path, "should_stop": self.should_stop}
+
+    # --- arret et assemblage ---------------------------------------------------------------------------
+
+    def _cleanup(self, kinds=("video", "audio", "log", "mux")) -> None:
+        for kind in kinds:
+            try:
+                os.remove(self._tmp(kind))
+            except OSError:
+                pass
+
+    def stop(self) -> str | None:
+        """Ferme les ecritures, assemble et rend le chemin du MP4 ; None si rien n'a ete ecrit ou si l'assemblage a echoue (temporaires gardes)."""
+        if self._stopped or not self._started:
+            return self._result
+        self._stopped = True
+        self._queue.put(None)
+        self._thread.join(timeout=60)
+        try:
+            self._proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            code = self._proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            code = self._proc.wait()
+        self._log.close()
+        audio_ok = False
+        if self._writer is not None:
+            if self.audio_input.tap == self._writer.push:
+                self.audio_input.tap = None
+            end_t = self._t0 + self.sent / self.fps if self._t0 is not None else None
+            self._writer.close(end_t=end_t)
+            audio_ok = self._writer.t_first is not None and self._writer.bytes_written > 0
+            if not audio_ok and not self.warning:
+                self.warning = "Aucun son recu de la carte son : la video est sans son."
+        if self.sent == 0:
+            self._cleanup()
+            self.warning = self.warning or "Aucune image enregistree."
+            return None
+        if code != 0:
+            self.warning = f"L'encodeur a echoue (code {code}) : {self._log_tail()} Fichiers temporaires gardes : {self._tmp('video')}"
+            return None
+        if audio_ok:
+            offset = core_rec.audio_offset(self._t0, self._writer.t_first, self.delay_ms)
+            cmd = core_rec.mux_command(self.mux_ffmpeg, self._tmp("video"), self._tmp("audio"), int(self.audio_input.rate), 2, offset, self._tmp("mux"),
+                                         duration_s=self.sent / self.fps)
+        else:
+            cmd = core_rec.remux_command(self.mux_ffmpeg, self._tmp("video"), self._tmp("mux"))
+        try:
+            done = subprocess.run(cmd, capture_output=True, timeout=600, creationflags=_NO_WINDOW)
+            ok = done.returncode == 0 and os.path.getsize(self._tmp("mux")) > 0
+            detail = done.stderr.decode("utf-8", "replace").strip()[-300:]
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok, detail = False, str(exc)
+        if not ok:
+            self._cleanup(("mux",))
+            self.warning = f"L'assemblage a echoue : {detail} Fichiers temporaires gardes : {self._tmp('video')}"
+            return None
+        os.replace(self._tmp("mux"), self.path)
+        self._cleanup(("video", "audio", "log"))
+        self._result = self.path
+        return self._result
+
+    def _log_tail(self) -> str:
+        try:
+            with open(self._tmp("log"), "rb") as fh:
+                return fh.read()[-300:].decode("utf-8", "replace").strip()
+        except OSError:
+            return ""

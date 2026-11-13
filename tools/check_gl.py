@@ -3212,21 +3212,27 @@ def check_recording() -> None:
     check(v[0] == "ffmpeg" and v[-1] == "out.mkv" and pair(v, "-f", "rawvideo") and pair(v, "-pix_fmt", "rgb24") and pair(v, "-s", "1080x1920") and pair(v, "-r", "30") and pair(v, "-i", "-"),
           "video: entree rawvideo rgb24 de la bonne taille et cadence sur l'entree standard", " ".join(v))
     check(pair(v, "-vf", "vflip") and "-an" in v and pair(v, "-pix_fmt", "yuv420p") and pair(v, "-g", "30"), "video: image retournee (lecture OpenGL), sans audio, yuv420p, une image cle par seconde")
-    check(pair(v, "-colorspace", "bt709") and pair(v, "-color_primaries", "bt709") and pair(v, "-color_trc", "bt709"), "video: etiquettes bt709 (base connue pour l'etalonnage)")
+    check(pair(v, "-colorspace", "bt709") and pair(v, "-color_primaries", "bt709") and pair(v, "-color_trc", "bt709")
+          and any(a.startswith("h264_metadata=") and "colour_primaries=1" in a and "transfer_characteristics=1" in a and "matrix_coefficients=1" in a for a in v),
+          "video: etiquettes bt709 (base connue pour l'etalonnage), ecrites dans le flux H.264")
     check(pair(v, "-c:v", "libx264") and pair(v, "-preset", "veryfast") and pair(v, "-crf", "17"), "video: x264 veryfast crf 17")
     vh = rec.video_command("ffmpeg", (720, 1280), 60, "h264_nvenc", "o.mkv")
     check(pair(vh, "-c:v", "h264_nvenc") and "-crf" not in vh and pair(vh, "-g", "60") and pair(vh, "-s", "720x1280"), "video: encodeur materiel sans crf, cadence 60 -> image cle toutes les 60")
 
     m = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 44100, 2, 0.09, "o.mp4")
     ia = m.index("a.raw")
-    check(m[ia - 1] == "-i" and pair(m[:ia], "-f", "f32le") and pair(m[:ia], "-ar", "44100") and pair(m[:ia], "-ac", "2") and pair(m[:ia], "-itsoffset", "0.090"),
-          "assemblage: audio brut f32le (frequence et canaux d'origine) decale de +90 ms", " ".join(m))
+    check(m[ia - 1] == "-i" and pair(m[:ia], "-f", "f32le") and pair(m[:ia], "-ar", "44100") and pair(m[:ia], "-ac", "2") and "-itsoffset" not in m and pair(m, "-af", "adelay=90:all=1"),
+          "assemblage: audio brut f32le (frequence et canaux d'origine), retarde de 90 ms par du silence (adelay)", " ".join(m))
+    check(pair(rec.mux_command("ffmpeg", "v", "a", 48000, 2, 0.0, "o", duration_s=3.0), "-t", "3.000") and "-t" not in m, "assemblage: la duree de la video coupe le tout (-t)")
     check(pair(m, "-c:v", "copy") and pair(m, "-c:a", "aac") and pair(m, "-b:a", "320k") and pair(m[ia:], "-ar", "48000") and pair(m, "-movflags", "+faststart") and m[-1] == "o.mp4",
           "assemblage: video recopiee, audio AAC 320 kb/s 48 kHz, faststart")
     mn = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 48000, 2, -0.06, "o.mp4")
-    check("-itsoffset" not in mn and pair(mn[:mn.index("a.raw")], "-ss", "0.060"), "assemblage: audio en avance = on coupe son debut (-ss), pas de decalage", " ".join(mn))
+    check("-af" not in mn and pair(mn[:mn.index("a.raw")], "-ss", "0.060"), "assemblage: audio en avance = on coupe son debut (-ss), pas de silence ajoute", " ".join(mn))
     m0 = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 48000, 2, 0.0, "o.mp4")
-    check("-itsoffset" not in m0 and "-ss" not in m0, "assemblage: decalage nul = ni -itsoffset ni -ss")
+    check("-af" not in m0 and "-ss" not in m0 and "-itsoffset" not in m0, "assemblage: decalage nul = ni silence ajoute ni coupe")
+
+    rm = rec.remux_command("ffmpeg", "v.mkv", "o.mp4")
+    check(pair(rm, "-i", "v.mkv") and pair(rm, "-c", "copy") and pair(rm, "-movflags", "+faststart") and rm[-1] == "o.mp4" and "-itsoffset" not in rm, "assemblage sans audio: video recopiee, faststart")
 
     # --- choix de l'encodeur
     check(rec.choose_encoder(["libx264", "h264_nvenc"], lambda e: True) == "libx264", "encodeur: x264 par defaut, meme si un encodeur materiel existe")
@@ -3351,6 +3357,203 @@ def check_recorder_audio() -> None:
     w.close()
     check(w.peak == 0.0 and w.frames == n, "ecriture: silence = crete nulle")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_recorder() -> None:
+    """Enregistrement (issue #140) : `Recorder` (images a cadence constante, son brut, assemblage) avec le vrai ffmpeg ; horloge simulee, rien n'attend en temps reel."""
+    print("Enregistrement : Recorder et assemblage (ffmpeg reel)")
+    import json
+    import shutil
+    import subprocess
+    import types
+    from datetime import datetime
+    import engine.recorder as er
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        check(False, "ffmpeg et ffprobe disponibles")
+        return
+    SIZE, FPS, RATE, N, T0 = (320, 180), 30, 48000, 512, 1000.0
+    root = Path(tempfile.mkdtemp(prefix="casual-rec-"))
+    folder = root / "dossier été test"                                   # espaces et accents
+    BLACK, WHITE = bytes(SIZE[0] * SIZE[1] * 3), b"\xff" * (SIZE[0] * SIZE[1] * 3)
+
+    def new_input():
+        return types.SimpleNamespace(rate=RATE, channels=2, tap=None)
+
+    def make(inp=None, delay_ms=0.0, **kw):
+        kw.setdefault("now_fn", lambda: datetime(2026, 11, 13, 22, 5, 9))
+        kw.setdefault("free_bytes", lambda p: 50_000_000_000)
+        return er.Recorder(ffmpeg, str(folder), "carre", FPS, delay_ms, audio_input=inp, size=SIZE, **kw)
+
+    def audio_block(k, base, click_abs):
+        t = base + (np.arange(N) + k * N) / RATE
+        sig = 0.2 * np.sin(2 * np.pi * 220 * (t - base))
+        sig = np.where((t >= click_abs) & (t < click_abs + 0.01), 0.9, sig)       # un clic de 10 ms, tres au-dessus du son de fond
+        return np.stack([sig, sig], axis=1).astype(np.float32)
+
+    def record(rec, inp, seconds, flash_at=1.0, click_at=1.0, audio_lag=0.0, audio_stop=None):
+        """Joue `seconds` de video a cadence simulee ; le son arrive par blocs de 512 echantillons, date comme le fait le callback (instant de fin)."""
+        rec.start()
+        base, k = T0 + audio_lag, 0
+        for i in range(int(seconds * FPS)):
+            now = T0 + i / FPS
+            rec.write(WHITE if now - T0 >= flash_at else BLACK, rec.due(now))
+            while inp is not None and base + (k + 1) * N / RATE <= now + 1.0 / FPS:
+                if audio_stop is None or base + k * N / RATE < T0 + audio_stop:
+                    inp.tap(audio_block(k, base, T0 + click_at), base + (k + 1) * N / RATE)
+                k += 1
+        return rec
+
+    def probe(path):
+        out = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-show_entries",
+                              "format=duration:stream=codec_type,codec_name,pix_fmt,width,height,channels,sample_rate,start_time,color_space,color_primaries,color_transfer,nb_read_frames",
+                              "-of", "json", str(path)], capture_output=True, text=True).stdout
+        d = json.loads(out)
+        return float(d["format"]["duration"]), {s["codec_type"]: s for s in d["streams"]}
+
+    def decode(path, args):
+        return subprocess.run([ffmpeg, "-v", "error", "-i", str(path), *args, "-"], capture_output=True).stdout
+
+    def flash_time(path, streams):
+        gray = np.frombuffer(decode(path, ["-vf", "scale=8:4,format=gray", "-f", "rawvideo"]), np.uint8).reshape(-1, 32)
+        idx = int(np.argmax(gray.mean(axis=1) > 128))
+        return float(streams["video"].get("start_time", 0) or 0) + idx / FPS
+
+    def click_time(path, streams, with_start=True):
+        pcm = np.frombuffer(decode(path, ["-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le"]), np.float32)
+        idx = int(np.argmax(np.abs(pcm) > 0.5))
+        return (float(streams["audio"].get("start_time", 0) or 0) if with_start else 0.0) + idx / RATE
+
+    def leftovers():
+        return sorted(p.name for p in folder.iterdir() if ".tmp." in p.name) if folder.exists() else []
+
+    # --- 1. enregistrement nominal : 3 s, son et eclair au meme instant
+    inp = new_input()
+    rec = record(make(inp), inp, 3.0)
+    path = rec.stop()
+    dur, st = probe(path)
+    v, a = st["video"], st["audio"]
+    check(path and os.path.dirname(path) == str(folder) and os.path.basename(path) == "casual-2026-11-13_22h05m09s.mp4" and Path(path).is_file(), "fichier final: nom date, dossier avec espaces et accents", str(path))
+    check(abs(dur - 3.0) < 0.1 and int(v["nb_read_frames"]) == 90, "duree 3 s a 0,1 s pres, 90 images", f"{dur:.3f} s, {v['nb_read_frames']} images")
+    check(v["codec_name"] == "h264" and v["pix_fmt"] == "yuv420p" and (v["width"], v["height"]) == SIZE and a["codec_name"] == "aac" and int(a["channels"]) == 2 and int(a["sample_rate"]) == 48000,
+          "flux: h264 yuv420p de la bonne taille, aac stereo 48 kHz", f"{v['codec_name']} {v['pix_fmt']} {v['width']}x{v['height']} {a['codec_name']} {a['channels']} {a['sample_rate']}")
+    check(v.get("color_space") == "bt709" and v.get("color_primaries") == "bt709" and v.get("color_transfer") == "bt709", "flux: etiquettes bt709", str({k: v.get(k) for k in ("color_space", "color_primaries", "color_transfer")}))
+    gap = click_time(path, st) - flash_time(path, st)
+    check(abs(gap) < 0.06, "synchro: le clic et l'eclair sont au meme instant dans le fichier (moins de 60 ms)", f"ecart {1000 * gap:+.0f} ms")
+    status = rec.status()
+    check(leftovers() == [] and rec._proc.poll() is not None and status["frames"] == 90 and status["dropped"] == 0 and status["encoder"] == "libx264" and -3.0 < status["peak_db"] < 0.0 and not status["recording"],
+          "fin: aucun fichier temporaire, ffmpeg termine, voyant (90 images, 0 doublon, libx264, crete)", f"{leftovers()} {status}")
+    check(rec.stop() == path, "arreter deux fois rend le meme chemin sans erreur")
+
+    # --- 2. le son demarre 0,2 s apres la 1re image : le decalage le remet en place ; le delai de synchro retarde le son de 40 ms
+    inp = new_input()
+    rec = record(make(inp, delay_ms=40.0, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 10)), inp, 3.0, audio_lag=0.2)
+    path = rec.stop()
+    dur, st = probe(path)
+    gap = click_time(path, st) - flash_time(path, st)
+    check(0.02 < gap < 0.06, "synchro: son demarre en retard + delai de 40 ms = clic 40 ms apres l'eclair (a 20 ms pres)", f"ecart {1000 * gap:+.0f} ms")
+    pcm = np.frombuffer(decode(path, ["-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le"]), np.float32)
+    lead = int(np.argmax(np.abs(pcm) > 0.05)) / RATE
+    check(lead > 0.23 and float(st["audio"].get("start_time", 0) or 0) < 0.01 and abs(dur - 3.0) < 0.1,
+          "le retard est du silence dans les echantillons (le son ne commence qu'a 0,24 s), pas un horodatage que certains logiciels de montage lisent mal ; duree coupee a celle de la video",
+          f"debut du son a {lead:.3f} s, {dur:.2f} s")
+
+    # --- 3. le son demarre AVANT la 1re image : son debut est coupe
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 11)), inp, 3.0, audio_lag=-0.1)
+    path = rec.stop()
+    dur, st = probe(path)
+    gap = click_time(path, st) - flash_time(path, st)
+    check(abs(gap) < 0.06 and abs(dur - 3.0) < 0.1, "synchro: son demarre avant l'image = debut coupe, toujours aligne et de la bonne duree", f"ecart {1000 * gap:+.0f} ms, {dur:.2f} s")
+
+    # --- 4. le son disparait en cours de route : du silence garde la duree, un avertissement le dit
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 12)), inp, 3.0, audio_stop=1.5)
+    warn = rec.status(now=T0 + 3.0)["warning"]
+    path = rec.stop()
+    dur, st = probe(path)
+    alen = len(np.frombuffer(decode(path, ["-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le"]), np.float32)) / RATE
+    check(abs(dur - 3.0) < 0.1 and alen > 2.85 and warn and "son" in warn, "son coupe a 1,5 s: fichier de 3 s, audio complete par du silence, avertissement",
+          f"{dur:.2f} s, audio {alen:.2f} s, {warn}")
+
+    # --- 5. rendu en retard : images dupliquees, duree juste ; sans entree audio : video seule
+    rec = make(now_fn=lambda: datetime(2026, 11, 13, 22, 5, 13))
+    rec.start()
+    rec.write(BLACK, rec.due(T0))
+    late = rec.due(T0 + 0.10)
+    rec.write(WHITE, late)
+    for i in range(4, 31):
+        rec.write(WHITE, rec.due(T0 + i / FPS))
+    path = rec.stop()
+    dur, st = probe(path)
+    check(late == 3 and rec.status()["dropped"] == 2 and int(st["video"]["nb_read_frames"]) == rec.status()["frames"] == 31 and "audio" not in st and abs(dur - 31 / FPS) < 0.1,
+          "retard: 2 images dupliquees comptees, video a cadence constante (31 images), sans audio quand il n'y a pas d'entree", f"{late} {rec.status()} {dur:.2f} {list(st)}")
+    check("audio" in (rec.status()["warning"] or ""), "sans entree audio: l'avertissement le dit", str(rec.status()["warning"]))
+
+    # --- 6. entree audio branchee mais aucun son recu
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 14)), None, 1.0)
+    path = rec.stop()
+    dur, st = probe(path)
+    check(path and "audio" not in st and "aucun son" in (rec.status()["warning"] or "").lower(), "entree sans aucun bloc: video seule et avertissement", str(rec.status()["warning"]))
+
+    # --- 7. echec de l'assemblage : jamais de fichier sous le nom final, temporaires gardes
+    inp = new_input()
+    rec = record(make(inp, now_fn=lambda: datetime(2026, 11, 13, 22, 5, 15)), inp, 1.0)
+    rec.mux_ffmpeg = "ffmpeg-inexistant-casual"
+    path = rec.stop()
+    names = leftovers()
+    check(path is None and not os.path.exists(rec.path) and any("video.tmp" in n for n in names) and any("audio.tmp" in n for n in names) and rec.status()["warning"],
+          "assemblage en echec: aucun fichier sous le nom final, video et audio temporaires conserves, avertissement", f"{path} {names}")
+
+    # --- 8. deux enregistrements dans la meme seconde
+    inp1, inp2 = new_input(), new_input()
+    same = lambda: datetime(2026, 11, 13, 23, 0, 0)
+    r1, r2 = make(inp1, now_fn=same), make(inp2, now_fn=same)
+    r1.start()
+    r2.start()
+    check(r1.path != r2.path and r2.path.endswith("s-2.mp4"), "meme seconde: le deuxieme fichier prend le suffixe -2", f"{r1.path} {r2.path}")
+    r1.write(BLACK, r1.due(T0))
+    r2.write(BLACK, r2.due(T0))
+    p1, p2 = r1.stop(), r2.stop()
+    check(p1 and p2 and p1 != p2 and Path(p1).is_file() and Path(p2).is_file(), "meme seconde: les deux fichiers sont ecrits")
+
+    # --- 9. disque : avertissement a l'ouverture, arret propre quand il se remplit, refus quand il est deja presque plein
+    low = make(new_input(), now_fn=lambda: datetime(2026, 11, 13, 23, 1, 0), free_bytes=lambda p: 1_500_000_000)
+    low.start()
+    check("Go" in (low.status()["warning"] or ""), "disque: moins de 2 Go libres = avertissement a l'ouverture", str(low.status()["warning"]))
+    low.stop()
+    state = {"n": 0}
+
+    def shrinking(p):
+        state["n"] += 1
+        return 50_000_000_000 if state["n"] == 1 else 50_000_000
+    rec = make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 2, 0), free_bytes=shrinking)
+    rec.start()
+    for i in range(90):
+        rec.write(BLACK, rec.due(T0 + i / FPS))
+    path = rec.stop()
+    dur, st = probe(path) if path else (0.0, {})
+    check(rec.should_stop and path and int(st["video"]["nb_read_frames"]) <= 40 and rec.status()["warning"], "disque qui se remplit: arret demande, ce qui est ecrit est assemble, avertissement",
+          f"{rec.status()['frames']} images, {rec.status()['warning']}")
+    try:
+        make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 3, 0), free_bytes=lambda p: 100_000_000).start()
+        check(False, "disque presque plein: l'enregistrement est refuse")
+    except er.RecorderError:
+        check(True, "disque presque plein: l'enregistrement est refuse")
+
+    # --- 10. encodeur materiel : essai raté = x264
+    tested = []
+    hw = make(None, hardware=True, listed_encoders=lambda: ["libx264", "h264_nvenc"], test_encoder=lambda e: tested.append(e) or False)
+    check(hw.pick_encoder() == "libx264" and tested == ["h264_nvenc"], "encodeur materiel demande mais l'essai echoue: x264", str(tested))
+    hw2 = make(None, hardware=True, listed_encoders=lambda: ["h264_nvenc"], test_encoder=lambda e: True)
+    check(hw2.pick_encoder() == "h264_nvenc", "encodeur materiel demande et fonctionnel: utilise")
+
+    # --- 11. aucune image : rien d'ecrit
+    rec = make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 4, 0))
+    rec.start()
+    check(rec.stop() is None and not [n for n in os.listdir(folder) if n.startswith("casual-2026-11-13_23h04")], "arret sans image: rien d'ecrit, rien de temporaire")
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def check_bands_pulse() -> None:
@@ -10922,7 +11125,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_recorder", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -10937,7 +11140,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
+               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),
