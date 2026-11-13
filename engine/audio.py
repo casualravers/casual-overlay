@@ -32,7 +32,8 @@ FLUX_BAND = (40.0, 6000.0)   # bande du flux d'attaques (tempo sans kick, voir c
 KICK_WIDE = (20.0, 400.0)    # bande large du critere de montee rapide (voir core.onset.WideRise)
 ATTACK_BAND = (40.0, 8000.0)  # bande sur laquelle on decrit une attaque pour distinguer kick et caisse claire (core.onset.KickClassifier)
 ATTACK_HOLD_S = 0.02          # une attaque est classee ~30 ms apres sa detection, quand le spectre l'a vue en entier (seulement quand deux familles de sons existent)
-ATTACK_LOOKBACK = 4           # le spectre Â« d'avant Â» l'attaque : 4 pas d'analyse plus tot (~43 ms)
+ATTACK_LOOKBACK_S = 0.042     # le spectre d'avant l'attaque : le plus recent qui a au moins cet age (4 pas de 512, 8 pas de 256 : ~43 ms)
+SPEC_KEEP_S = 0.1             # historique des spectres garde (en temps : independant de la taille du bloc)
 # Regles par balayage sur signaux synthetiques (voir CLAUDE.md): a sensibilite 1.0, zero
 # faux positif sur bruit blanc constant, kicks francs detectes meme a -30 dB de micro.
 KICK_RATIO_EXTRA = 1.2       # seuil: energie basses > base * (1 + extra / sensibilite)
@@ -113,7 +114,8 @@ class FeatureExtractor:
         self.classify = True                         # distingue kick et caisse claire (KickClassifier) ; False = comportement d'avant (banc)
         self.kick_class = KickClassifier()
         self._pending: tuple[float, object, bool] | None = None      # attaque en attente de classement : (instant, spectre d'avant, deja signalee)
-        self._mag_hist: deque = deque(maxlen=6)
+        self._mag_hist: deque = deque()             # (instant, spectre de la bande d'attaque) des SPEC_KEEP_S dernieres secondes
+        self.ref_age: float | None = None           # age du spectre de reference de la derniere attaque classee (tests)
         top = int(np.searchsorted(freqs, ATTACK_BAND[1]))
         self._att = slice(int(np.searchsorted(freqs, ATTACK_BAND[0])), top)
         fa = freqs[self._att]
@@ -162,7 +164,9 @@ class FeatureExtractor:
         spec = mag[self._att].copy()
         if self.classify:
             beat = self._classify(beat, spec, now)
-        self._mag_hist.append(spec)
+        self._mag_hist.append((now, spec))
+        while self._mag_hist and now - self._mag_hist[0][0] > SPEC_KEEP_S:
+            self._mag_hist.popleft()
         levels["edge_hit"] = self.det_hit.update(raw["high"], dt, now, max(self.sensitivity, 0.05) * self.hit_sens)
         for name, det in self.det_layer.items():          # kick de la couche : le kick commun a sensibilite 1, sinon son detecteur
             mult = self.layer_sens[name]
@@ -177,9 +181,11 @@ class FeatureExtractor:
         """Attaque detectee -> kick ou pas. Tant que le morceau n'a pas deux familles de sons nettes, la detection part tout de suite (comme avant) et
         sert seulement a apprendre ; sinon elle est retenue `ATTACK_HOLD_S`, decrite par le spectre qui vient d'apparaitre, et ne part que si c'est un kick."""
         fire = False
-        if candidate and self._pending is None and len(self._mag_hist) >= ATTACK_LOOKBACK:
+        ref = self._spec_before(now) if candidate and self._pending is None else None
+        if ref is not None:
             now_fire = not self.kick_class.armed
-            self._pending = (now, self._mag_hist[-ATTACK_LOOKBACK], now_fire)
+            self.ref_age = now - ref[0]
+            self._pending = (now, ref[1], now_fire)
             fire = now_fire
         elif self._pending is not None and now - self._pending[0] >= ATTACK_HOLD_S:
             t0, pre, already = self._pending
@@ -197,6 +203,13 @@ class FeatureExtractor:
         elif candidate:
             fire = not self.kick_class.armed
         return fire
+
+    def _spec_before(self, now: float):
+        """(instant, spectre) le plus recent qui a au moins ATTACK_LOOKBACK_S ; None si l'historique est encore trop court (debut)."""
+        for t, spec in reversed(self._mag_hist):
+            if now - t >= ATTACK_LOOKBACK_S - 1e-9:
+                return (t, spec)
+        return None
 
     def _fast_attack(self, samples, dt: float, now: float) -> bool:
         """Attaque rapide : les echantillons NEUFS (ceux du dernier pas, dt secondes) ramenes a ~1 kHz puis passes au detecteur temporel."""

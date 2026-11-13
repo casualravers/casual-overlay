@@ -2926,6 +2926,43 @@ def check_calibration() -> None:
           {"summary": rec, "clicks": 8, "flashes": 7}), "calibration: le rapport dit pourquoi il echoue, ou l'avance recommandee")
 
 
+def check_capture_block() -> None:
+    """Bloc de capture de 256 (issue #110, fin du lot 3) : ce qui comptait en PAS compte en temps ; le banc a 256 vaut celui a 512."""
+    print("Bloc de capture (256 / 512)")
+    import bench_kick as bk
+    from engine import audio as au
+    corpus = bk.synthetic_corpus(48000, 30.0)                  # 30 s comme le banc : les premieres secondes (apprentissage du classifieur) pesent moins
+    # --- le spectre d'avant l'attaque (classifieur kick / caisse claire) date de ~43 ms, quelle que soit la taille du bloc
+    sig = corpus["rock 100 BPM (kick 1 et 3, snare 2 et 4)"][0]
+    ages = {}
+    for hop in (256, 512):
+        ex = au.FeatureExtractor(48000)
+        buf = np.zeros(ex.win_size, dtype=np.float32)
+        seen = []
+        last = None
+        for i in range(0, len(sig) - hop + 1, hop):
+            buf = np.concatenate((buf[hop:], sig[i:i + hop].astype(np.float32)))
+            ex.process(buf, hop / 48000, (i + hop) / 48000)
+            ref = getattr(ex, "ref_age", None)
+            if ref is not None and ref is not last:
+                seen.append(ref)
+                last = ref
+        ages[hop] = seen
+    ok_age = all(ages[h] and all(au.ATTACK_LOOKBACK_S - 1e-9 <= a < au.ATTACK_LOOKBACK_S + h / 48000 + 1e-9
+                                 for a in ages[h]) for h in ages)
+    check(ok_age, "classifieur: le spectre de reference date de 43 ms au moins (un pas de plus au plus), a 256 comme a 512",
+          str({h: (round(min(a) * 1000, 1), round(max(a) * 1000, 1), len(a)) if a else None for h, a in ages.items()}))
+    # --- banc : a 256, aucun morceau ne perd plus d'un point de F1, le rock garde sa precision
+    worst, detail = 0.0, []
+    for name in ("rock 100 BPM (kick 1 et 3, snare 2 et 4)", "rock 100 BPM, telephone", "house 124 BPM", "kick sature, plein niveau"):
+        x, truth = corpus[name][0], corpus[name][2]
+        m5 = bk.metrics(bk.replay(x, 48000, hop=512), truth, len(x) / 48000)
+        m2 = bk.metrics(bk.replay(x, 48000, hop=256), truth, len(x) / 48000)
+        worst = max(worst, round(m5["f1"], 2) - round(m2["f1"], 2), 0.02 * max(0, m2["fp"] - m5["fp"] - 1))      # F1 au point pres (affiche)
+        detail.append(f"{name[:18]}: F1 {m5['f1']:.2f}->{m2['f1']:.2f} prec {m5['precision']:.2f}->{m2['precision']:.2f}")
+    check(worst <= 0.01 + 1e-9, "banc: blocs de 256 = aucun morceau ne perd plus d'un point de F1 ni plus d'un faux kick (rock compris ; ecart dans la phase d'apprentissage du classifieur)", " | ".join(detail))
+
+
 def check_bench_kick() -> None:
     """Lot 2 de la spec synchro son / image : le banc du detecteur de kick (appariement, metriques, fichiers, corpus synthetique, non-regression)."""
     print("Banc du detecteur de kick")
@@ -11964,7 +12001,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -11976,7 +12013,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
