@@ -89,6 +89,17 @@ def audio_offset(t_video0: float, t_audio0: float, delay_ms: float) -> float:
     return (t_audio0 - t_video0) + delay_ms / 1000.0
 
 
+def effective_delay_ms(delay_ms: float, lead_ms: float) -> float:
+    """Delai reellement applique a l'audio du fichier : le reglage « Avance » (`sync_lead_ms`) fait partir les effets EN AVANCE sur la detection (pour que la
+    lumiere tombe sur le son a l'ecran) ; dans un fichier il n'y a pas de latence d'affichage, donc l'audio doit avancer d'autant. Peut etre negatif."""
+    return float(delay_ms) - max(0.0, float(lead_ms))
+
+
+def hardware_bitrate(size: tuple[int, int], fps: int) -> int:
+    """Debit (bit/s) demande aux encodeurs materiels, qui n'ont pas de `-crf` : 0,2 bit par pixel et par image (1080x1920 a 30 i/s : ~12 Mbit/s)."""
+    return int(size[0] * size[1] * fps * 0.2)
+
+
 def output_name(now: datetime, directory: str, exists: Callable[[str], bool] = os.path.exists) -> str:
     """Chemin du fichier : `casual-AAAA-MM-JJ_HHhMMmSSs.mp4`, suffixe -2, -3... si le nom existe deja (deux enregistrements dans la meme seconde)."""
     stem = now.strftime("casual-%Y-%m-%d_%Hh%Mm%Ss")
@@ -105,7 +116,7 @@ def video_command(ffmpeg: str, size: tuple[int, int], fps: int, encoder: str, ou
     (a cadence constante, une image cle par seconde pour couper sans re-encoder, etiquettes bt709 pour l'etalonnage)."""
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-",
            "-an", "-vf", "vflip"]
-    cmd += X264_ARGS if encoder == "libx264" else ["-c:v", encoder]
+    cmd += X264_ARGS if encoder == "libx264" else ["-c:v", encoder, "-b:v", str(hardware_bitrate(size, fps))]
     # Les etiquettes bt709 sont ecrites dans le flux H.264 (VUI) par `h264_metadata` : les options -color_primaries / -color_trc seules ne laissent que la matrice
     # (mesure : le MP4 final disait « unknown » pour les primaires et le transfert) ; le filtre marche pour tous les encodeurs H.264 et survit a la recopie en MP4.
     cmd += ["-pix_fmt", "yuv420p", "-g", str(fps), "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
