@@ -14,7 +14,9 @@ BPM_MIN_KICKS = 6                      # pas d'estimation avant ce nombre de kic
 BPM_WINDOW_S = 24.0                    # on ne regarde que les kicks des dernieres secondes (le morceau change)
 BPM_CLUSTER = 0.03                     # deux estimations a moins de 3 % l'une de l'autre votent pour le meme tempo
 BPM_MIN_CONFIDENCE = 0.45              # part des estimations qui s'accordent ; en dessous : pas de BPM
-BPM_LOST_S = 5.0                       # sans kick depuis ce temps, le BPM est perdu
+KICK_SURE = 0.65                       # confiance des kicks au-dessus de laquelle on ne les contredit jamais
+TEMPO_SURE = 0.75                      # confiance du tempo du son qui permet de contredire des kicks peu surs
+BPM_LOST_S = 5.0                      # sans kick depuis ce temps, le BPM est perdu
 
 
 def fold_bpm(bpm: float, lo: float = BPM_LO, hi: float = BPM_HI) -> float:
@@ -299,6 +301,10 @@ class Rhythm:
                     return
             elif tempo is not None and abs(tempo / value / 2.0 - 1.0) < 0.05:
                 value, conf, from_tempo = tempo, max(conf, tconf), True     # kicks a la moitie du tempo du son : le tempo double est le bon
+            elif (tempo is not None and conf < KICK_SURE and tconf >= TEMPO_SURE and abs(tempo / value - 1.0) > 0.06
+                  and abs(tempo / value - 2.0) > 0.1 and abs(tempo / value - 0.5) > 0.03):
+                value, conf, from_tempo = tempo, tconf, True                # kicks peu surs (faux kicks sur les caisses claires...) et franchement en
+                #                                                             desaccord (ni double ni moitie) avec un tempo du son net : le tempo du son
         if value is not None and conf >= BPM_MIN_CONFIDENCE:
             self._from_tempo = from_tempo
         self.confidence = conf
