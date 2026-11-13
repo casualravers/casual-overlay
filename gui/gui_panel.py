@@ -1082,8 +1082,12 @@ def install(c):
         tk.Label(head, text="glisser-deposer d'un fichier sur une zone (overlay / audio2wave) = lier ce media"
                  if dnd["ok"] else "glisser-deposer indisponible (pip install tkinterdnd2)", bg=a2w.GUI_PANEL_BG,
                  fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
-        wrap = tk.Frame(scene_panel, bg=a2w.GUI_BG)                 # la liste a gauche, l'espace de controle global a droite
+        # la liste a gauche, l'espace de controle global a droite. Hauteur FIXE = celle choisie avec la poignee (issue #128) : sans elle, l'espace de
+        # controle (ttk.Notebook, qui garde la hauteur du plus haut onglet deja ouvert, ex. Affichage) imposait sa hauteur a toute la rangee ; il est
+        # maintenant coupe en bas quand la liste est plus basse que lui (on remonte la poignee pour gagner de la place, quitte a masquer le bas des onglets).
+        wrap = tk.Frame(scene_panel, bg=a2w.GUI_BG, height=getattr(s, "panel_body_h", PANEL_BODY_H))
         wrap.pack(fill="x")
+        wrap.pack_propagate(False)
         with STATS.timed("panel.master_box"):
             mbox = master_box()
         mbox.pack(in_=wrap, side="right", fill="y")
@@ -1131,10 +1135,8 @@ def install(c):
         def grip_press(e) -> None:
             # tout est calcule depuis l'etat au moment de l'appui (jamais depuis la taille courante de la fenetre, qui n'est pas encore a jour
             # entre deux mouvements : l'ancien calcul incremental se decalait et faisait trembler la liste et la fenetre pendant le glisser)
-            # hauteur AFFICHEE de la liste, pas celle demandee : l'espace de controle a droite (ttk.Notebook, qui garde la hauteur du plus haut
-            # onglet deja ouvert, ex. Affichage) peut imposer plus. Partir de la hauteur demandee laissait une zone morte (issue #128 : apres
-            # un clic sur Affichage la liste faisait 452 px pour 280 demandes, et glisser de moins de +172 px ne changeait rien).
-            floor = max(PANEL_BODY_MIN, mbox.winfo_reqheight())
+            # hauteur AFFICHEE de la liste (issue #128 : une hauteur demandee differente de celle affichee laissait une zone morte)
+            floor = PANEL_BODY_MIN
             drag.update(y=e.y_root, h=max(body.winfo_height(), floor), floor=floor, win=root.winfo_height(), w=root.winfo_width(),
                         overflow=getattr(s, "panel_overflow", 0), panel=getattr(s, "scene_panel_h", 0), want=None, job=None)
 
@@ -1158,6 +1160,7 @@ def install(c):
                 win = delta + take
             s.panel_overflow = overflow
             body.configure(height=want)
+            wrap.configure(height=want)                       # la rangee suit : l'espace de controle est coupe en bas s'il est plus haut
             s.panel_body_h = want
             s.scene_panel_h = drag["panel"] + win              # a la fermeture, la fenetre rend exactement ce qu'elle a pris
             height = max(MIN_WIN_H, drag["win"] + win)
@@ -1168,7 +1171,7 @@ def install(c):
         def grip_move(e) -> None:
             if not drag:
                 return
-            want = max(drag["floor"], drag["h"] + e.y_root - drag["y"])          # jamais sous l'espace de controle : la liste ne peut pas etre plus basse que lui
+            want = max(drag["floor"], drag["h"] + e.y_root - drag["y"])
             want = min(want, max(root.winfo_screenheight() - 200, PANEL_BODY_MIN))
             if want == drag["want"] or (want == drag["h"] and drag["want"] is None):
                 return

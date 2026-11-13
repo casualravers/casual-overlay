@@ -1353,9 +1353,10 @@ def check_gui() -> None:
     check(out.get("x_console") == (True, True, True), "console VJ: grosses commandes (PANIQUE, Drop, Suivante) et ligne d'etat", str(out.get("x_console")))
     check(out.get("x_title") is True, "titre de la fenetre: l'etat du spectacle (scene, VJ) lisible dans la barre des taches")
     check(out.get("x_autosave") is True, "auto-sauvegarde: reglages (sans etats du moment), scene et set ecrits", str(out.get("x_autosave")))
-    xa = out.get("x_grip_aff") or (0, 0, 0, False)
-    check(xa[1] == xa[0] + 60 and xa[2] == xa[0] and xa[3],
-          "etendu (GUI): apres l'onglet Affichage (plus haut que la liste), la poignee agrandit la liste des le premier pixel et la reduit d'autant (issue #128)",
+    xa = out.get("x_grip_aff") or (0, 0, 0, False, 0, False, 0)
+    check(xa[1] == xa[0] + 60 and xa[2] == xa[0] and xa[3] and xa[4] == 80 and xa[5],
+          "etendu (GUI): apres l'onglet Affichage, la poignee agrandit / reduit la liste des le premier pixel, et peut descendre jusqu'a 80 px "
+          "(l'espace de controle est alors coupe en bas, issue #128)",
           str(out.get("x_grip_aff")))
     check(out.get("x_wheel_grip") == (True,) * 4,
           "etendu (GUI): la molette defile la liste des scenes et la poignee l'agrandit / la reduit (la fenetre suit, minimum 80 px)",
@@ -6395,7 +6396,19 @@ def gui_expand_steps(c, s, out) -> None:
     grip.event_generate("<B1-Motion>", rooty=440)
     grip.event_generate("<ButtonRelease-1>", rooty=440)
     root.update()
-    out["x_grip_aff"] = (a0, a1, body.winfo_height(), root.winfo_height() == aw0)
+    a2 = body.winfo_height()
+    mbox_h = body.master.winfo_height()
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=-5000)                  # plus bas que l'onglet Affichage : permis, le bas de l'espace de controle est masque
+    grip.event_generate("<ButtonRelease-1>", rooty=-5000)
+    root.update()
+    a_min = body.winfo_height()
+    clipped = body.master.winfo_height() == a_min
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=500 + a2 - a_min)
+    grip.event_generate("<ButtonRelease-1>", rooty=500 + a2 - a_min)
+    root.update()
+    out["x_grip_aff"] = (a0, a1, a2, root.winfo_height() == aw0, a_min, clipped, mbox_h)
     vjnb.select(tab_before)
     root.update()
     # renommer depuis le panneau
