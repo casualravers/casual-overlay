@@ -6463,6 +6463,75 @@ def check_onsets() -> None:
           "kick par couche: la couche a sensibilite haute rattrape des kicks que le kick commun rate", f"bg {len(e2['bg'])} commun {len(b2)}")
 
 
+def check_effets_auto() -> None:
+    """Reactivite par effet (spec 2026-11-13) : tableau phase x couche x effet, dosages, fondus, derive (core/audio_layers.py, pur)."""
+    print("-- reactivite par effet (pur)")
+    import math
+    from core import audio_layers as al
+    phases = ("silence", "ambient", "groove", "build", "break", "peak")
+    ok = True
+    for ph in phases:
+        tab = al.auto_fx(ph)
+        for layer in al.LAYERS:
+            for e in al.EFFECTS:
+                src, dose = tab[layer][e]
+                ok = ok and src in al.SOURCES and (dose == al.DERIVE or 0.0 <= dose <= 1.0)
+    check(ok, "effets auto: toutes les phases x couches x effets ont une source connue et un dosage valide")
+    check(al.auto_fx(None) is None and al.auto_fx("inconnue") is None, "effets auto: phase absente ou inconnue = None (comportement d'avant)")
+
+    def actives(ph, layer):
+        return [e for e, (s, d) in al.auto_fx(ph)[layer].items() if d != al.DERIVE and d > 0.0]
+    check(all(actives(p, l) == [] for p in ("silence", "ambient") for l in al.LAYERS), "effets auto: silence et ambiance = aucun effet actif (derive seulement)")
+    check(actives("break", "bg") == [] and actives("break", "logo") == ["wobble"], "effets auto: cassure = fond au repos, seul le logo vit")
+    check(all(len(actives(p, l)) <= 2 for p in ("groove", "build") for l in al.LAYERS), "effets auto: hors du pic, deux effets actifs au plus par couche")
+    pk = actives("peak", "bg") + actives("peak", "logo")
+    check(sorted(pk) == sorted(al.EFFECTS), "effets auto: au pic les quatre effets sont actifs, chacun dans une seule couche", str(pk))
+    check(al.auto_fx("groove", 1.0)["logo"]["chroma"][0] == "frappes" and al.auto_fx("groove", 9.0)["logo"]["chroma"][0] == "aigus"
+          and al.auto_fx("groove")["logo"]["chroma"][0] == "aigus", "effets auto: en groove l'aberration du logo suit les frappes recentes, sinon les aigus")
+    tab_bg, tab_logo = al.auto_fx("groove")["bg"], al.auto_fx("groove")["logo"]
+    check(not (set(e for e in al.EFFECTS if tab_bg[e][1] not in (0, 0.0)) & set(e for e in al.EFFECTS if tab_logo[e][1] not in (0, 0.0))),
+          "effets auto: le logo est decale du fond (jamais le meme effet actif sur les deux couches)")
+    # --- banque d'effets : repos, montee progressive, derive, aller-retour
+    st = {"bass": 0.8, "mid": 0.5, "high": 0.6, "rms": 0.4, "beat": 0.9, "since_beat": 0.2, "hit": 0.7, "since_hit": 0.1}
+    bank = al.EffectBank()
+    rest = {e: al.REST for e in al.EFFECTS}
+    for k in range(10):
+        v = bank.levels(k / 60.0, 1 / 60.0, st, "bg", rest, "bg")
+    check(all(x == (0.0, 0.0, 0.0, al.NO_KICK) for x in v) and bank.active("bg") == [], "effets auto: tout au repos = quatre vecteurs silencieux, since = NO_KICK")
+    full = dict(rest, wobble=("basses", 1.0))
+    series, t = [], 0.6
+    for k in range(240):
+        t += 1 / 60.0
+        series.append(bank.levels(t, 1 / 60.0, st, "bg", full, "bg")[0][0])
+    steps = [b - a for a, b in zip(series, series[1:])]
+    check(max(steps) <= 0.25 / 60.0 * 60.0 / 4.0 + 1e-9 and all(s >= -1e-9 for s in steps) and series[-1] >= 0.72 and series[0] < 0.05,
+          "effets auto: un effet qui passe de repos a plein monte progressivement (jamais de saut, croissant, plein apres 4 s)", f"{series[0]:.3f} -> {series[-1]:.3f} pas max {max(steps):.4f}")
+    others = bank.levels(t, 1 / 60.0, st, "bg", full, "bg")
+    check(others[1] == (0.0, 0.0, 0.0, al.NO_KICK) and others[3] == (0.0, 0.0, 0.0, al.NO_KICK), "effets auto: les effets au repos restent silencieux pendant qu'un autre agit")
+    bank2 = al.EffectBank()
+    dr = dict(rest, wobble=("basses", al.DERIVE), chroma=("rien", al.DERIVE), ripple=("kick", al.DERIVE))
+    silent = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 5.0}
+    vals = [bank2.levels(x * 0.5, 1 / 60.0, silent, "logo", dr, "logo") for x in range(80)]
+    w = [v[0][0] for v in vals]
+    c = [v[3][2] for v in vals]
+    check(max(w) > 0.1 and max(w) <= al.DRIFT_WOBBLE + 1e-9 and max(c) > 0.05 and max(c) <= al.DRIFT_CHROMA + 1e-9 and all(v[1] == (0.0, 0.0, 0.0, al.NO_KICK) for v in vals),
+          "effets auto: la derive bouge sans son, reste bornee, et ne s'applique ni a l'onde de choc ni au glitch", f"{max(w):.3f} {max(c):.3f}")
+    bank3 = al.EffectBank()
+    bad = False
+    t = 0.0
+    for k in range(120):                      # repos -> plein -> repos en 0,5 s, plusieurs fois
+        t += 1 / 60.0
+        a = full if (k // 15) % 2 == 0 else rest
+        for vec in bank3.levels(t, 1 / 60.0, st, "bg", a, "bg"):
+            bad = bad or any(math.isnan(x) or x < 0.0 or (i < 3 and x > 1.0 + 1e-9) for i, x in enumerate(vec))
+    check(not bad, "effets auto: aller-retour rapide repos / plein: aucune valeur negative, hors plage ou NaN")
+    b4 = al.EffectBank()
+    b4.levels(0.0, 1 / 60.0, st, "bg", dict(rest, glitch=("aigus", 1.0)), "bg", fade=False)
+    for k in range(240):
+        b4.levels(k / 60.0, 1 / 60.0, st, "bg", dict(rest, glitch=("aigus", 1.0)), "bg", fade=False)
+    v = b4.levels(5.0, 1 / 60.0, st, "bg", dict(rest, glitch=("kick", 1.0)), "bg", fade=False)[2]
+    check(v[1] == 0.0 and v[2] > 0.8, "effets auto: sans fondu (source choisie a la main) le changement de source est immediat", str(v))
+
 def check_audio_layers() -> None:
     """Sources audio par couche en pixels : chaque couche ne reagit qu'a la partie du son choisie."""
     print("Sources audio par couche")
@@ -10587,7 +10656,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_groupes")
 
 
@@ -10599,7 +10668,7 @@ SUITE = (
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
-    "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
+    "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
     "check_bands_pulse", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
