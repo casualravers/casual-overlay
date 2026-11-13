@@ -10538,10 +10538,150 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_groupes")
+
+
+SUITE = (
+    "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
+    "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry",
+    "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
+    "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
+    "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
+    "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
+    "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
+    "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
+    "check_bands_pulse", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
+    "check_groupes",
+)
+# Verifications qui ont besoin d'une variable d'environnement le temps de leur execution (posee puis retiree autour de l'appel).
+ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
+
+# Groupes de la suite complete (integration continue : un job par groupe, en parallele). Tout `check_*` de SUITE qui n'est dans aucun groupe liste ici
+# va dans GROUPE_PAR_DEFAUT : ajouter une verification ne demande rien, et aucune ne peut etre oubliee. Un nom ne doit etre que dans UN groupe
+# (`check_groupes`). Equilibre vise : ~5 a 8 minutes chacun sur le serveur ; le groupe `gui` garde les verifications dont `check_gui` depend.
+GROUPE_PAR_DEFAUT = "reste"
+GROUPES = {
+    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
+    "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
+               "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
+               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
+    "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
+            "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
+            "check_manager", "check_gui"),
+}
+
+
+def group_of(name: str) -> str:
+    for group, members in GROUPES.items():
+        if name in members:
+            return group
+    return GROUPE_PAR_DEFAUT
+
+
+def parse_options(argv: list[str]) -> dict:
+    """Options de la ligne de commande : --pur, --duree, --sans-pur, --groupe NOM, --seulement MOTIF (repetable). ValueError si invalide."""
+    opts = {"pur": False, "duree": False, "sans_pur": False, "groupe": None, "seulement": []}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--pur", "--duree", "--sans-pur"):
+            opts[arg[2:].replace("-", "_")] = True
+        elif arg in ("--groupe", "--seulement"):
+            if i + 1 >= len(argv):
+                raise ValueError(f"{arg} demande une valeur")
+            i += 1
+            if arg == "--groupe":
+                opts["groupe"] = argv[i]
+            else:
+                opts["seulement"].append(argv[i])
+        else:
+            raise ValueError(f"option inconnue : {arg}")
+        i += 1
+    if opts["groupe"] is not None and opts["groupe"] not in (*GROUPES, GROUPE_PAR_DEFAUT):
+        raise ValueError(f"groupe inconnu : {opts['groupe']} (groupes : {', '.join((*GROUPES, GROUPE_PAR_DEFAUT))})")
+    return opts
+
+
+def selected_checks(opts: dict, suite: tuple = None) -> list[str]:
+    """Les verifications a lancer, dans l'ordre de SUITE : filtrees par groupe, par motif (sous-chaine du nom ; un motif sans correspondance est une
+    erreur : jamais « 0 verification, succes ») et, avec --sans-pur, privees de celles de PURES (deja passees par le job `pur`)."""
+    suite = SUITE if suite is None else suite
+    names = list(suite)
+    if opts.get("groupe"):
+        names = [n for n in names if group_of(n) == opts["groupe"]]
+    if opts.get("seulement"):
+        for motif in opts["seulement"]:
+            if not any(motif in n for n in suite):
+                raise ValueError(f"aucune verification ne correspond a « {motif} »")
+        names = [n for n in names if any(motif in n for motif in opts["seulement"])]
+    if opts.get("sans_pur"):
+        names = [n for n in names if n not in PURES]
+    if not names:
+        raise ValueError("aucune verification a lancer avec ces options")
+    return names
+
+
+def write_step_summary(durations: dict, title: str) -> None:
+    """Integration continue : tableau des durees dans le resume du job (GITHUB_STEP_SUMMARY), information seulement."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path or not durations:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"### Durees des verifications ({title}), total {sum(durations.values()):.0f} s\n\n| verification | secondes |\n|---|---|\n")
+            for name, secs in sorted(durations.items(), key=lambda kv: -kv[1]):
+                fh.write(f"| {name} | {secs:.0f} |\n")
+    except OSError:
+        pass
+
+
+def check_groupes() -> None:
+    print("Suite : table des verifications, groupes et options (CI en parallele)")
+    import inspect
+    callable_checks = {n for n, v in globals().items() if n.startswith("check_") and inspect.isfunction(v)
+                       and not any(p.default is p.empty for p in inspect.signature(v).parameters.values())}
+    forgotten = sorted(callable_checks - set(SUITE))
+    check(not forgotten and len(set(SUITE)) == len(SUITE) and all(n in globals() for n in SUITE),
+          "suite : toute verification `check_*` (sans argument) est dans SUITE, une seule fois (sinon elle ne tournerait jamais en CI)", str(forgotten))
+    members = [n for g in GROUPES.values() for n in g]
+    check(len(members) == len(set(members)) and all(n in SUITE for n in members) and GROUPE_PAR_DEFAUT not in GROUPES,
+          "groupes : un nom n'est que dans UN groupe, tous existent dans SUITE", str(sorted({n for n in members if members.count(n) > 1})))
+    union = sorted(n for g in (*GROUPES, GROUPE_PAR_DEFAUT) for n in SUITE if group_of(n) == g)
+    check(union == sorted(SUITE) and group_of("check_inconnu") == GROUPE_PAR_DEFAUT,
+          "groupes : leur reunion est la suite complete, un nom absent des groupes va dans le groupe par defaut")
+    opts0 = parse_options([])
+    check(selected_checks(opts0) == list(SUITE), "options : sans option, toute la suite dans l'ordre de SUITE")
+    check(selected_checks(dict(opts0, groupe="moteur")) == [n for n in SUITE if n in GROUPES["moteur"]],
+          "options : --groupe garde l'ordre de la suite")
+    no_pur = selected_checks(dict(opts0, sans_pur=True))
+    check(set(no_pur) == set(SUITE) - set(PURES) and "check_gui" in no_pur and "check_reader" not in no_pur,
+          "options : --sans-pur ne retire que les verifications de PURES (jamais une autre)")
+    only = selected_checks(dict(opts0, seulement=["rd_zones", "check_gui"]))
+    check(only == [n for n in SUITE if n in ("check_rd_zones", "check_gui")], "options : --seulement MOTIF (sous-chaine du nom, plusieurs motifs)", str(only))
+
+    def refused(fn, *args) -> bool:
+        try:
+            fn(*args)
+        except ValueError:
+            return True
+        return False
+
+    check(refused(selected_checks, dict(opts0, seulement=["xyz_introuvable"])) and refused(parse_options, ["--groupe", "nimporte"])
+          and refused(parse_options, ["--groupe"]) and refused(parse_options, ["--bizarre"])
+          and refused(selected_checks, dict(opts0, groupe="moteur", seulement=["check_gui"])),
+          "options : motif sans correspondance, groupe inconnu, valeur manquante, option inconnue, selection vide = erreur (jamais « 0 verification, succes »)")
+    parsed = parse_options(["--sans-pur", "--groupe", "gui", "--seulement", "a", "--seulement", "b", "--duree"])
+    check(parsed == {"pur": False, "duree": True, "sans_pur": True, "groupe": "gui", "seulement": ["a", "b"]}, "options : lecture de la ligne de commande", str(parsed))
 
 
 def main() -> None:
+    try:
+        opts = parse_options(sys.argv[1:])
+    except ValueError as exc:
+        print(f"Options : {exc}")
+        sys.exit(2)
     if SANS_GPU:
         for name in PURES:
             globals()[name]()
@@ -10550,97 +10690,40 @@ def main() -> None:
             sys.exit(1)
         print("Toutes les verifications pures passent.")
         return
+    try:
+        names = selected_checks(opts)
+    except ValueError as exc:
+        print(f"Options : {exc}")
+        sys.exit(2)
     durations: dict = {}
+    failed_checks: list = []                                # verifications dans lesquelles au moins un echec est tombe (relance ciblee)
 
     def timed(fn):
         def inner(*a, **k):
-            t0 = time.perf_counter()
+            t0, n0 = time.perf_counter(), len(failures)
             try:
                 return fn(*a, **k)
             finally:
                 durations[fn.__name__] = durations.get(fn.__name__, 0.0) + time.perf_counter() - t0
+                if len(failures) > n0 and fn.__name__ not in failed_checks:
+                    failed_checks.append(fn.__name__)
         inner.__name__ = fn.__name__
         return inner
 
     for _name in [n for n, v in list(globals().items()) if n.startswith("check_") and callable(v)]:
         globals()[_name] = timed(globals()[_name])
-    check_reader()
-    check_features()
-    check_features_phone()
-    check_text()
-    check_logo_video()
-    check_holo()
-    check_melt()
-    check_bg_stochastic()
-    check_reaction_pure()
-    check_foudre_pure()
-    check_textcycle()
-    check_reaction_sim()
-    check_rd_zones()
-    check_rd_symmetry()
-    check_bg_labyrinthe()
-    check_foudre_render()
-    check_cells()
-    check_noise()
-    check_doodles()
-    check_mosaic()
-    check_qr_projection()
-    check_icons()
-    check_audio2wave_interne()
-    check_masters()
-    check_portable_modules()
-    check_core_purity()
-    check_engine_layer()
-    check_params_schema()
-    check_safeguards()
-    check_uistats()
-    check_device_cache()
-    check_scenes()
-    check_bg_video()
-    check_fond_saveable()
-    check_randomizer()
-    check_diagnostics()
-    check_skin()
-    check_scrollbar()
-    check_menu_style()
-    check_dialogs()
-    check_audio2wave_api()
-    check_projection()
-    check_bar_gap()
-    check_line_resolution()
-    check_contract()
-    check_vj_flash()
-    check_gates()
-    check_layers()
-    check_audio_layers_pure()
-    check_onsets()
-    check_strobe_auto()
-    check_audio_layers()
-    check_automation()
-    check_params()
-    check_manager()
-    check_native_modes()
-    check_sphere_mode()
-    os.environ["CASUAL_MODES_PYTHON"] = "1"         # check_gui valide le repli : les modes Snap / Ridge dessines par audio2wave en Python
-    check_gui()
-    os.environ.pop("CASUAL_MODES_PYTHON", None)
-    check_render()
-    check_calibration()
-    check_bench_kick()
-    check_pulse()
-    check_bands_pulse()
-    check_latence()
-    check_beat_grid()
-    check_playback()
-    check_tempo()
-    check_remote_auth()
-    check_remote_server()
-    check_remote_page()
-    check_qrcode()
-    check_phase()
-    check_schedule()
-    check_palette()
-    check_stage_layout()
+    for name in names:
+        env = ENV_AVANT.get(name, {})
+        saved = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            globals()[name]()
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats
@@ -10649,13 +10732,24 @@ def main() -> None:
             print("  " + line)
     except Exception:
         pass
-    print("Verifications les plus longues (information, secondes) : " + ", ".join(
-        f"{n} {d:.0f}" for n, d in sorted(durations.items(), key=lambda kv: -kv[1])[:14]))
+    ranked = sorted(durations.items(), key=lambda kv: -kv[1])
+    if opts["duree"]:
+        print("Durees des verifications (secondes) :")
+        for n, d in ranked:
+            print(f"  {d:7.1f}  {n}")
+    else:
+        print("Verifications les plus longues (information, secondes) : " + ", ".join(f"{n} {d:.0f}" for n, d in ranked[:14]))
+    write_step_summary(durations, opts["groupe"] or ("selection" if opts["seulement"] else "suite complete"))
     drop_screen_dependent()
     if failures:
         print(f"{len(failures)} verification(s) en echec: {', '.join(failures)}")
         if only_fragile(failures):
             print(f"Seules des verifications de mise en page connues pour etre instables ont echoue : code {EXIT_FRAGILE} (relancer une fois).")
+            print("Verifications a relancer : " + ",".join(failed_checks))
+            rerun = os.environ.get("CHECK_RERUN_FILE")
+            if rerun:
+                with open(rerun, "w", encoding="utf-8") as fh:
+                    fh.write("\n".join(failed_checks))
             sys.exit(EXIT_FRAGILE)
         sys.exit(1)
     print("Toutes les verifications passent.")

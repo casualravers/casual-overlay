@@ -6,14 +6,20 @@ name: Verifications
 #              relancee UNE fois ; tout autre echec, ou un echec qui revient, fait echouer le job.
 # `portable` : fabrication et verification de la version portable (sans ffmpeg).
 # La mesure de latence logicielle est ecrite dans le resume du job (information, jamais un seuil : un serveur partage est trop variable).
+#
+# Duree (spec docs/plans/2026-11-13-optimiser-tests-et-flux-design.md) : `complet` est coupe en groupes independants (GROUPES de tools/check_gl.py) qui tournent en
+# PARALLELE (temps reel = le plus long groupe) et sautent les verifications deja passees par `pur` (--sans-pur). Sur un push de `main` (la PR vient de passer la meme
+# suite) seuls `pur` et `portable` tournent ; la suite complete tourne sur chaque PR, chaque nuit sur `main` et a la demande.
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 2 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: verifications-${{ github.ref }}
+  group: verifications-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -35,8 +41,14 @@ jobs:
 
   complet:
     needs: pur
+    if: github.event_name != 'push'
+    name: complet (${{ matrix.groupe }})
     runs-on: windows-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false                    # un groupe rouge ne cache pas les autres
+      matrix:
+        groupe: [labyrinthe, moteur, gui, reste]
     env:
       MESA_VERSION: "26.2.4"
     steps:
@@ -55,21 +67,26 @@ jobs:
         run: |
           choco install ffmpeg -y --no-progress | Out-Null
           ffmpeg -version | Select-Object -First 1
-      - name: Suite complete (relancee une fois si seuls des tests de mise en page instables echouent)
+      - name: Groupe de la suite (relance des SEULES verifications instables si seuls des tests de mise en page instables echouent)
         shell: pwsh
+        env:
+          CHECK_RERUN_FILE: check-rerun.txt
         run: |
-          python tools/check_gl.py *> check.log
+          python tools/check_gl.py --groupe ${{ matrix.groupe }} --sans-pur *> check.log
           $code = $LASTEXITCODE
           if ($code -eq 3) {
-            Write-Host "Echecs de mise en page connus pour etre instables : nouvelle execution"
+            Write-Host "Echecs de mise en page connus pour etre instables : nouvelle execution de ces seules verifications"
             Copy-Item check.log check-1.log
-            python tools/check_gl.py *> check.log
+            $seul = @()
+            foreach ($n in (Get-Content check-rerun.txt | Where-Object { $_ })) { $seul += @("--seulement", $n) }
+            Remove-Item Env:CHECK_RERUN_FILE
+            python tools/check_gl.py @seul *> check.log
             $code = $LASTEXITCODE
           }
           Get-Content check.log -Tail 60
           exit $code
       - name: Latence logicielle (information)
-        if: always()
+        if: always() && matrix.groupe == 'reste'
         shell: pwsh
         run: |
           "### Latence audio -> image (chaine logicielle, serveur partage : indicatif)" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -80,7 +97,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: journaux-verifications
+          name: journaux-verifications-${{ matrix.groupe }}
           path: check*.log
           if-no-files-found: ignore
 
