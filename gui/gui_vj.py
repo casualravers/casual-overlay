@@ -83,7 +83,7 @@ def install(c):
         info = s.status.get("phase_info") or {}
         bg, logo, bg_auto, logo_auto = s.status.get("sources", ("tout", "tout", False, False))
         on = float(params.get("auto_phase", 1.0)) >= 0.5
-        return explain.sources_text(bg, logo, bg_auto, logo_auto, info.get("name") if (on and info) else None)
+        return explain.sources_text(bg, logo, bg_auto, logo_auto, info.get("name") if (on and info) else None) + "\n" + explain.fx_line(s.status.get("fx_now"))
 
     def phase_fx_line() -> str:
         info = s.status.get("phase_info") or {}
@@ -512,11 +512,12 @@ def install(c):
             phase = tk.Label(f, text="phase : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w")
             phase.grid(row=1, column=3, columnspan=2, sticky="w", padx=6)
             vj_ui["phase"] = phase
-            sources = tk.Label(f, text="sources : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
+            sources = tk.Label(f, text="sources : -\neffets : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
             sources.grid(row=2, column=0, columnspan=6, sticky="w", padx=6, pady=(4, 0))
             vj_ui["sources"] = sources
             Tooltip(sources, "Partie du son qui pilote le fond et le logo (menus « reagit a » de l'onglet Effets). Sur Auto, elle change avec la phase : "
-                             "groove = fond sur les basses et logo sur les aigus, montee = mediums et frappes, cassure = seul le logo reagit, pic = tout sur le kick.")
+                             "groove = fond sur les basses et logo sur les aigus, montee = mediums et frappes, cassure = seul le logo reagit, pic = tout sur le kick. "
+                             "La 2e ligne dit ce qui fait bouger chaque effet (ondulation, choc, glitch, aberration) : en auto chaque effet a sa propre source, et ceux qui n'ont rien a dire restent au repos.")
             effects = tk.Label(f, text="phases auto : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
             effects.grid(row=3, column=0, columnspan=6, sticky="w", padx=6, pady=(2, 0))
             vj_ui["phase_fx"] = effects

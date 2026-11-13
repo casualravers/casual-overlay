@@ -22,6 +22,32 @@ def sources_text(bg: str, logo: str, bg_auto: bool, logo_auto: bool, phase: str 
     return lead
 
 
+FX_NAMES = {"wobble": "ondulation", "ripple": "choc", "glitch": "glitch", "chroma": "aberration"}
+
+
+def fx_text(layer: str, active: list | None) -> str:
+    """Les effets d'une couche en mode auto par effet : "fond : ondulation <- basses 60 %, choc <- kick 50 %". `active` = (effet, source, dosage) de
+    `EffectBank.active` ; None = la couche n'est pas en auto par effet (vide) ; liste vide = tout au repos."""
+    if active is None:
+        return ""
+    if not active:
+        return f"{layer} : tout au repos"
+    parts = []
+    for effect, source, dose in active:
+        name = FX_NAMES.get(effect, effect)
+        parts.append(f"{name} (derive lente)" if source == "derive" else f"{name} <- {source} {_fr(float(dose) * 100, 0)} %")
+    return f"{layer} : " + ", ".join(parts)
+
+
+def fx_line(fx_now: dict | None) -> str:
+    """La ligne des voyants d'effets : fond puis logo, ou "source de la couche" quand le mode auto par effet ne s'applique pas."""
+    fx_now = fx_now or {}
+    bg, logo = fx_text("fond", fx_now.get("bg")), fx_text("logo", fx_now.get("logo"))
+    if not bg and not logo:
+        return "effets : source de la couche (reglage a la main, ou phase inconnue)"
+    return "effets : " + "  |  ".join(x for x in (bg, logo) if x)
+
+
 def phase_effects_text(mult: dict | None, enabled: bool = True) -> str:
     """Ce que les phases auto font aux masters : « tempo x0,30 | reactivite x0,60 | effets x0,35 | derive de teinte 3 deg/s »."""
     if not enabled or not mult:

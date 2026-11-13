@@ -13,7 +13,7 @@ from pathlib import Path
 from core import sessionlog
 from core import doodles
 from core import qrcode
-from core.audio_layers import LayerFilter, SourceMixer, auto_sources, has_kick, layer_levels
+from core.audio_layers import EFFECTS, EffectBank, LayerFilter, SourceMixer, auto_fx, auto_sources, has_kick, layer_levels
 from core.pulse import cycle_seconds, swell as pulse_swell
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
@@ -280,7 +280,11 @@ class Renderer:
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
         self.sources_now = ("tout", "tout", False, False)                              # (fond, logo, fond en auto, logo en auto) : affiche dans l'interface
         self.strobe_info: tuple[str, float] | None = None                            # (raison, instant) du dernier eclair : affiche dans l'interface
-        self._layer_filters = (LayerFilter(), LayerFilter())                           # retard et lissage de la reaction au son : fond, logo
+        self._fx_bank = EffectBank()                                                   # reactivite par effet (mode auto) : un vecteur audio par effet et par couche
+        self._fx_filters = {layer: [LayerFilter() for _ in EFFECTS] for layer in ("bg", "logo")}
+        self._fx_t = None
+        self.fx_now = {"bg": None, "logo": None}                                       # effets actifs par couche (voyant) ; None = la couche n'est pas en auto par effet
+        self._layer_filters = (LayerFilter(), LayerFilter())                         # retard et lissage de la reaction au son : fond, logo
         self._hue_spec = 0.0                                                          # teinte tiree du spectre, lissee
         self._prev_ok = False
         self.fb_tex: list = []                  # trainee : deux images finales hors ecran (on lit l'une, on ecrit l'autre, puis on echange)
@@ -775,6 +779,23 @@ class Renderer:
         bg_au = self._layer_filters[0].step(t, self._src_mix[0].levels(t, state, src_bg, "bg", bg_auto), p["lag_bg"], p["smooth_bg"])
         lg_au = self._layer_filters[1].step(t, self._src_mix[1].levels(t, state, src_logo, lk, logo_auto), p["lag_" + lk], p["smooth_" + lk])
         lg_bass, lg_high, lg_beat = lg_au[0], lg_au[1], lg_au[2]
+        # Reactivite par effet (mode auto avec phase connue) : un vecteur audio par effet et par couche, chacun avec sa source et son dosage ;
+        # sinon les quatre effets lisent le vecteur de la couche (comportement d'avant, image identique). Le logo lie prend sa propre colonne si le fond est en auto.
+        fx_tab = auto_fx(phase_name, state.get("since_hit"))
+        bg_fx = bg_auto and fx_tab is not None
+        logo_fx = (bg_auto if linked else logo_auto) and fx_tab is not None
+        fdt = 0.0 if self._fx_t is None else min(max(t - self._fx_t, 0.0), 0.1)
+        self._fx_t = t
+        self.fx_now = {"bg": None, "logo": None}
+        au_bg_fx, au_logo_fx = [bg_au] * 4, [lg_au] * 4
+        if bg_fx:
+            raw = self._fx_bank.levels(t, fdt, state, "bg", fx_tab["bg"], "bg", True)
+            au_bg_fx = [self._fx_filters["bg"][i].step(t, raw[i], p["lag_bg"], p["smooth_bg"]) for i in range(4)]
+            self.fx_now["bg"] = self._fx_bank.active("bg")
+        if logo_fx:
+            raw = self._fx_bank.levels(t, fdt, state, "logo", fx_tab["logo"], lk, True)
+            au_logo_fx = [self._fx_filters["logo"][i].step(t, raw[i], p["lag_" + lk], p["smooth_" + lk]) for i in range(4)]
+            self.fx_now["logo"] = self._fx_bank.active("logo")
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt
@@ -998,8 +1019,9 @@ class Renderer:
         for name in ("bass", "mid", "high", "rms"):
             self._set(pp, f"u_{name}", float(state[name]))
         self._set(pp, "u_beat", float(beat))
-        self._set(pp, "u_au_bg", tuple(float(v) for v in bg_au))
-        self._set(pp, "u_au_logo", tuple(float(v) for v in lg_au))
+        for uname, vecs in (("u_au_bg", au_bg_fx), ("u_au_logo", au_logo_fx)):        # un vecteur par effet : ondulation, onde de choc, glitch, aberration
+            if uname in pp:
+                pp[uname].write(np.array([[float(x) for x in v] for v in vecs], dtype="f4").tobytes())
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
         self._set(pp, "u_flash", flash * flash)
         self._set(pp, "u_strobe", strobe_v)

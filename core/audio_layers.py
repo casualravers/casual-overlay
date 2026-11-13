@@ -61,6 +61,49 @@ def auto_sources(phase, since_hit=None) -> tuple[str, str]:
     return bg, logo
 
 
+# --- Reactivite PAR EFFET (spec 2026-11-13) : en mode auto, chaque effet de chaque couche a SA source et son dosage selon la phase -----------------
+# Les quatre effets de `post.frag` (`layer_fx`), dans l'ordre des vecteurs audio envoyes au shader : ondulation, onde de choc, glitch, aberration.
+EFFECTS = ("wobble", "ripple", "glitch", "chroma")
+DERIVE = "derive"                        # dosage : mouvement lent independant de la musique (ondulation et aberration seulement)
+REST = ("rien", 0.0)                     # effet au repos
+DOSE_TAU_S = 1.0                         # un dosage glisse vers sa cible avec cette constante de temps (jamais de saut)
+DRIFT_WOBBLE = 0.25                      # amplitude de la derive de l'ondulation (niveau de basses equivalent)
+DRIFT_CHROMA = 0.15                      # ... de l'aberration (niveau de kick equivalent)
+DRIFT_PERIOD_S = 20.0
+DOSE_OFF = 0.02                          # dosage lisse sous lequel l'effet est considere au repos (since = NO_KICK)
+
+
+def _fx(wobble=REST, ripple=REST, glitch=REST, chroma=REST) -> dict:
+    return {"wobble": wobble, "ripple": ripple, "glitch": glitch, "chroma": chroma}
+
+
+# phase -> couche -> effet -> (source, dosage). Le fond porte les basses / le kick, le logo les frappes / aigus : ils ne battent pas a l'unisson.
+# Hors du pic, deux effets au plus par couche ; au pic les quatre effets sont actifs mais repartis entre les deux couches. A regler a l'oeil.
+FX_TABLE = {
+    "silence": {"bg": _fx(wobble=("basses", DERIVE)), "logo": _fx(chroma=("rien", DERIVE))},
+    "ambient": {"bg": _fx(wobble=("basses", DERIVE)), "logo": _fx(chroma=("rien", DERIVE))},
+    "groove": {"bg": _fx(wobble=("basses", 0.6), ripple=("kick", 0.5)),
+               "logo": _fx(glitch=("air", 0.5), chroma=("frappes", 0.6))},
+    "build": {"bg": _fx(wobble=("mediums", 0.7), chroma=("elan", 0.5)),
+              "logo": _fx(glitch=("aigus", 0.7), chroma=("frappes", 0.6))},
+    "break": {"bg": _fx(), "logo": _fx(wobble=("tout", 0.6))},
+    "peak": {"bg": _fx(wobble=("basses", 1.0), ripple=("kick", 1.0)),
+             "logo": _fx(glitch=("frappes", 1.0), chroma=("kick", 1.0))},
+}
+
+
+def auto_fx(phase, since_hit=None) -> dict | None:
+    """Assignations {couche: {effet: (source, dosage)}} que le mode auto donne pour une phase ; None si la phase est inconnue ou absente
+    (comportement d'avant : un seul vecteur par couche). Groove : l'aberration du logo suit les frappes si on en a vu depuis moins de `HIT_RECENT_S`, sinon les aigus."""
+    if phase not in FX_TABLE:
+        return None
+    table = {layer: dict(effects) for layer, effects in FX_TABLE[phase].items()}
+    if phase == "groove":
+        recent = since_hit is not None and float(since_hit) < HIT_RECENT_S
+        table["logo"]["chroma"] = ("frappes" if recent else "aigus", table["logo"]["chroma"][1])
+    return table
+
+
 def valid(source) -> str:
     return source if source in SOURCES else DEFAULT
 
@@ -136,7 +179,45 @@ class SourceMixer:
         return (old[0] + (new[0] - old[0]) * w, old[1] + (new[1] - old[1]) * w, old[2] + (new[2] - old[2]) * w, new[3] if w > 0.5 else old[3])
 
 
-ATTACK_MAX_S = 0.12         # lissage a 1 : attaque de 120 ms
+class EffectBank:
+    """Les quatre vecteurs audio (un par effet, ordre `EFFECTS`) de chaque couche en mode auto : un `SourceMixer` (fondu de 1,5 s quand la source
+    change) et un dosage lisse (`DOSE_TAU_S`) par couple (couche, effet). Un effet au repos rend `(0, 0, 0, NO_KICK)` : l'onde de choc ne part jamais de lui.
+    La derive ajoute un petit mouvement lent independant du son (ondulation : composante `bass`, aberration : composante `beat`)."""
+
+    def __init__(self) -> None:
+        self._mix = {layer: [SourceMixer() for _ in EFFECTS] for layer in LAYERS}
+        self._dose: dict[str, list[float | None]] = {layer: [None] * len(EFFECTS) for layer in LAYERS}       # None : pas encore de dosage, la premiere cible est prise tout de suite
+        self._info: dict[str, list[tuple[str, str, float]]] = {layer: [] for layer in LAYERS}
+
+    def levels(self, now: float, dt: float, state: dict, layer: str, assign: dict, kick_layer: str, fade: bool = True) -> list:
+        a = 1.0 - math.exp(-max(float(dt), 0.0) / DOSE_TAU_S)
+        swing = 0.5 + 0.5 * math.sin(2.0 * math.pi * now / DRIFT_PERIOD_S)
+        out, info = [], []
+        for i, effect in enumerate(EFFECTS):
+            source, dose = assign.get(effect, REST)
+            drift = dose == DERIVE
+            target = 0.0 if drift else min(max(float(dose), 0.0), 1.0)
+            prev = self._dose[layer][i]
+            d = target if prev is None else prev + (target - prev) * a
+            self._dose[layer][i] = d
+            bass, high, beat, since = self._mix[layer][i].levels(now, state, source, kick_layer, fade)
+            vec = [bass * d, high * d, beat * d, since] if d >= DOSE_OFF else [0.0, 0.0, 0.0, NO_KICK]
+            if drift and effect in ("wobble", "chroma"):
+                k = DRIFT_WOBBLE if effect == "wobble" else DRIFT_CHROMA
+                vec[0 if effect == "wobble" else 2] += k * swing
+                info.append((effect, DERIVE, k * swing))
+            elif d >= DOSE_OFF:
+                info.append((effect, source, d))
+            out.append(tuple(vec))
+        self._info[layer] = info
+        return out
+
+    def active(self, layer: str) -> list[tuple[str, str, float]]:
+        """(effet, source ou « derive », dosage lisse) des effets non au repos, pour le voyant."""
+        return list(self._info.get(layer, []))
+
+
+ATTACK_MAX_S = 0.12        # lissage a 1 : attaque de 120 ms
 RELEASE_MAX_S = 0.8         # ... relachement de 800 ms
 
 
