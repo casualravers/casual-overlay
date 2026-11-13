@@ -9,11 +9,18 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Cache de l'archive Mesa (evite le telechargement a chaque job)
+      uses: actions/cache@v4
+      with:
+        path: mesa.7z
+        key: mesa-${{ inputs.version }}-msvc
     - name: Telechargement et copie des DLL
       shell: pwsh
       run: |
         $v = "${{ inputs.version }}"
-        Invoke-WebRequest "https://github.com/pal1000/mesa-dist-win/releases/download/$v/mesa3d-$v-release-msvc.7z" -OutFile mesa.7z
+        if (-not (Test-Path mesa.7z)) {
+          Invoke-WebRequest "https://github.com/pal1000/mesa-dist-win/releases/download/$v/mesa3d-$v-release-msvc.7z" -OutFile mesa.7z
+        }
         7z x mesa.7z -omesa -y | Out-Null
         $py = Split-Path (python -c "import sys; print(sys.executable)")
         # opengl32.dll (le chargeur) et libgallium_wgl.dll (le pilote llvmpipe) suffisent ; libglapi.dll n'existe plus dans les Mesa recents

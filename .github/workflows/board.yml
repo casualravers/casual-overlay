@@ -1,0 +1,77 @@
+name: Board
+
+# Deplace la carte du Project « Casual Overlay - Idees » selon l'etat de la PR qui la cite (issue #135) :
+#
+#   PR de SPEC seule (tous les fichiers sous docs/plans/)   ouverte -> « Spec a valider »   fusionnee -> « Pret »
+#   PR de code (au moins un fichier hors docs/plans/)       ouverte -> « En cours »         fusionnee -> « A tester »
+#   PR fermee sans fusion : la carte ne bouge pas.
+#
+# Une PR cite ses issues par `Closes #N` / `Fixes #N` / `Resolves #N` ou `Refs #N` (un lot parmi d'autres : meme regle, pas de fermeture). Les PR
+# de toutes les sessions suivent la meme regle. Le passage en « Fait » reste a la main (l'utilisateur ferme l'issue quand c'est valide en vrai).
+#
+# JETON : le GITHUB_TOKEN du depot ne peut PAS modifier un Project d'utilisateur. Il faut un jeton personnel (classique, portee `project`) enregistre
+# dans les secrets du depot sous le nom PROJECT_TOKEN. Sans lui le job se termine avec un avertissement (aucun echec : la PR n'est jamais bloquee).
+# Le Project est repere par son proprietaire (celui du depot) et son numero PROJECT_NUMBER ; ajouter une carte absente du Project est automatique.
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  PROJECT_NUMBER: "1"
+
+jobs:
+  carte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Jeton present ?
+        id: jeton
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$PROJECT_TOKEN" ]; then
+            echo "::warning::Secret PROJECT_TOKEN absent : les cartes du board ne sont pas deplacees (voir l'en-tete de .github/workflows/board.yml)."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deplacer les cartes
+        if: steps.jeton.outputs.present == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const merged = pr.merged === true;
+            if (context.payload.action === "closed" && !merged) { core.info("PR fermee sans fusion : rien a deplacer"); return; }
+            // issues citees (Closes / Fixes / Resolves / Refs), meme depot seulement
+            const issues = new Set();
+            for (const m of (pr.body || "").matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)/gi)) issues.add(Number(m[1]));
+            if (issues.size === 0) { core.info("aucune issue citee"); return; }
+            // spec seule ou code ?
+            const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+            const specOnly = files.length > 0 && files.every(f => f.filename.startsWith("docs/plans/"));
+            const target = specOnly ? (merged ? "Pret" : "Spec a valider") : (merged ? "A tester" : "En cours");
+            core.info(`PR #${pr.number} (${specOnly ? "spec seule" : "code"}, ${merged ? "fusionnee" : "ouverte"}) -> ${target}`);
+            const owner = context.repo.owner, number = Number(process.env.PROJECT_NUMBER);
+            const proj = await github.graphql(`query($o:String!,$n:Int!){ user(login:$o){ projectV2(number:$n){ id field(name:"Status"){ ... on ProjectV2SingleSelectField { id options { id name } } } } } }`, { o: owner, n: number });
+            const project = proj.user.projectV2, field = project.field;
+            const option = field.options.find(o => o.name === target);
+            if (!option) { core.setFailed(`colonne « ${target} » absente du Project`); return; }
+            for (const n of issues) {
+              const r = await github.graphql(`query($o:String!,$r:String!,$i:Int!){ repository(owner:$o,name:$r){ issue(number:$i){ id projectItems(first:20){ nodes{ id project{ id } } } } } }`,
+                { o: owner, r: context.repo.repo, i: n }).catch(e => null);
+              if (!r || !r.repository.issue) { core.info(`#${n} : pas une issue de ce depot`); continue; }
+              let item = r.repository.issue.projectItems.nodes.find(x => x.project.id === project.id);
+              if (!item) {
+                const add = await github.graphql(`mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`, { p: project.id, c: r.repository.issue.id });
+                item = add.addProjectV2ItemById.item;
+              }
+              await github.graphql(`mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`,
+                { p: project.id, i: item.id, f: field.id, o: option.id });
+              core.info(`#${n} -> ${target}`);
+            }
