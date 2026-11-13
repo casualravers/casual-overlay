@@ -2946,6 +2946,56 @@ def check_bench_kick() -> None:
           f"{by['sans kick : charleys et claps secs']['faux_par_minute']} / {by['sans kick : charleys et caisses claires larges']['faux_par_minute']}")
     bass = by["kick sur basse continue"]
     check(bass["rappel"] < 0.7, "banc: limite connue : kick sur basse continue encore en partie manque a la sensibilite 1 (le banc le chiffre au lieu de le cacher)", str(bass["rappel"]))
+    # --- kick / caisse claire (bug signale : le beat partait sur kick + snare, BPM faux) : avant / apres sur le meme corpus
+    bk.CLASSIFY = False
+    try:
+        raw = {it["nom"]: it["sensibilites"]["1"] for it in bk.bench_synthetic((1.0,), 15.0)}
+    finally:
+        bk.CLASSIFY = True
+    for name in ("rock 100 BPM (kick 1 et 3, snare 2 et 4)", "rock 100 BPM, telephone", "dnb 174 BPM, telephone"):
+        check(by[name]["precision"] >= raw[name]["precision"] + 0.15 and by[name]["precision"] >= 0.68 and by[name]["rappel"] >= 0.9,
+              f"kick / snare: {name}: la caisse claire n'est plus prise pour un kick (precision {raw[name]['precision']} -> {by[name]['precision']}), kicks gardes",
+              f"{by[name]}")
+    for name in ("house 124 BPM + snare sur 2 et 4", "house + snare, telephone", "house 124 BPM", "breakbeat 140 BPM", "telephone (coupe sous 250 Hz, -30 dB)"):
+        check(by[name]["rappel"] >= 0.9 and by[name]["precision"] >= 0.95,
+              f"kick / snare: {name}: un kick pose sur une caisse claire (ou sans caisse claire) reste un kick", f"{by[name]}")
+    good = [n for n, r in by.items() if r.get("bpm_vrai") and n != "dnb 174 BPM (kick 1 et 3 syncope, snare 2 et 4)" and n != "dnb 174 BPM, telephone"]
+    check(all(bk.bpm_ok(by[n]["bpm"], by[n]["bpm_vrai"]) for n in good),
+          "BPM: juste a 3 % sur tous les morceaux du corpus (sauf dnb 174 : lu a 87, l'octave du dessous, ambiguite connue)",
+          str({n: (by[n]["bpm"], by[n]["bpm_vrai"]) for n in good if not bk.bpm_ok(by[n]["bpm"], by[n]["bpm_vrai"])}))
+    from core.onset import KickClassifier
+    kc = KickClassifier()
+    for i in range(30):                                               # kicks (beaucoup de graves) et caisses claires (peu) en alternance
+        kc.observe(0.1 + 0.05 * (i % 3) if i % 2 == 0 else -1.8 + 0.05 * (i % 3))
+    check(kc.armed and kc.is_kick(0.1) and not kc.is_kick(-1.8) and kc.is_kick(0.1 - 0.4),
+          "kick / snare: deux familles nettes -> la famille sans graves n'est plus un kick, un kick un peu plus faible l'est encore", f"armed {kc.armed} seuil {kc.thr}")
+    kc = KickClassifier()
+    for i in range(40):
+        kc.observe(0.1 + 0.15 * ((i * 7) % 5) / 5.0)                  # kicks d'intensites variees, pas de caisse claire
+    check(not kc.armed and kc.is_kick(-0.5), "kick / snare: une seule famille (accents de kick) -> rien n'est ecarte")
+    kc = KickClassifier()
+    for i in range(30):
+        kc.observe(0.1 if i % 2 == 0 else -0.3)
+    check(not kc.armed, "kick / snare: deux niveaux trop proches (moins d'une decade) -> rien n'est ecarte")
+    from core.rhythm import Rhythm as _R
+    r = _R()
+    r.est.estimate = lambda: (100.0, 0.50)
+    r.tempo.estimate = lambda now: (150.0, 0.85)
+    r._last_kick = 9.9
+    r._evaluate(10.0)
+    check(r.bpm is not None and abs(r.bpm - 150.0) < 1.0, "BPM: kicks peu surs en desaccord net avec un tempo du son net -> le tempo du son", str(r.bpm))
+    r = _R()
+    r.est.estimate = lambda: (100.0, 0.50)
+    r.tempo.estimate = lambda now: (50.0, 0.85)
+    r._last_kick = 9.9
+    r._evaluate(10.0)
+    check(r.bpm is not None and abs(r.bpm - 100.0) < 1.0, "BPM: un tempo du son a la moitie des kicks ne les contredit pas (ambiguite d'octave : on garde les kicks)", str(r.bpm))
+    r = _R()
+    r.est.estimate = lambda: (100.0, 0.80)
+    r.tempo.estimate = lambda now: (150.0, 0.85)
+    r._last_kick = 9.9
+    r._evaluate(10.0)
+    check(r.bpm is not None and abs(r.bpm - 100.0) < 1.0, "BPM: des kicks surs (confiance 0,8) ne sont jamais contredits", str(r.bpm))
     # --- avant / apres le lot 3 : meme corpus, FFT seule : le retard baisse d'au moins 10 ms sans perdre plus d'un point de F1 (critere de la spec)
     bk.FAST = False
     try:
@@ -10538,7 +10588,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_groupes")
 
 
 def main() -> None:
