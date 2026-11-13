@@ -54,29 +54,54 @@ Chaque ligne a son test dans la tache qui possede le code.
 
 **Produit** : un compte rendu dans la PR (chiffres, decision).
 
-- [ ] **Etape 1** : ecrire le script : ouvre le moteur en synthetique, rend 300 images vers un FBO 1080x1920 par `Renderer.draw(fbo, (1080, 1920), ...)`, relit dans deux tampons en alternance (`ctx.buffer` + `fbo.read_into`), envoie a un `ffmpeg` (`libx264 veryfast`) sur son entree standard ; mesure le temps GPU (`PerfGuard`), le temps de relecture, le CPU de ffmpeg, le nombre d'images tenues.
-- [ ] **Etape 2** : lancer a 30 puis 60 images/s, avec fond `pattern` + halo + cellules ; verifier a l'oeil (MP4 lu) que pixelisation, halo, trainee et transition ne sont pas deformes par la taille.
-- [ ] **Etape 3** : noter dans la PR : GPU ms, CPU %, images tenues, encodeur materiel disponible (`ffmpeg -encoders`), ce qui change visuellement. Decision : 30 seul, 30 et 60, ou revoir la spec. **S'arreter et la demander a l'utilisateur si 30 ne tient pas.**
+- [x] **Etape 1** : ecrire le script : ouvre le moteur en synthetique, rend 300 images vers un FBO 1080x1920 par `Renderer.draw(fbo, (1080, 1920), ...)`, relit dans deux tampons en alternance (`ctx.buffer` + `fbo.read_into`), envoie a un `ffmpeg` (`libx264 veryfast`) sur son entree standard ; mesure le temps GPU (`PerfGuard`), le temps de relecture, le CPU de ffmpeg, le nombre d'images tenues.
+- [x] **Etape 2** : lancer a 30 puis 60 images/s, avec fond `pattern` + halo + cellules ; verifier a l'oeil (MP4 lu) que pixelisation, halo, trainee et transition ne sont pas deformes par la taille.
+- [x] **Etape 3** : noter dans la PR : GPU ms, CPU %, images tenues, encodeur materiel disponible (`ffmpeg -encoders`), ce qui change visuellement. Decision : 30 seul, 30 et 60, ou revoir la spec. **S'arreter et la demander a l'utilisateur si 30 ne tient pas.**
 - Attendu : fichier de 10 s ouvrable, 300 images, aucune image noire.
+
+#### Resultats du spike (fait le 2026-11-13 ; poste de dev : Ryzen 5 4600H 12 fils, Radeon integree, ffmpeg 9.0 ; script sur la branche `spike-enregistrement`, jamais fusionnee)
+
+Rendu hors ecran 1080x1920, relecture asynchrone sur deux tampons GL, ecriture par un fil vers `ffmpeg`, etat audio synthetique (un kick toutes les 0,5 s). « Libre » = debit maximal, « cadence » = images attendues a l'heure.
+
+| Profil (1080x1920) | rendu moyen | debit libre | a 30 images/s | a 60 images/s |
+|---|---|---|---|---|
+| leger (aucun effet couteux) | 8 ms | 87 i/s | tient | ~20 % en retard |
+| halo seul | 13 ms | 63 i/s | tient | ne tient pas |
+| fonte seule | 11 ms | 73 i/s | tient | ne tient pas |
+| composition (trainee + pixelisation) | 9 ms | 81 i/s | tient | limite |
+| **cellules seules** | **25 ms** | 37 i/s | tient de justesse | non |
+| lourd (halo + cellules + fonte + composition) | **35 ms** | **27 i/s** | **ne tient pas (~10 % d'images dupliquees)** | non |
+| lourd en **720x1280** | 16 ms | 57 i/s | **tient** | ~6 % de doublons |
+
+- **Le goulot est le rendu GPU**, pas la relecture (0,2 a 0,4 ms pour la lancer, 1,5 a 3,5 ms pour la recuperer) ni l'encodage (x264 `veryfast` tient 80 images/s en libre).
+- **CPU** (sur 12 fils) : x264 environ 230 % d'un coeur a 30 images/s (~19 % de la machine), encodeur materiel AMF environ 105 %. Fichiers de 18 a 25 Mo pour 10 s, soit 100 a 150 Mo par minute : l'ordre de grandeur de la spec est confirme.
+- **Independance de la resolution** : ecart moyen de 0,7 a 2,7 sur 255 entre un rendu 1080x1920 reduit de moitie et un rendu direct en 540x960 : les effets lies a la taille (pixelisation, halo) se comportent pareil. Image regardee a l'oeil : sens correct (le texte du logo se lit a l'endroit, le `vflip` est bon), pixelisation, halo et trainee presents. MP4 valides : 300 images, 10 s, `yuv420p`, 1080x1920.
+- **Limites du spike** : ni fenetre ni copie vers l'ecran, ni capture audio ni analyse en meme temps, ni GUI : les chiffres reels seront un peu moins bons. Le tampon hors ecran n'est **pas multi-echantillonne** alors que l'ecran de la fenetre l'est : bords moins lisses (voir tache 5). Un seul poste.
+
+**Decisions tirees** (reportees dans la spec) :
+1. **30 images/s tient** pour les looks courants ; les **cellules** (25 ms a elles seules) et le cumul des effets couteux font passer sous 30 images/s a 1080x1920.
+2. Nouveau format **`vertical_hd` 720x1280** (tient 30 images/s avec tous les effets, ~57 images/s) a cote de 1080x1920, qui reste le defaut. L'alerte « plus de 2 % d'images dupliquees » le propose.
+3. **60 images/s deconseille a 1080x1920** (ne tient pas, meme en leger, sur ce poste) ; il n'a de sens qu'en 720x1280.
+4. **Encodeur par defaut `libx264`** (qualite previsible, CPU largement suffisant, le GPU est deja le goulot) ; l'encodeur materiel est une option (`rec_encoder`), au lieu d'etre prefere d'office.
 
 ### Tache 2 : `core/recording.py` (TDD)
 
 **Fichiers** : creer `core/recording.py` ; test `tools/check_gl.py` (`check_recording`, dans `SUITE` et `PURES`) ; `core/params_schema.py`.
 
 **Produit** (signatures exactes) :
-- `FORMATS: dict[str, tuple[int, int]]` = `{"vertical": (1080, 1920), "horizontal": (1920, 1080), "carre": (1080, 1080)}`.
+- `FORMATS: dict[str, tuple[int, int]]` = `{"vertical": (1080, 1920), "vertical_hd": (720, 1280), "horizontal": (1920, 1080), "carre": (1080, 1080)}`.
 - `frames_due(t0: float, now: float, fps: int, sent: int) -> int` : nombre d'images a ecrire pour que l'image numero k tombe a `t0 + k / fps` ; `max(0, floor((now - t0) * fps) + 1 - sent)`.
 - `audio_offset(t_video0: float, t_audio0: float, delay_ms: float) -> float` : `(t_audio0 - t_video0) + delay_ms / 1000` (positif = audio retarde).
 - `output_name(now: datetime, directory: str, exists=os.path.exists) -> str` : `casual-AAAA-MM-JJ_HHhMMmSS.mp4`, suffixe `-2`, `-3`... si le fichier existe.
 - `video_command(ffmpeg: str, size: tuple[int, int], fps: int, encoder: str, out: str) -> list[str]` : entree `rawvideo rgb24` sur stdin, `-vf vflip`, `-pix_fmt yuv420p`, `-g <fps>`, etiquettes bt709 (`-colorspace`, `-color_primaries`, `-color_trc`), `libx264` : `-preset veryfast -crf 17`.
 - `mux_command(ffmpeg: str, video: str, audio_raw: str, rate: int, channels: int, offset_s: float, out: str) -> list[str]` : video `-c copy`, audio `-f f32le` encode `aac -b:a 320k -ar 48000`, `-movflags +faststart` ; offset > 0 : `-itsoffset` sur l'audio ; offset < 0 : `-ss` de `-offset` sur l'audio.
-- `choose_encoder(listed: Iterable[str], tested: Callable[[str], bool]) -> str` : ordre `h264_nvenc`, `h264_amf`, `h264_qsv` (liste ET `tested` vrai), sinon `libx264`.
+- `choose_encoder(listed: Iterable[str], tested: Callable[[str], bool], hardware: bool = False) -> str` : `libx264` si `hardware` est faux ; sinon, dans l'ordre `h264_nvenc`, `h264_amf`, `h264_qsv`, le premier liste ET `tested` vrai, a defaut `libx264`.
 - `peak_db(peak: float) -> float` : dBFS, plancher -120 ; `drop_warning(dropped: int, total: int) -> str | None` : message au-dela de 2 %.
 - `core/explain.py` : `rec_status_text(seconds: float, size_bytes: int, peak_db: float, dropped: int, encoder: str) -> str` (« REC 01:23 | 412 Mo | crete -3 dBFS | images dupliquees 0 | libx264 »).
 
-- [ ] **Etape 1 : tests d'abord** (`check_recording`) : `frames_due(0, 0, 30, 0) == 1` ; `frames_due(0, 0.0334, 30, 1) == 1` ; `frames_due(0, 0.10, 30, 1) == 3` (retard = doublons) ; `frames_due(0, 0.01, 30, 5) == 0` (jamais negatif) ; meme chose a 60 ; `audio_offset(10.0, 10.05, 40) == 0.09` (a 1 ms) ; `output_name` avec fichier existant donne `-2` puis `-3`, dossier avec espaces et `é` ; `video_command` contient les trois etiquettes bt709, `-g 30`, `vflip`, `-crf 17` pour `libx264` et pas pour `h264_nvenc` ; `mux_command` : decalage positif -> `-itsoffset`, negatif -> `-ss` ; `choose_encoder(["libx264", "h264_nvenc"], lambda e: False) == "libx264"` ; `peak_db(1.0) == 0.0`, `peak_db(0.0) == -120.0` ; `drop_warning(3, 100)` renvoie un texte, `drop_warning(2, 100)` `None` ; reglages : `rec_fps` hors {30, 60} ramene, `rec_delay_ms` 999 ramene a 300, `rec_format` inconnu ramene au defaut.
+- [ ] **Etape 1 : tests d'abord** (`check_recording`) : `frames_due(0, 0, 30, 0) == 1` ; `frames_due(0, 0.0334, 30, 1) == 1` ; `frames_due(0, 0.10, 30, 1) == 3` (retard = doublons) ; `frames_due(0, 0.01, 30, 5) == 0` (jamais negatif) ; meme chose a 60 ; `audio_offset(10.0, 10.05, 40) == 0.09` (a 1 ms) ; `output_name` avec fichier existant donne `-2` puis `-3`, dossier avec espaces et accents ; `video_command` contient les trois etiquettes bt709, `-g 30`, `vflip`, `-crf 17` pour `libx264` et pas pour `h264_nvenc` ; `mux_command` : decalage positif -> `-itsoffset`, negatif -> `-ss` ; `choose_encoder(["libx264", "h264_nvenc"], lambda e: True) == "libx264"` (materiel non demande) ; avec `hardware=True` : `h264_nvenc` si l'essai reussit, `libx264` si l'essai echoue ; `peak_db(1.0) == 0.0`, `peak_db(0.0) == -120.0` ; `drop_warning(3, 100)` renvoie un texte, `drop_warning(2, 100)` `None` ; reglages : `rec_fps` hors {30, 60} ramene, `rec_delay_ms` 999 ramene a 300, `rec_format` inconnu ramene au defaut, `rec_encoder` inconnu idem.
 - [ ] **Etape 2** : lancer `python tools/check_gl.py --seulement check_recording` : echec attendu (module absent).
-- [ ] **Etape 3** : implementer `core/recording.py`, les quatre lignes de `params_schema.py` (portee `device`, defauts `vertical`, 30, `~/Videos/casual-overlay`, 40) et `rec_status_text`.
+- [ ] **Etape 3** : implementer `core/recording.py`, les cinq lignes de `params_schema.py` (portee `device` : `rec_format` defaut `vertical`, `rec_fps` 30, `rec_dir` `~/Videos/casual-overlay`, `rec_delay_ms` 40, `rec_encoder` `libx264` ou `materiel`) et `rec_status_text`.
 - [ ] **Etape 4** : `--seulement check_recording` puis `--pur` : tout passe, `check_core_purity` et `check_params_schema` compris. Commit.
 
 ### Tache 3 : point d'ecoute audio et fichier brut
@@ -102,7 +127,7 @@ Chaque ligne a son test dans la tache qui possede le code.
 - `status() -> dict` : `seconds`, `bytes`, `peak_db`, `dropped`, `encoder`, `warning`.
 - Entree audio absente en cours de route : le fil audio ecrit du silence aux instants manquants (duree gardee) et `warning` le dit.
 
-- [ ] **Etape 1 : tests** (faux flux audio, ffmpeg reel) : 3 s d'images synthetiques + audio synthetique -> `ffprobe` : duree 3 s a 0,1 s pres, `h264` `yuv420p` de la bonne taille, `aac` 2 canaux 48000, etiquettes bt709 ; aucun fichier au nom final apres un echec d'assemblage (ffmpeg force a echouer) ; temporaires supprimes apres succes et conserves apres echec ; deux demarrages dans la meme seconde -> deux fichiers ; dossier avec espaces et `é` ; arret pendant l'enregistrement ; audio coupe a la moitie -> duree juste + `warning` ; disque presque plein simule (fonction d'espace injectable) -> arret propre, fichier partiel assemble ; images ecrites en retard (`due` rend 3) -> `rec_dropped` = 2 ; **synchro** : clic audio a l'instant t et eclair video a l'instant t, mesure dans le fichier (premiere crete audio, premier changement de luminosite), ecart sous 60 ms ; **sensibilite** : avec le decalage mis a zero alors que l'audio demarre 0,2 s apres la video, le meme test doit echouer ; aucun processus ffmpeg residuel.
+- [ ] **Etape 1 : tests** (faux flux audio, ffmpeg reel) : 3 s d'images synthetiques + audio synthetique -> `ffprobe` : duree 3 s a 0,1 s pres, `h264` `yuv420p` de la bonne taille, `aac` 2 canaux 48000, etiquettes bt709 ; aucun fichier au nom final apres un echec d'assemblage (ffmpeg force a echouer) ; temporaires supprimes apres succes et conserves apres echec ; deux demarrages dans la meme seconde -> deux fichiers ; dossier avec espaces et accents ; arret pendant l'enregistrement ; audio coupe a la moitie -> duree juste + `warning` ; disque presque plein simule (fonction d'espace injectable) -> arret propre, fichier partiel assemble ; images ecrites en retard (`due` rend 3) -> `rec_dropped` = 2 ; **synchro** : clic audio a l'instant t et eclair video a l'instant t, mesure dans le fichier (premiere crete audio, premier changement de luminosite), ecart sous 60 ms ; **sensibilite** : avec le decalage mis a zero alors que l'audio demarre 0,2 s apres la video, le meme test doit echouer ; aucun processus ffmpeg residuel.
 - [ ] **Etape 2** : lancer, echec attendu. **Etape 3** : implementer. **Etape 4** : relancer. Commit.
 
 ### Tache 5 : integration a la boucle de rendu
@@ -112,7 +137,7 @@ Chaque ligne a son test dans la tache qui possede le code.
 **Interfaces** : commandes `rec_start` / `rec_stop` lues par la boucle ; touche E ; `s.status["rec"]` = `Recorder.status()` ; `s.recorder`.
 
 - [ ] **Etape 1 : test** (Mesa) : `Projection` ouverte, `rec_start` : la boucle appelle `Renderer.draw` UNE fois par image (compteur) vers un tampon de la taille du format ; la fenetre recoit la copie (pixels non noirs, ratio respecte) ; sans enregistrement, image identique pixel pour pixel a avant ; pixelisation, halo et trainee a 1080x1920 donnent la meme image qu'un rendu de reference de meme taille ; rendu ralenti volontairement -> doublons, duree juste ; fermeture de la projection en cours d'enregistrement -> fichier assemble et message ; relance automatique de la projection -> idem ; fenetre redimensionnee en cours -> fichier inchange.
-- [ ] **Etape 2** : echec attendu. **Etape 3** : implementer : cible hors ecran creee a `rec_start` a la taille du format, `draw` vers elle, relecture asynchrone (deux tampons `read_into`, ecriture de l'image precedente), copie vers `ctx.screen` (`copy_framebuffer`, bandes noires si le ratio differe), arret propre dans le `finally` de `gl_main`. **Etape 4** : relancer, puis `--seulement check_render`, `--seulement check_projection`. Commit.
+- [ ] **Etape 2** : echec attendu. **Etape 3** : implementer : cible hors ecran creee a `rec_start` a la taille du format, **multi-echantillonnee 4x puis resolue** vers la texture relue (la fenetre l'est, le tampon du spike ne l'etait pas : sans cela les bords sont moins lisses ; mesurer son cout, le retirer si 30 images/s ne tient plus), `draw` vers elle, relecture asynchrone (deux tampons `read_into`, ecriture de l'image precedente), copie vers `ctx.screen` (`copy_framebuffer`, bandes noires si le ratio differe), arret propre dans le `finally` de `gl_main`. **Etape 4** : relancer, puis `--seulement check_render`, `--seulement check_projection`. Commit.
 
 ### Tache 6 : interface
 

@@ -20,7 +20,7 @@ Le montage se limite a **couper le debut et la fin** et a **etalonner**, dans le
 | Sujet | Decision |
 |---|---|
 | Sortie | un MP4 : H.264 `yuv420p` + AAC 320 kb/s stereo 48 kHz, `faststart`, etiquettes bt709 (primaires, transfert, matrice) pour que l'etalonnage parte d'une base connue ; une image cle par seconde (`-g` = fps) pour couper sans re-encoder |
-| Formats | `vertical` 1080x1920 (defaut), `horizontal` 1920x1080, `carre` 1080x1080 ; cadence 30 (defaut) ou 60 images/s |
+| Formats | `vertical` 1080x1920 (defaut), `vertical_hd` 720x1280 (pour les looks lourds : cellules, cumul d'effets), `horizontal` 1920x1080, `carre` 1080x1080 ; cadence 30 (defaut) ou 60 images/s (60 deconseille a 1080x1920 : ne tient pas sur le poste de dev) |
 | Audio | l'entree d'analyse choisie dans l'appli, enregistree **brute** : stereo, frequence native du peripherique, **sans auto-gain** ni mixage mono |
 | Rendu | passe unique dans un tampon hors ecran a la taille du format (voir *Rendu*) |
 | Dossier | `rec_dir`, defaut `~/Videos/casual-overlay/`, fichiers `casual-AAAA-MM-JJ_HHhMMmSS.mp4` |
@@ -51,7 +51,7 @@ Relecture : `fbo.read` bloque le GPU ; on lit dans deux tampons GL en alternance
 
 ### Encodage
 
-Un processus `ffmpeg` recoit les images brutes (`rgb24`, premiere ligne en bas : `vflip`) sur son entree standard et ecrit la **video seule** dans un fichier temporaire. Encodeur choisi au lancement par `core.recording.choose_encoder(disponibles, testes)` : materiel (`h264_nvenc`, `h264_amf`, `h264_qsv`) s'il est liste par `ffmpeg -encoders` **et** qu'un essai d'une image reussit (un encodeur liste peut echouer sans le materiel), sinon `libx264` (`-preset veryfast -crf 17`). L'encodeur retenu est dit dans le statut.
+Un processus `ffmpeg` recoit les images brutes (`rgb24`, premiere ligne en bas : `vflip`) sur son entree standard et ecrit la **video seule** dans un fichier temporaire. Encodeur par defaut : `libx264` (`-preset veryfast -crf 17`) ; le spike a montre que le GPU est le goulot et que x264 tient 80 images/s pour ~19 % du CPU. Option `rec_encoder` = `materiel` : `core.recording.choose_encoder(disponibles, testes, hardware=True)` prend `h264_nvenc`, `h264_amf` ou `h264_qsv` s'il est liste par `ffmpeg -encoders` **et** qu'un essai d'une image reussit (un encodeur liste peut echouer sans le materiel), sinon retombe sur `libx264`. L'encodeur retenu est dit dans le statut.
 
 ### Assemblage a l'arret
 
@@ -96,9 +96,13 @@ Section « Enregistrement » de l'onglet *Affichage* : format, cadence, dossier 
 2. ~~Plein ecran pendant l'enregistrement~~ : possible, la fenetre affiche la copie du tampon, sans autre reglage (propose, non conteste).
 3. Delai audio par defaut a 40 ms : a confirmer apres une premiere mesure sur le materiel de l'utilisateur (`tools/calibrer_avance.py`).
 
+## Resultats du spike (2026-11-13)
+
+Voir le plan (`2026-11-13-enregistrement-video-plan.md`, tache 1). En bref : 30 images/s tient a 1080x1920 pour les looks courants ; le rendu GPU est le goulot (cellules : 25 ms, tous effets couteux : 35 ms soit 27 images/s) ; relecture et encodage ne le sont pas ; 720x1280 tient 30 images/s avec tous les effets. Consequences : format `vertical_hd` ajoute, encodeur `libx264` par defaut, 60 images/s deconseille a 1080x1920, tampon hors ecran a multi-echantillonner (a mesurer).
+
 ## Jalons proposes
 
-1. **Spike** (jetable) : rendre vers un tampon hors ecran 1080x1920, le relire et l'encoder en MP4 pendant 10 s ; mesurer le GPU et le CPU. Decide de la faisabilite a 30 / 60 images/s.
+1. ~~**Spike** (jetable)~~ : fait, faisable a 30 images/s.
 2. `core/recording.py` + tests purs.
 3. Audio : point d'ecoute et fichier brut ; assemblage ; test de synchro.
 4. Interface (bouton, voyant, touche, palette) et cas limites.
