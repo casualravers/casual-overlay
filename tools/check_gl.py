@@ -1056,6 +1056,7 @@ def check_gui() -> None:
                     gui_diag_steps(c, s, out)
                     gui_lead_steps(c, s, out)
                     gui_zoom_steps(c, s, out)
+                    gui_macro_scroll_steps(c, s, out)
                     gui_rec_steps(c, s, out)
                 except Exception:
                     import traceback
@@ -1442,6 +1443,10 @@ def check_gui() -> None:
     hs = out.get("aff_height") or [(0, 0, 0), (1, 1, 1)]
     check(hs[0] == hs[1], "onglet Affichage: un voyant de pulsation ou un statut tres long ne change pas la hauteur de l'onglet (rien ne decale)", str(hs))
     print(f"  (information) hauteur voulue de l'onglet Affichage : {hs[0][0]} px")
+    ms = (out.get("macro_scroll") or ({}, 0))[0]
+    check(ms.get("Masters") == (True, True, True) and ms.get("Affichage") == (True, True, True) and ms.get("grand") is True,
+          "reglages macro (GUI): liste reduite par la poignee = ascenseur vertical dans l'onglet (Masters, Affichage), la molette le fait defiler ; agrandie, plus d'ascenseur",
+          str(out.get("macro_scroll")))
     check(out.get("zoom") == (True, True, True, True),
           "fenetre agrandie (defaut): ouvrir / fermer le panneau etendu et glisser la poignee la laissent agrandie, a la meme taille", str(out.get("zoom")))
     lg = out.get("lead_gui") or {}
@@ -6777,6 +6782,65 @@ def gui_rec_steps(c, s, out) -> None:
     ui["rec_dir_var"].set(saved["rec_dir"])
     nb.select(0)
     root.update()
+
+
+def gui_macro_scroll_steps(c, s, out) -> None:
+    """Reglages macro (espace de controle du panneau etendu) : quand la liste est reduite par la poignee, chaque onglet plus haut que sa place a un
+    ascenseur vertical et la molette le fait defiler ; agrandie, plus d'ascenseur."""
+    import skin as skin_
+    root = c["root"]
+    sc = c["scenes"]
+    sc["expand"](True)
+    root.update()
+    nb = next(w for w in _walk_all(c["vj"]["master_box"]()) if w.winfo_class() == "TNotebook")
+    before_tab = nb.select()
+    res = {}
+    grip = next(w for w in _walk_all(root) if w.winfo_class() == "Label" and str(w.cget("text")) == "\u22ef")
+    body_h = None
+    for name in ("Masters", "Affichage"):
+        nb.select([t_ for t_ in nb.tabs() if nb.tab(t_, "text") == name][0])
+        root.update()
+        root.update()
+        f = nb.nametowidget(nb.select())
+        outer = next((w for w in _walk_all(f) if hasattr(w, "_scroll")), None)
+        if outer is None:                                   # Affichage : sa zone defilante est posee dans l'onglet (enfant de la barre)
+            outer = c["aff_frame"]
+        if body_h is None:
+            body = c["scenes"]["panel_state"]["body"]
+            body_h = body.winfo_height()
+            grip.event_generate("<ButtonPress-1>", rooty=500)
+            grip.event_generate("<B1-Motion>", rooty=-5000)
+            grip.event_generate("<ButtonRelease-1>", rooty=-5000)
+            for _ in range(3):
+                root.update()
+                time.sleep(0.05)
+        outer._scroll["sync"]()
+        root.update()
+        shown = outer._scroll["state"]["shown"] and bool(outer._scroll["bar"].winfo_ismapped())
+        inner = outer._scroll["inner"]
+        child = inner.winfo_children()[0] if inner.winfo_children() else inner
+        y0 = outer._scroll["canvas"].yview()[0]
+        wheeled = skin_.scroll_wheel(child, 3)
+        root.update()
+        res[name] = (shown, wheeled, outer._scroll["canvas"].yview()[0] > y0)
+    small = c["scenes"]["panel_state"]["body"].winfo_height()
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=500 + 2000)
+    grip.event_generate("<ButtonRelease-1>", rooty=500 + 2000)
+    for _ in range(3):
+        root.update()
+        time.sleep(0.05)
+    outer._scroll["sync"]()
+    root.update()
+    res["grand"] = not outer._scroll["state"]["shown"]
+    grip.event_generate("<ButtonPress-1>", rooty=500)                       # on remet la hauteur d'origine (la suite compare les tailles)
+    grip.event_generate("<B1-Motion>", rooty=500 + body_h - c["scenes"]["panel_state"]["body"].winfo_height())
+    grip.event_generate("<ButtonRelease-1>", rooty=500 + body_h - c["scenes"]["panel_state"]["body"].winfo_height())
+    root.update()
+    nb.select(before_tab)
+    sc["expand"](False)
+    root.update()
+    out["macro_scroll"] = (res, small)
 
 
 def gui_zoom_steps(c, s, out) -> None:

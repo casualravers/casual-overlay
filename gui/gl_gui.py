@@ -967,6 +967,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             return
         if under(e.widget, strip):
             strip.xview_scroll(step * 2, "units")
+        elif skin.scroll_wheel(e.widget, step):
+            pass                                          # un onglet des reglages macro (espace de controle) plus haut que sa place
         elif under(e.widget, pcv):
             pcv.yview_scroll(step, "units")
         elif under(e.widget, canvas) and active_panel().winfo_reqheight() > visible_height() + 1:
@@ -1119,7 +1121,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # « Affichage et analyse » (entree d'analyse, plein ecran, diagnostic, mesures...) est un reglage de la projection, pas de l'overlay :
     # onglet « Affichage » de l'espace de controle global du Mode VJ. Le contenu est construit ici (parent persistant : la barre) puis
     # pose dans l'onglet a sa premiere selection (`pack(in_=...)`, comme le panneau lui-meme).
-    tab_aff = tk.Frame(scene_top, bg=a2w.GUI_PANEL_BG)
+    # zone defilante (si l'onglet est plus haut que la place laissee par la poignee du panneau) : le contenu est un enfant du canvas, donc coupe par lui
+    aff_outer, tab_aff = skin.scroll_area(scene_top, a2w.GUI_PANEL_BG)
+    tab_aff._scroll_outer = aff_outer
 
     def toggle_aff(flag: bool | None = None) -> None:
         """Ouvre le panneau etendu sur l'onglet Affichage (True / bascule) ou le referme (False)."""
@@ -2553,7 +2557,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "root": root, "live_host": panel["frame"], "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": tab_aff, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "mosaic_var": mosaic_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": aff_outer, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "mosaic_var": mosaic_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
             "live_wrap": live_wrap, "right_panel": right_wrap, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,

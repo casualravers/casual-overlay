@@ -197,6 +197,70 @@ FIELD_MIN_TEXT = 110                                  # px : largeur minimale du
 FIELD_MAX_TEXT = 360                                 # px : un nom de preset tres long n'elargit pas les listes a l'infini
 
 
+SCROLL_AREAS: list = []                               # canvas des zones defilantes (scroll_area) : la molette de la fenetre les fait defiler
+
+
+def scroll_area(parent: tk.Misc, bg: str) -> tuple:
+    """(cadre exterieur, cadre interieur) : le contenu pose dans le cadre INTERIEUR defile verticalement quand le cadre exterieur est plus bas que lui.
+    La hauteur voulue de l'exterieur reste celle du contenu (un ttk.Notebook se dimensionne comme avant) ; l'ascenseur (fin, `scrollbar`) n'apparait que
+    si le contenu depasse et se pose PAR-DESSUS le bord droit (`place`) : il n'elargit rien et ne decale rien. Molette : `scroll_wheel`."""
+    outer = tk.Frame(parent, bg=bg)
+    cv = tk.Canvas(outer, bg=bg, highlightthickness=0, bd=0)
+    inner = tk.Frame(cv, bg=bg)
+    item = cv.create_window(0, 0, window=inner, anchor="nw")
+    bar = scrollbar(outer, command=cv.yview)
+    cv.configure(yscrollcommand=bar.set)
+    cv.pack(fill="both", expand=True)
+    state = {"shown": False}
+
+    def sync(_e=None) -> None:
+        try:
+            req_w, req_h = inner.winfo_reqwidth(), inner.winfo_reqheight()
+            if int(cv.cget("height")) != req_h or int(cv.cget("width")) != req_w:
+                cv.configure(height=req_h, width=req_w)                 # l'exterieur demande la taille du contenu
+            cv.configure(scrollregion=(0, 0, max(req_w, cv.winfo_width()), req_h))
+            need = cv.winfo_height() > 1 and req_h > cv.winfo_height() + 1
+            if need and not state["shown"]:
+                bar.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne")
+                bar.lift()
+            elif not need and state["shown"]:
+                bar.place_forget()
+                cv.yview_moveto(0)
+            state["shown"] = need
+        except tk.TclError:
+            pass
+
+    def on_canvas(e) -> None:
+        try:
+            cv.itemconfigure(item, width=e.width)                       # le contenu prend toute la largeur
+        except tk.TclError:
+            return
+        sync()
+
+    inner.bind("<Configure>", sync, add="+")
+    cv.bind("<Configure>", on_canvas, add="+")
+    outer._scroll = {"canvas": cv, "bar": bar, "inner": inner, "state": state, "sync": sync}
+    SCROLL_AREAS.append(cv)
+    return outer, inner
+
+
+def scroll_wheel(widget, step: int) -> bool:
+    """Fait defiler la zone defilante (scroll_area) sous `widget` si son contenu depasse ; rend True si c'est fait (la molette ne va pas ailleurs)."""
+    path = str(widget)
+    for cv in list(SCROLL_AREAS):
+        try:
+            if not cv.winfo_exists():
+                SCROLL_AREAS.remove(cv)
+                continue
+            c = str(cv)
+            if (path == c or path.startswith(c + ".")) and cv.master._scroll["state"]["shown"]:
+                cv.yview_scroll(step, "units")
+                return True
+        except (tk.TclError, AttributeError, ValueError):
+            continue
+    return False
+
+
 def scrollbar(parent: tk.Misc, command=None, orient: str = "vertical") -> ttk.Scrollbar:
     """Ascenseur vertical aux couleurs de la GUI. Le `tk.Scrollbar` de Windows ignore les couleurs (rail gris clair, fleches : un
     bloc clair dans une fenetre sombre) : on prend un `ttk.Scrollbar` (theme `clam`, le seul dont les couleurs se reglent) sans

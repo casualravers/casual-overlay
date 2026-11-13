@@ -1092,8 +1092,9 @@ def install(c):
             mbox = master_box()
         mbox.pack(in_=wrap, side="right", fill="y")
         mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
-        if tab_aff.winfo_manager() == "pack":
-            tab_aff.lift()                                          # l'onglet Affichage est un enfant de la barre, pose dans l'onglet : remonte par-dessus la boite, sinon il reste cache (onglet vide)
+        aff_outer = getattr(tab_aff, "_scroll_outer", tab_aff)
+        if aff_outer.winfo_manager() == "pack":
+            aff_outer.lift()                                          # l'onglet Affichage est un enfant de la barre, pose dans l'onglet : remonte par-dessus la boite, sinon il reste cache (onglet vide)
         if getattr(s, "library_open", LIBRARY_DEFAULT):
             build_library(wrap, rows)
         else:
