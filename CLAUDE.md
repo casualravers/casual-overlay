@@ -8,7 +8,7 @@ casual-overlay affiche le visuel `audio2wave_live` (flux ffmpeg) dans une fenetr
 plein ecran sur le videoprojecteur, avec un logo PNG incruste et des deformations pilotees
 en temps reel par l'audio du micro. Le plan d'origine est dans `docs/PLAN_POC_GL.md`.
 
-**audio2wave est interne** : une copie du depot `audio2wave` (`https://github.com/casualravers/audio2wave`, `main`) vit dans `sources/audio2wave/` (modules **plats** : ils\ns'importent par leur nom, le dossier est ajoute a `sys.path` ; `audio2wave_gl.bundled_paths` le choisit : `audio2wave/` a cote du programme (portable) > `sources/audio2wave/` >\ndepot voisin `../audio2wave` (dernier recours) ; `--a2w-dir` / `AUDIO2WAVE_DIR` en essaient un autre). On importe `audio2wave_live` (`parse_args`, `producer_command`,\n`resolve_size`, `list_audio_devices`) et les autres modules. Son CLAUDE.md (copie : `sources/audio2wave/CLAUDE.md`) fait foi pour tout ce qui touche au visuel de base (filtres ffmpeg, `--averaging`,\nlatence). **Origine et ecarts** : `sources/audio2wave/VENDORED.md` (commit copie, section « Modifications locales ») et `ORIGINE.json` (empreinte de chaque fichier d'origine) ;\n`check_gl.py` (`check_audio2wave_interne`) echoue si un fichier differe de l'origine **sans etre note** dans VENDORED.md : modifier ces fichiers est permis maintenant, mais toute\nmodification se note (fichier, raison) pour pouvoir resynchroniser avec le depot d'origine. Le depot `audio2wave` reste vivant a part : un correctif qui y est fait se reporte a la main ici\n(et inversement), c'est le prix d'avoir deux copies tant qu'il existe.
+**audio2wave est interne** : une copie du depot `audio2wave` (`https://github.com/casualravers/audio2wave`, `main`) vit dans `sources/audio2wave/` (modules **plats** : ils s'importent par leur nom, le dossier est ajoute a `sys.path` ; `audio2wave_gl.bundled_paths` le choisit : `audio2wave/` a cote du programme (portable) > `sources/audio2wave/` > depot voisin `../audio2wave` (dernier recours) ; `--a2w-dir` / `AUDIO2WAVE_DIR` en essaient un autre). On importe `audio2wave_live` (`parse_args`, `producer_command`, `resolve_size`, `list_audio_devices`) et les autres modules. Son CLAUDE.md (copie : `sources/audio2wave/CLAUDE.md`) fait foi pour tout ce qui touche au visuel de base (filtres ffmpeg, `--averaging`, latence). **Origine et ecarts** : `sources/audio2wave/VENDORED.md` (commit copie, section « Modifications locales ») et `ORIGINE.json` (empreinte de chaque fichier d'origine) ; `check_gl.py` (`check_audio2wave_interne`) echoue si un fichier differe de l'origine **sans etre note** dans VENDORED.md : modifier ces fichiers est permis maintenant, mais toute modification se note (fichier, raison) pour pouvoir resynchroniser avec le depot d'origine. Le depot `audio2wave` reste vivant a part : un correctif qui y est fait se reporte a la main ici (et inversement), c'est le prix d'avoir deux copies tant qu'il existe.
 
 **API hote d'audio2wave utilisee** (`common.API_VERSION` >= 2 ; la copie interne l'expose et la garantit par `check_contract.py`, on ne reecrit plus ses constantes ni ses methodes, on ne fouille plus ses
 widgets) : `common.set_gui_accent(accent, accent_fg)` (accent de la palette : `apply_a2w_palette`), `AutomationManager(..., curve_label,
@@ -56,7 +56,7 @@ core/            Python pur, stdlib seulement (aucune fenetre, aucun GL, aucun n
   randomizer     Full Randomizer (banques d'assets, tirages)
   schedule       planning de la soiree (heure -> texte du logo)
   palette        classement de la palette de commandes (Ctrl+K)
-  doodles        doodles du site : config, liste du bucket, fichiers vus, validation, position, cycle de vie, mur (voir plus bas)
+  doodles        doodles du site : config, liste du bucket, fichiers vus, validation, position, cycle de vie, mur (voir docs/fonctions/medias-externes.md)
 engine/          moteur sans rendu GL (importe core/ et les dependances facultatives, jamais la GUI ni la facade) :
   deps           numpy / glfw / moderngl / sounddevice / Pillow importes une fois (`None` si absents, `MISSING`)
   audio          FeatureExtractor, RingBuffer, AudioAnalyzer, entrees micro / synthetique
@@ -66,7 +66,7 @@ engine/          moteur sans rendu GL (importe core/ et les dependances facultat
   session        Session (etat partage GL / GUI / fils), AudioController, NoDeviceManager
   preview        apercu d'une scene : capture reduite (JPEG) de la fenetre de rendu
   native_modes   Snap (pencil, simple, rekordbox) et Ridge dessines en GL : analyse d'audio2wave + shaders `mode_*.frag`, `NativeModeSource`, `ModeGL`
-  doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue`r
+  doodle_feed    fil de recuperation des doodles (urllib + Pillow), file Session.doodle_queue
   projection     Projection (fenetre a la demande, reprise auto), logo, boucle de rendu (gl_main / loop)
   app            run_app (micro, producteur, session, arret propre ; la GUI lui est injectee, jamais importee)
 gui/             fenetre de reglages Tk, modules PLATS (importes par leur nom : `audio2wave_gl` ajoute gui/ a `sys.path`) : gl_gui, gui_*, skin, theme, icons, py_modes, gui_colors, gui_gates
@@ -81,7 +81,8 @@ gui_fond / gui_effects / gui_logo / gui_audio   onglets de la partie LIVE et OVE
 gui_sets / gui_drop / gui_random / gui_panel    sets, medias (glisser-deposer, vignettes), Full Randomizer, panneau etendu
 gui_presets / gui_bar / gui_palette / gui_stage   barre de presets (overlay et fond), barre des scenes, palette Ctrl+K, mode scene plein ecran
 gui_vj            espace de controle global du Mode VJ (masters, historique, montee / drop) + garde-fous (panique, tap tempo, aide, console, auto-sauvegarde)
-skin / theme / gui_colors / gui_gates           habillage, couleurs, grisages```
+skin / theme / gui_colors / gui_gates           habillage, couleurs, grisages
+```
 
 **Regle de dependance** : `core/` n'importe jamais le moteur (`audio2wave_gl`), la GUI, Tk, numpy, GL, PIL ni audio2wave ; le moteur et la GUI
 importent `core/`. `check_gl.py` (`check_core_purity`) l'impose par l'analyse des imports et en important tout `core/` dans un interpreteur
@@ -105,7 +106,7 @@ python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ff
 python tools/build_portable.py --zip                         # dossier portable (Python + ffmpeg + audio2wave dedans)
 ```
 
-Options utiles : `--gui` (fenetre de reglages, voir plus bas), `--live-args "--style radio
+Options utiles : `--gui` (fenetre de reglages, voir docs/fonctions/gui.md), `--live-args "--style radio
 --gain 20"` (transmis a audio2wave_live),
 `--render-size`, `--logo`, `--logo-video anim.webm [--logo-key #00ff00]`, `--text "LIGNE 1\nLIGNE 2"`, `--logo-scale`, `--logo-pos`, `--monitor`, `--hud`, `--stats`,
 `--automation/--no-automation`, `--fps-cap`, `--max-seconds` + `--screenshot` (captures de test).
@@ -240,5 +241,5 @@ piege s'il touche plusieurs themes). Un nouveau theme = une nouvelle fiche + sa 
 - Petite demande (label `sans-spec`) : pas de spec, de « Vrac » directement a « En cours ».
 - **Gabarit de PR** (.github/pull_request_template.md) : resume, Closes #N / Refs #N, theme, ce qui a ete verifie, liste de controle de ce qui demande du materiel (projecteur, micro, telephone) et ligne « Non verifie » explicite.
 - **Board automatique** (.github/workflows/board.yml, pull_request_target, issue #135) : la carte de l'issue citee par la PR (Closes / Fixes / Resolves / Refs #N) passe selon l'etat de la PR : spec seule (tout sous docs/plans/) ouverte -> « Spec a valider », fusionnee -> « Pret » ; code ouvert -> « En cours », fusionne -> « A tester » ; fermee sans fusion : rien. « Fait » reste a la main. **Demande un secret PROJECT_TOKEN** (jeton personnel classique, portee project : le GITHUB_TOKEN ne peut pas modifier un Project d'utilisateur) ; sans lui le job avertit et ne fait rien. Ne verifie que les mutations GraphQL de l'API a la main apres avoir pose le secret.
-- **CI : caches** (issue #133) : archive Mesa (ctions/cache, cle = version) dans .github/actions/mesa, wheels pip aussi pour le job portable ; ffmpeg (choco) n'est pas mis en cache. Gain non mesure (minutes bloquees au moment de l'ecriture).
+- **CI : caches** (issue #133) : archive Mesa (`actions/cache`, cle = version) dans .github/actions/mesa, wheels pip aussi pour le job portable ; ffmpeg (choco) n'est pas mis en cache. Gain non mesure (minutes bloquees au moment de l'ecriture).
 - Tri du vrac sur demande : doublons fusionnes, regroupement par theme, effort grossier, idees qui touchent les memes fichiers signalees.

@@ -9,4 +9,5 @@ Avant de modifier un module, lis sa fiche :
 - `native_modes.py`, `sphere_mode.py` : [docs/fonctions/gui.md](../docs/fonctions/gui.md)
 - `preview.py` : [docs/fonctions/scenes-vj.md](../docs/fonctions/scenes-vj.md)
 - `doodle_feed.py`, `recorder.py`, `remote.py` : [docs/fonctions/medias-externes.md](../docs/fonctions/medias-externes.md)
-- `diagnostics.py` : [docs/fonctions/outillage.md](../docs/fonctions/outillage.md)
+- `diagnostics.py`, `deps.py` (dependances facultatives, `MISSING`) : [docs/fonctions/outillage.md](../docs/fonctions/outillage.md)
+- `session.py` (etat partage GL / GUI / fils : la regle des threads est dans la racine, section Architecture) : [docs/fonctions/projection.md](../docs/fonctions/projection.md)
