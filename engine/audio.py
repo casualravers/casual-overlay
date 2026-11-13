@@ -5,6 +5,7 @@ Extrait tel quel de `audio2wave_gl` (qui re-exporte ces noms). Les dependances f
 from __future__ import annotations
 
 import math
+import os
 import sys
 import threading
 import time
@@ -19,6 +20,36 @@ from engine.deps import np, sd
 
 
 # --- Analyse audio -----------------------------------------------------------------
+
+# Taille du bloc de capture = pas d'analyse (le fil d'analyse traite chaque bloc recu). 256 a 48 kHz = 5,3 ms (issue #110, fin du lot 3) ;
+# `CASUAL_AUDIO_BLOCK=512` (secours : carte son qui crepite) ; repli automatique a 512 si la carte deborde (voir `OverflowCounter`).
+CAPTURE_BLOCK = 256
+OVERFLOW_MAX = 5                  # debordements toleres ...
+OVERFLOW_WINDOW_S = 60.0          # ... sur cette fenetre ; au-dela, la session rouvre l'entree avec des blocs de 512 (une fois)
+
+
+def capture_block() -> int:
+    """Taille de bloc a utiliser : `CASUAL_AUDIO_BLOCK` s'il vaut 256 ou 512, sinon `CAPTURE_BLOCK`."""
+    val = os.environ.get("CASUAL_AUDIO_BLOCK", "").strip()
+    return int(val) if val in ("256", "512") else CAPTURE_BLOCK
+
+
+class OverflowCounter:
+    """Debordements de la capture (blocs perdus par la carte son) dates : `burst` dit s'il y en a eu plus de OVERFLOW_MAX en OVERFLOW_WINDOW_S."""
+
+    def __init__(self) -> None:
+        self.times: deque = deque()
+        self.total = 0
+
+    def note(self, now: float) -> None:
+        self.times.append(now)
+        self.total += 1
+
+    def burst(self, now: float) -> bool:
+        while self.times and now - self.times[0] > OVERFLOW_WINDOW_S:
+            self.times.popleft()
+        return len(self.times) > OVERFLOW_MAX
+
 
 BANDS = {"bass": (20.0, 150.0), "mid": (150.0, 2000.0), "high": (2000.0, 10000.0)}
 # Seuils absolus (amplitude de bin FFT, 1.0 = sinus pleine echelle) sous lesquels une
@@ -466,7 +497,10 @@ def capture_age(time_info, frames: int, rate: float, max_age_s: float = 1.0) -> 
 class SoundDeviceInput:
     """Capture sounddevice en callback (mono, blocs courts) vers un RingBuffer ; chaque bloc est date a sa capture."""
 
-    def __init__(self, device, ring: RingBuffer, blocksize: int = 512):
+    def __init__(self, device, ring: RingBuffer, blocksize: int | None = None):
+        blocksize = blocksize or capture_block()
+        self.blocksize = blocksize
+        self.overflows = OverflowCounter()
         info = sd.query_devices(device, "input")
         self.rate = int(info["default_samplerate"])
         self.name = info["name"]
@@ -479,9 +513,12 @@ class SoundDeviceInput:
             dtype="float32", latency="low", callback=self._callback)
 
     def _callback(self, indata, frames, time_info, status):
+        now = time.monotonic()
         if status:
             self.dropped = getattr(self, "dropped", 0) + 1
-        t_end = time.monotonic() - capture_age(time_info, frames, self.rate)
+            if getattr(status, "input_overflow", True):
+                self.overflows.note(now)
+        t_end = now - capture_age(time_info, frames, self.rate)
         self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), t_end)
         tap = self.tap
         if tap is not None:              # enregistrement en cours : le bloc stereo est copie (le pilote reutilise son tampon) ; une erreur ici ne touche jamais l'analyse
@@ -496,6 +533,9 @@ class SoundDeviceInput:
     def stop(self):
         self.stream.stop()
         self.stream.close()
+
+    def overflow_burst(self, now: float) -> bool:
+        return self.overflows.burst(now)
 
     @property
     def latency_ms(self) -> float:

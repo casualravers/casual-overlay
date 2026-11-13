@@ -2962,6 +2962,70 @@ def check_capture_block() -> None:
         detail.append(f"{name[:18]}: F1 {m5['f1']:.2f}->{m2['f1']:.2f} prec {m5['precision']:.2f}->{m2['precision']:.2f}")
     check(worst <= 0.01 + 1e-9, "banc: blocs de 256 = aucun morceau ne perd plus d'un point de F1 ni plus d'un faux kick (rock compris ; ecart dans la phase d'apprentissage du classifieur)", " | ".join(detail))
 
+    # --- taille de bloc : constante, variable d'environnement
+    saved_env = os.environ.pop("CASUAL_AUDIO_BLOCK", None)
+    try:
+        b0 = au.capture_block()
+        os.environ["CASUAL_AUDIO_BLOCK"] = "512"
+        b1 = au.capture_block()
+        os.environ["CASUAL_AUDIO_BLOCK"] = "300"
+        b2 = au.capture_block()
+    finally:
+        os.environ.pop("CASUAL_AUDIO_BLOCK", None)
+        if saved_env is not None:
+            os.environ["CASUAL_AUDIO_BLOCK"] = saved_env
+    check(b0 == au.CAPTURE_BLOCK and b1 == 512 and b2 == au.CAPTURE_BLOCK, "bloc: CAPTURE_BLOCK par defaut, CASUAL_AUDIO_BLOCK=512 le force, valeur invalide ignoree",
+          str((b0, b1, b2)))
+    # --- compteur de debordements : plus de OVERFLOW_MAX en OVERFLOW_WINDOW_S
+    oc = au.OverflowCounter()
+    for k in range(au.OVERFLOW_MAX):
+        oc.note(100.0 + k)
+    under = oc.burst(110.0)
+    oc.note(111.0)
+    over = oc.burst(112.0)
+    later = oc.burst(112.0 + au.OVERFLOW_WINDOW_S + 20.0)
+    check(not under and over and not later, "debordements: au plus OVERFLOW_MAX = rien, un de plus = trop, oublies apres la fenetre", str((under, over, later)))
+
+    # --- repli automatique de l'entree a 512 (fausse entree : aucune carte son)
+    from engine.session import AudioController
+
+    class FakeInput:
+        made = []
+
+        def __init__(self, device, ring, blocksize=None):
+            self.device, self.blocksize = device, blocksize
+            self.rate, self.name, self.tap, self.burst_now, self.stopped = 48000, f"faux {device}", None, False, False
+            FakeInput.made.append(self)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.stopped = True
+
+        def overflow_burst(self, now):
+            return self.burst_now
+    ring_ = au.RingBuffer(48000 * 2)
+    msgs = []
+    ctl = AudioController(ring_, 1.0, False, device="micro", input_factory=FakeInput, block=256, on_message=msgs.append)
+    first = ctl.src
+    tap_ = lambda *a: None
+    first.tap = tap_
+    quiet = ctl.check_block(10.0)
+    first.burst_now = True
+    msg = ctl.check_block(11.0)
+    second = ctl.src
+    second.burst_now = True
+    again = ctl.check_block(12.0)
+    ctl.switch("autre")
+    third = ctl.src
+    check(quiet is None and msg and second is not first and second.blocksize == 512 and second.device == "micro" and second.tap is tap_
+          and first.stopped and ctl.block == 512 and msgs == [msg],
+          "repli: trop de debordements a 256 = la meme entree rouverte a 512, l'enregistrement en cours suit, message", str((quiet, msg, second.blocksize, msgs)))
+    check(again is None and third.blocksize == 512, "repli: une seule fois par session ; un changement d'entree garde le bloc courant", str((again, third.blocksize)))
+    syn = AudioController(au.RingBuffer(48000), 1.0, True)
+    check(syn.check_block(1.0) is None, "repli: jamais en mode synthetique")
+
 
 def check_bench_kick() -> None:
     """Lot 2 de la spec synchro son / image : le banc du detecteur de kick (appariement, metriques, fichiers, corpus synthetique, non-regression)."""

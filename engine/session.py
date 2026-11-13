@@ -7,9 +7,11 @@ from __future__ import annotations
 import copy
 import queue
 import threading
+import time
 from typing import TYPE_CHECKING
 
-from engine.audio import AudioAnalyzer, FeatureExtractor, RingBuffer, SoundDeviceInput, SyntheticAudio
+from core import sessionlog
+from engine.audio import AudioAnalyzer, FeatureExtractor, RingBuffer, SoundDeviceInput, SyntheticAudio, capture_block
 from engine.deps import sd
 from engine.video import FrameReader, ProducerManager, spawn_producer
 
@@ -22,15 +24,24 @@ class AudioController:
     """Entree audio d'analyse (sounddevice ou synthetique) + analyseur, avec changement
     d'entree a chaud (GUI). L'extracteur est recree si la frequence d'echantillonnage change."""
 
-    def __init__(self, ring: RingBuffer, sensitivity: float, synthetic: bool, device=None):
+    GUARD_EVERY_S = 1.0
+
+    def __init__(self, ring: RingBuffer, sensitivity: float, synthetic: bool, device=None, *, input_factory=SoundDeviceInput,
+                 block: int | None = None, on_message=None):
         self.ring = ring
         self.synthetic = synthetic
+        self.device = device
+        self._factory = input_factory
+        self.block = block or capture_block()          # taille de bloc de capture en cours (256 ; 512 apres un repli)
+        self.fell_back = False
+        self.on_message = on_message                   # rappel (texte) : statut de la GUI, pose par run_app
+        self._guard_stop = threading.Event()
         if synthetic:
             self.src = SyntheticAudio(ring)
             self.rate = 48000
             self.name = "synthetique (kick 60 Hz, 120 BPM)"
         else:
-            self.src = SoundDeviceInput(device, ring)
+            self.src = self._factory(device, ring, blocksize=self.block)
             self.rate = self.src.rate
             self.name = self.src.name
         self.analyzer = AudioAnalyzer(ring, FeatureExtractor(self.rate, sensitivity=sensitivity))
@@ -38,19 +49,59 @@ class AudioController:
     def start(self) -> None:
         self.analyzer.start()
         self.src.start()
+        if not self.synthetic:
+            threading.Thread(target=self._guard, name="audio-garde", daemon=True).start()
 
     def stop(self) -> None:
+        self._guard_stop.set()
         self.analyzer.stop()
         try:
             self.src.stop()
         except Exception:
             pass
 
+    def _guard(self) -> None:
+        """Toutes les secondes : la carte son deborde-t-elle avec des blocs courts ? (repli a 512, une fois)."""
+        while not self._guard_stop.wait(self.GUARD_EVERY_S):
+            try:
+                self.check_block(time.monotonic())
+            except Exception as exc:                   # la garde ne doit jamais tuer l'analyse
+                sessionlog.error("Garde de la capture audio", exc)
+
+    def check_block(self, now: float) -> str | None:
+        """Repli automatique : avec des blocs de moins de 512, plus de OVERFLOW_MAX debordements en OVERFLOW_WINDOW_S = la meme entree est
+        rouverte avec des blocs de 512 (l'enregistrement en cours suit : `tap` recopie). Une seule fois par session ; jamais en synthetique.
+        Rend le message (aussi passe a `on_message` et au journal), ou None."""
+        if self.synthetic or self.fell_back or self.block >= 512:
+            return None
+        burst = getattr(self.src, "overflow_burst", None)
+        if burst is None or not burst(now):
+            return None
+        self.fell_back = True
+        new = self._factory(self.device, self.ring, blocksize=512)
+        new.tap = getattr(self.src, "tap", None)
+        new.start()
+        old, self.src = self.src, new
+        try:
+            old.stop()
+        except Exception:
+            pass
+        self.block = 512
+        msg = "Carte son : blocs de 256 trop courts (debordements), retour a 512"
+        sessionlog.event(msg)
+        if self.on_message is not None:
+            try:
+                self.on_message(msg)
+            except Exception:
+                pass
+        return msg
+
     def switch(self, device) -> str:
         """Bascule sur une autre entree sounddevice. Leve une exception si elle est refusee
-        (l'entree precedente reste alors active)."""
-        new = SoundDeviceInput(device, self.ring)
+        (l'entree precedente reste alors active). La taille de bloc en cours est gardee."""
+        new = self._factory(device, self.ring, blocksize=self.block)
         new.start()
+        self.device = device
         old, self.src = self.src, new
         try:
             old.stop()
@@ -91,9 +142,10 @@ class AudioController:
         for query in (name, None):
             try:
                 from engine.audio import find_input_device
-                new = SoundDeviceInput(find_input_device(query) if query else None, self.ring)
+                dev = find_input_device(query) if query else None
+                new = self._factory(dev, self.ring, blocksize=self.block)          # taille de bloc en cours (512 apres un repli)
                 new.start()
-                self.src = new
+                self.src, self.device = new, dev
                 return True
             except (Exception, SystemExit):
                 continue
