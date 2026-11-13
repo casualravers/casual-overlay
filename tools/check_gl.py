@@ -3258,6 +3258,101 @@ def check_recording() -> None:
           "voyant: plus d'une heure, pas de signal, saturation signalee")
 
 
+def check_recorder_audio() -> None:
+    """Enregistrement (issue #140) : point d'ecoute stereo de la capture audio et fichier brut (`RawAudioWriter`)."""
+    print("Enregistrement : point d'ecoute audio et fichier brut")
+    import shutil
+    import types
+    import engine.audio as ea
+    import engine.recorder as er
+
+    rate, n = 48000, 512
+
+    def fake_device(channels, tap=None):
+        dev = ea.SoundDeviceInput.__new__(ea.SoundDeviceInput)            # sans ouvrir de peripherique
+        dev.rate, dev.channels, dev.ring, dev.tap, dev.tap_errors = rate, channels, ea.RingBuffer(1 << 14), tap, 0
+        return dev
+
+    info = types.SimpleNamespace(inputBufferAdcTime=0.0, currentTime=0.0)         # pilote sans horodatage : le bloc est date au callback
+    rg = np.random.default_rng(5)
+    blocks = [rg.uniform(-0.8, 0.8, (n, 2)).astype(np.float32) for _ in range(100)]
+
+    # --- point d'ecoute : les blocs stereo arrivent entiers, l'analyse mono ne change pas
+    got = []
+    dev = fake_device(2, tap=lambda block, t_end: got.append((block, t_end)))
+    ref = fake_device(2)
+    t0 = time.monotonic()
+    for b in blocks:
+        dev._callback(b, n, info, None)
+        ref._callback(b, n, info, None)
+    check(len(got) == 100 and all(np.array_equal(g[0], b) for g, b in zip(got, blocks)) and all(g[0].shape == (n, 2) for g in got), "tap: 100 blocs stereo recus tels quels")
+    check(got[-1][1] >= t0 and got[-1][1] <= time.monotonic() + 0.01 and all(b[1] >= a[1] for a, b in zip(got, got[1:])), "tap: chaque bloc est date (instant croissant, celui du callback)")
+    check(np.array_equal(dev.ring.latest(4096), ref.ring.latest(4096)) and abs(float(np.abs(dev.ring.latest(4096)).max())) > 0.1, "tap: l'analyse mono recoit les memes valeurs avec ou sans point d'ecoute")
+    got[0][0][0, 0] = 99.0
+    check(blocks[0][0, 0] != 99.0, "tap: le bloc recu est une copie (le tampon du pilote est reutilise)")
+    mono = fake_device(1, tap=lambda block, t_end: got.append((block, t_end)))
+    got.clear()
+    mono._callback(blocks[0][:, :1].copy(), n, info, None)
+    check(got[0][0].shape == (n, 2) and np.array_equal(got[0][0][:, 0], blocks[0][:, 0]) and np.array_equal(got[0][0][:, 1], blocks[0][:, 0]), "tap: un peripherique mono donne deux canaux identiques")
+
+    def boom(block, t_end):
+        raise RuntimeError("disque")
+    bad = fake_device(2, tap=boom)
+    bad._callback(blocks[0], n, info, None)
+    check(bad.tap_errors == 1 and np.abs(bad.ring.latest(n)).max() > 0.1, "tap: une erreur de l'enregistreur n'arrete pas l'analyse (compteur tap_errors)")
+
+    tmp = Path(tempfile.mkdtemp(prefix="casual-rec-"))
+
+    def read_raw(path):
+        return np.frombuffer(Path(path).read_bytes(), dtype="<f4").reshape(-1, 2)
+
+    # --- ecriture brute : fichier identique, premier instant, crete
+    base = 100.0
+    w = er.RawAudioWriter(str(tmp / "a.raw"), 2, rate)
+    for k, b in enumerate(blocks):
+        w.push(b, base + (k + 1) * n / rate)
+    w.close()
+    data = read_raw(tmp / "a.raw")
+    check(np.array_equal(data, np.concatenate(blocks)) and w.bytes_written == data.nbytes and w.lost == 0 and w.frames == 100 * n, "ecriture: fichier f32le entrelace identique aux blocs, rien de perdu",
+          f"{data.shape} {w.bytes_written}")
+    check(abs(w.t_first - base) < 1e-9, "ecriture: instant du premier echantillon", str(w.t_first))
+    check(abs(w.peak - float(np.abs(np.concatenate(blocks)).max())) < 1e-7, "ecriture: crete exacte")
+    w.close()
+    w.push(blocks[0], base + 99.0)
+    check(read_raw(tmp / "a.raw").shape[0] == 100 * n, "ecriture: fermer deux fois et pousser apres la fermeture sont sans effet")
+
+    # --- blocs manquants : du silence garde la duree
+    w = er.RawAudioWriter(str(tmp / "gap.raw"), 2, rate)
+    for k in range(10):
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    for k in range(15, 20):                                               # 5 blocs jamais arrives (carte debranchee un instant)
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    w.close()
+    data = read_raw(tmp / "gap.raw")
+    check(data.shape[0] == 20 * n and np.array_equal(data[:10 * n], np.concatenate(blocks[:10])) and not data[10 * n:15 * n].any() and np.array_equal(data[15 * n:], np.concatenate(blocks[15:20])),
+          "trou: 5 blocs manquants = 5 blocs de silence, le reste a sa place, duree juste", f"{data.shape}")
+
+    # --- ecriture trop lente : file pleine, blocs perdus, duree gardee
+    class Slow(er.RawAudioWriter):
+        def _write(self, handle, data):
+            time.sleep(0.03)
+            super()._write(handle, data)
+    w = Slow(str(tmp / "slow.raw"), 2, rate, max_queue=2)
+    for k in range(40):
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    w.close()
+    data = read_raw(tmp / "slow.raw")
+    check(w.lost >= 10 and abs(data.shape[0] - 40 * n) <= 2 and w.frames == data.shape[0],
+          "file pleine: les blocs perdus sont comptes (jamais de blocage du callback) et remplaces par du silence, y compris en fin de fichier", f"perdus {w.lost}, {data.shape[0]} echantillons pour {40 * n}")
+
+    # --- silence permanent : crete au plancher
+    w = er.RawAudioWriter(str(tmp / "z.raw"), 2, rate)
+    w.push(np.zeros((n, 2), np.float32), base + n / rate)
+    w.close()
+    check(w.peak == 0.0 and w.frames == n, "ecriture: silence = crete nulle")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_bands_pulse() -> None:
     """Lot 5 de la spec synchro son / image : enveloppes continues par bande, sources de bande et de pulsation, respiration sur la pulsation."""
     print("Bandes fines, sources de pulsation et respiration")
@@ -10814,7 +10909,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_recording", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_recording", "check_recorder_audio", "check_groupes")
 
 
 SUITE = (
@@ -10827,7 +10922,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_recording", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

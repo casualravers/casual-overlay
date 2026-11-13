@@ -459,6 +459,8 @@ class SoundDeviceInput:
         self.name = info["name"]
         self.channels = max(1, min(2, int(info["max_input_channels"])))
         self.ring = ring
+        self.tap = None                  # point d'ecoute de l'enregistrement : tap(bloc stereo float32 copie, instant de fin) ; None = aucun cout
+        self.tap_errors = 0
         self.stream = sd.InputStream(
             device=device, channels=self.channels, samplerate=self.rate, blocksize=blocksize,
             dtype="float32", latency="low", callback=self._callback)
@@ -466,8 +468,14 @@ class SoundDeviceInput:
     def _callback(self, indata, frames, time_info, status):
         if status:
             self.dropped = getattr(self, "dropped", 0) + 1
-        now = time.monotonic()
-        self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), now - capture_age(time_info, frames, self.rate))
+        t_end = time.monotonic() - capture_age(time_info, frames, self.rate)
+        self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), t_end)
+        tap = self.tap
+        if tap is not None:              # enregistrement en cours : le bloc stereo est copie (le pilote reutilise son tampon) ; une erreur ici ne touche jamais l'analyse
+            try:
+                tap(indata.copy() if self.channels == 2 else np.repeat(indata, 2, axis=1), t_end)
+            except Exception:
+                self.tap_errors += 1
 
     def start(self):
         self.stream.start()
