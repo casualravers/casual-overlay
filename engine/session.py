@@ -64,10 +64,40 @@ class AudioController:
         return new.name
 
     @staticmethod
-    def input_choices() -> list[tuple[int, str]]:
+    def input_choices(keep: str | None = None) -> list[tuple[int, str]]:
+        """Entrees disponibles. Windows expose chaque entree physique une fois par API audio (MME, DirectSound, WASAPI, WDM-KS) :
+        quand WASAPI en fournit, on ne garde qu'elle (les doublons ne servent a rien), sauf l'entree `keep` (celle qui tourne)."""
         hostapis = sd.query_hostapis()
-        return [(i, f"[{hostapis[d['hostapi']]['name'].replace('Windows ', '')}] {d['name']}")
-                for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+        rows = [(i, d, hostapis[d["hostapi"]]["name"]) for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+        if any("WASAPI" in api for _i, _d, api in rows):
+            rows = [r for r in rows if "WASAPI" in r[2] or (keep and keep in r[1]["name"])]
+        return [(i, f"[{api.replace('Windows ', '')}] {d['name']}") for i, d, api in rows]
+
+    def refresh_devices(self) -> bool:
+        """Relit la liste des peripheriques (PortAudio la fige au demarrage : un micro branche apres n'apparait pas). Reinitialise PortAudio,
+        ce qui coupe le flux un instant : l'entree courante est rouverte par son nom. Faux si rien n'a ete fait (synthetique, erreur)."""
+        if self.synthetic:
+            return False
+        name = self.name
+        try:
+            self.src.stop()
+        except Exception:
+            pass
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:
+            pass
+        for query in (name, None):
+            try:
+                from engine.audio import find_input_device
+                new = SoundDeviceInput(find_input_device(query) if query else None, self.ring)
+                new.start()
+                self.src = new
+                return True
+            except (Exception, SystemExit):
+                continue
+        return False
 
 
 class Session:

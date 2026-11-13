@@ -3344,6 +3344,21 @@ def check_recorder_audio() -> None:
         dev.rate, dev.channels, dev.ring, dev.tap, dev.tap_errors = rate, channels, ea.RingBuffer(1 << 14), tap, 0
         return dev
 
+    # --- liste des entrees : une seule ligne par entree physique (WASAPI) quand elle existe, sauf l'entree qui tourne
+    import engine.session as es
+    apis = [{"name": "MME"}, {"name": "Windows WASAPI"}]
+    devs = [{"name": "Micro X", "hostapi": 0, "max_input_channels": 2}, {"name": "Micro X", "hostapi": 1, "max_input_channels": 2},
+            {"name": "Haut-parleur", "hostapi": 1, "max_input_channels": 0}, {"name": "Ligne Y", "hostapi": 0, "max_input_channels": 2}]
+    old_sd = es.sd
+    es.sd = types.SimpleNamespace(query_hostapis=lambda: apis, query_devices=lambda: devs)
+    try:
+        plain = es.AudioController.input_choices()
+        kept = es.AudioController.input_choices("Ligne Y")
+    finally:
+        es.sd = old_sd
+    check(plain == [(1, "[WASAPI] Micro X")], "entrees: WASAPI seule quand elle existe, sorties et doublons MME ecartes", str(plain))
+    check((3, "[MME] Ligne Y") in kept and (1, "[WASAPI] Micro X") in kept, "entrees: l'entree qui tourne reste listee meme hors WASAPI", str(kept))
+
     info = types.SimpleNamespace(inputBufferAdcTime=0.0, currentTime=0.0)         # pilote sans horodatage : le bloc est date au callback
     rg = np.random.default_rng(5)
     blocks = [rg.uniform(-0.8, 0.8, (n, 2)).astype(np.float32) for _ in range(100)]
