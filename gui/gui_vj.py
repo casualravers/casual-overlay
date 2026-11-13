@@ -354,21 +354,28 @@ def install(c):
 
         pending: dict = {}                                  # onglet -> fonction qui le remplit (a la premiere selection : le panneau est cher a habiller)
 
-        def new_tab(name: str, fill) -> None:
+        def new_tab(name: str, fill, scroll: bool = True) -> None:
+            """Un onglet ; son contenu est dans une zone defilante (ascenseur seulement si la liste du panneau, reglee par la poignee, laisse moins de
+            hauteur que le contenu). `scroll=False` : la fonction recoit le cadre de l'onglet lui-meme (Affichage pose sa propre zone defilante)."""
             f = tk.Frame(nb, bg=a2w.GUI_PANEL_BG)
-            f.columnconfigure(1, weight=1)
-            f.columnconfigure(4, weight=1)
             nb.add(f, text=name)
-            pending[str(f)] = fill
+            target = f
+            if scroll:
+                outer, target = skin.scroll_area(f, a2w.GUI_PANEL_BG)
+                outer.pack(fill="both", expand=True)
+            target.columnconfigure(1, weight=1)
+            target.columnconfigure(4, weight=1)
+            pending[str(f)] = (fill, target)
 
         def build_current(_evt=None) -> None:
             try:
                 f = nb.nametowidget(nb.select())
             except (tk.TclError, KeyError):
                 return
-            fill = pending.pop(str(f), None)
-            if fill is not None:
-                fill(f)
+            entry = pending.pop(str(f), None)
+            if entry is not None:
+                fill, target = entry
+                fill(target)
                 skin.apply(f)
             setattr(s, "master_tab", nb.index("current"))
 
@@ -673,10 +680,11 @@ def install(c):
 
         # ---- Affichage et analyse (contenu construit une fois avec la fenetre, pose ici)
         def fill_7(f) -> None:
-            tab_aff.pack(in_=f, side="top", fill="both", expand=True)
-            tab_aff.lift()
+            outer = getattr(tab_aff, "_scroll_outer", tab_aff)           # la zone defilante qui contient l'onglet (enfant de la barre, posee ici)
+            outer.pack(in_=f, side="top", fill="both", expand=True)
+            outer.lift()
 
-        new_tab("Affichage", fill_7)
+        new_tab("Affichage", fill_7, scroll=False)
 
         # ---- Enregistrement video + audio : bouton, format, cadence, encodeur, delai audio, dossier, voyant (issue #140). Onglet a part : l'onglet Affichage est deja le
         # plus haut, et c'est lui qui donne sa hauteur au panneau etendu.
