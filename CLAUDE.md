@@ -103,6 +103,7 @@ python audio2wave_gl.py --gui [--projeter]             # reglages seuls ; bouton
 python audio2wave_gl.py --synthetic --no-fullscreen    # sans ffmpeg ni micro
 python tools/check_gl.py                                     # verifications hors materiel
 python audio2wave_gl.py --diagnostic                   # ce PC est-il pret ? (ffmpeg, OpenGL, micro...)
+python audio2wave_gl.py --rapport-bug "description"   # zip de diagnostic sur le Bureau (journal, plantages, reglages sans secrets)
 python tools/build_portable.py --zip                         # dossier portable (Python + ffmpeg + audio2wave dedans)
 ```
 

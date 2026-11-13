@@ -140,6 +140,10 @@ def build_app(out: Path, a2w_dir: Path) -> None:
     for f in a2w_dir.glob("*.py"):
         shutil.copy2(f, dst / f.name)
     (out / "LISEZMOI.txt").write_text(README_PORTABLE, encoding="utf-8")
+    if str(HERE) not in sys.path:
+        sys.path.insert(0, str(HERE))
+    from core.bugreport import version_info               # le portable n'a pas git : le rapport de bug lit ce fichier
+    (out / "VERSION").write_text(version_info(HERE) + "\n", encoding="utf-8")
 
 
 def build_ffmpeg(out: Path, ffmpeg_dir: Path | None) -> list[str]:
