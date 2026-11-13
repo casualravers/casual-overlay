@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import subprocess
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -59,15 +60,14 @@ def _medias(obj) -> list[str]:
 
 def scenes_summary(data: dict) -> dict:
     """Resume de `scenes.json` : par scene son nom, son mode, son fond et ses medias ; par set la liste des scenes. Pas les reglages complets."""
-    scenes = []
-    for sc in data.get("scenes", []) if isinstance(data, dict) else []:
-        if isinstance(sc, dict):
-            scenes.append({"nom": sc.get("name", ""), "mode": sc.get("mode", ""), "fond": sc.get("bg", ""), "medias": _medias(sc)})
-    sets = []
-    for st in data.get("sets", []) if isinstance(data, dict) else []:
-        if isinstance(st, dict):
-            sets.append({"nom": st.get("name", ""), "scenes": [e.get("scene", "") for e in st.get("entries", []) if isinstance(e, dict)]})
-    return {"scenes": scenes, "sets": sets, "set_actif": data.get("active_set", "") if isinstance(data, dict) else ""}
+    data = data if isinstance(data, dict) else {}
+
+    def items(obj, key) -> list:                    # un fichier abime peut avoir un nombre ou null a la place d'une liste
+        val = obj.get(key) if isinstance(obj, dict) else None
+        return [x for x in val if isinstance(x, dict)] if isinstance(val, list) else []
+    scenes = [{"nom": sc.get("name", ""), "mode": sc.get("mode", ""), "fond": sc.get("bg", ""), "medias": _medias(sc)} for sc in items(data, "scenes")]
+    sets = [{"nom": st.get("name", ""), "scenes": [e.get("scene", "") for e in items(st, "entries")]} for st in items(data, "sets")]
+    return {"scenes": scenes, "sets": sets, "set_actif": data.get("active_set", "")}
 
 
 def _read(path: Path) -> bytes | None:
@@ -78,12 +78,13 @@ def _read(path: Path) -> bytes | None:
 
 
 def _depot_url(settings_dir: Path) -> str:
-    """URL du depot des doodles SANS sa partie requete (une cle peut y figurer) ; "" si absente ou illisible."""
+    """URL du depot des doodles SANS identifiants, requete ni fragment (une cle peut y figurer) ; "" si absente ou illisible."""
     raw = _read(settings_dir / "depot.json")
     try:
         url = str(json.loads(raw.decode("utf-8")).get("url", "")) if raw else ""
         parts = urlsplit(url)
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")) if url else ""
+        host = (parts.hostname or "") + (f":{parts.port}" if parts.port else "")
+        return urlunsplit((parts.scheme, host, parts.path, "", "")) if url else ""
     except (ValueError, AttributeError, UnicodeDecodeError):
         return ""
 
@@ -129,8 +130,8 @@ def collect(settings_dir: Path, extras: dict[str, str]) -> tuple[list[tuple[str,
         try:
             summary = scenes_summary(json.loads(raw.decode("utf-8")))
             entries.append(("reglages/scenes_resume.json", json.dumps(redact(summary), indent=1, ensure_ascii=False).encode("utf-8")))
-        except (ValueError, UnicodeDecodeError):
-            notes.append("illisible : scenes.json (JSON invalide)")
+        except Exception as exc:                    # un fichier abime ne doit jamais empecher le rapport
+            notes.append(f"illisible : scenes.json ({type(exc).__name__})")
     for name in EXTRA_FILES:
         if extras.get(name):
             entries.append((name, str(extras[name]).encode("utf-8")))
@@ -146,28 +147,36 @@ def collect(settings_dir: Path, extras: dict[str, str]) -> tuple[list[tuple[str,
 
 
 def write_zip(path: Path, entries: list[tuple[str, bytes]]) -> None:
-    """Ecrit le zip d'un coup : fichier provisoire puis `os.replace` (jamais de zip a moitie ecrit sous le nom final)."""
+    """Ecrit le zip d'un coup : fichier provisoire UNIQUE (deux rapports en meme temps ne se melangent pas) puis `os.replace` (jamais de zip a
+    moitie ecrit sous le nom final)."""
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    os.close(fd)
+    tmp = Path(name)
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-            for name, data in entries:
-                z.writestr(name, data)
+            for entry, data in entries:
+                z.writestr(entry, data)
         os.replace(tmp, path)
     finally:
-        if tmp.exists():
+        try:
             tmp.unlink()
+        except OSError:                             # deja deplace (cas normal), ou impossible : ne pas masquer l'erreur d'origine
+            pass
 
 
 def output_path(folder: Path, now: datetime) -> Path:
-    """`casual-bug-AAAA-MM-JJ_HHhMM.zip` dans `folder`, suffixe -2, -3... si le nom est deja pris (deux rapports dans la meme minute)."""
+    """`casual-bug-AAAA-MM-JJ_HHhMM.zip` dans `folder`, suffixe -2, -3... si le nom est deja pris. Le nom est RESERVE sur le disque (fichier vide
+    cree en exclusif) : deux rapports lances en meme temps (bouton, ligne de commande) ne peuvent pas choisir le meme."""
     base = now.strftime("casual-bug-%Y-%m-%d_%Hh%M")
-    path = Path(folder) / f"{base}.zip"
-    n = 2
-    while path.exists():
-        path = Path(folder) / f"{base}-{n}.zip"
-        n += 1
-    return path
+    n = 1
+    while True:
+        path = Path(folder) / (f"{base}.zip" if n == 1 else f"{base}-{n}.zip")
+        try:
+            with open(path, "xb"):
+                return path
+        except FileExistsError:
+            n += 1
 
 
 def version_info(repo_dir: Path, run=subprocess.run) -> str:

@@ -140,10 +140,15 @@ def install(c):
         from gl_gui import STATS
         ask = getattr(s, "bug_ask", None) or (lambda: simpledialog.askstring(
             "Rapport de bug", "Ce qui s'est passe (facultatif) :", parent=root))
+        if str(bug_btn.cget("state")) == "disabled":       # un rapport est deja en cours
+            return None
         text = ask()
         if text is None:
             return None
-        system = bugreport.system_info(root, s)           # lu ici : Tk ne se touche que depuis son fil
+        try:
+            system = bugreport.system_info(root, s)       # lu ici : Tk ne se touche que depuis son fil
+        except Exception as exc:
+            system = {"erreur": repr(exc)}
         fluidity = "\n".join(STATS.report(16))
         out_dir = getattr(s, "bug_out_dir", None)
         result: dict = {}
@@ -155,20 +160,22 @@ def install(c):
                 diag = f"Diagnostic impossible : {exc}"
             try:
                 result["path"], result["notes"] = bugreport.make_report(text, out_dir=out_dir, diag=diag, system=system, fluidity=fluidity)
-            except OSError as exc:
-                result["error"] = str(exc)
+            except Exception as exc:                       # quelle que soit l'erreur : un message, jamais un fil mort en silence
+                result["error"] = f"{type(exc).__name__}: {exc}"
 
         def finish():
-            if "error" in result:
-                s.status["msg"] = f"Rapport de bug impossible : {result['error']}"
+            bug_btn.configure(state="normal")
+            if "path" not in result:
+                s.status["msg"] = f"Rapport de bug impossible : {result.get('error', 'delai depasse')}"
                 return
-            s.status["msg"] = f"Rapport de bug ecrit : {result['path'].name} (sur le Bureau)" if out_dir is None else f"Rapport de bug ecrit : {result['path'].name}"
+            s.status["msg"] = f"Rapport de bug ecrit : {result['path']}"
             if out_dir is None:
                 try:
-                    subprocess.Popen(["explorer", f"/select,{result['path']}"])
+                    subprocess.Popen(bugreport.explorer_command(result["path"]))
                 except OSError:
                     pass
 
+        bug_btn.configure(state="disabled")
         worker = threading.Thread(target=work, name="rapport-bug", daemon=True)
         worker.start()
         if wait:

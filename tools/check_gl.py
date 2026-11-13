@@ -1443,6 +1443,8 @@ def check_gui() -> None:
     check(out.get("bug_gui") == (True, "Rapport de bug", True, True, True, True),
           "rapport de bug (GUI): bouton a cote de Diagnostic ; annuler n'ecrit rien ; le zip a fluidite, diagnostic, systeme et la description ; message",
           str(out.get("bug_gui")))
+    check(out.get("bug_gui_error") == (True, True, "normal"),
+          "rapport de bug (GUI): une erreur quelconque pendant l'ecriture = message, pas d'exception, bouton rendu", str(out.get("bug_gui_error")))
     hs = out.get("aff_height") or [(0, 0, 0), (1, 1, 1)]
     check(hs[0] == hs[1], "onglet Affichage: un voyant de pulsation ou un statut tres long ne change pas la hauteur de l'onglet (rien ne decale)", str(hs))
     print(f"  (information) hauteur voulue de l'onglet Affichage : {hs[0][0]} px")
@@ -3940,6 +3942,36 @@ def check_bugreport() -> None:
     v3 = br.version_info(d, run=no_git)
     check(v1 == "1231ef4 du 2026-11-13" and v2 == "9f9f9f9 du 2026-11-01" and v3 == "inconnue", "version: git, sinon fichier VERSION, sinon inconnue", str((v1, v2, v3)))
 
+    # --- revue : scenes.json mal forme, URL avec identifiants, reservation du nom
+    for bad in ({"scenes": 5}, {"sets": [{"entries": None}]}, {"sets": 3}, [1, 2], {"scenes": [{"name": "A", "overlay": 3}], "sets": [{"name": "s", "entries": [None, 4]}]}):
+        (d / "scenes.json").write_text(json.dumps(bad), encoding="utf-8")
+        try:
+            e_, n_ = br.collect(d, {})
+            ok_ = True
+        except Exception as exc:
+            ok_, n_ = False, [repr(exc)]
+        if not ok_:
+            break
+    check(ok_, "scenes.json mal forme (types inattendus): le rapport sort quand meme", str(n_))
+    (d / "depot.json").write_text(json.dumps({"url": "https://moi:SECRET7@p.supabase.co:8443/chemin?apikey=x#k=SECRET8"}), encoding="utf-8")
+    readme7 = dict(br.collect(d, {})[0])["LISEZMOI.txt"].decode("utf-8")
+    check("SECRET7" not in readme7 and "SECRET8" not in readme7 and "moi" not in readme7 and "p.supabase.co:8443/chemin" in readme7,
+          "URL du depot: ni identifiants, ni requete, ni fragment ; hote, port et chemin gardes", readme7[:400])
+    import threading
+    folder = Path(tempfile.mkdtemp(prefix="casual-bug-race-"))
+    got, lock = [], threading.Lock()
+
+    def reserve():
+        p_ = br.output_path(folder, datetime(2026, 11, 13, 23, 0))
+        with lock:
+            got.append(p_)
+    ths = [threading.Thread(target=reserve) for _ in range(8)]
+    for t_ in ths:
+        t_.start()
+    for t_ in ths:
+        t_.join()
+    check(len(set(got)) == 8 and all(p_.exists() for p_ in got), "nom: huit rapports en meme temps = huit noms distincts, reserves sur le disque", str(sorted(p_.name for p_ in got))[:200])
+
 
 def check_bugreport_cli() -> None:
     """Rapport de bug par la ligne de commande (`--rapport-bug`, utile si la GUI ne demarre plus) et `engine.bugreport.make_report`."""
@@ -3980,6 +4012,57 @@ def check_bugreport_cli() -> None:
     check("diagnostic.txt" in names and "Diagnostic casual-overlay" in blob.decode("utf-8", "replace") and "python" in sysinfo and "essai du rapport" in readme,
           "--rapport-bug: diagnostic, systeme et description dans le zip", str(names))
     check(not [i for i in range(1, 7) if f"SECRET{i}".encode() in blob], "--rapport-bug: aucun secret dans le zip")
+
+    # --- revue
+    import types
+    import threading
+
+    class Proj:
+        def __init__(self, on):
+            self.on = on
+
+        def running(self):
+            return self.on
+    closed = eb.system_info(s=types.SimpleNamespace(status={}, projection=Proj(False)))["projection_ouverte"]
+    opened = eb.system_info(s=types.SimpleNamespace(status={}, projection=Proj(True)))["projection_ouverte"]
+    check(closed is False and opened is True, "systeme: projection fermee / ouverte lue par running() (pas la methode elle-meme)", str((closed, opened)))
+    race = Path(tempfile.mkdtemp(prefix="casual-bug-race2-"))
+    paths, errs = [], []
+
+    def one(i):
+        try:
+            paths.append(eb.make_report(f"r{i}", settings=d, out_dir=race, diag="d", system={}, now=now)[0])
+        except Exception as exc:
+            errs.append(repr(exc))
+    ths = [threading.Thread(target=one, args=(i,)) for i in range(6)]
+    for t_ in ths:
+        t_.start()
+    for t_ in ths:
+        t_.join()
+    valid = 0
+    for p_ in paths:
+        try:
+            with zipfile.ZipFile(p_) as z:
+                valid += z.testzip() is None and "LISEZMOI.txt" in z.namelist()
+        except Exception:
+            pass
+    check(not errs and len(set(paths)) == 6 and valid == 6 and not list(race.glob("*.tmp*")),
+          "rapports simultanes: six zips distincts et valides, aucun provisoire laisse", f"{errs} {len(set(paths))} valides {valid}")
+    out_c = Path(tempfile.mkdtemp(prefix="casual-bug-crash-"))
+
+    def crashing(cmd, **k):
+        return types.SimpleNamespace(returncode=-1073741819, stdout="", stderr="")
+    code = eb.run_cli("plantage", ROOT / "sources" / "audio2wave", True, out_c, settings=d, run=crashing)
+    zc = list(out_c.glob("*.zip"))
+    diag_c = ""
+    if zc:
+        with zipfile.ZipFile(zc[0]) as z:
+            diag_c = z.read("diagnostic.txt").decode("utf-8") if "diagnostic.txt" in z.namelist() else ""
+    check(code == 0 and len(zc) == 1 and "interrompu" in diag_c and "-1073741819" in diag_c,
+          "ligne de commande: diagnostic dans un sous-processus ; s'il plante (pilote GL), le zip sort quand meme avec le code", diag_c[:200])
+    cmd = eb.explorer_command(Path(r"C:\Users\x\OneDrive - Org\Bureau\casual-bug-1.zip"))
+    check(cmd == 'explorer /select,"C:\\Users\\x\\OneDrive - Org\\Bureau\\casual-bug-1.zip"',
+          "Explorateur: chemin entre guillemets apres /select, (Bureau OneDrive avec espaces)", cmd)
 
 
 def check_lead_auto() -> None:
@@ -7091,6 +7174,17 @@ def gui_diag_steps(c, s, out) -> None:
             readme = z.read("LISEZMOI.txt").decode("utf-8")
     out["bug_gui"] = (c["bug_btn"].master == c["diag_btn"].master, c["bug_btn"].cget("text"), not cancelled,
                       {"fluidite.txt", "diagnostic.txt", "systeme.json"} <= set(names), "infobulles" in readme, "Rapport" in str(s.status.get("msg", "")))
+    import engine.bugreport as eb_
+    real_make = eb_.make_report
+
+    def broken(*a, **k):
+        raise RuntimeError("zip casse")
+    eb_.make_report = broken
+    try:
+        failed = c["bug_report"](wait=True)
+    finally:
+        eb_.make_report = real_make
+    out["bug_gui_error"] = (failed is None, "impossible" in str(s.status.get("msg", "")), str(c["bug_btn"].cget("state")))
     del s.bug_out_dir, s.bug_ask
     if msg_before is None:
         s.status.pop("msg", None)

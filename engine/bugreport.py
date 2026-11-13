@@ -9,6 +9,7 @@ from __future__ import annotations
 import ctypes
 import json
 import platform
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -91,7 +92,11 @@ def system_info(gui_root=None, s=None) -> dict:
     if s is not None:
         status = getattr(s, "status", {}) or {}
         proj = getattr(s, "projection", None)
-        info["projection_ouverte"] = bool(getattr(proj, "running", False)) if proj is not None else False
+        running = getattr(proj, "running", None)
+        try:
+            info["projection_ouverte"] = bool(running()) if callable(running) else bool(running)     # Projection.running est une methode
+        except Exception:
+            info["projection_ouverte"] = "inconnu"
         for key in ("gpu_ms", "gpu_budget_ms", "perf", "msg"):
             if key in status:
                 info[key] = status[key]
@@ -135,15 +140,38 @@ def make_report(description: str, *, settings: Path | None = None, out_dir: Path
     return path, notes
 
 
-def run_cli(description: str, a2w_dir: Path, synthetic: bool = False, out_dir: Path | None = None) -> int:
-    """`--rapport-bug` : ecrit le rapport (diagnostic complet, OpenGL compris : aucune projection ne tourne) et imprime le chemin. Code 0 / 1."""
+def explorer_command(path: Path) -> str:
+    """Commande qui ouvre l'Explorateur sur le fichier, chemin ENTRE GUILLEMETS apres `/select,` (une liste d'arguments le citait en entier,
+    `"/select,C:\\...\\a b.zip"`, et l'Explorateur ouvrait son dossier par defaut quand le chemin a des espaces : Bureau OneDrive)."""
+    return f'explorer /select,"{path}"'
+
+
+def diagnostic_subprocess(a2w_dir: Path, synthetic: bool = False, run=subprocess.run) -> str:
+    """Diagnostic complet (OpenGL compris) dans un SOUS-PROCESSUS : un pilote graphique qui plante tue ce processus-la, pas le rapport (c'est
+    justement le cas d'un plantage natif qu'on veut rapporter)."""
+    cmd = [sys.executable, str(REPO_DIR / "audio2wave_gl.py"), "--diagnostic", "--a2w-dir", str(a2w_dir)] + (["--synthetic"] if synthetic else [])
     try:
-        diag = diagnostic_text(a2w_dir, synthetic, gui=True, opengl=True)
-    except Exception as exc:                       # le rapport doit sortir meme si le diagnostic plante
-        diag = f"Diagnostic impossible : {exc}"
+        res = run(cmd, capture_output=True, text=True, timeout=120, cwd=str(REPO_DIR), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"Diagnostic impossible : {exc}"
+    text = (res.stdout or "").strip()
+    if res.returncode not in (0, 1) or "Resultat" not in text:
+        return (f"Diagnostic interrompu (code de sortie {res.returncode}) : plantage probable (pilote graphique ?).\n"
+                f"{text}\n{(res.stderr or '').strip()[-2000:]}").strip()
+    return text
+
+
+def run_cli(description: str, a2w_dir: Path, synthetic: bool = False, out_dir: Path | None = None, *, settings: Path | None = None,
+            run=subprocess.run) -> int:
+    """`--rapport-bug` : ecrit le rapport (diagnostic complet dans un sous-processus) et imprime le chemin. Code 0 / 1."""
+    diag = diagnostic_subprocess(a2w_dir, synthetic, run)
     try:
-        path, notes = make_report(description, out_dir=out_dir, diag=diag, system=system_info())
-    except OSError as exc:
+        system = system_info()
+    except Exception as exc:
+        system = {"erreur": repr(exc)}
+    try:
+        path, notes = make_report(description, settings=settings, out_dir=out_dir, diag=diag, system=system)
+    except Exception as exc:                       # jamais de trace : un message clair
         print(f"Rapport de bug impossible : {exc}", file=sys.stderr)
         return 1
     print(f"Rapport de bug ecrit : {path}")
