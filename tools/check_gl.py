@@ -3845,6 +3845,99 @@ def check_recording_render() -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+def _bug_settings_dir() -> Path:
+    """Faux dossier ~/.audio2wave pour les tests du rapport de bug : six secrets plantes (SECRET1..SECRET6), un JSON invalide, un gros journal."""
+    import json
+    d = Path(tempfile.mkdtemp(prefix="casual-bug-"))
+    (d / "gl_params.json").write_text(json.dumps({"a": 1, "remote_token": "SECRET1", "x": {"Anon_Key": "SECRET2", "b": 2},
+                                                  "l": [{"api_key": "SECRET3", "c": 3}]}), encoding="utf-8")
+    (d / "depot.json").write_text(json.dumps({"url": "https://p.supabase.co?apikey=SECRET4", "anon_key": "SECRET5"}), encoding="utf-8")
+    (d / "masters.json").write_text("{pas du json SECRET6", encoding="utf-8")
+    scenes = {"version": 2, "scenes": [{"name": "Neon", "mode": "live", "bg": "live", "overlay": {"logo_path": "C:/m/logo.png", "fx_int": [1] * 50}},
+                                       {"name": "Ridge bleu", "mode": "ridge", "bg": "pattern", "overlay": {"logo_video": "C:/m/a.webm", "fx_int": [1] * 50}}],
+              "sets": [{"name": "principal", "entries": [{"scene": "Neon", "media": {}}, {"scene": "Ridge bleu", "media": {}}]}], "active_set": "principal"}
+    (d / "scenes.json").write_text(json.dumps(scenes), encoding="utf-8")
+    line = "2026-11-13 21:00:00 INFO une ligne de journal assez longue pour remplir le fichier\n"
+    (d / "casual-overlay.log.1").write_text(line * (2_500_000 // len(line)) + "DERNIERE LIGNE\n", encoding="utf-8")
+    (d / "casual-overlay.log").write_text("debut\nfin du journal\n", encoding="utf-8")
+    (d / "crash.log").write_text("", encoding="utf-8")
+    return d
+
+
+def check_bugreport() -> None:
+    """Rapport de bug (issue #136) : choix des fichiers, masquage des secrets, resume des scenes, zip, nom, version. Pur (dossiers temporaires)."""
+    print("Rapport de bug (zip)")
+    import json
+    import zipfile
+    from datetime import datetime
+    from core import bugreport as br
+    # --- masquage
+    red = br.redact({"a": 1, "remote_token": "S", "x": {"Anon_Key": "S", "b": 2}, "l": [{"api_key": "S", "c": 3}], "PassWord": "S"})
+    check(red == {"a": 1, "remote_token": "***", "x": {"Anon_Key": "***", "b": 2}, "l": [{"api_key": "***", "c": 3}], "PassWord": "***"},
+          "masquage: cles secretes (casse ignoree, dicts et listes imbriques) remplacees, le reste intact", str(red))
+    # --- collecte et zip
+    d = _bug_settings_dir()
+    extras = {"description": "infobulles absentes", "version": "abc1234 du 2026-11-13", "portable": "venv",
+              "diagnostic.txt": "Diagnostic casual-overlay\nResultat : ok", "systeme.json": json.dumps({"python": "3.12"})}
+    entries, notes = br.collect(d, extras)
+    names = [n for n, _ in entries]
+    out = br.output_path(d, datetime(2026, 11, 13, 21, 5))
+    br.write_zip(out, entries)
+    with zipfile.ZipFile(out) as z:
+        znames = z.namelist()
+        blob = b"".join(z.read(n) for n in znames)
+        readme = z.read("LISEZMOI.txt").decode("utf-8")
+        log1 = z.read("journal/casual-overlay.log.1") if "journal/casual-overlay.log.1" in znames else b""
+        summ = json.loads(z.read("reglages/scenes_resume.json")) if "reglages/scenes_resume.json" in znames else {}
+        gp = json.loads(z.read("reglages/gl_params.json")) if "reglages/gl_params.json" in znames else {}
+    leaks = [f"SECRET{i}" for i in range(1, 7) if f"SECRET{i}".encode() in blob]
+    check(not leaks, "secrets: aucun des six secrets plantes ne se retrouve dans le zip", str(leaks))
+    check(names[0] == "LISEZMOI.txt" and {"journal/casual-overlay.log", "journal/casual-overlay.log.1", "reglages/gl_params.json", "reglages/scenes_resume.json",
+                                          "diagnostic.txt", "systeme.json"} <= set(znames),
+          "zip: LISEZMOI en tete, journaux, reglages masques, resume des scenes, diagnostic et systeme", str(znames))
+    check(not any("depot" in n or "masters" in n or n.endswith("scenes.json") or "crash" in n or "fluidite" in n for n in znames),
+          "zip: ni depot.json, ni JSON invalide, ni scenes.json complet, ni crash.log vide, ni entree absente des extras", str(znames))
+    check(gp.get("remote_token") == "***" and gp.get("a") == 1, "reglages: gl_params masque", str(gp))
+    check(any("illisible" in n and "masters.json" in n for n in notes) and any("absent" in n and "autosave.precedent.json" in n for n in notes)
+          and any("tronque" in n and "casual-overlay.log.1" in n for n in notes),
+          "notes: JSON invalide illisible, fichier absent, journal tronque", str(notes))
+    check(len(log1) <= br.LOG_MAX and log1.rstrip().endswith(b"DERNIERE LIGNE"), "journal: tronque a LOG_MAX en gardant la fin", str(len(log1)))
+    check("infobulles absentes" in readme and "abc1234" in readme and "https://p.supabase.co" in readme and "apikey" not in readme
+          and "masters.json" in readme,
+          "LISEZMOI: description, version, URL du depot sans sa requete, notes", readme[:300])
+    sc = summ.get("scenes", [])
+    check(len(sc) == 2 and sc[0].get("nom") == "Neon" and "C:/m/logo.png" in sc[0].get("medias", []) and sc[1].get("mode") == "ridge"
+          and summ.get("sets", [{}])[0].get("scenes") == ["Neon", "Ridge bleu"]
+          and len(json.dumps(summ)) < (d / "scenes.json").stat().st_size,
+          "resume des scenes: nom, mode, medias, sets ; plus petit que l'original", json.dumps(summ)[:300])
+    big = d / "gl_params.json"
+    big.write_text(json.dumps({"x": "y" * (br.SETTING_MAX + 10)}), encoding="utf-8")
+    entries2, notes2 = br.collect(d, {})
+    check("reglages/gl_params.json" not in [n for n, _ in entries2] and any("trop gros" in n and "gl_params.json" in n for n in notes2),
+          "reglage de plus de SETTING_MAX: remplace par une note", str(notes2))
+    # --- nom du fichier
+    check(out.name == "casual-bug-2026-11-13_21h05.zip" and br.output_path(d, datetime(2026, 11, 13, 21, 5)).name == "casual-bug-2026-11-13_21h05-2.zip",
+          "nom: casual-bug-AAAA-MM-JJ_HHhMM.zip, suffixe -2 si deja pris", out.name)
+    check(not list(d.glob("*.tmp")), "zip: aucun fichier provisoire laisse")
+
+    # --- version
+    class Done:
+        def __init__(self, out_):
+            self.returncode, self.stdout = 0, out_
+
+    def fake_run(cmd, **k):
+        return Done("1231ef4\n" if "rev-parse" in cmd else "2026-11-13\n")
+
+    def no_git(cmd, **k):
+        raise OSError("pas de git")
+    v1 = br.version_info(d, run=fake_run)
+    (d / "VERSION").write_text("9f9f9f9 du 2026-11-01\n", encoding="utf-8")
+    v2 = br.version_info(d, run=no_git)
+    (d / "VERSION").unlink()
+    v3 = br.version_info(d, run=no_git)
+    check(v1 == "1231ef4 du 2026-11-13" and v2 == "9f9f9f9 du 2026-11-01" and v3 == "inconnue", "version: git, sinon fichier VERSION, sinon inconnue", str((v1, v2, v3)))
+
+
 def check_lead_auto() -> None:
     """Avance estimee automatiquement (remplace la calibration manuelle) : somme des retards de la chaine, lissee, arrondie, lisible."""
     print("Avance automatique (estimation)")
@@ -11657,7 +11750,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -11670,7 +11763,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_bugreport", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
