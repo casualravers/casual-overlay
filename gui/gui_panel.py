@@ -1131,7 +1131,11 @@ def install(c):
         def grip_press(e) -> None:
             # tout est calcule depuis l'etat au moment de l'appui (jamais depuis la taille courante de la fenetre, qui n'est pas encore a jour
             # entre deux mouvements : l'ancien calcul incremental se decalait et faisait trembler la liste et la fenetre pendant le glisser)
-            drag.update(y=e.y_root, h=int(body.cget("height")), win=root.winfo_height(), w=root.winfo_width(),
+            # hauteur AFFICHEE de la liste, pas celle demandee : l'espace de controle a droite (ttk.Notebook, qui garde la hauteur du plus haut
+            # onglet deja ouvert, ex. Affichage) peut imposer plus. Partir de la hauteur demandee laissait une zone morte (issue #128 : apres
+            # un clic sur Affichage la liste faisait 452 px pour 280 demandes, et glisser de moins de +172 px ne changeait rien).
+            floor = max(PANEL_BODY_MIN, mbox.winfo_reqheight())
+            drag.update(y=e.y_root, h=max(body.winfo_height(), floor), floor=floor, win=root.winfo_height(), w=root.winfo_width(),
                         overflow=getattr(s, "panel_overflow", 0), panel=getattr(s, "scene_panel_h", 0), want=None, job=None)
 
         def grip_apply() -> None:
@@ -1164,7 +1168,7 @@ def install(c):
         def grip_move(e) -> None:
             if not drag:
                 return
-            want = max(PANEL_BODY_MIN, drag["h"] + e.y_root - drag["y"])
+            want = max(drag["floor"], drag["h"] + e.y_root - drag["y"])          # jamais sous l'espace de controle : la liste ne peut pas etre plus basse que lui
             want = min(want, max(root.winfo_screenheight() - 200, PANEL_BODY_MIN))
             if want == drag["want"] or (want == drag["h"] and drag["want"] is None):
                 return

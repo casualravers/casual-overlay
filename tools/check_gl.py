@@ -1353,6 +1353,10 @@ def check_gui() -> None:
     check(out.get("x_console") == (True, True, True), "console VJ: grosses commandes (PANIQUE, Drop, Suivante) et ligne d'etat", str(out.get("x_console")))
     check(out.get("x_title") is True, "titre de la fenetre: l'etat du spectacle (scene, VJ) lisible dans la barre des taches")
     check(out.get("x_autosave") is True, "auto-sauvegarde: reglages (sans etats du moment), scene et set ecrits", str(out.get("x_autosave")))
+    xa = out.get("x_grip_aff") or (0, 0, 0, False)
+    check(xa[1] == xa[0] + 60 and xa[2] == xa[0] and xa[3],
+          "etendu (GUI): apres l'onglet Affichage (plus haut que la liste), la poignee agrandit la liste des le premier pixel et la reduit d'autant (issue #128)",
+          str(out.get("x_grip_aff")))
     check(out.get("x_wheel_grip") == (True,) * 4,
           "etendu (GUI): la molette defile la liste des scenes et la poignee l'agrandit / la reduit (la fenetre suit, minimum 80 px)",
           str(out.get("x_wheel_grip")))
@@ -6356,23 +6360,44 @@ def gui_expand_steps(c, s, out) -> None:
     wheel_pos = cv.yview()[0]
     grip = [w for w in walk_(panel) if w.winfo_class() == "Label" and str(w.cget("text")) == "⋯"][0]
     body = cv.master
-    g0, gw0 = int(body.cget("height")), root.winfo_height()
+    # hauteurs AFFICHEES (winfo_height) : l'espace de controle a droite de la liste peut imposer plus que la hauteur demandee (issue #128)
+    g0, gw0 = body.winfo_height(), root.winfo_height()
     grip.event_generate("<ButtonPress-1>", rooty=500)
     grip.event_generate("<B1-Motion>", rooty=560)
     grip.event_generate("<ButtonRelease-1>", rooty=560)
     root.update()
-    h1, win1 = int(body.cget("height")), root.winfo_height()
+    h1, win1 = body.winfo_height(), root.winfo_height()
     grip.event_generate("<ButtonPress-1>", rooty=500)
     grip.event_generate("<B1-Motion>", rooty=-5000)
     grip.event_generate("<ButtonRelease-1>", rooty=-5000)
     root.update()
-    small = int(body.cget("height"))
+    small, floor = body.winfo_height(), body.master.winfo_height()
     grip.event_generate("<ButtonPress-1>", rooty=500)
     grip.event_generate("<B1-Motion>", rooty=500 + g0 - small)       # on remet la hauteur d'origine (la suite compare les tailles)
     grip.event_generate("<ButtonRelease-1>", rooty=500 + g0 - small)
     root.update()
-    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + min(60, max(root.winfo_screenheight() - 80 - gw0, 0)), small == 80)     # la fenetre suit tant qu'elle tient dans l'ecran
-    out["x_grip_back"] = (int(body.cget("height")), g0, root.winfo_height(), gw0)
+    out["x_wheel_grip"] = (wheel_pos > 0, h1 == g0 + 60, win1 == gw0 + min(60, max(root.winfo_screenheight() - 80 - gw0, 0)),
+                           small >= 80 and small == floor)     # la fenetre suit tant qu'elle tient dans l'ecran ; au plus petit, la liste remplit toujours sa rangee
+    out["x_grip_back"] = (body.winfo_height(), g0, root.winfo_height(), gw0)
+    # issue #128 : apres un clic sur l'onglet Affichage (plus haut que la liste), la poignee agit des le premier pixel
+    vjnb = next(w for w in walk_(root) if w.winfo_class() == "TNotebook" and "Affichage" in [w.tab(t_, "text") for t_ in w.tabs()])
+    tab_before = vjnb.select()
+    vjnb.select([t_ for t_ in vjnb.tabs() if vjnb.tab(t_, "text") == "Affichage"][0])
+    root.update()
+    root.update()
+    a0, aw0 = body.winfo_height(), root.winfo_height()
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=560)
+    grip.event_generate("<ButtonRelease-1>", rooty=560)
+    root.update()
+    a1 = body.winfo_height()
+    grip.event_generate("<ButtonPress-1>", rooty=500)
+    grip.event_generate("<B1-Motion>", rooty=440)
+    grip.event_generate("<ButtonRelease-1>", rooty=440)
+    root.update()
+    out["x_grip_aff"] = (a0, a1, body.winfo_height(), root.winfo_height() == aw0)
+    vjnb.select(tab_before)
+    root.update()
     # renommer depuis le panneau
     # nom tres long : affiche en entier, colonnes alignees d'une ligne a l'autre
     long_name = "Une scene au nom vraiment tres long pour verifier l'affichage complet " + "x" * 20
