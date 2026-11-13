@@ -12,24 +12,25 @@ from pathlib import Path
 
 import theme
 
-WIDTH, HEIGHT = 420, 232
+WIDTH, HEIGHT = 460, 282
 LOGO_PATH = Path(__file__).resolve().parent.parent / "asset" / "logo_chargement.png"     # fabrique par tools/make_logo_chargement.py
-LOGO_W = 340
-BAR_W, BAR_H = 340, 6
+LOGO_W = 360
+BAR_W, BAR_H = 380, 8                     # barre en gelule (capsule) : piste sombre, remplissage a l'accent avec un reflet
+TAGLINE = "projection audio-reactive"
 CREEP = 0.07                  # chaque jalon avance la barre de cette part du chemin restant (jamais a 100 % avant la fin)
 MIN_REPAINT_S = 0.03
 
 # Jalons de construction (sections chronometrees de la GUI) -> texte affiche.
 SECTION_LABELS = {
-    "build_window": "Construction de l'interface...",
-    "build.destruction": "Preparation de la fenetre...",
-    "refresh_scene_bar": "Barre des scenes...",
-    "bar.mesure": "Barre des scenes...",
-    "bar.habillage": "Habillage...",
-    "panel.master_box": "Espace de controle...",
-    "panel.lignes": "Liste des scenes...",
-    "panel.lot": "Liste des scenes...",
-    "panel.habillage": "Habillage...",
+    "build_window": "Construction de l'interface",
+    "build.destruction": "Preparation de la fenetre",
+    "refresh_scene_bar": "Barre des scenes",
+    "bar.mesure": "Barre des scenes",
+    "bar.habillage": "Habillage de l'interface",
+    "panel.master_box": "Espace de controle",
+    "panel.lignes": "Liste des scenes",
+    "panel.lot": "Liste des scenes",
+    "panel.habillage": "Habillage de l'interface",
 }
 
 
@@ -46,19 +47,45 @@ class Splash:
         top.overrideredirect(True)
         top.attributes("-topmost", True)
         top.configure(bg=theme.BG, highlightthickness=1, highlightbackground=theme.LINE)
+        tk.Frame(top, bg=theme.LIVE, height=3, bd=0).pack(fill="x", side="top")          # filet d'accent en haut de la carte
         x = (top.winfo_screenwidth() - WIDTH) // 2
         y = (top.winfo_screenheight() - HEIGHT) // 3
         top.geometry(f"{WIDTH}x{HEIGHT}+{x}+{y}")
         self.logo = self._load_logo()
         if self.logo is not None:                            # la forme d'onde d'un kick, aberration chromatique et glitch
-            tk.Label(top, image=self.logo, bg=theme.BG, bd=0).pack(pady=(24, 4))
-        tk.Label(top, text="casual-overlay", bg=theme.BG, fg=theme.FG, font=("Segoe UI", 13 if self.logo else 15, "bold")).pack(pady=(0 if self.logo else 20, 2))
-        self.label = tk.Label(top, text="Demarrage...", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SMALL)
-        self.label.pack()
-        self.bar = tk.Canvas(top, width=BAR_W, height=BAR_H, bg=theme.PANEL, bd=0, highlightthickness=0)
-        self.bar.pack(pady=(10, 0))
-        self.fill = self.bar.create_rectangle(0, 0, 0, BAR_H, fill=theme.LIVE, width=0)
+            tk.Label(top, image=self.logo, bg=theme.BG, bd=0).pack(pady=(20, 2))
+        tk.Label(top, text="casual-overlay", bg=theme.BG, fg=theme.FG, font=("Segoe UI", 15 if not self.logo else 14, "bold")).pack(pady=(0 if self.logo else 22, 0))
+        tk.Label(top, text=TAGLINE.upper(), bg=theme.BG, fg=theme.MUTED, font=theme.FONT_KICKER).pack(pady=(0, 14))
+        row = tk.Frame(top, bg=theme.BG)                     # etape en cours a gauche, avancement a droite
+        row.pack(fill="x", padx=(WIDTH - BAR_W) // 2)
+        self.label = tk.Label(row, text="Demarrage", bg=theme.BG, fg=theme.FG, font=theme.FONT, anchor="w")
+        self.label.pack(side="left")
+        self.percent = tk.Label(row, text="0 %", bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SMALL, anchor="e")
+        self.percent.pack(side="right")
+        self.bar = tk.Canvas(top, width=BAR_W, height=BAR_H, bg=theme.BG, bd=0, highlightthickness=0)
+        self.bar.pack(pady=(8, 0))
+        self._capsule(0, BAR_W, theme.TROUGH)                # piste
+        self.fill = []                                       # morceaux du remplissage (gelule + reflet), redessines a chaque avance
+        self._draw_fill(0.0)
         top.update()                                         # premiere peinture : evenements traites une fois, ensuite seulement le dessin
+
+    def _capsule(self, x0: float, x1: float, color: str, y0: float = 0, y1: float = BAR_H) -> list:
+        """Une gelule horizontale (rectangle + deux disques) sur la barre ; rend les identifiants des formes."""
+        r = (y1 - y0) / 2
+        x1 = max(x1, x0 + 2 * r)
+        c = self.bar
+        return [c.create_oval(x0, y0, x0 + 2 * r, y1, fill=color, width=0), c.create_oval(x1 - 2 * r, y0, x1, y1, fill=color, width=0),
+                c.create_rectangle(x0 + r, y0, x1 - r, y1, fill=color, width=0)]
+
+    def _draw_fill(self, frac: float) -> None:
+        for item in self.fill:
+            self.bar.delete(item)
+        self.fill = []
+        if frac <= 0:
+            return
+        x1 = BAR_W * min(frac, 1.0)
+        self.fill = self._capsule(0, x1, theme.LIVE)
+        self.fill += self._capsule(2, max(x1 - 2, BAR_H), theme.lighten(theme.LIVE, 0.22), 1, 3)          # reflet fin sur le haut
 
     @staticmethod
     def _load_logo():
@@ -82,8 +109,9 @@ class Splash:
         self._last = now
         try:
             if label:
-                self.label.configure(text=label)
-            self.bar.coords(self.fill, 0, 0, BAR_W * min(self.frac, 1.0), BAR_H)
+                self.label.configure(text=label.rstrip(". "))
+            self.percent.configure(text=f"{int(min(self.frac, 1.0) * 100)} %")
+            self._draw_fill(self.frac)
             self.top.update_idletasks()                      # dessin seul : pas d'evenements (les minuteries de la fenetre en construction attendent)
         except tk.TclError:
             pass
