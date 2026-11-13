@@ -1319,7 +1319,7 @@ def check_gui() -> None:
           str(out.get("x_foudre_ui")))
     check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc, decharge de la foudre", str(out.get("x_build")))
     check(out.get("x_silence") == (True,) * 3, "phases auto (GUI): la case ecrit auto_phase", str(out.get("x_silence")))
-    check(out.get("x_panic") == (True, True, True, True), "panique (GUI): le bouton coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
+    check(out.get("x_panic") == (True, True, True, True), "panique (GUI): plus de bouton PANIQUE dans la barre (REC a sa place) ; la palette coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
@@ -1447,6 +1447,8 @@ def check_gui() -> None:
     check(len(set(rg.get("heights") or [(0, 0), (1, 1)])) == 1, "onglet Rec (GUI): un voyant court ou tres long ne change ni la hauteur du voyant ni celle de l'onglet (rien ne decale)", str(rg.get("heights")))
     check(rg.get("sent") == "rec" and rg.get("values") == ("vertical_hd", 60.0, "materiel", 120.0, "C:/clips test/mes videos", "D:/autre dossier"),
           "onglet Rec (GUI): le bouton envoie la commande au fil GL ; format, cadence, encodeur, delai et dossier (selecteur ou saisie) vont dans les reglages", str((rg.get("sent"), rg.get("values"))))
+    check(rg.get("bar") == (("● REC", "disabled"), ("■ 01:23", "normal"), "rec"),
+          "bouton REC de la barre (a la place de PANIQUE): grise projection fermee, temps ecoule pendant l'enregistrement, un clic envoie la commande", str(rg.get("bar")))
     check(rg.get("palette") == (True, "Enregistrement : demarrer / arreter", "rec") and rg.get("help") and rg.get("tab_icon"),
           "onglet Rec (GUI): commande de la palette Ctrl+K, touche E dans l'aide, icone de l'onglet", str((rg.get("palette"), rg.get("help"), rg.get("tab_icon"))))
     bm = out.get("bgv_modes", {})
@@ -5587,11 +5589,10 @@ def gui_expand_steps(c, s, out) -> None:
     params["fx_on"] = [1, 1, 1, 1, 1]
     vjc["state"]["running"] = True
     s.scene_lock = True
-    panic_btn = next((w for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button" and w.cget("text") == "PANIQUE"), None)
-    if panic_btn is not None:
-        panic_btn.invoke()
+    bar_texts_ = [w.cget("text") for w in walk_(c["scene_bar"]) if w.winfo_class() == "Button"]
+    c["palette"].choose("panique")                    # le bouton de la barre est maintenant REC : la panique passe par la palette (Ctrl+K), la console, le mode scene et la touche X
     root.update()
-    out["x_panic"] = (panic_btn is not None,
+    out["x_panic"] = ("PANIQUE" not in bar_texts_ and "\u25cf REC" in bar_texts_,
                       params["comp_sym"] == 0 and params["hue_master"] == 0.0 and params["build"] == 0.0 and params["strobe_on"] == 0.0
                       and params["auto_phase"] == 0.0 and params["holo_on"] == 0.0 and params["fx_on"] == [0] * 5,
                       vjc["state"]["running"] is False and not s.scene_lock, "PANIQUE" in c["scenes"]["msg"].get())
@@ -6565,6 +6566,8 @@ def gui_rec_steps(c, s, out) -> None:
     proj = getattr(s, "projection", None)
     was_on = getattr(proj, "on", None)
     refresh()
+    bar_btn = ui["rec_bar_btn"]
+    bar_closed = (bar_btn.cget("text"), str(bar_btn.cget("state")))
     closed = (str(btn.cget("state")), label.cget("text"))                      # projection fermee : bouton grise avec la raison
     if proj is not None:
         proj.on = True                                                         # la projection s'ouvre : le bouton devient actif
@@ -6578,6 +6581,7 @@ def gui_rec_steps(c, s, out) -> None:
         refresh()
         root.update_idletasks()
         heights.append((nb.nametowidget(nb.select()).winfo_reqheight(), label.winfo_reqheight()))
+    bar_rec = (bar_btn.cget("text"), str(bar_btn.cget("state")))
     recording = (btn.cget("text"), str(btn.cget("state")), label.cget("text").startswith("REC 01:23 | 412 Mo | crete -3 dBFS"))
     s.recording = None
     s.status.pop("rec", None)
@@ -6594,6 +6598,8 @@ def gui_rec_steps(c, s, out) -> None:
         s.commands.get_nowait()
     btn.invoke()
     sent = s.commands.get_nowait() if not s.commands.empty() else None
+    bar_btn.invoke()
+    bar_sent = s.commands.get_nowait() if not s.commands.empty() else None
     # reglages : format, cadence, encodeur, delai, dossier
     widget("Radiobutton", "Vertical HD").invoke()
     widget("Radiobutton", "60 i/s").invoke()
@@ -6616,7 +6622,7 @@ def gui_rec_steps(c, s, out) -> None:
     tab_idx = names.index("Rec")
     if proj is not None and was_on is not None:
         proj.on = was_on
-    out["rec_gui"] = {"closed": closed, "idle": idle, "recording": recording, "after": after, "nofmpeg": nofmpeg, "heights": heights, "sent": sent, "values": values,
+    out["rec_gui"] = {"closed": closed, "idle": idle, "recording": recording, "after": after, "nofmpeg": nofmpeg, "heights": heights, "sent": sent, "values": values, "bar": (bar_closed, bar_rec, bar_sent),
                       "palette": (any(l.startswith("Enregistrement") for l in labels), chosen, via_palette), "help": "E : enregistrer" in gg_.SHORTCUTS_HELP,
                       "tab_icon": bool(str(nb.tab(tab_idx, "image")))}
     for key, val in saved.items():

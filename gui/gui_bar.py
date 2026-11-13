@@ -1,4 +1,4 @@
-"""Barre des scenes (rangee ambre en haut de la fenetre) : touches de scene, set, Etendre, Mode VJ, projection, PANIQUE, menus.
+"""Barre des scenes (rangee ambre en haut de la fenetre) : touches de scene, set, Etendre, Mode VJ, projection, REC, menus.
 
 Extrait de `gl_gui.build_window` : le code a ete coupe tel quel (memes noms, meme indentation). Les noms dont il a besoin
 arrivent par le contexte `c` (`install(c)`) ; `bar_signature` et `refresh_scene_bar` sont rendus par `install` et re-lies dans `build_window`.
@@ -105,12 +105,14 @@ def install(c):
         scenes_title.pack(side="left", padx=(8, 6), pady=5)
         # Mode VJ (a droite) : reglages, scene suivante, lecture / pause. Pose AVANT les touches des scenes : en pack, le
         # premier arrive est le premier servi, donc 9 scenes aux noms longs ne repoussent jamais le bouton hors de la fenetre.
-        panic_btn = tk.Button(scene_bar, text="PANIQUE", command=do_panic, relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
-                              font=("Segoe UI", 9, "bold"), bg="#d92b2b", fg="#ffffff", activebackground="#ff4d4d", activeforeground="#ffffff")
-        panic_btn.pack(side="right", padx=(2, 6), pady=5)
-        Tooltip(panic_btn, "PANIQUE (touche X dans la fenetre de rendu) : coupe d'un geste effets, strobe, montee, composition, teinte et mode "
-                           "silence, remet les masters a 100 %, met le VJ en pause et retire le verrou. Le fond, le logo et les medias restent.")
-        vj_ui["panic"] = panic_btn
+        # REC (a la place de l'ancien bouton PANIQUE, qui reste dans la console, le mode scene, la palette Ctrl+K et la touche X) :
+        # largeur fixe, le temps ecoule remplace le texte pendant l'enregistrement (rec_refresh de gui_vj).
+        rec_bar_btn = tk.Button(scene_bar, text="● REC", width=10, command=lambda: s.commands.put("rec"), relief="flat", bd=0, padx=10, pady=3,
+                                cursor="hand2", font=("Segoe UI", 9, "bold"), bg="#d92b2b", fg="#ffffff", activebackground="#ff4d4d", activeforeground="#ffffff")
+        rec_bar_btn.pack(side="right", padx=(2, 6), pady=5)
+        Tooltip(rec_bar_btn, "REC (touche E dans la fenetre de rendu) : enregistre la projection en video + le son de l'entree audio dans un MP4 pret a poster ; "
+                             "un second clic arrete. Format, cadence et dossier : onglet Rec. Grise tant que la projection n'est pas ouverte.")
+        vj_ui["rec_bar_btn"] = rec_bar_btn
         expanded = bool(getattr(s, "scenes_expanded", False))
         expand = tk.Button(scene_bar, text="\u25b4 Reduire" if expanded else "\u25be Etendre", command=lambda: set_expanded(not expanded),
                            relief="flat", bd=0, padx=8, pady=3, cursor="hand2", bg=a2w.GUI_PANEL_BG, fg=SCENE_COLOR,

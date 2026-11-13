@@ -850,7 +850,7 @@ le recharge pas) et documentation. L'ordre de la table est celui des fichiers sa
   aucun reglage lu ou ecrit par le code sans etre dans la table, `core/params_schema.py` dans le portable (`APP_FILES`).
 ### Garde-fous d'exploitation (soiree : fiabilite, robustesse, aisance)
 
-- **Panique** (`gl.panic(params)`, `PANIC_RESET`; bouton rouge **PANIQUE** tout a droite de la barre, touche **X** dans la fenetre de rendu, bouton de la console) :
+- **Panique** (`gl.panic(params)`, `PANIC_RESET`; touche **X** dans la fenetre de rendu, bouton de la console, du mode scene et commande de la palette Ctrl+K ; **plus de bouton dans la barre des scenes** : le bouton rouge tout a droite est maintenant **REC**, a la demande de l'utilisateur, qui ne se sert pas de la panique) :
   coupe d'un geste montee, strobe arme, composition (symetrie, pixel, trainee, deformation, rotation), teinte globale et cycle, respirations,
   phases auto (`auto_phase` coupe, multiplicateurs neutres), effets 1-5 du fond et du logo, noise, halo / fonte / cellules ; remet les masters (reac, tempo,
   overlay, fond, effets) a 100 % ; un fond `video` sans fichier (ecran noir) repasse en `live`. **Ne touche pas** au logo, au texte, aux
@@ -1414,7 +1414,7 @@ une mesure de l'application.
 
 ### Enregistrement video + audio (`core/recording.py`, `engine/recorder.py`, onglet *Rec*, touche E ; issue #140, spec `docs/plans/2026-11-13-enregistrement-video-design.md`, plan `-plan.md` avec son journal d'ecarts)
 
-Un bouton produit UN MP4 pret a poster (contenu maison, pas en soiree) : H.264 yuv420p + AAC 320 k stereo 48 kHz, bt709, faststart. L'audio est le son brut de l'entree de la carte son (`SoundDeviceInput.tap`), pas la capture du rendu. Pas de format de montage : l'utilisateur ne fait que couper debut / fin et etalonner.
+Un bouton **REC** (barre des scenes, tout a droite, a la place de l'ancien PANIQUE ; largeur fixe, « ■ mm:ss » pendant l'enregistrement, grise sans projection) ou l'onglet *Rec* produit UN MP4 pret a poster (contenu maison, pas en soiree) : H.264 yuv420p + AAC 320 k stereo 48 kHz, bt709, faststart. L'audio est le son brut de l'entree de la carte son (`SoundDeviceInput.tap`), pas la capture du rendu. Pas de format de montage : l'utilisateur ne fait que couper debut / fin et etalonner.
 - **Reglages** (portee `device`) : `rec_format` (`vertical` 1080x1920 par defaut, `vertical_hd` 720x1280, `horizontal`, `carre`), `rec_fps` (30 par defaut, 60), `rec_encoder` (`libx264` veryfast crf 17, ou `materiel` = nvenc / amf / qsv s'il est liste ET passe un test d'une image), `rec_delay_ms` (40), `rec_dir` (`~/Videos/casual-overlay`). Nom du fichier `casual-AAAA-MM-JJ_HHhMMmSSs.mp4` (suffixe -2, -3).
 - **`core/recording.py`** (pur) : formats, `frames_due` (images dues a cadence constante : un rendu en retard DUPLIQUE des images, la duree reste juste), `fit_rect`, `output_name`, commandes ffmpeg (`video_command`, `mux_command`), `choose_encoder`, `peak_db`, `drop_warning`. `explain.rec_status_text` / `rec_panel` = voyant et etat du bouton.
 - **`engine/recorder.py`** : `RawAudioWriter` (file bornee, ne bloque jamais le callback audio ; un trou de plus de 40 ms est comble par du silence, fin de fichier comprise), `Recorder` (ffmpeg rawvideo sur stdin), `RecordingControl` (branche dans `engine/projection.loop`). Commandes `rec` / `rec_start` / `rec_stop`, voyant `s.status["rec"]`, fin `s.status["rec_done"]`.

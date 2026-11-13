@@ -166,8 +166,8 @@ def install(c):
 
     def rec_refresh() -> None:
         """Onglet « Rec » : texte et etat du bouton (grise sans projection ni ffmpeg, rouge « Arreter » pendant l'enregistrement) et voyant (hauteur fixe)."""
-        btn, label = vj_ui.get("rec_btn"), vj_ui.get("rec_label")
-        if btn is None or label is None:
+        btn, label, bar_btn = vj_ui.get("rec_btn"), vj_ui.get("rec_label"), vj_ui.get("rec_bar_btn")
+        if btn is None and bar_btn is None:
             return
         try:
             ctl = getattr(s, "recording", None)
@@ -178,18 +178,28 @@ def install(c):
             audio_name = s.audio.name if src is not None and hasattr(src, "tap") else None            # l'entree synthetique n'a pas de point d'ecoute
             text, enabled = explain.rec_panel(recording, s.status.get("rec"), projection is None or projection.running(), rec_cache["ffmpeg"], s.status.get("rec_done"),
                                               core_rec.format_label(params.get("rec_format", core_rec.DEFAULT_FORMAT)), core_rec.clean_fps(params.get("rec_fps", 30)), audio_name)
-            want = "■ Arreter" if recording else "● Enregistrer"
-            if btn.cget("text") != want:
-                btn.configure(text=want, bg="#c0392b" if recording else a2w.GUI_BG)
             state = "normal" if enabled else "disabled"
-            if str(btn.cget("state")) != state:
-                btn.configure(state=state)
-            if label.cget("text") != text:
-                label.configure(text=text)
+            if bar_btn is not None:                                                  # bouton de la barre (a la place de PANIQUE) : toujours present
+                secs = int(float((s.status.get("rec") or {}).get("seconds", 0.0)))
+                want_bar = f"\u25a0 {secs // 60:02d}:{secs % 60:02d}" if recording else "\u25cf REC"
+                try:
+                    if bar_btn.cget("text") != want_bar:
+                        bar_btn.configure(text=want_bar)
+                    if str(bar_btn.cget("state")) != state:
+                        bar_btn.configure(state=state)
+                except tk.TclError:
+                    vj_ui.pop("rec_bar_btn", None)
+            if btn is not None and label is not None:
+                want = "■ Arreter" if recording else "● Enregistrer"
+                if btn.cget("text") != want:
+                    btn.configure(text=want, bg="#c0392b" if recording else a2w.GUI_BG)
+                if str(btn.cget("state")) != state:
+                    btn.configure(state=state)
+                if label.cget("text") != text:
+                    label.configure(text=text)
         except tk.TclError:
             vj_ui.pop("rec_btn", None)
             vj_ui.pop("rec_label", None)
-
     vj_ui["rec_refresh"] = rec_refresh
 
     def sync_master_panel() -> None:
