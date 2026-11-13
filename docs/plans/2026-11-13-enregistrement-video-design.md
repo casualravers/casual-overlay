@@ -1,6 +1,6 @@
 # Enregistrement video + audio (issue #140)
 
-Statut : **spec a valider**. Aucun code avant l'accord de l'utilisateur.
+Statut : **spec validee par l'utilisateur le 2026-11-13** (cadence par defaut : 30 images/s). Plan : `2026-11-13-enregistrement-video-plan.md`.
 
 ## Objectif
 
@@ -92,8 +92,8 @@ Section « Enregistrement » de l'onglet *Affichage* : format, cadence, dossier 
 
 ## Questions ouvertes
 
-1. Cadence par defaut : 30 (propose) ou 60 images/s ?
-2. Un enregistrement doit-il aussi pouvoir garder la fenetre de projection en plein ecran sur un autre ecran (le moniteur est alors la copie du tampon) ? Propose : oui, sans autre reglage.
+1. ~~Cadence par defaut~~ : **30 images/s** (decide), 60 en option.
+2. ~~Plein ecran pendant l'enregistrement~~ : possible, la fenetre affiche la copie du tampon, sans autre reglage (propose, non conteste).
 3. Delai audio par defaut a 40 ms : a confirmer apres une premiere mesure sur le materiel de l'utilisateur (`tools/calibrer_avance.py`).
 
 ## Jalons proposes
