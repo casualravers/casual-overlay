@@ -3189,6 +3189,11 @@ def check_recording() -> None:
     except ValueError:
         check(True, "images: cadence nulle refusee")
 
+    # --- copie dans la fenetre : meme rapport que l'enregistrement, bandes noires
+    check(rec.fit_rect((1080, 1920), (1280, 720)) == (437, 0, 405, 720) and rec.fit_rect((1080, 1920), (540, 960)) == (0, 0, 540, 960)
+          and rec.fit_rect((1920, 1080), (640, 640)) == (0, 160, 640, 360) and rec.fit_rect((1080, 1920), (0, 0)) == (0, 0, 0, 0),
+          "fenetre: l'image enregistree est copiee en gardant son rapport (bandes noires), fenetre reduite a rien = rien", str(rec.fit_rect((1080, 1920), (1280, 720))))
+
     # --- decalage de l'audio
     check(abs(rec.audio_offset(10.0, 10.05, 40.0) - 0.09) < 1e-9, "decalage audio: demarre apres l'image + delai de 40 ms = +90 ms")
     check(abs(rec.audio_offset(10.0, 9.9, 40.0) + 0.06) < 1e-9, "decalage audio: demarre avant l'image = negatif (-60 ms)")
@@ -3553,6 +3558,187 @@ def check_recorder() -> None:
     rec = make(None, now_fn=lambda: datetime(2026, 11, 13, 23, 4, 0))
     rec.start()
     check(rec.stop() is None and not [n for n in os.listdir(folder) if n.startswith("casual-2026-11-13_23h04")], "arret sans image: rien d'ecrit, rien de temporaire")
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def check_recording_render() -> None:
+    """Enregistrement (issue #140) : `RecordingControl`, ce que la boucle GL appelle, avec un contexte standalone (pas de fenetre glfw) : un seul `draw` par image,
+    vers la cible hors ecran ; l'image enregistree est celle d'un rendu de la meme taille ; la fenetre recoit une copie qui garde le rapport ; arrets propres."""
+    print("Enregistrement : rendu hors ecran et copie vers la fenetre")
+    import json
+    import math
+    import shutil
+    import subprocess
+    import types
+    from datetime import datetime
+    import engine.recorder as er
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    if not ffmpeg or not ffprobe:
+        check(False, "ffmpeg et ffprobe disponibles")
+        return
+    REC, WIN, FPS, T0 = (320, 568), (640, 360), 30, 1000.0
+    root = Path(tempfile.mkdtemp(prefix="casual-rec-"))
+    params = dict(gl.DEFAULT_PARAMS) | {"bg_mode": "pattern", "bg_palette": "duo", "auto_phase": 0, "holo_on": 0.0, "rec_dir": str(root)}
+
+    def state(t):
+        since = t % 0.5
+        return {"bass": 0.5 + 0.4 * math.sin(t * 1.3), "mid": 0.4, "high": 0.3, "rms": 0.5, "beat": math.exp(-since / 0.2), "since_beat": since}
+
+    def fbo_of(size):
+        return ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+
+    def read(fbo, size):
+        return np.frombuffer(fbo.read(components=3, alignment=1), np.uint8).reshape(size[1], size[0], 3)
+
+    counter = {"n": 0}
+
+    class Spy(er.Recorder):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.writes = []
+
+        def write(self, frame, count=1):
+            self.writes.append((frame, count))
+            super().write(frame, count)
+
+    def make(**extra):
+        """(session factice, controle, espions) : l'enregistreur est cree a petite taille, nom de fichier unique."""
+        spies = []
+
+        def factory(ffmpeg_, directory, fmt, fps, delay_ms, **kw):
+            counter["n"] += 1
+            r = Spy(ffmpeg_, directory, fmt, fps, delay_ms, size=REC, now_fn=lambda n=counter["n"]: datetime(2026, 11, 13, 12, n // 60, n % 60),
+                    free_bytes=extra.get("free_bytes", lambda p: 50_000_000_000), **kw)
+            spies.append(r)
+            return r
+        s = types.SimpleNamespace(audio=types.SimpleNamespace(src=types.SimpleNamespace(rate=48000, channels=2, tap=None)), status={})
+        renderer = gl.Renderer(ctx, REC, None)
+        calls = {"n": 0}
+        real_draw = renderer.draw
+
+        def counting(*a, **k):
+            calls["n"] += 1
+            return real_draw(*a, **k)
+        renderer.draw = counting
+        ctl = er.RecordingControl(s, ctx, renderer, which=extra.get("which", shutil.which), factory=factory)
+        return s, ctl, spies, renderer, calls
+
+    def frames(ctl, renderer, win, win_size, first, count, dt=1.0 / FPS):
+        for i in range(first, first + count):
+            target, size = ctl.frame_target(win, win_size)
+            renderer.draw(target, size, state(i * dt), params, i * dt)
+            ctl.after_draw(T0 + i * dt, win, win_size)
+
+    def probe(path):
+        out = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-show_entries", "stream=width,height,nb_read_frames", "-of", "json", str(path)], capture_output=True, text=True).stdout
+        return json.loads(out)["streams"][0]
+
+    win = fbo_of(WIN)
+
+    # --- 1. un seul draw par image, vers une cible de la taille du format ; l'image ecrite est celle d'un rendu de cette taille
+    s, ctl, spies, renderer, calls = make()
+    ctl.start(params)
+    check(ctl.active and len(spies) == 1, "demarrage: l'enregistrement est actif", str(s.status))
+    sizes = []
+    real_draw = renderer.draw
+
+    def spy_draw(target, size, *a, **k):
+        sizes.append(tuple(size))
+        return real_draw(target, size, *a, **k)
+    renderer.draw = spy_draw
+    frames(ctl, renderer, win, WIN, 0, 30)
+    check(len(sizes) == 30 and set(sizes) == {REC} and calls["n"] == 30, "rendu: un seul draw par image, a la taille du format (pas celle de la fenetre)", f"{set(sizes)} {calls['n']} appels")
+    ref = gl.Renderer(ctx, REC, None)
+    reffbo = fbo_of(REC)
+    same = True
+    for i, (frame, count) in enumerate(spies[0].writes[:10]):
+        ref.draw(reffbo, REC, state(i / FPS), params, i / FPS)
+        same = same and count == 1 and frame == reffbo.read(components=3, alignment=1)
+    check(len(spies[0].writes) == 30 and same, "image enregistree: octet pour octet celle d'un rendu de la meme taille", f"{len(spies[0].writes)} ecritures")
+
+    # --- 2. la fenetre recoit une copie qui garde le rapport (bandes noires)
+    img = read(win, WIN)
+    x, y, w, h = er.core_rec.fit_rect(REC, WIN)
+    cols = np.where(img.max(axis=(0, 2)) > 8)[0]
+    check(img[:, :x - 2].max() == 0 and img[:, x + w + 2:].max() == 0 and img[:, x + 3:x + w - 3].max() > 60 and abs((cols.max() - cols.min() + 1) - w) <= 4,
+          "fenetre: copie de l'image enregistree, rapport garde, bandes noires de chaque cote", f"image de {cols.min()} a {cols.max()}, attendu {x} a {x + w - 1}")
+
+    # --- 3. la fenetre change de taille en cours d'enregistrement : le fichier ne change pas
+    win2 = fbo_of((800, 600))
+    frames(ctl, renderer, win2, (800, 600), 30, 15)
+    check(all(len(f) == REC[0] * REC[1] * 3 for f, c in spies[0].writes) and len(spies[0].writes) == 45, "fenetre redimensionnee en cours: les images gardent la taille du format")
+
+    # --- 4. arret : assemblage en arriere-plan, fichier valide, voyant
+    ctl.stop()
+    ctl.close()
+    done = s.status.get("rec_done") or {}
+    st = probe(done["path"]) if done.get("path") else {}
+    check(not ctl.active and "rec" not in s.status and done.get("path") and Path(done["path"]).is_file() and (st.get("width"), st.get("height")) == REC and int(st.get("nb_read_frames", 0)) == 45,
+          "arret: fichier assemble de la bonne taille et du bon nombre d'images, voyant retire", f"{done} {st}")
+    check("sauve" in s.status.get("msg", "").lower(), "arret: message de fin dans le statut", s.status.get("msg", ""))
+
+    # --- 5. sans enregistrement : rien ne change (pixel pour pixel)
+    s, ctl, spies, renderer, calls = make()
+    direct = gl.Renderer(ctx, WIN, None)
+    other = fbo_of(WIN)
+    target, size = ctl.frame_target(win, WIN)
+    renderer.draw(target, size, state(1.0), params, 1.0)
+    ctl.after_draw(T0, win, WIN)
+    direct.draw(other, WIN, state(1.0), params, 1.0)
+    check(target is win and size == WIN and not ctl.active and read(win, WIN).tobytes() == read(other, WIN).tobytes(), "sans enregistrement: rendu direct vers la fenetre, image identique")
+
+    # --- 6. rendu en retard : images dupliquees, comptees
+    s, ctl, spies, renderer, calls = make()
+    ctl.start(params)
+    frames(ctl, renderer, win, WIN, 0, 10, dt=0.1)
+    check(spies[0].duplicated == 18 and spies[0].sent == 28, "rendu a 10 images/s pour 30 demandees: images dupliquees pour garder la duree", f"{spies[0].duplicated} doublons, {spies[0].sent} images")
+    ctl.close()
+
+    # --- 7. l'entree audio change en cours d'enregistrement : arret propre, fichier assemble
+    s, ctl, spies, renderer, calls = make()
+    ctl.start(params)
+    frames(ctl, renderer, win, WIN, 0, 10)
+    s.audio.src = types.SimpleNamespace(rate=44100, channels=2, tap=None)
+    frames(ctl, renderer, win, WIN, 10, 2)
+    ctl.close()
+    check(not ctl.active and "entree audio" in s.status.get("msg", "").lower() + " ".join(str(v) for v in s.status.get("rec_done", {}).values()).lower() and s.status.get("rec_done", {}).get("path"),
+          "entree audio changee: enregistrement arrete proprement, fichier assemble", str(s.status))
+
+    # --- 8. disque qui se remplit : le controle s'arrete seul
+    state_ = {"n": 0}
+
+    def shrinking(p):
+        state_["n"] += 1
+        return 50_000_000_000 if state_["n"] == 1 else 50_000_000
+    s, ctl, spies, renderer, calls = make(free_bytes=shrinking)
+    ctl.start(params)
+    frames(ctl, renderer, win, WIN, 0, 60)
+    ctl.close()
+    check(not ctl.active and spies[0].sent <= 40 and "disque" in (s.status.get("rec_done", {}).get("warning") or s.status.get("msg", "")).lower(),
+          "disque qui se remplit: l'enregistrement s'arrete seul et le fichier est assemble", str(s.status))
+
+    # --- 9. refus : ffmpeg absent, disque presque plein
+    s, ctl, spies, renderer, calls = make(which=lambda name: None)
+    ctl.start(params)
+    check(not ctl.active and spies == [] and "ffmpeg" in s.status.get("msg", ""), "ffmpeg absent: enregistrement refuse avec un message", s.status.get("msg", ""))
+    s, ctl, spies, renderer, calls = make(free_bytes=lambda p: 100_000_000)
+    ctl.start(params)
+    check(not ctl.active and "disque" in s.status.get("msg", "").lower(), "disque presque plein: enregistrement refuse avec un message", s.status.get("msg", ""))
+
+    # --- 10. bascule et fermeture pendant un enregistrement
+    s, ctl, spies, renderer, calls = make()
+    ctl.toggle(params)
+    check(ctl.active, "bascule: un appui demarre")
+    frames(ctl, renderer, win, WIN, 0, 20)
+    ctl.close()                                         # fermeture de la projection en cours d'enregistrement : arret propre et assemblage
+    check(not ctl.active and Path(s.status["rec_done"]["path"]).is_file(), "fermeture de la projection pendant l'enregistrement: fichier assemble")
+    ctl.close()
+    check(True, "fermer deux fois est sans effet")
     shutil.rmtree(root, ignore_errors=True)
 
 
@@ -11125,7 +11311,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_recorder", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -11140,7 +11326,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder"),
+               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),

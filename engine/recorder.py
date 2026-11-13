@@ -16,7 +16,8 @@ from datetime import datetime
 from typing import Callable
 
 from core import recording as core_rec
-from engine.deps import np
+from core import sessionlog
+from engine.deps import moderngl, np
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # pas de fenetre de console qui clignote sous Windows
 QUEUE_FRAMES = 8                   # images en attente de l'encodeur : au-dela, le rendu attend (jamais d'image perdue en silence)
@@ -368,3 +369,135 @@ class Recorder:
                 return fh.read()[-300:].decode("utf-8", "replace").strip()
         except OSError:
             return ""
+
+
+class RecordingRun:
+    """Un enregistrement vu de la boucle GL : la cible hors ecran a la taille du format, la lecture des images et la copie vers la fenetre.
+
+    Le moteur dessine UNE fois par image, vers `fbo` (a la taille du format) : `Renderer.draw` integre ses animations image par image, l'appeler deux fois
+    (fenetre + enregistrement) les ferait avancer deux fois plus vite. La fenetre est donc un moniteur : `finish_frame` y copie l'image enregistree.
+    """
+
+    def __init__(self, ctx, renderer, recorder: Recorder):
+        self.ctx, self.renderer, self.recorder = ctx, renderer, recorder
+        self.size = recorder.size
+        self.tex = ctx.texture(self.size, 4)
+        self.tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.fbo = ctx.framebuffer(color_attachments=[self.tex])
+
+    def finish_frame(self, now: float, screen, screen_size: tuple[int, int]) -> None:
+        """Apres le rendu de l'image : l'ecrit (une fois, ou plusieurs si le rendu a du retard : la duree reste juste), puis la copie dans la fenetre."""
+        count = self.recorder.due(now)
+        if count > 0:
+            self.recorder.write(self.fbo.read(components=3, alignment=1), count)      # lecture synchrone : l'image est celle de cet instant
+        self.renderer.blit_fit(screen, self.tex, self.size, screen_size)
+
+    def release(self) -> None:
+        self.fbo.release()
+        self.tex.release()
+
+
+class RecordingControl:
+    """Ce que la boucle GL possede : zero ou un enregistrement. La boucle appelle `frame_target` avant `Renderer.draw` et `after_draw` apres ; `toggle` /
+    `start` / `stop` viennent des commandes (touche E, bouton) ; `close` a la fermeture de la projection. L'assemblage du MP4 (quelques secondes pour un
+    long enregistrement) se fait dans un fil : la projection ne gele pas. Etat lu par la GUI : `s.status["rec"]` (voyant, pendant l'enregistrement),
+    `s.status["rec_done"]` (`{"path", "warning"}` une fois le fichier ecrit), `s.status["msg"]` (messages).
+    """
+
+    STATUS_EVERY_S = 0.25
+
+    def __init__(self, s, ctx, renderer, which=shutil.which, factory: Callable | None = None):
+        self.s, self.ctx, self.renderer = s, ctx, renderer
+        self._which = which
+        self._factory = factory or (lambda ffmpeg, directory, fmt, fps, delay_ms, **kw: Recorder(ffmpeg, directory, fmt, fps, delay_ms, **kw))
+        self._run: RecordingRun | None = None
+        self._audio_src = None
+        self._last_status = 0.0
+        self._threads: list[threading.Thread] = []
+
+    @property
+    def active(self) -> bool:
+        return self._run is not None
+
+    def toggle(self, params: dict) -> None:
+        if self.active:
+            self.stop()
+        else:
+            self.start(params)
+
+    def start(self, params: dict) -> None:
+        if self._run is not None:
+            return
+        ffmpeg = self._which("ffmpeg")
+        if not ffmpeg:
+            self.s.status["msg"] = "ffmpeg introuvable : enregistrement impossible."
+            return
+        src = getattr(getattr(self.s, "audio", None), "src", None)
+        audio_input = src if src is not None and hasattr(src, "tap") and hasattr(src, "rate") else None        # l'entree synthetique n'a pas de point d'ecoute
+        recorder = self._factory(ffmpeg, str(params.get("rec_dir", core_rec.DEFAULT_DIR)), params.get("rec_format", core_rec.DEFAULT_FORMAT),
+                                 params.get("rec_fps", 30), float(params.get("rec_delay_ms", 40.0)), audio_input=audio_input,
+                                 hardware=params.get("rec_encoder") == "materiel")
+        try:
+            recorder.start()
+        except RecorderError as exc:
+            self.s.status["msg"] = str(exc)
+            return
+        self._run = RecordingRun(self.ctx, self.renderer, recorder)
+        self._audio_src = src
+        self._last_status = 0.0
+        self.s.status.pop("rec_done", None)
+        self.s.status["msg"] = f"Enregistrement : {recorder.size[0]}x{recorder.size[1]} a {recorder.fps} images/s, encodeur {recorder.encoder}"
+        sessionlog.event(f"Enregistrement demarre : {recorder.path} ({recorder.size[0]}x{recorder.size[1]}, {recorder.fps} i/s, {recorder.encoder}, "
+                         f"audio {'oui' if audio_input is not None else 'non'})")
+
+    def frame_target(self, screen, screen_size: tuple[int, int]):
+        """(cible, taille) du rendu de cette image : la cible hors ecran du format pendant l'enregistrement, sinon la fenetre."""
+        if self._run is not None:
+            return self._run.fbo, self._run.size
+        return screen, screen_size
+
+    def after_draw(self, now: float, screen, screen_size: tuple[int, int]) -> None:
+        run = self._run
+        if run is None:
+            return
+        run.finish_frame(now, screen, screen_size)
+        if now - self._last_status >= self.STATUS_EVERY_S:
+            self._last_status = now
+            self.s.status["rec"] = run.recorder.status()
+        if getattr(getattr(self.s, "audio", None), "src", None) is not self._audio_src:
+            self.stop("L'entree audio a change : enregistrement arrete.")                  # une autre frequence d'echantillonnage fausserait le son
+        elif run.recorder.should_stop:
+            self.stop(run.recorder.warning or "Enregistrement arrete.")
+
+    def stop(self, reason: str | None = None) -> None:
+        """Arrete l'enregistrement (la cible GL est liberee tout de suite) ; l'assemblage se termine dans un fil."""
+        run, self._run = self._run, None
+        if run is None:
+            return
+        run.release()
+        self.s.status.pop("rec", None)
+        recorder = run.recorder
+        if reason:
+            self.s.status["msg"] = reason
+
+        def finish() -> None:
+            path = recorder.stop()
+            warning = recorder.warning
+            self.s.status["rec_done"] = {"path": path, "warning": warning, "frames": recorder.sent}
+            if path:
+                said = "" if not reason or reason == warning else reason + " "          # la raison de l'arret reste dite (le message de fin ne l'ecrase pas)
+                self.s.status["msg"] = f"{said}Enregistrement sauve : {path}" + (f" ({warning})" if warning else "")
+                sessionlog.event(f"Enregistrement termine : {path} ({recorder.sent} images, {recorder.duplicated} dupliquees)")
+            else:
+                self.s.status["msg"] = warning or "Enregistrement : rien d'ecrit."
+                sessionlog.event(f"Enregistrement sans fichier : {warning}")
+        thread = threading.Thread(target=finish, name="rec-assemble")
+        self._threads = [t for t in self._threads if t.is_alive()] + [thread]
+        thread.start()
+
+    def close(self) -> None:
+        """Fermeture de la projection : arrete l'enregistrement en cours et ATTEND la fin de l'assemblage (le fichier ne doit pas rester a moitie fait)."""
+        self.stop()
+        for thread in self._threads:
+            thread.join(timeout=600)
+        self._threads = []

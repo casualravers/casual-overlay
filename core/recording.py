@@ -65,6 +65,18 @@ def frames_due(t0: float, now: float, fps: int, sent: int) -> int:
     return max(0, int(math.floor((now - t0) * fps + 1e-9)) + 1 - sent)
 
 
+def fit_rect(src: tuple[int, int], dst: tuple[int, int]) -> tuple[int, int, int, int]:
+    """(x, y, largeur, hauteur) de la plus grande image de rapport `src` qui tient dans `dst`, centree (bandes noires de chaque cote). Fenetre
+    reduite a rien : (0, 0, 0, 0)."""
+    sw, sh = src
+    dw, dh = dst
+    if min(sw, sh, dw, dh) <= 0:
+        return (0, 0, 0, 0)
+    scale = min(dw / sw, dh / sh)
+    w, h = max(1, int(sw * scale)), max(1, int(sh * scale))
+    return ((dw - w) // 2, (dh - h) // 2, w, h)
+
+
 def audio_offset(t_video0: float, t_audio0: float, delay_ms: float) -> float:
     """Decalage (secondes) de l'audio dans le fichier : l'instant du premier echantillon moins celui de la premiere image, plus le delai de
     synchro (le visuel reagit apres le son : l'audio est retarde pour que l'effet tombe dessus). Positif = audio retarde."""
