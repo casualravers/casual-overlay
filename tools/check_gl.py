@@ -3845,6 +3845,39 @@ def check_recording_render() -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+CLAUDE_FICHES = ("fond", "logo", "audio", "synchro", "strobe-foudre", "scenes-vj", "gui", "projection", "exploitation", "medias-externes", "outillage")
+CLAUDE_MAX_ROOT_LINES = 300
+
+
+def check_claude_md() -> None:
+    """Issue #132 : CLAUDE.md racine court (charge a chaque session), detail par theme dans docs/fonctions/, pointeurs par dossier coherents."""
+    print("CLAUDE.md allege (racine, fiches, pointeurs)")
+    import re
+    base = Path(__file__).resolve().parent.parent
+    root_md = base / "CLAUDE.md"
+    text = root_md.read_text(encoding="utf-8")
+    n = len(text.splitlines())
+    check(n <= CLAUDE_MAX_ROOT_LINES, f"CLAUDE.md racine: au plus {CLAUDE_MAX_ROOT_LINES} lignes (chargee a chaque session)", f"{n} lignes")
+    fiches_dir = base / "docs" / "fonctions"
+    present = sorted(p_.stem for p_ in fiches_dir.glob("*.md")) if fiches_dir.is_dir() else []
+    missing = [f for f in CLAUDE_FICHES if f not in present]
+    check(not missing, "fiches: les 11 fiches par theme existent dans docs/fonctions/", str(missing))
+    cited = set(re.findall(r"docs/fonctions/([a-z0-9-]+)\.md", text))
+    check(not [c_ for c_ in cited if c_ not in present], "index: chaque fiche citee par CLAUDE.md existe", str(sorted(cited - set(present))))
+    check(present and not [p_ for p_ in present if p_ not in cited], "index: chaque fiche de docs/fonctions/ est citee par CLAUDE.md", str(sorted(set(present) - cited)))
+    bad = []
+    for d_ in ("core", "engine", "gui", "tools"):
+        f_ = base / d_ / "CLAUDE.md"
+        if not f_.is_file():
+            bad.append(f"{d_}/CLAUDE.md absent")
+            continue
+        refs = set(re.findall(r"docs/fonctions/([a-z0-9-]+)\.md", f_.read_text(encoding="utf-8")))
+        if not refs:
+            bad.append(f"{d_}/CLAUDE.md ne pointe vers aucune fiche")
+        bad += [f"{d_}/CLAUDE.md -> {r_}.md introuvable" for r_ in refs if r_ not in present]
+    check(not bad, "pointeurs: core/, engine/, gui/, tools/ ont leur CLAUDE.md, qui ne pointe que vers des fiches existantes", str(bad))
+
+
 def check_lead_auto() -> None:
     """Avance estimee automatiquement (remplace la calibration manuelle) : somme des retards de la chaine, lissee, arrondie, lisible."""
     print("Avance automatique (estimation)")
@@ -11657,7 +11690,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_recording", "check_recorder_audio", "check_groupes")
 
 
 SUITE = (
@@ -11670,7 +11703,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
