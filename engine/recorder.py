@@ -51,6 +51,7 @@ class RawAudioWriter:
         self.frames = 0                                   # echantillons par canal ecrits (silence compris)
         self.bytes_written = 0
         self.lost = 0
+        self.error: str | None = None                     # erreur d'ecriture (cle retiree, disque plein) : le fil vide la file sans bloquer
         self._t_last_end: float | None = None             # fin du dernier bloc RECU (meme perdu)
         self._closed = False
         self._lock = threading.Lock()
@@ -89,7 +90,7 @@ class RawAudioWriter:
         if end_t is not None and self.t_first is not None and (self._t_last_end is None or end_t > self._t_last_end):
             self._t_last_end = end_t
         self._queue.put(None)
-        self._thread.join()
+        self._thread.join(timeout=30)
 
     # --- fil d'ecriture -------------------------------------------------------------------------------
 
@@ -113,17 +114,22 @@ class RawAudioWriter:
             self._silence(handle, int(round(gap * self.rate)))
 
     def _run(self) -> None:
-        with open(self.path, "wb") as handle:
-            while True:
-                item = self._queue.get()
-                if item is None:
-                    break
-                block, t_end = item
-                self._fill_to(handle, t_end - len(block) / self.rate)
-                self._write(handle, np.ascontiguousarray(block, dtype="<f4").tobytes())
-                self.frames += len(block)
-            if self._t_last_end is not None and self.t_first is not None:
-                self._fill_to(handle, self._t_last_end)
+        try:
+            with open(self.path, "wb") as handle:
+                while True:
+                    item = self._queue.get()
+                    if item is None:
+                        break
+                    block, t_end = item
+                    self._fill_to(handle, t_end - len(block) / self.rate)
+                    self._write(handle, np.ascontiguousarray(block, dtype="<f4").tobytes())
+                    self.frames += len(block)
+                if self._t_last_end is not None and self.t_first is not None:
+                    self._fill_to(handle, self._t_last_end)
+        except OSError as exc:          # cle retiree, disque plein : on garde ce qui est ecrit et on vide la file (close() ne doit jamais bloquer)
+            self.error = str(exc)
+            while self._queue.get() is not None:
+                pass
 
 
 def list_encoders(ffmpeg: str) -> list[str]:
@@ -207,16 +213,22 @@ class Recorder:
         return core_rec.choose_encoder(self._listed() if self.hardware else [], self._tested, self.hardware)
 
     def start(self) -> None:
-        os.makedirs(self.directory, exist_ok=True)
-        free = self._free_bytes(self.directory)
+        try:
+            os.makedirs(self.directory, exist_ok=True)
+            free = self._free_bytes(self.directory)
+        except OSError as exc:          # lecteur absent, caractere interdit, droits : un message, jamais une projection qui tombe
+            raise RecorderError(f"Dossier inutilisable ({self.directory}) : {exc}") from exc
         if free < core_rec.FREE_STOP_BYTES:
             raise RecorderError(f"Disque presque plein ({free / 1e6:.0f} Mo libres) : enregistrement impossible.")
         if free < core_rec.FREE_WARN_BYTES:
             self.warning = f"Moins de 2 Go libres ({free / 1e9:.1f} Go) : l'enregistrement s'arretera si le disque se remplit."
         self.encoder = self.pick_encoder()
         self.path = core_rec.output_name(self._now_fn(), self.directory, exists=lambda p: os.path.exists(p) or os.path.exists(self._tmp("video", p)))
-        open(self._tmp("video"), "wb").close()                    # reserve le nom (une autre session dans la meme seconde en prendra un autre)
-        self._log = open(self._tmp("log"), "wb")
+        try:
+            open(self._tmp("video"), "wb").close()                # reserve le nom (une autre session dans la meme seconde en prendra un autre)
+            self._log = open(self._tmp("log"), "wb")
+        except OSError as exc:
+            raise RecorderError(f"Ecriture impossible dans {self.directory} : {exc}") from exc
         try:
             self._proc = subprocess.Popen(core_rec.video_command(self.ffmpeg, self.size, self.fps, self.encoder, self._tmp("video")),
                                           stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self._log, creationflags=_NO_WINDOW)
@@ -314,8 +326,18 @@ class Recorder:
         if self._stopped or not self._started:
             return self._result
         self._stopped = True
-        self._queue.put(None)
+        try:
+            self._queue.put(None, timeout=QUEUE_TIMEOUT_S)
+        except queue.Full:              # encodeur fige : le fil video est coince dans write(), on tue ffmpeg pour le debloquer
+            self._proc.kill()
+            try:
+                self._queue.put(None, timeout=QUEUE_TIMEOUT_S)
+            except queue.Full:
+                pass
         self._thread.join(timeout=60)
+        if self._thread.is_alive():
+            self._proc.kill()
+            self._thread.join(timeout=10)
         try:
             self._proc.stdin.close()
         except OSError:
@@ -414,12 +436,18 @@ class RecordingControl:
         self._audio_src = None
         self._last_status = 0.0
         self._threads: list[threading.Thread] = []
+        self._last_toggle = -1e9
+        self.debounce_s = 0.6
 
     @property
     def active(self) -> bool:
         return self._run is not None
 
     def toggle(self, params: dict) -> None:
+        now = time.monotonic()
+        if now - self._last_toggle < self.debounce_s:           # double clic : une seule bascule (comme le bouton de projection)
+            return
+        self._last_toggle = now
         if self.active:
             self.stop()
         else:
@@ -442,7 +470,12 @@ class RecordingControl:
         except RecorderError as exc:
             self.s.status["msg"] = str(exc)
             return
-        self._run = RecordingRun(self.ctx, self.renderer, recorder)
+        try:
+            self._run = RecordingRun(self.ctx, self.renderer, recorder)
+        except Exception as exc:        # pas assez de memoire video : ni ffmpeg ni point d'ecoute ne restent
+            recorder.stop()
+            self.s.status["msg"] = f"Enregistrement impossible : {exc}"
+            return
         self._audio_src = src
         self._last_status = 0.0
         self.s.status.pop("rec_done", None)
@@ -491,7 +524,7 @@ class RecordingControl:
             else:
                 self.s.status["msg"] = warning or "Enregistrement : rien d'ecrit."
                 sessionlog.event(f"Enregistrement sans fichier : {warning}")
-        thread = threading.Thread(target=finish, name="rec-assemble")
+        thread = threading.Thread(target=finish, name="rec-assemble", daemon=False)          # non daemon : fermer l'appli attend la fin de l'assemblage
         self._threads = [t for t in self._threads if t.is_alive()] + [thread]
         thread.start()
 

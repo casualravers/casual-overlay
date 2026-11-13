@@ -3388,6 +3388,13 @@ def check_recorder_audio() -> None:
     w.push(np.zeros((n, 2), np.float32), base + n / rate)
     w.close()
     check(w.peak == 0.0 and w.frames == n, "ecriture: silence = crete nulle")
+    # --- erreur d'ecriture (dossier disparu) : le fil ne meurt pas en silence, close() rend la main
+    w = er.RawAudioWriter(str(tmp / "absent" / "x.raw"), 2, rate)
+    for k in range(700):                                               # plus que la file (512) : un fil mort la remplirait et close() bloquerait
+        w.push(blocks[k % 100], base + (k + 1) * n / rate)
+    t_close = time.monotonic()
+    w.close()
+    check(w.error and time.monotonic() - t_close < 5, "ecriture impossible: l'erreur est gardee et close() ne bloque pas", str(w.error))
     shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -3757,10 +3764,24 @@ def check_recording_render() -> None:
     ctl.start(params)
     check(not ctl.active and "disque" in s.status.get("msg", "").lower(), "disque presque plein: enregistrement refuse avec un message", s.status.get("msg", ""))
 
+    # --- 9b. dossier inutilisable (lecteur absent, nom interdit) : un message, aucune exception
+    blocker = root / "un_fichier.txt"
+    blocker.write_text("x")
+    s, ctl, spies, renderer, calls = make()
+    try:
+        ctl.start({**params, "rec_dir": str(blocker / "sous-dossier")})
+        raised = None
+    except Exception as exc:
+        raised = exc
+    check(raised is None and not ctl.active and "dossier" in s.status.get("msg", "").lower(),
+          "dossier inutilisable: message clair, la projection ne tombe pas", f"{raised!r} {s.status.get('msg')}")
+
     # --- 10. bascule et fermeture pendant un enregistrement
     s, ctl, spies, renderer, calls = make()
     ctl.toggle(params)
     check(ctl.active, "bascule: un appui demarre")
+    ctl.toggle(params)
+    check(ctl.active, "double clic: la seconde bascule a moins de 0,6 s est ignoree (pas de demarrage + arret)")
     frames(ctl, renderer, win, WIN, 0, 20)
     ctl.close()                                         # fermeture de la projection en cours d'enregistrement : arret propre et assemblage
     check(not ctl.active and Path(s.status["rec_done"]["path"]).is_file(), "fermeture de la projection pendant l'enregistrement: fichier assemble")
