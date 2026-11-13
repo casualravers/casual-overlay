@@ -3236,6 +3236,11 @@ def check_recording() -> None:
     check(pair(v, "-c:v", "libx264") and pair(v, "-preset", "veryfast") and pair(v, "-crf", "17"), "video: x264 veryfast crf 17")
     vh = rec.video_command("ffmpeg", (720, 1280), 60, "h264_nvenc", "o.mkv")
     check(pair(vh, "-c:v", "h264_nvenc") and "-crf" not in vh and pair(vh, "-g", "60") and pair(vh, "-s", "720x1280"), "video: encodeur materiel sans crf, cadence 60 -> image cle toutes les 60")
+    check(pair(vh, "-b:v", str(rec.hardware_bitrate((720, 1280), 60))) and rec.hardware_bitrate((1080, 1920), 30) == 12_441_600,
+          "video: l'encodeur materiel recoit un debit (0,2 bit par pixel et par image), sinon son debit par defaut est tres bas")
+    check(rec.effective_delay_ms(40, 0) == 40 and rec.effective_delay_ms(40, 80) == -40 and rec.effective_delay_ms(40, -5) == 40,
+          "delai audio: l'avance des effets est retranchee (le fichier n'a pas de latence d'affichage), le resultat peut etre negatif")
+    check(rec.audio_offset(10.0, 10.0, rec.effective_delay_ms(40, 80)) == -0.04, "delai negatif = l'audio avance (coupe de son debut)")
 
     m = rec.mux_command("ffmpeg", "v.mkv", "a.raw", 44100, 2, 0.09, "o.mp4")
     ia = m.index("a.raw")

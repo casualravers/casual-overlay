@@ -696,7 +696,7 @@ def install(c):
                    tip="x264 : qualite previsible, le processeur fait le travail (par defaut). Materiel : nvenc, amf ou qsv s'ils fonctionnent sur ce PC, sinon x264.")
             slider(f, (2, 0), "rec_delay_ms", "Delai audio", 0, 300, 5, 1.0, " ms", 40,
                    "Retard du son par rapport a l'image dans le fichier : le visuel reagit apres le son (capture, analyse, rendu), donc le son est retarde pour que "
-                   "l'effet tombe dessus. 40 ms par defaut ; a regler en regardant un enregistrement (ou avec tools/calibrer_avance.py).")
+                   "l'effet tombe dessus. 40 ms par defaut ; a regler en regardant un enregistrement. Le reglage Avance (onglet Affichage) est retranche automatiquement.")
             dir_row = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
             dir_row.grid(row=3, column=0, columnspan=6, sticky="we", padx=6, pady=(3, 0))
             tk.Label(dir_row, text="Dossier", width=9, anchor="w", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG).pack(side="left")

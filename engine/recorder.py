@@ -132,8 +132,20 @@ class RawAudioWriter:
                 pass
 
 
+_ENCODER_CACHE: dict = {}                    # (ffmpeg, encodeur) -> resultat : lancer 1 a 4 ffmpeg a chaque REC gelait la projection (fil GL)
+
+
 def list_encoders(ffmpeg: str) -> list[str]:
-    """Noms des encodeurs video que ffmpeg dit connaitre (`ffmpeg -encoders`) ; liste vide si la commande echoue."""
+    """Noms des encodeurs video que ffmpeg dit connaitre (`ffmpeg -encoders`) ; liste vide si la commande echoue. Resultat garde pour la session."""
+    if ("list", ffmpeg) in _ENCODER_CACHE:
+        return list(_ENCODER_CACHE[("list", ffmpeg)])
+    names = _list_encoders(ffmpeg)
+    if names:
+        _ENCODER_CACHE[("list", ffmpeg)] = names
+    return list(names)
+
+
+def _list_encoders(ffmpeg: str) -> list[str]:
     try:
         out = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20, creationflags=_NO_WINDOW).stdout
     except (OSError, subprocess.SubprocessError):
@@ -147,7 +159,14 @@ def list_encoders(ffmpeg: str) -> list[str]:
 
 
 def try_encoder(ffmpeg: str, encoder: str) -> bool:
-    """Un encodeur liste peut echouer sans le materiel : on encode une image noire pour voir."""
+    """Un encodeur liste peut echouer sans le materiel : on encode une image noire pour voir. Resultat garde pour la session."""
+    key = ("try", ffmpeg, encoder)
+    if key not in _ENCODER_CACHE:
+        _ENCODER_CACHE[key] = _try_encoder(ffmpeg, encoder)
+    return _ENCODER_CACHE[key]
+
+
+def _try_encoder(ffmpeg: str, encoder: str) -> bool:
     cmd = [ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2", "-frames:v", "1", "-c:v", encoder, "-f", "null", "-"]
     try:
         return subprocess.run(cmd, capture_output=True, timeout=30, creationflags=_NO_WINDOW).returncode == 0
@@ -159,7 +178,7 @@ class Recorder:
     """Un enregistrement : images a cadence constante vers un ffmpeg, son stereo brut a cote, puis assemblage en un MP4.
 
     Utilisation (fil GL) : `start()`, puis a chaque image affichee `n = due(now)` et, si `n > 0`, `write(image_rgb, n)` (l'image est ecrite `n` fois :
-    un rendu en retard duplique la precedente et la duree reste juste), enfin `stop()` qui rend le chemin du MP4 (ou None). Tout ce qui peut mal tourner est dit
+    un rendu en retard repete l'image du moment pour les cases manquees et la duree reste juste), enfin `stop()` qui rend le chemin du MP4 (ou None). Tout ce qui peut mal tourner est dit
     dans `status()["warning"]` ; `should_stop` devient vrai quand l'enregistrement doit s'arreter de lui-meme (disque presque plein, encodeur bloque).
 
     Fichiers : le dossier recoit `casual-....mp4`. Pendant l'enregistrement il y a des temporaires `casual-....video.tmp.mkv` et `....audio.tmp.raw` ; ils sont supprimes
@@ -380,7 +399,11 @@ class Recorder:
             self._cleanup(("mux",))
             self.warning = f"L'assemblage a echoue : {detail} Fichiers temporaires gardes : {self._tmp('video')}"
             return None
-        os.replace(self._tmp("mux"), self.path)
+        try:
+            os.replace(self._tmp("mux"), self.path)
+        except OSError as exc:
+            self.warning = f"Le fichier final n'a pas pu etre ecrit : {exc} Fichiers temporaires gardes : {self._tmp('video')}"
+            return None
         self._cleanup(("video", "audio", "log"))
         self._result = self.path
         return self._result
@@ -463,7 +486,7 @@ class RecordingControl:
         src = getattr(getattr(self.s, "audio", None), "src", None)
         audio_input = src if src is not None and hasattr(src, "tap") and hasattr(src, "rate") else None        # l'entree synthetique n'a pas de point d'ecoute
         recorder = self._factory(ffmpeg, str(params.get("rec_dir", core_rec.DEFAULT_DIR)), params.get("rec_format", core_rec.DEFAULT_FORMAT),
-                                 params.get("rec_fps", 30), float(params.get("rec_delay_ms", 40.0)), audio_input=audio_input,
+                                 params.get("rec_fps", 30), core_rec.effective_delay_ms(float(params.get("rec_delay_ms", 40.0)), float(params.get("sync_lead_ms", 0.0))), audio_input=audio_input,
                                  hardware=params.get("rec_encoder") == "materiel")
         try:
             recorder.start()

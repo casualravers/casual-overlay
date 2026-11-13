@@ -132,7 +132,7 @@ TABLE: tuple[Param, ...] = (
     _p("rec_format", recording.DEFAULT_FORMAT, choices=tuple(recording.FORMATS), scope="device", doc="Enregistrement : format de l'image (vertical 1080x1920, vertical_hd 720x1280 pour les looks lourds, horizontal, carre)."),
     _p("rec_fps", 30, 30, 60, scope="device", doc="Enregistrement : images par seconde (30 ou 60 ; 60 ne tient pas en 1080x1920 sur un GPU integre)."),
     _p("rec_dir", recording.DEFAULT_DIR, scope="device", doc="Enregistrement : dossier des fichiers MP4 (~ = dossier de l'utilisateur)."),
-    _p("rec_delay_ms", 40.0, 0.0, 300.0, scope="device", doc="Enregistrement : retard (ms) de l'audio par rapport a l'image, pour que l'effet tombe sur le son (le visuel reagit apres le son) ; a mesurer avec tools/calibrer_avance.py."),
+    _p("rec_delay_ms", 40.0, 0.0, 300.0, scope="device", doc="Enregistrement : retard (ms) de l'audio par rapport a l'image, pour que l'effet tombe sur le son (le visuel reagit apres le son) ; le reglage « Avance » (sync_lead_ms) est retranche automatiquement (le fichier n'a pas de latence d'affichage) ; tools/calibrer_avance.py mesure projecteur + trajet acoustique, donc donne une valeur trop grande pour un fichier : regle a l'oreille sur un clip."),
     _p("rec_encoder", "libx264", choices=("libx264", "materiel"), scope="device", doc="Enregistrement : encodeur x264 (defaut, qualite previsible) ou materiel (nvenc, amf, qsv s'ils fonctionnent)."),
     _p("qr_corner", "bas droite", choices=("bas droite", "bas gauche", "haut droite", "haut gauche"), scope="device", doc="Coin de la projection qui porte le QR code."),
     _p("qr_size", 0.18, 0.08, 0.5, scope="device", doc="Cote du QR code, en fraction de la hauteur de l'ecran (marge blanche comprise)."),
