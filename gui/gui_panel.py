@@ -17,7 +17,7 @@ import tkinter as tk
 
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
-    from gl_gui import BANNER_FG, MIN_WIN_H, SCENE_COLOR, STATS, THUMB_H          # import tardif : gl_gui importe ce module
+    from gl_gui import BANNER_FG, MIN_WIN_H, SCENE_COLOR, STATS, THUMB_H, is_maximized          # import tardif : gl_gui importe ce module
     import queue
     import uuid
     Tooltip = c.Tooltip
@@ -1164,7 +1164,7 @@ def install(c):
             s.panel_body_h = want
             s.scene_panel_h = drag["panel"] + win              # a la fermeture, la fenetre rend exactement ce qu'elle a pris
             height = max(MIN_WIN_H, drag["win"] + win)
-            if height != root.winfo_height():
+            if height != root.winfo_height() and not is_maximized(root):          # fenetre agrandie : elle garde sa taille, la page du dessous se reduit
                 root.geometry(f"{drag['w']}x{height}")
                 root.after(120, keep_on_screen)
 
@@ -1278,6 +1278,8 @@ def install(c):
     def keep_on_screen() -> None:
         """La fenetre qui grandit ne depasse pas la zone utile de l'ecran (barre des taches comprise) : on la remonte (sa hauteur est deja plafonnee a l'ecran).
         Sans cela, le bas de la page (ascenseur de l'overlay, poignee de la liste) restait sous la barre des taches, inatteignable."""
+        if is_maximized(root):
+            return
         try:
             root.update_idletasks()
             work_bottom = root.winfo_screenheight() - 48
@@ -1306,7 +1308,7 @@ def install(c):
         s.scenes_expanded = bool(flag)
         s.panel_overflow = 0
         refresh_scene_bar()
-        if root.winfo_ismapped():
+        if root.winfo_ismapped() and not is_maximized(root):        # fenetre agrandie : elle garde sa taille (le panneau prend la place de la page)
             root.update_idletasks()
             if flag:
                 s.scene_panel_h = scene_panel.winfo_reqheight()

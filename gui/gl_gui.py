@@ -682,6 +682,8 @@ def run_gui(s, live, on_ready=None, boot=None) -> None:
                 root.after(100, reveal)                    # le panneau etendu se remplit encore : l'ecran de chargement reste
                 return
             STATS.on_enter = None
+            if not os.environ.get("CASUAL_NO_MAXIMIZE"):
+                maximize(root)                             # la fenetre de reglages s'ouvre agrandie (plein ecran avec la barre des taches)
             try:
                 root.attributes("-alpha", 1.0)
                 root.lift()
@@ -701,6 +703,27 @@ def run_gui(s, live, on_ready=None, boot=None) -> None:
 
     root.after(50, stall_watch)
     root.mainloop()
+
+
+def maximize(root) -> None:
+    """Agrandit la fenetre (« zoomed » sous Windows et macOS, attribut `-zoomed` sous Linux) ; sans effet si le gestionnaire de fenetres refuse."""
+    try:
+        root.state("zoomed")
+    except tk.TclError:
+        try:
+            root.attributes("-zoomed", True)
+        except tk.TclError:
+            pass
+
+
+def is_maximized(root) -> bool:
+    """La fenetre est agrandie : on ne lui impose plus de taille (un `geometry()` la ferait sortir de cet etat et la redimensionnerait)."""
+    try:
+        if root.state() == "zoomed":
+            return True
+        return bool(root.attributes("-zoomed"))
+    except (tk.TclError, ValueError):
+        return False
 
 
 def build_window(s, live, root, mode: str, on_ready=None) -> None:
@@ -915,7 +938,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         new_w = layout.get("live_w", 0)
         layout["wide_need"] = max(layout["wide_need"] + new_w - old_w, 0)       # largeur cote a cote : les panneaux n'ont pas la meme largeur
         on_page_config()
-        if keep is not None:
+        if keep is not None and not is_maximized(root):
             root.update_idletasks()
             root.geometry(f"{keep[0]}x{keep[1]}")
         pending = getattr(s, "pending_live_overrides", None)
@@ -2517,7 +2540,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     ui_every("meter", METER_MS, update_meter)
     ui_every("bridge", BRIDGE_MS, poll_bridge)
     sync_automation_state()
-    if keep_size is not None:
+    if keep_size is not None and not is_maximized(root):
         root.update_idletasks()
         root.geometry(f"{keep_size[0]}x{keep_size[1]}")        # fixe la taille : plus de redimensionnement automatique
     DEVICE_CACHE["on"] = False
