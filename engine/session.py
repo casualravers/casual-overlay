@@ -36,6 +36,7 @@ class AudioController:
         self.fell_back = False
         self.on_message = on_message                   # rappel (texte) : statut de la GUI, pose par run_app
         self._guard_stop = threading.Event()
+        self._lock = threading.RLock()                 # repli (fil de garde), changement d'entree et relecture des peripheriques (fil Tk) : un a la fois
         if synthetic:
             self.src = SyntheticAudio(ring)
             self.rate = 48000
@@ -70,49 +71,59 @@ class AudioController:
 
     def check_block(self, now: float) -> str | None:
         """Repli automatique : avec des blocs de moins de 512, plus de OVERFLOW_MAX debordements en OVERFLOW_WINDOW_S = la meme entree est
-        rouverte avec des blocs de 512 (l'enregistrement en cours suit : `tap` recopie). Une seule fois par session ; jamais en synthetique.
-        Rend le message (aussi passe a `on_message` et au journal), ou None."""
-        if self.synthetic or self.fell_back or self.block >= 512:
-            return None
-        burst = getattr(self.src, "overflow_burst", None)
-        if burst is None or not burst(now):
-            return None
-        self.fell_back = True
-        new = self._factory(self.device, self.ring, blocksize=512)
-        new.tap = getattr(self.src, "tap", None)
-        new.start()
-        old, self.src = self.src, new
-        try:
-            old.stop()
-        except Exception:
-            pass
-        self.block = 512
+        rouverte avec des blocs de 512. Un enregistrement en cours s'arrete proprement (comme a tout changement d'entree : le point d'ecoute
+        n'est pas recopie). Une seule fois par session ; jamais en synthetique. Rend le message (aussi passe a `on_message` et au journal), ou None."""
+        with self._lock:
+            if self.synthetic or self.fell_back or self.block >= 512:
+                return None
+            burst = getattr(self.src, "overflow_burst", None)
+            if burst is None or not burst(now):
+                return None
+            self.fell_back = True
+            try:
+                new = self._factory(self.device, self.ring, blocksize=512)
+                new.start()
+            except Exception as exc:                   # entree debranchee entre-temps : on garde celle de 256 et on le dit
+                msg = f"Carte son : debordements avec des blocs de 256, retour a 512 impossible ({exc})"
+                sessionlog.event(msg)
+                self._say(msg)
+                return msg
+            old, self.src = self.src, new
+            try:
+                old.stop()
+            except Exception:
+                pass
+            self.block = 512
         msg = "Carte son : blocs de 256 trop courts (debordements), retour a 512"
         sessionlog.event(msg)
+        self._say(msg)
+        return msg
+
+    def _say(self, msg: str) -> None:
         if self.on_message is not None:
             try:
                 self.on_message(msg)
             except Exception:
                 pass
-        return msg
 
     def switch(self, device) -> str:
         """Bascule sur une autre entree sounddevice. Leve une exception si elle est refusee
         (l'entree precedente reste alors active). La taille de bloc en cours est gardee."""
-        new = self._factory(device, self.ring, blocksize=self.block)
-        new.start()
-        self.device = device
-        old, self.src = self.src, new
-        try:
-            old.stop()
-        except Exception:
-            pass
-        if new.rate != self.rate:
-            self.rate = new.rate
-            self.analyzer.extractor = FeatureExtractor(
-                new.rate, sensitivity=self.analyzer.extractor.sensitivity)
-        self.name = new.name
-        return new.name
+        with self._lock:
+            new = self._factory(device, self.ring, blocksize=self.block)
+            new.start()
+            self.device = device
+            old, self.src = self.src, new
+            try:
+                old.stop()
+            except Exception:
+                pass
+            if new.rate != self.rate:
+                self.rate = new.rate
+                self.analyzer.extractor = FeatureExtractor(
+                    new.rate, sensitivity=self.analyzer.extractor.sensitivity)
+            self.name = new.name
+            return new.name
 
     @staticmethod
     def input_choices(keep: str | None = None) -> list[tuple[int, str]]:
@@ -129,27 +140,28 @@ class AudioController:
         ce qui coupe le flux un instant : l'entree courante est rouverte par son nom. Faux si rien n'a ete fait (synthetique, erreur)."""
         if self.synthetic:
             return False
-        name = self.name
-        try:
-            self.src.stop()
-        except Exception:
-            pass
-        try:
-            sd._terminate()
-            sd._initialize()
-        except Exception:
-            pass
-        for query in (name, None):
+        with self._lock:                               # la garde ne doit pas ouvrir une entree pendant que PortAudio est reinitialise
+            name = self.name
             try:
-                from engine.audio import find_input_device
-                dev = find_input_device(query) if query else None
-                new = self._factory(dev, self.ring, blocksize=self.block)          # taille de bloc en cours (512 apres un repli)
-                new.start()
-                self.src, self.device = new, dev
-                return True
-            except (Exception, SystemExit):
-                continue
-        return False
+                self.src.stop()
+            except Exception:
+                pass
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception:
+                pass
+            for query in (name, None):
+                try:
+                    from engine.audio import find_input_device
+                    dev = find_input_device(query) if query else None
+                    new = self._factory(dev, self.ring, blocksize=self.block)          # taille de bloc en cours (512 apres un repli)
+                    new.start()
+                    self.src, self.device = new, dev
+                    return True
+                except (Exception, SystemExit):
+                    continue
+            return False
 
 
 class Session:

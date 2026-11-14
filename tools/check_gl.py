@@ -3019,12 +3019,74 @@ def check_capture_block() -> None:
     again = ctl.check_block(12.0)
     ctl.switch("autre")
     third = ctl.src
-    check(quiet is None and msg and second is not first and second.blocksize == 512 and second.device == "micro" and second.tap is tap_
+    check(quiet is None and msg and second is not first and second.blocksize == 512 and second.device == "micro"
           and first.stopped and ctl.block == 512 and msgs == [msg],
-          "repli: trop de debordements a 256 = la meme entree rouverte a 512, l'enregistrement en cours suit, message", str((quiet, msg, second.blocksize, msgs)))
+          "repli: trop de debordements a 256 = la meme entree rouverte a 512, message", str((quiet, msg, second.blocksize, msgs)))
     check(again is None and third.blocksize == 512, "repli: une seule fois par session ; un changement d'entree garde le bloc courant", str((again, third.blocksize)))
     syn = AudioController(au.RingBuffer(48000), 1.0, True)
     check(syn.check_block(1.0) is None, "repli: jamais en mode synthetique")
+
+    # --- suites de la revue
+    check(second.tap is None, "repli: l'enregistrement n'est PAS rebranche sur la nouvelle entree (REC s'arrete proprement, aucun point d'ecoute oublie)",
+          str(second.tap))
+    check(len(FakeInput.made) == 3, "repli: aucune entree ouverte en plus (premiere, repli, changement d'entree)", str(len(FakeInput.made)))
+
+    class Broken(FakeInput):
+        def __init__(self, device, ring, blocksize=None):
+            if blocksize == 512:
+                raise OSError("entree debranchee")
+            super().__init__(device, ring, blocksize)
+    msgs_b = []
+    ctl_b = AudioController(au.RingBuffer(48000), 1.0, False, device="m", input_factory=Broken, block=256, on_message=msgs_b.append)
+    keep_src = ctl_b.src
+    keep_src.burst_now = True
+    msg_b = ctl_b.check_block(5.0)
+    check(ctl_b.src is keep_src and msg_b and "impossible" in msg_b and msgs_b == [msg_b] and ctl_b.block == 256,
+          "repli impossible (entree debranchee): message, l'entree de 256 reste active", str((msg_b, msgs_b)))
+    import threading as _th
+    import time as _tm
+
+    class Slow(FakeInput):
+        def start(self):
+            _tm.sleep(0.05)
+    first_slow = len(FakeInput.made)
+    ctl_s = AudioController(au.RingBuffer(48000), 1.0, False, device="m", input_factory=Slow, block=256)
+    ctl_s.src.burst_now = True
+    ths = [_th.Thread(target=ctl_s.check_block, args=(1.0,)), _th.Thread(target=ctl_s.switch, args=("autre",))]
+    for t_ in ths:
+        t_.start()
+    for t_ in ths:
+        t_.join()
+    slows = FakeInput.made[first_slow:]                     # FakeInput range toutes les entrees creees (Slow comprises) dans sa propre liste
+    alive = [x for x in slows if not x.stopped]
+    check(len(alive) == 1 and alive[0] is ctl_s.src, "repli et changement d'entree en meme temps: une seule entree reste ouverte, c'est celle de la session",
+          f"{len(alive)} ouvertes sur {len(slows)}")
+    rb = au.RingBuffer(48000)
+    check(rb.stamps.maxlen * 256 / 48000 >= 10.0, "horodatages: au moins 10 s gardes en blocs de 256", str(rb.stamps.maxlen))
+    for k in range(3000):
+        rb.write(np.zeros(256, dtype=np.float32), 100.0 + k * 256 / 48000)
+    t_last = rb.time_at(rb.total, 48000.0)
+    check(t_last is not None and abs(t_last - (100.0 + 2999 * 256 / 48000)) < 1e-9, "horodatages: instant du dernier echantillon exact", str(t_last))
+    from core.phase import PhaseTracker
+    shares = []
+    for hop in (512, 256):
+        pt = PhaseTracker()
+        lv = {"raw_rms": 0.1, "raw_bass": 0.0, "raw_mid": 0.05, "raw_high": 0.05, "rms": 0.1, "bass": 0.0, "mid": 0.5, "high": 0.5}
+        for k in range(int(3.0 * 48000 / hop)):
+            if k == int(2.0 * 48000 / hop):
+                lv = dict(lv, raw_bass=0.1, bass=1.0)
+            pt.update((k + 1) * hop / 48000, lv, False, "idle", None)
+            if k == int(2.1 * 48000 / hop):
+                shares.append(pt._bass_share)
+    check(len(shares) == 2 and abs(shares[0] - shares[1]) < 0.03, "phases: la part des basses est lissee en TEMPS (meme valeur a 256 qu'a 512, 100 ms apres un saut)",
+          str([round(x, 3) for x in shares]))
+
+    class PropSrc:
+        @property
+        def latency_ms(self):
+            return 22.0
+    check(au.capture_latency_ms(PropSrc()) == 22.0 and au.capture_latency_ms(None) == 0.0,
+          "latence annoncee de la capture lue comme une propriete (l'avance auto prenait 0 faute d'horodatage du pilote)")
 
 
 def check_bench_kick() -> None:

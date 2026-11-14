@@ -517,11 +517,8 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
         analyzer.extractor.hit_sens = float(params.get("hit_sensitivity", 1.0))                 # frappes aigues
-        try:
-            src_ = getattr(s.audio, "src", None)
-            fallback_ = float(src_.latency_ms()) if src_ is not None and hasattr(src_, "latency_ms") else 0.0       # sans horodatage du pilote
-        except Exception:
-            fallback_ = 0.0
+        from engine.audio import capture_latency_ms
+        fallback_ = capture_latency_ms(getattr(s.audio, "src", None))       # sans horodatage du pilote : la latence annoncee par l'entree
         if 0.0 < now - prev_t_lead < 0.5:
             frame_dt = (now - prev_t_lead) if frame_dt is None else frame_dt + 0.05 * ((now - prev_t_lead) - frame_dt)
         prev_t_lead = now

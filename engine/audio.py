@@ -89,7 +89,7 @@ BANDS8_GATE = 0.0005              # sous cette amplitude de bin : silence (comme
 RISE_MAX = 10.0                   # derivee publiee (unites d'enveloppe par seconde), plafonnee
 PULSE_USABLE = 0.30               # confiance minimale de l'horloge pour que les grilles de pulsation emettent des evenements
 EDGES = ("hit", "bg", "logo")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo
-STAMP_KEEP = 512                  # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 512)
+STAMP_KEEP = 2048                 # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 256, ~22 s en blocs de 512)
 AGE_FLOOR_S = 3.0                 # fenetre du plancher du retard de capture (le retard stable, sans la gigue du fil d'analyse)
 AGE_SMOOTH_TAU_S = 0.5            # lissage du retard de capture publie
 
@@ -340,14 +340,18 @@ class RingBuffer:
         """Instant (time.monotonic) de capture de l'echantillon numero `index` (compte depuis le debut : `index` = `total` donne la fin du
         dernier bloc ecrit). None tant qu'aucun bloc n'est ecrit."""
         with self.lock:
-            stamps = list(self.stamps)
-        if not stamps:
-            return None
-        for total, t_end in stamps:
-            if total >= index:
-                return t_end - (total - index) / rate
-        total, t_end = stamps[-1]
-        return t_end + (index - total) / rate
+            if not self.stamps:
+                return None
+            total, t_end = self.stamps[-1]
+            if index >= total:                         # cas courant (fin du dernier bloc) : sans copier ni parcourir l'historique
+                return t_end + (index - total) / rate
+            found = None
+            for total, t_end in reversed(self.stamps):
+                if total < index:
+                    break
+                found = (total, t_end)
+        total, t_end = found if found is not None else (total, t_end)
+        return t_end - (total - index) / rate
 
     def latest(self, n: int):
         out = np.zeros(n, dtype=np.float32)
@@ -516,7 +520,7 @@ class SoundDeviceInput:
         now = time.monotonic()
         if status:
             self.dropped = getattr(self, "dropped", 0) + 1
-            if getattr(status, "input_overflow", True):
+            if getattr(status, "input_overflow", False):             # seulement les blocs perdus (pas les autres alertes, au demarrage du flux)
                 self.overflows.note(now)
         t_end = now - capture_age(time_info, frames, self.rate)
         self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), t_end)
@@ -540,6 +544,17 @@ class SoundDeviceInput:
     @property
     def latency_ms(self) -> float:
         return float(self.stream.latency) * 1000.0
+
+
+def capture_latency_ms(src) -> float:
+    """Latence annoncee par l'entree (`SoundDeviceInput.latency_ms`, une PROPRIETE), 0 si inconnue. La boucle de rendu l'appelait comme une
+    fonction : TypeError avale, l'avance automatique prenait toujours 0 faute d'horodatage du pilote."""
+    try:
+        val = getattr(src, "latency_ms", None) if src is not None else None
+        val = val() if callable(val) else val
+        return float(val) if val is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 class AudioAnalyzer:
