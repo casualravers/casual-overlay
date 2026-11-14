@@ -5,6 +5,7 @@ Extrait tel quel de `audio2wave_gl` (qui re-exporte ces noms). Les dependances f
 from __future__ import annotations
 
 import math
+import os
 import sys
 import threading
 import time
@@ -20,6 +21,36 @@ from engine.deps import np, sd
 
 # --- Analyse audio -----------------------------------------------------------------
 
+# Taille du bloc de capture = pas d'analyse (le fil d'analyse traite chaque bloc recu). 256 a 48 kHz = 5,3 ms (issue #110, fin du lot 3) ;
+# `CASUAL_AUDIO_BLOCK=512` (secours : carte son qui crepite) ; repli automatique a 512 si la carte deborde (voir `OverflowCounter`).
+CAPTURE_BLOCK = 256
+OVERFLOW_MAX = 5                  # debordements toleres ...
+OVERFLOW_WINDOW_S = 60.0          # ... sur cette fenetre ; au-dela, la session rouvre l'entree avec des blocs de 512 (une fois)
+
+
+def capture_block() -> int:
+    """Taille de bloc a utiliser : `CASUAL_AUDIO_BLOCK` s'il vaut 256 ou 512, sinon `CAPTURE_BLOCK`."""
+    val = os.environ.get("CASUAL_AUDIO_BLOCK", "").strip()
+    return int(val) if val in ("256", "512") else CAPTURE_BLOCK
+
+
+class OverflowCounter:
+    """Debordements de la capture (blocs perdus par la carte son) dates : `burst` dit s'il y en a eu plus de OVERFLOW_MAX en OVERFLOW_WINDOW_S."""
+
+    def __init__(self) -> None:
+        self.times: deque = deque()
+        self.total = 0
+
+    def note(self, now: float) -> None:
+        self.times.append(now)
+        self.total += 1
+
+    def burst(self, now: float) -> bool:
+        while self.times and now - self.times[0] > OVERFLOW_WINDOW_S:
+            self.times.popleft()
+        return len(self.times) > OVERFLOW_MAX
+
+
 BANDS = {"bass": (20.0, 150.0), "mid": (150.0, 2000.0), "high": (2000.0, 10000.0)}
 # Seuils absolus (amplitude de bin FFT, 1.0 = sinus pleine echelle) sous lesquels une
 # bande est consideree comme silence : sans ca l'auto-gain ampliferait le bruit du micro.
@@ -32,7 +63,8 @@ FLUX_BAND = (40.0, 6000.0)   # bande du flux d'attaques (tempo sans kick, voir c
 KICK_WIDE = (20.0, 400.0)    # bande large du critere de montee rapide (voir core.onset.WideRise)
 ATTACK_BAND = (40.0, 8000.0)  # bande sur laquelle on decrit une attaque pour distinguer kick et caisse claire (core.onset.KickClassifier)
 ATTACK_HOLD_S = 0.02          # une attaque est classee ~30 ms apres sa detection, quand le spectre l'a vue en entier (seulement quand deux familles de sons existent)
-ATTACK_LOOKBACK = 4           # le spectre Â« d'avant Â» l'attaque : 4 pas d'analyse plus tot (~43 ms)
+ATTACK_LOOKBACK_S = 0.042     # le spectre d'avant l'attaque : le plus recent qui a au moins cet age (4 pas de 512, 8 pas de 256 : ~43 ms)
+SPEC_KEEP_S = 0.1             # historique des spectres garde (en temps : independant de la taille du bloc)
 # Regles par balayage sur signaux synthetiques (voir CLAUDE.md): a sensibilite 1.0, zero
 # faux positif sur bruit blanc constant, kicks francs detectes meme a -30 dB de micro.
 KICK_RATIO_EXTRA = 1.2       # seuil: energie basses > base * (1 + extra / sensibilite)
@@ -57,7 +89,7 @@ BANDS8_GATE = 0.0005              # sous cette amplitude de bin : silence (comme
 RISE_MAX = 10.0                   # derivee publiee (unites d'enveloppe par seconde), plafonnee
 PULSE_USABLE = 0.30               # confiance minimale de l'horloge pour que les grilles de pulsation emettent des evenements
 EDGES = ("hit", "bg", "logo")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo
-STAMP_KEEP = 512                  # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 512)
+STAMP_KEEP = 2048                 # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 256, ~22 s en blocs de 512)
 AGE_FLOOR_S = 3.0                 # fenetre du plancher du retard de capture (le retard stable, sans la gigue du fil d'analyse)
 AGE_SMOOTH_TAU_S = 0.5            # lissage du retard de capture publie
 
@@ -113,7 +145,8 @@ class FeatureExtractor:
         self.classify = True                         # distingue kick et caisse claire (KickClassifier) ; False = comportement d'avant (banc)
         self.kick_class = KickClassifier()
         self._pending: tuple[float, object, bool] | None = None      # attaque en attente de classement : (instant, spectre d'avant, deja signalee)
-        self._mag_hist: deque = deque(maxlen=6)
+        self._mag_hist: deque = deque()             # (instant, spectre de la bande d'attaque) des SPEC_KEEP_S dernieres secondes
+        self.ref_age: float | None = None           # age du spectre de reference de la derniere attaque classee (tests)
         top = int(np.searchsorted(freqs, ATTACK_BAND[1]))
         self._att = slice(int(np.searchsorted(freqs, ATTACK_BAND[0])), top)
         fa = freqs[self._att]
@@ -162,7 +195,9 @@ class FeatureExtractor:
         spec = mag[self._att].copy()
         if self.classify:
             beat = self._classify(beat, spec, now)
-        self._mag_hist.append(spec)
+        self._mag_hist.append((now, spec))
+        while self._mag_hist and now - self._mag_hist[0][0] > SPEC_KEEP_S:
+            self._mag_hist.popleft()
         levels["edge_hit"] = self.det_hit.update(raw["high"], dt, now, max(self.sensitivity, 0.05) * self.hit_sens)
         for name, det in self.det_layer.items():          # kick de la couche : le kick commun a sensibilite 1, sinon son detecteur
             mult = self.layer_sens[name]
@@ -177,9 +212,11 @@ class FeatureExtractor:
         """Attaque detectee -> kick ou pas. Tant que le morceau n'a pas deux familles de sons nettes, la detection part tout de suite (comme avant) et
         sert seulement a apprendre ; sinon elle est retenue `ATTACK_HOLD_S`, decrite par le spectre qui vient d'apparaitre, et ne part que si c'est un kick."""
         fire = False
-        if candidate and self._pending is None and len(self._mag_hist) >= ATTACK_LOOKBACK:
+        ref = self._spec_before(now) if candidate and self._pending is None else None
+        if ref is not None:
             now_fire = not self.kick_class.armed
-            self._pending = (now, self._mag_hist[-ATTACK_LOOKBACK], now_fire)
+            self.ref_age = now - ref[0]
+            self._pending = (now, ref[1], now_fire)
             fire = now_fire
         elif self._pending is not None and now - self._pending[0] >= ATTACK_HOLD_S:
             t0, pre, already = self._pending
@@ -197,6 +234,13 @@ class FeatureExtractor:
         elif candidate:
             fire = not self.kick_class.armed
         return fire
+
+    def _spec_before(self, now: float):
+        """(instant, spectre) le plus recent qui a au moins ATTACK_LOOKBACK_S ; None si l'historique est encore trop court (debut)."""
+        for t, spec in reversed(self._mag_hist):
+            if now - t >= ATTACK_LOOKBACK_S - 1e-9:
+                return (t, spec)
+        return None
 
     def _fast_attack(self, samples, dt: float, now: float) -> bool:
         """Attaque rapide : les echantillons NEUFS (ceux du dernier pas, dt secondes) ramenes a ~1 kHz puis passes au detecteur temporel."""
@@ -296,14 +340,18 @@ class RingBuffer:
         """Instant (time.monotonic) de capture de l'echantillon numero `index` (compte depuis le debut : `index` = `total` donne la fin du
         dernier bloc ecrit). None tant qu'aucun bloc n'est ecrit."""
         with self.lock:
-            stamps = list(self.stamps)
-        if not stamps:
-            return None
-        for total, t_end in stamps:
-            if total >= index:
-                return t_end - (total - index) / rate
-        total, t_end = stamps[-1]
-        return t_end + (index - total) / rate
+            if not self.stamps:
+                return None
+            total, t_end = self.stamps[-1]
+            if index >= total:                         # cas courant (fin du dernier bloc) : sans copier ni parcourir l'historique
+                return t_end + (index - total) / rate
+            found = None
+            for total, t_end in reversed(self.stamps):
+                if total < index:
+                    break
+                found = (total, t_end)
+        total, t_end = found if found is not None else (total, t_end)
+        return t_end - (total - index) / rate
 
     def latest(self, n: int):
         out = np.zeros(n, dtype=np.float32)
@@ -453,7 +501,10 @@ def capture_age(time_info, frames: int, rate: float, max_age_s: float = 1.0) -> 
 class SoundDeviceInput:
     """Capture sounddevice en callback (mono, blocs courts) vers un RingBuffer ; chaque bloc est date a sa capture."""
 
-    def __init__(self, device, ring: RingBuffer, blocksize: int = 512):
+    def __init__(self, device, ring: RingBuffer, blocksize: int | None = None):
+        blocksize = blocksize or capture_block()
+        self.blocksize = blocksize
+        self.overflows = OverflowCounter()
         info = sd.query_devices(device, "input")
         self.rate = int(info["default_samplerate"])
         self.name = info["name"]
@@ -466,9 +517,12 @@ class SoundDeviceInput:
             dtype="float32", latency="low", callback=self._callback)
 
     def _callback(self, indata, frames, time_info, status):
+        now = time.monotonic()
         if status:
             self.dropped = getattr(self, "dropped", 0) + 1
-        t_end = time.monotonic() - capture_age(time_info, frames, self.rate)
+            if getattr(status, "input_overflow", False):             # seulement les blocs perdus (pas les autres alertes, au demarrage du flux)
+                self.overflows.note(now)
+        t_end = now - capture_age(time_info, frames, self.rate)
         self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), t_end)
         tap = self.tap
         if tap is not None:              # enregistrement en cours : le bloc stereo est copie (le pilote reutilise son tampon) ; une erreur ici ne touche jamais l'analyse
@@ -484,9 +538,23 @@ class SoundDeviceInput:
         self.stream.stop()
         self.stream.close()
 
+    def overflow_burst(self, now: float) -> bool:
+        return self.overflows.burst(now)
+
     @property
     def latency_ms(self) -> float:
         return float(self.stream.latency) * 1000.0
+
+
+def capture_latency_ms(src) -> float:
+    """Latence annoncee par l'entree (`SoundDeviceInput.latency_ms`, une PROPRIETE), 0 si inconnue. La boucle de rendu l'appelait comme une
+    fonction : TypeError avale, l'avance automatique prenait toujours 0 faute d'horodatage du pilote."""
+    try:
+        val = getattr(src, "latency_ms", None) if src is not None else None
+        val = val() if callable(val) else val
+        return float(val) if val is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 class AudioAnalyzer:

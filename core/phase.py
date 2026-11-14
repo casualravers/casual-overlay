@@ -52,6 +52,8 @@ CALM_ABS = 0.012              # sous cela l'energie est faible quelle que soit l
 QUIET_ABS = 0.04              # sans kick, sous cette energie : ambiance
 MEAN_TAU_S = 40.0
 E_TAU_S = 1.0
+SHARE_TAU_S = 0.101              # lissage de la part des basses (= l'ancien 0,1 par pas de 10,7 ms)
+BRIGHT_TAU_S = 0.208             # lissage de la brillance (= l'ancien 0,05 par pas de 10,7 ms)
 PEAK_BOOST = 1.2              # energie / moyenne pour entrer en Â« pic Â» (on en sort sous PEAK_KEEP)
 PEAK_KEEP = 1.08
 BUILD_MIN = 0.03              # une montee se reconnait au-dessus de cette energie (une entree en douceur depuis le silence n'en est pas une)
@@ -170,9 +172,9 @@ class PhaseTracker:
                 else:
                     self._share_mean += (self._bass_share - self._share_mean) * (1.0 - math.exp(-dt / MEAN_TAU_S))
         total = bass + mid + high
-        if total > 1e-6:
-            self._bass_share += (bass / total - self._bass_share) * 0.1
-            self._bright += ((mid + 2.0 * high) / (total + high) - self._bright) * 0.05
+        if total > 1e-6 and dt > 0:                    # lisse en TEMPS (avant : 0,1 et 0,05 par appel, soit ces constantes a 10,7 ms par pas)
+            self._bass_share += (bass / total - self._bass_share) * (1.0 - math.exp(-dt / SHARE_TAU_S))
+            self._bright += ((mid + 2.0 * high) / (total + high) - self._bright) * (1.0 - math.exp(-dt / BRIGHT_TAU_S))
         rate = len(self._kicks) / KICK_WINDOW_S
         self._rate = rate
         self._density = min(rate / (max(bpm, 60.0) / 60.0), 1.0) if bpm else min(rate / 2.0, 1.0)

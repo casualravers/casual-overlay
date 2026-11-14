@@ -86,6 +86,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
         reader = manager.reader
 
     s = Session(args, params, live, live_args, render_size, win_size, audio, manager, reader)
+    audio.on_message = lambda msg: (s.status.__setitem__("msg", msg), print(msg, file=sys.stderr))      # repli de la capture a 512 : dit dans le statut
     if recovery_msg:
         s.status["msg"] = recovery_msg
         print(recovery_msg, file=sys.stderr)

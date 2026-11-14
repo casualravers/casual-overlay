@@ -7,7 +7,7 @@ par un eclair du strobe (mode « kick ») : l'image devient blanche. On releve t
           (analyse)                       (rendu, image comprise)
 
 Deux modes :
-  * interne (defaut) : le kick est ecrit dans le tampon audio au rythme reel, blocs de 512 comme le callback d'une carte son.
+  * interne (defaut) : le kick est ecrit dans le tampon audio au rythme reel, blocs de la taille de capture (engine.audio.capture_block) comme le callback d'une carte son.
     Mesure la partie LOGICIELLE (fenetre d'analyse, fil d'analyse, boucle de rendu a 60 Hz). Aucun materiel.
   * --materiel : le kick est JOUE par la sortie audio (haut-parleur ou casque pose contre le micro) et capte par l'entree reelle
     (sounddevice, comme `run_app`). Ajoute le tampon des cartes son et le trajet acoustique.
@@ -124,10 +124,11 @@ def _watch_detections(an, stop, out):
 
 
 def measure(kicks: int = 12, hardware: bool = False, input_device=None, output_device=None, fps: int = 60,
-            size: tuple[int, int] = (320, 180), rate: int = 48000, block: int = 512, log=print) -> dict:
+            size: tuple[int, int] = (320, 180), rate: int = 48000, block: int | None = None, log=print) -> dict:
     """Lance la mesure et rend {"rows": [...], "analyse": {...}, "rendu": {...}, "total": {...}, "missed": n, "info": {...}}."""
-    from engine.audio import AudioAnalyzer, FeatureExtractor, RingBuffer, SoundDeviceInput
+    from engine.audio import AudioAnalyzer, FeatureExtractor, RingBuffer, SoundDeviceInput, capture_block
     from engine.deps import MISSING, moderngl, np, sd
+    block = block or capture_block()
     if np is None or moderngl is None:
         raise RuntimeError("numpy et moderngl sont necessaires (pip install -r requirements-gl.txt)")
     ring = RingBuffer()

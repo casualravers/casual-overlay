@@ -1,6 +1,6 @@
 """Banc du detecteur de kick (lot 2 de la spec synchro son / image, issue #96).
 
-Rejoue de l'audio dans le VRAI `FeatureExtractor`, par blocs de 512 echantillons comme le fil d'analyse, **a vitesse simulee** (horloge injectee :
+Rejoue de l'audio dans le VRAI `FeatureExtractor`, par blocs de CAPTURE_BLOCK echantillons comme le fil d'analyse, **a vitesse simulee** (horloge injectee :
 un morceau de 3 minutes se rejoue en quelques secondes) et compare les kicks detectes a une verite terrain. Il repond a une question chiffree :
 le kick est-il manque ? en trop ? mal date ? (le lot 3 en depend : on ne reduit pas le retard au jugé.)
 
@@ -33,9 +33,9 @@ for _p in (ROOT, Path(__file__).resolve().parent):
 
 import numpy as np                      # noqa: E402
 
-from engine.audio import FeatureExtractor      # noqa: E402
+from engine.audio import CAPTURE_BLOCK, FeatureExtractor      # noqa: E402
 
-HOP = 512                      # taille de bloc du fil d'analyse
+HOP = CAPTURE_BLOCK            # taille de bloc du fil d'analyse (celle de la capture : engine.audio.CAPTURE_BLOCK)
 EARLY_S = 0.03                 # un kick detecte jusqu'a 30 ms AVANT le vrai compte (gigue d'annotation)
 LATE_S = 0.09                  # ... et jusqu'a 90 ms APRES (retard d'analyse + montee)
 DOUBLE_S = 0.12                # deux detections du meme kick a moins de 120 ms : « double »

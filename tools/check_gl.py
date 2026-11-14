@@ -2939,6 +2939,169 @@ def check_calibration() -> None:
           {"summary": rec, "clicks": 8, "flashes": 7}), "calibration: le rapport dit pourquoi il echoue, ou l'avance recommandee")
 
 
+def check_capture_block() -> None:
+    """Bloc de capture de 256 (issue #110, fin du lot 3) : ce qui comptait en PAS compte en temps ; le banc a 256 vaut celui a 512."""
+    print("Bloc de capture (256 / 512)")
+    import bench_kick as bk
+    from engine import audio as au
+    corpus = bk.synthetic_corpus(48000, 30.0)                  # 30 s comme le banc : les premieres secondes (apprentissage du classifieur) pesent moins
+    # --- le spectre d'avant l'attaque (classifieur kick / caisse claire) date de ~43 ms, quelle que soit la taille du bloc
+    sig = corpus["rock 100 BPM (kick 1 et 3, snare 2 et 4)"][0]
+    ages = {}
+    for hop in (256, 512):
+        ex = au.FeatureExtractor(48000)
+        buf = np.zeros(ex.win_size, dtype=np.float32)
+        seen = []
+        last = None
+        for i in range(0, len(sig) - hop + 1, hop):
+            buf = np.concatenate((buf[hop:], sig[i:i + hop].astype(np.float32)))
+            ex.process(buf, hop / 48000, (i + hop) / 48000)
+            ref = getattr(ex, "ref_age", None)
+            if ref is not None and ref is not last:
+                seen.append(ref)
+                last = ref
+        ages[hop] = seen
+    ok_age = all(ages[h] and all(au.ATTACK_LOOKBACK_S - 1e-9 <= a < au.ATTACK_LOOKBACK_S + h / 48000 + 1e-9
+                                 for a in ages[h]) for h in ages)
+    check(ok_age, "classifieur: le spectre de reference date de 43 ms au moins (un pas de plus au plus), a 256 comme a 512",
+          str({h: (round(min(a) * 1000, 1), round(max(a) * 1000, 1), len(a)) if a else None for h, a in ages.items()}))
+    # --- banc : a 256, aucun morceau ne perd plus d'un point de F1, le rock garde sa precision
+    worst, detail = 0.0, []
+    for name in ("rock 100 BPM (kick 1 et 3, snare 2 et 4)", "rock 100 BPM, telephone", "house 124 BPM", "kick sature, plein niveau"):
+        x, truth = corpus[name][0], corpus[name][2]
+        m5 = bk.metrics(bk.replay(x, 48000, hop=512), truth, len(x) / 48000)
+        m2 = bk.metrics(bk.replay(x, 48000, hop=256), truth, len(x) / 48000)
+        worst = max(worst, round(m5["f1"], 2) - round(m2["f1"], 2), 0.02 * max(0, m2["fp"] - m5["fp"] - 1))      # F1 au point pres (affiche)
+        detail.append(f"{name[:18]}: F1 {m5['f1']:.2f}->{m2['f1']:.2f} prec {m5['precision']:.2f}->{m2['precision']:.2f}")
+    check(worst <= 0.01 + 1e-9, "banc: blocs de 256 = aucun morceau ne perd plus d'un point de F1 ni plus d'un faux kick (rock compris ; ecart dans la phase d'apprentissage du classifieur)", " | ".join(detail))
+
+    # --- taille de bloc : constante, variable d'environnement
+    saved_env = os.environ.pop("CASUAL_AUDIO_BLOCK", None)
+    try:
+        b0 = au.capture_block()
+        os.environ["CASUAL_AUDIO_BLOCK"] = "512"
+        b1 = au.capture_block()
+        os.environ["CASUAL_AUDIO_BLOCK"] = "300"
+        b2 = au.capture_block()
+    finally:
+        os.environ.pop("CASUAL_AUDIO_BLOCK", None)
+        if saved_env is not None:
+            os.environ["CASUAL_AUDIO_BLOCK"] = saved_env
+    check(b0 == au.CAPTURE_BLOCK and b1 == 512 and b2 == au.CAPTURE_BLOCK, "bloc: CAPTURE_BLOCK par defaut, CASUAL_AUDIO_BLOCK=512 le force, valeur invalide ignoree",
+          str((b0, b1, b2)))
+    # --- compteur de debordements : plus de OVERFLOW_MAX en OVERFLOW_WINDOW_S
+    oc = au.OverflowCounter()
+    for k in range(au.OVERFLOW_MAX):
+        oc.note(100.0 + k)
+    under = oc.burst(110.0)
+    oc.note(111.0)
+    over = oc.burst(112.0)
+    later = oc.burst(112.0 + au.OVERFLOW_WINDOW_S + 20.0)
+    check(not under and over and not later, "debordements: au plus OVERFLOW_MAX = rien, un de plus = trop, oublies apres la fenetre", str((under, over, later)))
+
+    # --- repli automatique de l'entree a 512 (fausse entree : aucune carte son)
+    from engine.session import AudioController
+
+    class FakeInput:
+        made = []
+
+        def __init__(self, device, ring, blocksize=None):
+            self.device, self.blocksize = device, blocksize
+            self.rate, self.name, self.tap, self.burst_now, self.stopped = 48000, f"faux {device}", None, False, False
+            FakeInput.made.append(self)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.stopped = True
+
+        def overflow_burst(self, now):
+            return self.burst_now
+    ring_ = au.RingBuffer(48000 * 2)
+    msgs = []
+    ctl = AudioController(ring_, 1.0, False, device="micro", input_factory=FakeInput, block=256, on_message=msgs.append)
+    first = ctl.src
+    tap_ = lambda *a: None
+    first.tap = tap_
+    quiet = ctl.check_block(10.0)
+    first.burst_now = True
+    msg = ctl.check_block(11.0)
+    second = ctl.src
+    second.burst_now = True
+    again = ctl.check_block(12.0)
+    ctl.switch("autre")
+    third = ctl.src
+    check(quiet is None and msg and second is not first and second.blocksize == 512 and second.device == "micro"
+          and first.stopped and ctl.block == 512 and msgs == [msg],
+          "repli: trop de debordements a 256 = la meme entree rouverte a 512, message", str((quiet, msg, second.blocksize, msgs)))
+    check(again is None and third.blocksize == 512, "repli: une seule fois par session ; un changement d'entree garde le bloc courant", str((again, third.blocksize)))
+    syn = AudioController(au.RingBuffer(48000), 1.0, True)
+    check(syn.check_block(1.0) is None, "repli: jamais en mode synthetique")
+
+    # --- suites de la revue
+    check(second.tap is None, "repli: l'enregistrement n'est PAS rebranche sur la nouvelle entree (REC s'arrete proprement, aucun point d'ecoute oublie)",
+          str(second.tap))
+    check(len(FakeInput.made) == 3, "repli: aucune entree ouverte en plus (premiere, repli, changement d'entree)", str(len(FakeInput.made)))
+
+    class Broken(FakeInput):
+        def __init__(self, device, ring, blocksize=None):
+            if blocksize == 512:
+                raise OSError("entree debranchee")
+            super().__init__(device, ring, blocksize)
+    msgs_b = []
+    ctl_b = AudioController(au.RingBuffer(48000), 1.0, False, device="m", input_factory=Broken, block=256, on_message=msgs_b.append)
+    keep_src = ctl_b.src
+    keep_src.burst_now = True
+    msg_b = ctl_b.check_block(5.0)
+    check(ctl_b.src is keep_src and msg_b and "impossible" in msg_b and msgs_b == [msg_b] and ctl_b.block == 256,
+          "repli impossible (entree debranchee): message, l'entree de 256 reste active", str((msg_b, msgs_b)))
+    import threading as _th
+    import time as _tm
+
+    class Slow(FakeInput):
+        def start(self):
+            _tm.sleep(0.05)
+    first_slow = len(FakeInput.made)
+    ctl_s = AudioController(au.RingBuffer(48000), 1.0, False, device="m", input_factory=Slow, block=256)
+    ctl_s.src.burst_now = True
+    ths = [_th.Thread(target=ctl_s.check_block, args=(1.0,)), _th.Thread(target=ctl_s.switch, args=("autre",))]
+    for t_ in ths:
+        t_.start()
+    for t_ in ths:
+        t_.join()
+    slows = FakeInput.made[first_slow:]                     # FakeInput range toutes les entrees creees (Slow comprises) dans sa propre liste
+    alive = [x for x in slows if not x.stopped]
+    check(len(alive) == 1 and alive[0] is ctl_s.src, "repli et changement d'entree en meme temps: une seule entree reste ouverte, c'est celle de la session",
+          f"{len(alive)} ouvertes sur {len(slows)}")
+    rb = au.RingBuffer(48000)
+    check(rb.stamps.maxlen * 256 / 48000 >= 10.0, "horodatages: au moins 10 s gardes en blocs de 256", str(rb.stamps.maxlen))
+    for k in range(3000):
+        rb.write(np.zeros(256, dtype=np.float32), 100.0 + k * 256 / 48000)
+    t_last = rb.time_at(rb.total, 48000.0)
+    check(t_last is not None and abs(t_last - (100.0 + 2999 * 256 / 48000)) < 1e-9, "horodatages: instant du dernier echantillon exact", str(t_last))
+    from core.phase import PhaseTracker
+    shares = []
+    for hop in (512, 256):
+        pt = PhaseTracker()
+        lv = {"raw_rms": 0.1, "raw_bass": 0.0, "raw_mid": 0.05, "raw_high": 0.05, "rms": 0.1, "bass": 0.0, "mid": 0.5, "high": 0.5}
+        for k in range(int(3.0 * 48000 / hop)):
+            if k == int(2.0 * 48000 / hop):
+                lv = dict(lv, raw_bass=0.1, bass=1.0)
+            pt.update((k + 1) * hop / 48000, lv, False, "idle", None)
+            if k == int(2.1 * 48000 / hop):
+                shares.append(pt._bass_share)
+    check(len(shares) == 2 and abs(shares[0] - shares[1]) < 0.03, "phases: la part des basses est lissee en TEMPS (meme valeur a 256 qu'a 512, 100 ms apres un saut)",
+          str([round(x, 3) for x in shares]))
+
+    class PropSrc:
+        @property
+        def latency_ms(self):
+            return 22.0
+    check(au.capture_latency_ms(PropSrc()) == 22.0 and au.capture_latency_ms(None) == 0.0,
+          "latence annoncee de la capture lue comme une propriete (l'avance auto prenait 0 faute d'horodatage du pilote)")
+
+
 def check_bench_kick() -> None:
     """Lot 2 de la spec synchro son / image : le banc du detecteur de kick (appariement, metriques, fichiers, corpus synthetique, non-regression)."""
     print("Banc du detecteur de kick")
@@ -12012,7 +12175,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -12024,7 +12187,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
