@@ -55,6 +55,8 @@ TABLE: tuple[Param, ...] = (
     _p("fx_link", 1.0, 0.0, 1.0, doc="1 = le logo subit les memes effets que le fond ; 0 = effets propres (fxl_*)."),
     _p("fxl_on", [1, 1, 1, 1], 0, 1, doc="Interrupteurs des 4 effets de la couche logo (fx_link = 0)."),
     _p("fxl_int", [1.0, 1.0, 1.0, 1.0], 0.0, 2.0, doc="Intensites des 4 effets de la couche logo."),
+    _p("ripple_beat", "mesure", choices=("mesure", "kick"),
+       doc="Onde de choc : sur le 1er temps de chaque mesure (un temps sur quatre, cale sur la grille Temps 1 si elle est posee) ou a chaque kick."),
     _p("src_bg", "auto", choices=audio_layers.SOURCES, doc="Partie du son qui pilote le fond (effets, animations) : une bande, les attaques, ou la grille de la pulsation."),
     _p("src_logo", "auto", choices=audio_layers.SOURCES, doc="Partie du son qui pilote le logo (effets, reactions, halo, fonte, cellules) ; ignore tant que fx_link = 1 (le logo suit alors la source du fond)."),
     _p("sens_bg", 1.0, 0.25, 4.0, doc="Sensibilite du kick propre au fond (x la sensibilite generale) ; 1 = le kick commun."),

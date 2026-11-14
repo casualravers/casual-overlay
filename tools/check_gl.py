@@ -1927,7 +1927,7 @@ def check_render() -> None:
 
     # Effets en plein kick: l'image doit changer sans etre noire ni saturee.
     loud = {"bass": 1.0, "mid": 0.6, "high": 0.9, "rms": 0.8, "beat": 1.0, "since_beat": 0.05}
-    params = {"fx_on": [1] * 5, "fx_int": [1.0] * 5, "master": 1.0, "sensitivity": 1.0}
+    params = {"fx_on": [1] * 5, "fx_int": [1.0] * 5, "master": 1.0, "sensitivity": 1.0, "ripple_beat": "kick"}   # chaque kick (etats sans compteur de kicks)
     r.draw(fbo, size, loud, params, 1.0)
     out2 = read_target(ctx, fbo, size)
     change = np.abs(out2.astype(int) - video.astype(int)).mean()
@@ -1941,6 +1941,19 @@ def check_render() -> None:
         r.draw(fbo, size, state, p, 1.0)
         d = np.abs(read_target(ctx, fbo, size).astype(int) - video.astype(int)).mean()
         check(d > 0.3, f"effet {name} visible isolement", f"ecart moyen {d:.2f}")
+    # Onde de choc sur le 1er temps (`ripple_beat` = mesure, le defaut) : elle part sur le 1er kick entendu (un 1), pas sur le 2e.
+    p = dict(params, fx_on=[0, 1, 0, 0, 0], ripple_beat="mesure")
+    rd = gl.Renderer(ctx, size, None)
+    rd.video_tex.write(frame, alignment=1)
+    rd.draw(fbo, size, dict(loud, beats=0, since_beat=10.0, beat=0.0), p, 0.7)
+    rd.draw(fbo, size, dict(loud, beats=1, since_beat=0.0, beat=1.0), p, 0.7)
+    rd.draw(fbo, size, dict(loud, beats=1, since_beat=0.3, beat=0.22), p, 1.0)
+    d1 = np.abs(read_target(ctx, fbo, size).astype(int) - video.astype(int)).mean()
+    rd.draw(fbo, size, dict(loud, beats=2, since_beat=0.0, beat=1.0), p, 1.2)
+    rd.draw(fbo, size, dict(loud, beats=2, since_beat=0.3, beat=0.22), p, 1.5)    # 2e kick 0,3 s avant ; le 1 date de 0,8 s
+    d2 = np.abs(read_target(ctx, fbo, size).astype(int) - video.astype(int)).mean()
+    check(d1 > 0.3 and d2 < d1, "onde de choc au 1er temps: visible apres le 1, plus faible apres le kick suivant (elle ne repart pas)",
+          f"apres le 1 {d1:.2f}, apres le 2e kick {d2:.2f}")
 
     # Fond genere (motif): rendu dans le shader, sans flux video.
     def render(rr, state, p, t=1.0):
@@ -4117,6 +4130,41 @@ def check_claude_md() -> None:
             if not (f_.parent / link_).resolve().is_file():
                 bad.append(f"{d_}/CLAUDE.md : lien {link_} ne se resout pas depuis {d_}/")
     check(not bad, "pointeurs: core/, engine/, gui/, tools/, gl_shaders/ ont leur CLAUDE.md, qui ne pointe (par des liens qui se resolvent) que vers des fiches existantes", str(bad))
+
+
+def check_ripple_downbeat() -> None:
+    """Onde de choc sur le 1er temps de la mesure (au lieu de chaque kick) : instant du dernier « 1 », remplacement du seul vecteur de l'onde de choc."""
+    print("Onde de choc sur le 1er temps")
+    from core import audio_layers as al
+    from core import params_schema as ps
+    NK = al.NO_KICK
+    check(ps.BY_KEY["ripple_beat"].default == "mesure" and ps.BY_KEY["ripple_beat"].choices == ("mesure", "kick") and ps.BY_KEY["ripple_beat"].scope == "look",
+          "schema: onde de choc au 1er temps par defaut (reglage de look : presets overlay et scenes)")
+    # --- pulsation calee : la grille « mesure » (1 temps sur 4, calee sur Temps 1, deja en avance) fait foi
+    g = al.DownbeatGate()
+    check(g.update(10.0, {"beats": 3, "pulse_since": {"mesure": 0.25}}) == 0.25, "pulsation calee: l'instant du dernier 1 vient de la grille de la pulsation")
+    # --- sans pulsation, avec la grille Temps 1 : un kick dont le numero de temps est un multiple de 4 est un 1
+    g = al.DownbeatGate()
+    g.update(0.0, {"beats": 0})
+    seen = []
+    for k in range(1, 9):                          # kicks numerotes 1..8 depuis le « 1 » de la grille (0 = le 1)
+        s = g.update(k * 0.5, {"beats": k, "beat_index": k})
+        seen.append(round(s, 3))
+    check(seen == [NK, NK, NK, 0.0, 0.5, 1.0, 1.5, 0.0], "grille Temps 1 sans pulsation: l'onde part sur les temps 4 et 8 (numero multiple de 4)", str(seen))
+    # --- ni pulsation ni grille : un kick sur quatre, le premier entendu compte comme un 1
+    g = al.DownbeatGate()
+    g.update(0.0, {"beats": 0})
+    seen = [round(g.update(k * 0.5, {"beats": k}), 3) for k in range(1, 10)]
+    check(seen == [0.0, 0.5, 1.0, 1.5, 0.0, 0.5, 1.0, 1.5, 0.0], "sans pulsation ni grille: un kick sur quatre (le premier entendu est le 1)", str(seen))
+    check(al.DownbeatGate().update(1.0, {"beats": 0}) == NK, "aucun kick encore: pas d'onde")
+    # --- seul le vecteur de l'onde de choc change, et seulement s'il est pilote par une attaque
+    v_kick = (0.4, 0.2, 0.9, 0.05)
+    vecs = [v_kick] * 4
+    out = al.ripple_on_downbeat(vecs, 1.25)
+    check(out[1] == (0.4, 0.2, 0.9, 1.25) and out[0] == v_kick and out[2] == v_kick and out[3] == v_kick and vecs[1] == v_kick,
+          "vecteurs: seule l'onde de choc (indice 1) prend l'instant du 1, les autres effets gardent le kick ; l'entree n'est pas modifiee", str(out))
+    rest = (0.3, 0.3, 0.0, NK)
+    check(al.ripple_on_downbeat([rest] * 4, 0.1)[1] == rest, "vecteurs: une onde de choc au repos (source sans attaque, dosage 0) reste au repos")
 
 
 def check_lead_auto() -> None:
@@ -11964,7 +12012,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -11977,7 +12025,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
