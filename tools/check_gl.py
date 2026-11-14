@@ -2983,12 +2983,22 @@ def check_capture_block() -> None:
         b1 = au.capture_block()
         os.environ["CASUAL_AUDIO_BLOCK"] = "300"
         b2 = au.capture_block()
+        os.environ["CASUAL_AUDIO_BLOCK"] = "256"
+        b3 = au.capture_block()
     finally:
         os.environ.pop("CASUAL_AUDIO_BLOCK", None)
         if saved_env is not None:
             os.environ["CASUAL_AUDIO_BLOCK"] = saved_env
-    check(b0 == au.CAPTURE_BLOCK and b1 == 512 and b2 == au.CAPTURE_BLOCK, "bloc: CAPTURE_BLOCK par defaut, CASUAL_AUDIO_BLOCK=512 le force, valeur invalide ignoree",
-          str((b0, b1, b2)))
+    check(b0 == au.CAPTURE_BLOCK and b1 == 512 and b2 == au.CAPTURE_BLOCK and b3 == 256, "bloc: CAPTURE_BLOCK par defaut, CASUAL_AUDIO_BLOCK=512 / 256 le force, valeur invalide ignoree",
+          str((b0, b1, b2, b3)))
+    check(au.CAPTURE_BLOCK == 512, "bloc: 512 par defaut (a 256 une carte son en WASAPI perdait des blocs sans le signaler : son de l'enregistrement hache)",
+          str(au.CAPTURE_BLOCK))
+    # --- bloc perdu sans drapeau du pilote (WASAPI) : vu au saut de l'horodatage des blocs
+    r_ = 48000
+    check(not au.block_gap(None, 1.0, 256, r_) and not au.block_gap(1.0, 1.0 + 256 / r_, 256, r_)
+          and not au.block_gap(1.0, 1.0 + 2 * 256 / r_, 256, r_) and au.block_gap(1.0, 1.0 + 3 * 256 / r_, 256, r_)
+          and not au.block_gap(1.0, 1.0 - 0.001, 256, r_),
+          "bloc perdu: un saut de l'horodatage de plus de 2 blocs compte comme un debordement (gigue d'un bloc toleree, premier bloc ignore)")
     # --- compteur de debordements : plus de OVERFLOW_MAX en OVERFLOW_WINDOW_S
     oc = au.OverflowCounter()
     for k in range(au.OVERFLOW_MAX):
