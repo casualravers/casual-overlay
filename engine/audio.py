@@ -26,6 +26,10 @@ from engine.deps import np, sd
 # 512 par defaut : a 256, une carte son en WASAPI (poste de dev, 14/11/2026) perdait des blocs sans lever `input_overflow` (enregistrement : 1221 trous,
 # 54 s de silence sur 124 s ; 2 trous la veille a 512). `CASUAL_AUDIO_BLOCK=256` garde l'essai a 256, avec le repli a 512 (pertes vues par `block_gap`).
 CAPTURE_BLOCK = 512
+# Tampon de la carte son (secondes, passe a `sd.InputStream(latency=...)`). « low » donnait 22 ms en WASAPI sur une Focusrite et perdait ~3 % du son
+# SANS drapeau ni zeros, meme sans charge (3,88 s recues sur 4) : enregistrement qui crepite. 30 ms (annonce 41 ms) : rien de perdu, meme avec le GIL
+# tenu 150 ms toutes les 0,6 s (tools : mesure du 14/11/2026). Le tampon n'ajoute pas de retard a la livraison des blocs (un bloc part des qu'il est plein).
+CAPTURE_LATENCY_S = 0.03
 OVERFLOW_MAX = 5                  # debordements toleres ...
 OVERFLOW_WINDOW_S = 60.0          # ... sur cette fenetre ; au-dela, la session rouvre l'entree avec des blocs de 512 (une fois)
 
@@ -522,7 +526,7 @@ class SoundDeviceInput:
         self._prev_end = None            # fin du bloc precedent (horloge des blocs) : un saut = bloc perdu, meme sans drapeau du pilote
         self.stream = sd.InputStream(
             device=device, channels=self.channels, samplerate=self.rate, blocksize=blocksize,
-            dtype="float32", latency="low", callback=self._callback)
+            dtype="float32", latency=CAPTURE_LATENCY_S, callback=self._callback)
 
     def _callback(self, indata, frames, time_info, status):
         now = time.monotonic()

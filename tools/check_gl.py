@@ -2993,6 +2993,26 @@ def check_capture_block() -> None:
           str((b0, b1, b2, b3)))
     check(au.CAPTURE_BLOCK == 512, "bloc: 512 par defaut (a 256 une carte son en WASAPI perdait des blocs sans le signaler : son de l'enregistrement hache)",
           str(au.CAPTURE_BLOCK))
+    # --- tampon de la carte son : 30 ms explicites (« low » = 22 ms en WASAPI sur la Focusrite : 3 % du son perdu sans drapeau, meme sans charge)
+    class FakeSd:
+        opened = {}
+
+        @staticmethod
+        def query_devices(device, kind):
+            return {"default_samplerate": 48000.0, "name": "fausse carte", "max_input_channels": 2}
+
+        class InputStream:
+            def __init__(self, **kw):
+                FakeSd.opened = kw
+                self.latency = kw.get("latency")
+    real_sd = au.sd
+    au.sd = FakeSd
+    try:
+        au.SoundDeviceInput(17, au.RingBuffer(48000))
+    finally:
+        au.sd = real_sd
+    check(au.CAPTURE_LATENCY_S == 0.03 and FakeSd.opened.get("latency") == au.CAPTURE_LATENCY_S and FakeSd.opened.get("blocksize") == au.CAPTURE_BLOCK,
+          "tampon: l'entree s'ouvre avec 30 ms de tampon (pas « low ») et le bloc courant", str(FakeSd.opened.get("latency")))
     # --- bloc perdu sans drapeau du pilote (WASAPI) : vu au saut de l'horodatage des blocs
     r_ = 48000
     check(not au.block_gap(None, 1.0, 256, r_) and not au.block_gap(1.0, 1.0 + 256 / r_, 256, r_)
