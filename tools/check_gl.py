@@ -2939,6 +2939,53 @@ def check_calibration() -> None:
           {"summary": rec, "clicks": 8, "flashes": 7}), "calibration: le rapport dit pourquoi il echoue, ou l'avance recommandee")
 
 
+def check_drop() -> None:
+    """Drop plus impactant (issue #89), partie pure : styles tires au hasard sans repetition, courbes qui reviennent au neutre, dosage."""
+    print("Drop (styles, courbes)")
+    import random
+    from core import drop as dr
+    d = dr.DropFx(rng=random.Random(1))
+    seq = [d.trigger(100.0 + 3 * k) for k in range(200)]
+    check(all(a != b for a, b in zip(seq, seq[1:])), "styles: jamais deux fois le meme de suite", str(seq[:12]))
+    check(set(seq[:10]) == set(dr.STYLES) and all(set(seq[i:i + 10]) == set(dr.STYLES) for i in range(0, 190, 10)),
+          "styles: les cinq passent dans chaque serie de dix (memoire : tout defile)", str(seq[:20]))
+    seq2 = [dr.DropFx(rng=random.Random(1)).trigger(0.0) for _ in range(3)]
+    check(len(set(seq2)) == 1, "styles: meme graine = meme tirage (deterministe)", str(seq2))
+    neutral = dr.NEUTRAL
+    checks_ = {}
+    for style in dr.STYLES:
+        e = dr.DropFx()
+        e.trigger(10.0, style=style)
+        early = e.values(10.08)
+        late = e.values(10.0 + dr.DURATION + 0.01)
+        before = e.values(9.0)
+        checks_[style] = (early != neutral, late == neutral, before == neutral, early.boost > 0.8, 0.0 <= early.flash <= 1.0)
+    check(all(all(v) for v in checks_.values()), "courbes: chaque style agit tout de suite (rafale d'effets), revient EXACTEMENT au neutre apres DURATION, rien avant",
+          str({k: v for k, v in checks_.items() if not all(v)}))
+    sig = {}
+    for style in dr.STYLES:
+        e = dr.DropFx()
+        e.trigger(0.0, style=style)
+        vals = [e.values(t_ / 100.0) for t_ in range(1, 120)]
+        sig[style] = (max(v.zoom for v in vals), max(abs(v.shake[0]) + abs(v.shake[1]) for v in vals), max(v.slices for v in vals),
+                      max(v.invert for v in vals), max(abs(v.hue) for v in vals), max(v.implode for v in vals), max(v.force[1] for v in vals))
+    check(sig["coup"][0] > 0.05 and sig["coup"][1] > 0.003 and sig["fracture"][2] > 0.5 and sig["negatif"][3] > 0.9 and sig["negatif"][4] > 1.0
+          and sig["implosion"][5] > 0.3 and sig["onde"][6] >= 2.0,
+          "signatures: coup = zoom + secousse, fracture = tranches, negatif = inversion + tour de teinte, implosion = aspiration, onde = onde de choc geante",
+          str({k: tuple(round(x, 3) for x in v) for k, v in sig.items()}))
+    e = dr.DropFx()
+    e.trigger(0.0, style="coup")
+    zero = e.values(0.1, amount=0.0)
+    half, full = e.values(0.1, amount=0.5), e.values(0.1, amount=1.0)
+    check(zero == neutral and 0 < half.boost < full.boost and abs(half.zoom) < abs(full.zoom), "dosage: 0 = rien, 50 % = moitie", str((half.boost, full.boost)))
+    e.trigger(0.0, style="onde")
+    check(e.values(0.05, foudre=True).flash == 0.0 and e.values(0.05).flash > 0.0, "mode Foudre: jamais de flash blanc plein ecran (la grande decharge le remplace)")
+    e2 = dr.DropFx()
+    e2.trigger(0.0, style="onde")
+    e2.trigger(0.5, style="coup")
+    check(e2.values(0.55).zoom > 0 and e2.style == "coup", "un drop pendant un autre repart de zero avec le nouveau style")
+
+
 def check_capture_block() -> None:
     """Bloc de capture de 256 (issue #110, fin du lot 3) : ce qui comptait en PAS compte en temps ; le banc a 256 vaut celui a 512."""
     print("Bloc de capture (256 / 512)")
@@ -12175,7 +12222,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -12187,7 +12234,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
