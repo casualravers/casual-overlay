@@ -260,3 +260,55 @@ class LayerFilter:
             elif tau <= 1e-6:
                 self.sm[i] = v
         return (self.sm[0], self.sm[1], self.sm[2], out[3])
+
+
+# --- Onde de choc sur le 1er temps de la mesure (reglage `ripple_beat`) ---------------------------------------------------------------------
+# L'onde de choc est l'effet le plus fort : a chaque kick elle sature l'image. En mode « mesure », elle ne part que sur le « 1 » de chaque
+# mesure (un temps sur quatre). Le « 1 » se cale sur la grille Temps 1 (onglet Masters, touche virgule) ; sans grille, il est arbitraire.
+RIPPLE_BEATS = ("mesure", "kick")
+RIPPLE_FX = 1                            # indice de l'onde de choc dans les vecteurs par effet (wobble, onde de choc, glitch, aberration)
+BEATS_PER_BAR = 4
+
+
+class DownbeatGate:
+    """Secondes depuis le dernier 1er temps de mesure (`NO_KICK` si aucun). Ordre de confiance :
+    1. pulsation calee (`state["pulse_since"]["mesure"]`) : predictive, deja en avance, comptee depuis le « 1 » de la grille Temps 1 ;
+    2. sinon, a chaque nouveau kick (`state["beats"]` augmente) : c'est un 1 si son numero de temps depuis la grille (`beat_index`) est un multiple de 4 ;
+    3. sinon (ni pulsation ni grille) : un kick sur quatre, le premier entendu compte comme un 1 (l'onde ne disparait pas faute de calage)."""
+
+    def __init__(self) -> None:
+        self.last_beats = None           # compteur de kicks vu a l'image precedente
+        self.count = 0                   # kicks comptes sans grille (repli 3)
+        self.t_down = None               # instant du dernier 1 detecte par les kicks
+
+    def update(self, now: float, state: dict) -> float:
+        beats = int(state.get("beats") or 0)
+        new = 0 if self.last_beats is None else max(0, beats - self.last_beats)
+        if self.last_beats is None and beats > 0:
+            new = 1                      # premier appel en plein morceau : le kick en cours compte
+        self.last_beats = beats
+        if new:
+            idx = state.get("beat_index")
+            if idx is not None:
+                if int(idx) % BEATS_PER_BAR == 0:
+                    self.t_down = now
+                self.count = 0           # la grille fait foi : le repli repartira d'un 1 si elle disparait
+            else:
+                for _ in range(new):
+                    if self.count % BEATS_PER_BAR == 0:
+                        self.t_down = now
+                    self.count += 1
+        pulse = (state.get("pulse_since") or {}).get("mesure")
+        if pulse is not None:
+            return float(pulse)
+        return NO_KICK if self.t_down is None else max(0.0, now - self.t_down)
+
+
+def ripple_on_downbeat(vecs, since_down: float) -> list:
+    """Copie des quatre vecteurs (bass, high, beat, since) d'une couche ou l'onde de choc compte depuis le dernier 1er temps au lieu du dernier
+    kick. Une onde de choc au repos (source sans attaque : since = NO_KICK) le reste ; les autres effets ne changent pas."""
+    out = list(vecs)
+    v = out[RIPPLE_FX]
+    if v[3] < NO_KICK - 1e-3:
+        out[RIPPLE_FX] = (v[0], v[1], v[2], float(since_down))
+    return out

@@ -13,7 +13,7 @@ from pathlib import Path
 from core import sessionlog
 from core import doodles
 from core import qrcode
-from core.audio_layers import EFFECTS, EffectBank, LayerFilter, SourceMixer, auto_fx, auto_sources, has_kick, layer_levels
+from core.audio_layers import EFFECTS, DownbeatGate, EffectBank, LayerFilter, SourceMixer, auto_fx, auto_sources, has_kick, layer_levels, ripple_on_downbeat
 from core.pulse import cycle_seconds, swell as pulse_swell
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
@@ -281,6 +281,7 @@ class Renderer:
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
         self.sources_now = ("tout", "tout", False, False)                              # (fond, logo, fond en auto, logo en auto) : affiche dans l'interface
         self.strobe_info: tuple[str, float] | None = None                            # (raison, instant) du dernier eclair : affiche dans l'interface
+        self._downbeat = DownbeatGate()                                               # onde de choc sur le 1er temps de la mesure (`ripple_beat`)
         self._fx_bank = EffectBank()                                                   # reactivite par effet (mode auto) : un vecteur audio par effet et par couche
         self._fx_filters = {layer: [LayerFilter() for _ in EFFECTS] for layer in ("bg", "logo")}
         self._fx_t = None
@@ -823,6 +824,9 @@ class Renderer:
             raw = self._fx_bank.levels(t, fdt, state, "logo", fx_tab["logo"], lk, True)
             au_logo_fx = [self._fx_filters["logo"][i].step(t, raw[i], p["lag_" + lk], p["smooth_" + lk]) for i in range(4)]
             self.fx_now["logo"] = self._fx_bank.active("logo")
+        since_down = self._downbeat.update(t, state)                                   # appele a chaque image : le compte des kicks reste juste
+        if p.get("ripple_beat", "mesure") == "mesure":                                 # l'onde de choc ne part que sur le « 1 » de la mesure
+            au_bg_fx, au_logo_fx = ripple_on_downbeat(au_bg_fx, since_down), ripple_on_downbeat(au_logo_fx, since_down)
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt
