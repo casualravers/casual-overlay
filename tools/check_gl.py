@@ -1320,13 +1320,14 @@ def check_gui() -> None:
     check(out.get("x_drop_foudre") == (True, True), "foudre (GUI): le Drop declenche la grande decharge et n'envoie pas le flash blanc plein ecran", str(out.get("x_drop_foudre")))
     check(out.get("x_foudre_ui") == (True,) * 11, "foudre (GUI): interrupteur Strobe / Foudre au-dessus du bouton, reglages de la foudre actifs ou grises selon le mode, curseurs et couleur ecrivent les reglages",
           str(out.get("x_foudre_ui")))
-    check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, flash et eclair blanc, decharge de la foudre", str(out.get("x_build")))
+    check(out.get("x_build") == (True,) * 5,"montee / drop (GUI): la montee progresse, le drop remet a zero, lance l'effet du Drop (drop_fx), decharge de la foudre", str(out.get("x_build")))
+    check(out.get("x_drop_nobuild") == (True, True), "drop (GUI): le bouton Drop lance l'effet complet meme sans montee en cours (issue #89)", str(out.get("x_drop_nobuild")))
     check(out.get("x_silence") == (True,) * 3, "phases auto (GUI): la case ecrit auto_phase", str(out.get("x_silence")))
     check(out.get("x_panic") == (True, True, True, True), "panique (GUI): plus de bouton PANIQUE dans la barre (REC a sa place) ; la palette coupe effets, strobe, montee, composition, teinte, silence ; VJ en pause, verrou retire",
           str(out.get("x_panic")))
     check(out.get("x_panic_key") == (True, True), "panique (touche X): la demande du fil GL est suivie par la GUI", str(out.get("x_panic_key")))
     check(out.get("x_rhythm") == (True,) * 4,
-          "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = flash et eclair", str(out.get("x_rhythm")))
+          "rythme (GUI): tempo auto = BPM detecte / 120 (et cadence du strobe), montee auto sur la cassure, drop auto = effet du Drop (drop_fx)", str(out.get("x_rhythm")))
     check(out.get("x_kick_led") == (True,) * 4, "rythme (GUI): voyant de kick + BPM (valeur en clair, gardee 4 s si la detection decroche) dans la barre ; curseur de tempo en BPM (0 a 240)", str(out.get("x_kick_led")))
     check(out.get("x_rhythm_manual") == (True,), "rythme (GUI): montee / drop auto decoche = rien ne part tout seul", str(out.get("x_rhythm_manual")))
     check(out.get("x_stage") == (True,) * 8, "mode scene (GUI): une touche par scene, la scene active en ambre, un clic applique la scene, les masters ecrivent les reglages, la PANIQUE marche",
@@ -1340,7 +1341,7 @@ def check_gui() -> None:
           str(out.get("x_sched")))
     check(out.get("x_grid_vj") == (True,) * 6,
           "grille du temps (GUI): Temps 1 ancre la grille, le VJ en rythme arme son changement sur un 1 (a ~N mesures), sinon comme avant", str(out.get("x_grid_vj")))
-    check(out.get("x_phase_build") == (True,) * 6, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (flash + eclair), une montee qui retombe est annulee, rien si le strobe auto est coupe ; une montee lancee a la main n'est jamais annulee par les phases",
+    check(out.get("x_phase_build") == (True,) * 6, "strobe auto (GUI): la montee part quand la phase montee est reconnue, le passage au pic est le drop (effet du Drop), une montee qui retombe est annulee, rien si le strobe auto est coupe ; une montee lancee a la main n'est jamais annulee par les phases",
           str(out.get("x_phase_build")))
     check(out.get("x_rhythm_vj") == (True, True), "rythme (GUI): le VJ change de scene sur le drop detecte (reglage du set), pas quand il est coupe", str(out.get("x_rhythm_vj")))
     check(out.get("x_aff_stack") == (True,), "etendu (GUI): l'onglet Affichage reste au-dessus de la boite des onglets apres une reconstruction du panneau (jamais vide)", str(out.get("x_aff_stack")))
@@ -1894,6 +1895,73 @@ def check_features() -> None:
 def read_target(ctx, fbo, size):
     data = fbo.read(components=3)
     return np.frombuffer(data, dtype=np.uint8).reshape(size[1], size[0], 3)[::-1]   # haut en premier
+
+
+def check_drop_render() -> None:
+    """Drop (issue #89), en pixels : chaque style change franchement l'image, meme effets coupes ; tout revient a l'identique apres DURATION ;
+    dosage 0 = rien ; le compteur drop_fx lance bien un drop."""
+    print("Drop (rendu)")
+    from core import drop as dr
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (240, 136)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    yy, xx = np.mgrid[0:size[1], 0:size[0]]
+    cell = max(size[1] // 8, 4)
+    chk = ((xx // cell + yy // cell) % 2).astype(np.uint8)
+    bg = np.stack([30 + 150 * chk, (xx * 200 // size[0]).astype(np.uint8), 60 + 80 * (1 - chk)], axis=2).astype(np.uint8)    # damier + degrade : zoom, tranches, negatif se voient
+    r.video_tex.write(np.ascontiguousarray(bg).tobytes())
+    idle = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 10.0}
+    p = dict(gl.DEFAULT_PARAMS, bg_mode="live", holo_on=0.0, auto_phase=0, fx_on=[0] * 5, strobe_auto=0, comp_trail=0.0)
+    clock = [100.0]
+    r.drop_clock = lambda: clock[0]
+
+    def frame():
+        r.draw(fbo, size, idle, p, clock[0])
+        return read_target(ctx, fbo, size).astype(int)
+    base = frame()
+    diffs, back = {}, {}
+    for style in dr.STYLES:
+        clock[0] += 5.0
+        ref = frame()
+        r.drop.trigger(clock[0], style=style)
+        clock[0] += 0.08
+        diffs[style] = float(np.abs(frame() - ref).mean())
+        clock[0] += dr.DURATION
+        back[style] = int(np.abs(frame() - ref).max())
+    check(all(v > 6.0 for v in diffs.values()), "chaque style change franchement l'image (effets coupes compris)", str({k: round(v, 1) for k, v in diffs.items()}))
+    check(all(v <= 2 for v in back.values()), "apres DURATION, l'image revient exactement a l'identique", str(back))
+    clock[0] += 5.0
+    n0 = r.drop.count
+    p["drop_fx"] = int(p.get("drop_fx", 0)) + 1
+    clock[0] += 0.05
+    lit = float(np.abs(frame() - base).mean())
+    check(r.drop.count == n0 + 1 and lit > 6.0, "le compteur drop_fx lance un drop (style tire au hasard)", f"{r.drop.style} {lit:.1f}")
+    clock[0] += 5.0
+    p["drop_amount"] = 0.0
+    p["drop_fx"] += 1
+    clock[0] += 0.05
+    none_ = int(np.abs(frame() - base).max())
+    check(none_ <= 2, "dosage 0 : le drop ne change rien", str(none_))
+    p["drop_amount"] = 1.0
+    clock[0] += 5.0
+    p["drop_fx"] += 1
+    clock[0] += 0.05
+    hit = float(np.abs(frame() - base).mean())
+    gl.panic(p)
+    clock[0] += 0.02
+    cut = int(np.abs(frame() - base).max())
+    check(hit > 6.0 and cut <= 2, "PANIQUE pendant un drop : l'image redevient normale tout de suite", f"{hit:.1f} {cut}")
+    r2 = gl.Renderer(ctx, size, None)
+    r2.drop_clock = lambda: clock[0]
+    r2.video_tex.write(np.ascontiguousarray(bg).tobytes())
+    p2 = dict(p, drop_fx=5, drop_clear=3)
+    r2.draw(fbo, size, idle, p2, clock[0])
+    check(r2.drop.count == 0, "au lancement, un compteur drop_fx deja non nul ne declenche rien", str(r2.drop.count))
 
 
 def check_render() -> None:
@@ -2937,6 +3005,64 @@ def check_calibration() -> None:
           "calibration: image sans contraste ou piste muette = aucun evenement (pas de faux chiffre)")
     check("impossible" in ca.report({"summary": {}, "clicks": 3, "flashes": 0}) and f"AVANCE recommandee : {rec['advance_ms']} ms" in ca.report(
           {"summary": rec, "clicks": 8, "flashes": 7}), "calibration: le rapport dit pourquoi il echoue, ou l'avance recommandee")
+
+
+def check_drop() -> None:
+    """Drop plus impactant (issue #89), partie pure : styles tires au hasard sans repetition, courbes qui reviennent au neutre, dosage."""
+    print("Drop (styles, courbes)")
+    import random
+    from core import drop as dr
+    d = dr.DropFx(rng=random.Random(1))
+    seq = [d.trigger(100.0 + 3 * k) for k in range(200)]
+    check(all(a != b for a, b in zip(seq, seq[1:])), "styles: jamais deux fois le meme de suite", str(seq[:12]))
+    check(set(seq[:10]) == set(dr.STYLES) and all(set(seq[i:i + 10]) == set(dr.STYLES) for i in range(0, 190, 10)),
+          "styles: les cinq passent dans chaque serie de dix (memoire : tout defile)", str(seq[:20]))
+    seq2 = [dr.DropFx(rng=random.Random(1)).trigger(0.0) for _ in range(3)]
+    check(len(set(seq2)) == 1, "styles: meme graine = meme tirage (deterministe)", str(seq2))
+    neutral = dr.NEUTRAL
+    checks_ = {}
+    for style in dr.STYLES:
+        e = dr.DropFx()
+        e.trigger(10.0, style=style)
+        early = e.values(10.08)
+        late = e.values(10.0 + dr.DURATION + 0.01)
+        before = e.values(9.0)
+        checks_[style] = (early != neutral, late == neutral, before == neutral, early.boost > 0.8, 0.0 <= early.flash <= 1.0)
+    check(all(all(v) for v in checks_.values()), "courbes: chaque style agit tout de suite (rafale d'effets), revient EXACTEMENT au neutre apres DURATION, rien avant",
+          str({k: v for k, v in checks_.items() if not all(v)}))
+    sig = {}
+    for style in dr.STYLES:
+        e = dr.DropFx()
+        e.trigger(0.0, style=style)
+        vals = [e.values(t_ / 100.0) for t_ in range(1, 120)]
+        sig[style] = (max(v.zoom for v in vals), max(abs(v.shake[0]) + abs(v.shake[1]) for v in vals), max(v.slices for v in vals),
+                      max(v.invert for v in vals), max(abs(v.hue) for v in vals), max(v.implode for v in vals), max(v.force[1] for v in vals))
+    check(sig["coup"][0] > 0.05 and sig["coup"][1] > 0.003 and sig["fracture"][2] > 0.5 and sig["negatif"][3] > 0.9 and sig["negatif"][4] > 1.0
+          and sig["implosion"][5] > 0.3 and sig["onde"][6] >= 2.0,
+          "signatures: coup = zoom + secousse, fracture = tranches, negatif = inversion + tour de teinte, implosion = aspiration, onde = onde de choc geante",
+          str({k: tuple(round(x, 3) for x in v) for k, v in sig.items()}))
+    e = dr.DropFx()
+    e.trigger(0.0, style="coup")
+    zero = e.values(0.1, amount=0.0)
+    half, full = e.values(0.1, amount=0.5), e.values(0.1, amount=1.0)
+    check(zero == neutral and 0 < half.boost < full.boost and abs(half.zoom) < abs(full.zoom), "dosage: 0 = rien, 50 % = moitie", str((half.boost, full.boost)))
+    e.trigger(0.0, style="onde")
+    check(e.values(0.05, foudre=True).flash == 0.0 and e.values(0.05).flash > 0.0, "mode Foudre: jamais de flash blanc plein ecran (la grande decharge le remplace)")
+    e2 = dr.DropFx()
+    e2.trigger(0.0, style="onde")
+    e2.trigger(0.5, style="coup")
+    check(e2.values(0.55).zoom > 0 and e2.style == "coup", "un drop pendant un autre repart de zero avec le nouveau style")
+    e2.clear()
+    check(e2.values(0.6) is neutral, "clear (PANIQUE): le drop en cours est coupe net")
+    e3 = dr.DropFx()
+    e3.trigger(0.0, style="negatif")
+    check(e3.values(0.05, foudre=True).invert <= 0.4 < e3.values(0.05).invert, "mode Foudre: le negatif est attenue (pas de blanc plein ecran)")
+    e3.trigger(0.0, style="implosion")
+    check(max(abs(e3.values(t_ / 100.0, amount=1.5).implode) for t_ in range(1, 200)) <= 0.85, "implosion a 150 %: aspiration plafonnee (l'image ne se replie pas)")
+    from core import controls as ctl
+    pp = {"drop_clear": 2}
+    ctl.panic(pp)
+    check(pp["drop_clear"] == 3, "panique: coupe l'effet du Drop en cours (compteur drop_clear +1)")
 
 
 def check_capture_block() -> None:
@@ -6162,10 +6288,14 @@ def gui_expand_steps(c, s, out) -> None:
         time.sleep(0.05)
     started = params["build"]
     s.commands.queue.clear() if hasattr(s.commands, "queue") else None
-    hits = params["strobe_hits"]
+    fx0 = int(params.get("drop_fx", 0))
     drops0 = params["foudre_drop"]
     vjc["drop"]()
-    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, params["strobe_hits"] == hits + 1, not s.commands.empty(), params["foudre_drop"] == drops0 + 1)
+    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, int(params.get("drop_fx", 0)) == fx0 + 1, sc["msg"].get() == "DROP", params["foudre_drop"] == drops0 + 1)
+    # issue #89 : le Drop part aussi SANS montee en cours (meme effet complet)
+    fx1 = int(params.get("drop_fx", 0))
+    vjc["drop"]()
+    out["x_drop_nobuild"] = (int(params.get("drop_fx", 0)) == fx1 + 1, sc["msg"].get().startswith("DROP"))
     while not s.commands.empty():
         s.commands.get_nowait()
     # mode Foudre : le Drop ne lance pas le flash blanc plein ecran (la grande decharge le remplace)
@@ -6339,11 +6469,11 @@ def gui_expand_steps(c, s, out) -> None:
     fake_rhythm.builds, fake_rhythm.state = 1, "build"
     vjc["rhythm_step"]()
     auto_started = "montee automatique" in c["scenes"]["msg"].get()
-    hits0 = params["strobe_hits"]
+    hits0 = int(params.get("drop_fx", 0))
     fake_rhythm.drops, fake_rhythm.state = 1, "idle"
     vjc["rhythm_step"]()
     out["x_rhythm"] = (r_off == 1.0, r_on == (round(128.0 / 120.0, 3), 2.13), auto_started,
-                       params["build"] == 0.0 and params["strobe_hits"] == hits0 + 1 and not s.commands.empty()
+                       params["build"] == 0.0 and int(params.get("drop_fx", 0)) == hits0 + 1
                        and "DROP" in c["scenes"]["msg"].get())
     while not s.commands.empty():
         s.commands.get_nowait()
@@ -6402,9 +6532,9 @@ def gui_expand_steps(c, s, out) -> None:
     phase_at("build")
     pump(0.25)
     started = "montee" in c["scenes"]["msg"].get().lower() and params["build"] > 0.0
-    hits_before = params["strobe_hits"]
+    hits_before = int(params.get("drop_fx", 0))
     phase_at("peak")
-    dropped = (params["build"] == 0.0 and params["strobe_hits"] == hits_before + 1 and not s.commands.empty()
+    dropped = (params["build"] == 0.0 and int(params.get("drop_fx", 0)) == hits_before + 1
                and params["strobe_why"] == "drop (passage au pic)" and "DROP" in c["scenes"]["msg"].get())
     phase_at(None)
     phase_at("build")
@@ -12175,7 +12305,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -12187,7 +12317,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
@@ -12203,7 +12333,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render"),
+               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),

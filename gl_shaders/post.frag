@@ -44,6 +44,8 @@ uniform float u_trans;          // transition de scene : progression 0 -> 1 (-1 
 uniform float u_trans_kind;     // 0 = fondu enchaine, 1 = zoom avec aberration
 uniform sampler2D u_trans_tex;  // image finale d'avant le changement de scene
 uniform float u_flash;        // transition du VJ : 1 -> 0 en ~0,5 s (flash blanc + bandes de glitch)
+uniform vec4  u_drop_uv;      // Drop (core/drop.py) : zoom (> 0 grossit), secousse x, y (uv), aspiration (> 0 vers le centre, < 0 expulsion)
+uniform vec4  u_drop_fx;      // Drop : tranches decalees 0..1, negatif 0..1, graine des tranches, -
 
 // Intensite effective de chaque effet (interrupteur x intensite x intensite globale), une fois par
 // couche : x = wobble, y = ripple, z = aberration chromatique, w = glitch. Avec des reglages identiques
@@ -234,13 +236,29 @@ vec2 comp_uv(vec2 uv) {
     return clamp(p, 0.0, 1.0);
 }
 
+vec2 drop_uv(vec2 p) {                       // Drop : coup de zoom, secousse, aspiration, tranches (rien quand tout est a 0)
+    if (abs(u_drop_uv.x) + abs(u_drop_uv.y) + abs(u_drop_uv.z) + abs(u_drop_uv.w) + u_drop_fx.x < 1e-5) return p;
+    float aspect = u_res.x / u_res.y;
+    vec2 q = (p - 0.5) * vec2(aspect, 1.0);
+    q /= 1.0 + u_drop_uv.x;                                  // zoom : on lit plus pres du centre, l'image grossit
+    float r = length(q);
+    q *= 1.0 + u_drop_uv.w * (1.0 - smoothstep(0.0, 0.9, r)) * 1.6;   // aspiration : le centre de l'image est etire vers l'exterieur, le pourtour reste
+    p = q / vec2(aspect, 1.0) + 0.5 + u_drop_uv.yz;
+    if (u_drop_fx.x > 0.001) {                                // fracture : 12 grandes tranches decalees, chacune dans son sens
+        float band = floor(p.y * 12.0);
+        float h = hash(vec2(band, u_drop_fx.z));
+        p.x += (h - 0.5) * 0.32 * u_drop_fx.x * step(0.25, h);
+    }
+    return clamp(p, 0.0, 1.0);
+}
+
 vec3 hue_rotate(vec3 c, float a) {           // rotation autour de l'axe du gris (1,1,1)
     vec3 k = vec3(0.57735027);
     return c * cos(a) + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - cos(a));
 }
 
 void main() {
-    cuv = comp_uv(v_uv);
+    cuv = drop_uv(comp_uv(v_uv));
     // Halo holographique: deformation du fond + lumiere (jamais sur le logo: pose dessus, intact).
     vec2 disp = vec2(0.0);
     vec3 light = vec3(0.0);
@@ -256,6 +274,9 @@ void main() {
 
     if (abs(u_hue) > 0.001) {
         col = clamp(hue_rotate(col, u_hue), 0.0, 1.0);
+    }
+    if (u_drop_fx.y > 0.001) {                              // Drop « negatif »
+        col = mix(col, 1.0 - col, u_drop_fx.y);
     }
     if (u_trail > 0.001) {                                  // trainee : l'image precedente (finale) s'estompe de u_trail par image
         col = max(col, texture(u_prev, gl_FragCoord.xy / u_res).rgb * u_trail);

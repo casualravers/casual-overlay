@@ -111,6 +111,7 @@ def panic(params: dict) -> list[str]:
         changed.append("bg_mode")
     params["strobe_hits"] = int(params.get("strobe_hits", 0))                       # pas d'eclair en attente
     params["foudre_clear"] = int(params.get("foudre_clear", 0)) + 1                 # la foudre en cours est videe
+    params["drop_clear"] = int(params.get("drop_clear", 0)) + 1                     # l'impact du Drop en cours est coupe net
     return changed
 
 
