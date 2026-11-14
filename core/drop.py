@@ -23,7 +23,7 @@ STYLES = ("onde", "coup", "fracture", "negatif", "implosion")
 DURATION = 2.0               # secondes : au-dela, plus rien (valeurs neutres)
 BURST_S = 1.5                # duree de la rafale d'effets
 FADE_FROM = 0.7              # part de DURATION a partir de laquelle tout s'eteint en douceur (garantit le neutre exact a DURATION)
-BASE_FORCE = (0.6, 0.8, 0.8, 0.5)      # rafale commune : ondulation, onde de choc, aberration, glitch (ordre de u_fx_bg / u_fx_logo)
+BASE_FORCE = (0.3, 0.3, 0.5, 0.3)      # rafale commune : ondulation, onde de choc, aberration, glitch (ordre de u_fx_bg / u_fx_logo)
 
 
 @dataclass(frozen=True)
@@ -96,8 +96,8 @@ class DropFx:
             force[2] += 1.2 * burst
             flash = 0.55 * math.exp(-t / 0.15)
         elif st == "coup":
-            zoom = 0.16 * math.exp(-t / 0.22) * math.cos(t * 2.0 * math.pi * 3.0)
-            amp = 0.012 * math.exp(-t / 0.25)
+            zoom = 0.28 * math.exp(-t / 0.22) * math.cos(t * 2.0 * math.pi * 3.0)
+            amp = 0.018 * math.exp(-t / 0.25)
             shake = (amp * math.sin(t * 73.0 + self.seed), amp * math.cos(t * 61.0 + self.seed))
             flash = 0.4 * math.exp(-t / 0.1)
         elif st == "fracture":
@@ -106,13 +106,13 @@ class DropFx:
             force[2] += 1.5 * burst
             flash = 0.2 * math.exp(-t / 0.08)
         elif st == "negatif":
-            invert = 1.0 if t < 0.1 else math.exp(-(t - 0.1) / 0.15)
-            hue = math.pi * (1.0 - _smooth(0.0, 1.3, t))
+            invert = 1.0 - _smooth(0.16, 0.22, t)                        # coup sec : pas de fondu par le gris
+            hue = math.pi * (1.0 - _smooth(0.0, 0.9, t))                 # retour en tournant de teinte, sans s'attarder
         elif st == "implosion":
             if t < 0.3:
-                implode = 0.5 * (t / 0.3) ** 2
+                implode = 0.8 * (t / 0.3) ** 2
             else:
-                implode = 0.5 * math.exp(-(t - 0.3) / 0.12) * math.cos((t - 0.3) * 25.0)
+                implode = 0.8 * math.exp(-(t - 0.3) / 0.12) * math.cos((t - 0.3) * 25.0)
                 flash = 0.6 * math.exp(-(t - 0.3) / 0.12)
         if foudre:
             flash = 0.0

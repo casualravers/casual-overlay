@@ -307,25 +307,26 @@ def install(c):
         scene_msg.set(f"Montee sur {float(params.get('build_time', 16.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
         build_tick()
 
+    def fire_drop() -> None:
+        """L'impact du Drop (issue #89) : un style tire au hasard par le rendu (core/drop.py : onde, coup, fracture, negatif, implosion) + une
+        rafale d'effets ~1,5 s ; le flash blanc est dose par le style (jamais en mode Foudre, ou la grande decharge part a la place)."""
+        params["drop_fx"] = int(params.get("drop_fx", 0)) + 1
+        params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1              # mode Foudre : grande decharge a pleine profondeur
+
     def do_drop() -> None:
-        """Relache d'un coup : flash blanc et tout retombe aux reglages normaux."""
-        was = build_ui["t0"] is not None
+        """Le Drop : relache la montee s'il y en a une, et lance TOUJOURS l'impact complet (meme sans montee en cours)."""
         rhythm_ui["manual_build"] = False
         build_ui["t0"] = None
         params["build"] = 0.0
         rhythm_ui["auto_build"] = False
-        if was:
-            if params.get("strobe_kind") != "foudre":                              # mode Foudre : la grande decharge remplace le flash blanc plein ecran
-                s.commands.put("flash")
-            params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
-            params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1          # mode Foudre : grande decharge a pleine profondeur
+        fire_drop()
         btn = vj_ui.get("build")
         if btn is not None:
             try:
                 btn.configure(text=build_text())
             except tk.TclError:
                 vj_ui.pop("build", None)
-        scene_msg.set("DROP" if was else "Pas de montee en cours")
+        scene_msg.set("DROP")
 
     def master_box() -> tk.Frame:
         """L'espace de controle global est construit une seule fois (parent persistant : la barre) puis replace a droite de chaque
@@ -498,7 +499,11 @@ def install(c):
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
                         "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
             drop = button(f, "Drop", do_drop, row=2, column=3, sticky="w", padx=6, pady=(3, 0))
-            Tooltip(drop, "Relache la montee d'un coup : flash blanc (mode Foudre : grande decharge a pleine profondeur), tout retombe aux reglages normaux.")
+            Tooltip(drop, "Drop : un impact qui change a chaque fois (onde de choc geante, coup de zoom, fracture, negatif ou implosion, jamais deux fois "
+                          "le meme de suite) + une rafale d'effets d'environ 1,5 s. Marche aussi sans montee en cours ; relache la montee s'il y en a une. "
+                          "Mode Foudre : pas de flash blanc, grande decharge a la place.")
+            slider(f, (6, 0), "drop_amount", "Drop", 0, 150, 5, 100.0, "%", 100,
+                   "Force de l'impact du Drop (0 % = aucun effet, 100 % = normal, jusqu'a 150 %). Double-clic sur le nom : retour a 100 %.")
             sinfo = tk.Label(f, text="strobe auto : -", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", justify="left", wraplength=420)
             dark = slider(f, (4, 0), "strobe_dark", "Sombre", 5, 100, 5, 100.0, "%", 100,
                           "Les eclairs ne blanchissent que les parties SOMBRES de l'image : seuil de luminosite (100 % = toute l'image, plus bas = seulement ce qui est plus "
@@ -978,11 +983,8 @@ def install(c):
             do_drop()                                        # relache la montee : flash + eclair
             rhythm_ui["t_drop"] = time.monotonic()
         elif auto and not recent:
-            if params.get("strobe_kind") != "foudre":
-                s.commands.put("flash")
             params["strobe_why"] = why
-            params["strobe_hits"] = int(params.get("strobe_hits", 0)) + 1
-            params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1
+            fire_drop()                                      # meme impact que le bouton Drop
             rhythm_ui["t_drop"] = time.monotonic()
             scene_msg.set("DROP detecte")
         elif not auto:

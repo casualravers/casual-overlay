@@ -22,6 +22,7 @@ from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _uni
 from core.params import DEFAULT_PARAMS
 from core import reaction
 from core.recording import cover_uv as fit_cover, fit_rect
+from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.reaction import ReactionDiffusion
 from engine.video import LogoVideo
@@ -82,6 +83,17 @@ class NoiseDrive:
 
     def beat(self) -> float:
         return math.exp(-self.since / 0.2)
+
+
+def drop_audio(vecs, dv) -> list:
+    """Audio vu par les quatre effets d'une couche pendant un Drop : ondulation sur la rafale, onde de choc qui part de l'instant du drop,
+    glitch et aberration sur le « kick » du drop (chaque vecteur : basses, aigus, kick, secondes depuis le kick)."""
+    out = [list(map(float, v)) for v in vecs]
+    out[0][0] = max(out[0][0], 0.8 * dv.boost)
+    out[1][2], out[1][3] = max(out[1][2], dv.kick), min(out[1][3], dv.since)
+    out[2][2] = max(out[2][2], dv.kick)
+    out[3][2] = max(out[3][2], dv.kick)
+    return out
 
 
 def layer_effects(params: dict) -> tuple[list[float], list[float]]:
@@ -298,6 +310,9 @@ class Renderer:
         self._trans_kind = 0.0
         self.trans_tex = self.trans_fbo = None    # image finale d'avant le changement de scene, figee
         self.flash_t = -10.0              # instant (time.monotonic) du dernier flash de transition du VJ
+        self.drop = DropFx()              # effet du Drop (issue #89) : style tire au hasard + rafale d'effets, lance par le compteur drop_fx
+        self._dropfx_seen: int | None = None
+        self.drop_clock = time.monotonic  # horloge du Drop (remplacee par les tests)
         self.noise_out = (0.0, 0.0)      # (houle, coup) x force, pour l'indicateur de la GUI
         self._melt_t = 0.0          # cycles de fonte ecoules (partie entiere = cycles complets)
         self._melt_clock = 0.0      # secondes (derive du bruit)
@@ -447,6 +462,20 @@ class Renderer:
     def start_transition(self, kind: str = "fade") -> None:
         """Changement de scene : la prochaine image fige l'image finale d'avant et la fond dans la nouvelle (ignore si `trans_time` = 0)."""
         self._trans_pending = kind
+
+    def _drop_values(self, p: dict):
+        """Effet du Drop a cet instant : un increment du compteur `drop_fx` lance un drop (style tire au hasard), puis ses courbes."""
+        n = int(p.get("drop_fx", 0))
+        if self._dropfx_seen is None:
+            self._dropfx_seen = n                      # au lancement : le compteur deja la ne declenche rien
+        if n != self._dropfx_seen:
+            self._dropfx_seen = n
+            self.drop.trigger(self.drop_clock())
+        return self.drop.values(self.drop_clock(), float(p.get("drop_amount", 1.0)), foudre=p.get("strobe_kind") == "foudre")
+
+    @staticmethod
+    def _drop_audio(vecs, dv) -> list:
+        return drop_audio(vecs, dv)
 
     def _strobe(self, p: dict, state: dict) -> float:
         """Eclair blanc court du strobe : 1 -> 0 en 70 ms. Declenche a chaque appui, puis (arme / maintenu) en cadence fixe ou
@@ -1035,6 +1064,13 @@ class Renderer:
 
         # Passe 2 : post-traitement de chaque couche avec ses effets, logo par-dessus, vers la cible.
         fx_bg, fx_logo = layer_effects(p)
+        dv = self._drop_values(p)
+        if dv is not DROP_NEUTRAL:
+            # Drop (issue #89) : la rafale force et pousse les quatre effets des deux couches, et leur fait voir un « kick » a l'instant du drop.
+            mult = 1.0 + 1.5 * dv.boost
+            fx_bg = [max(v, f) * mult for v, f in zip(fx_bg, dv.force)]
+            fx_logo = [max(v, f) * mult for v, f in zip(fx_logo, dv.force)]
+            au_bg_fx, au_logo_fx = self._drop_audio(au_bg_fx, dv), self._drop_audio(au_logo_fx, dv)
         # Decorreles, les ondes du logo partent de son centre (origine GL = bas gauche) et son glitch
         # tire d'autres bandes; lies, tout est identique au fond (comme un seul post-traitement).
         center = (0.5, 0.5) if linked else (rect[0], 1.0 - rect[1])
@@ -1056,13 +1092,15 @@ class Renderer:
             if uname in pp:
                 pp[uname].write(np.array([[float(x) for x in v] for v in vecs], dtype="f4").tobytes())
         flash = max(0.0, 1.0 - (time.monotonic() - self.flash_t) / 0.55)
-        self._set(pp, "u_flash", flash * flash)
+        self._set(pp, "u_flash", max(flash * flash, dv.flash))
+        self._set(pp, "u_drop_uv", (float(dv.zoom), float(dv.shake[0]), float(dv.shake[1]), float(dv.implode)))
+        self._set(pp, "u_drop_fx", (float(dv.slices), float(dv.invert), float(dv.seed), 0.0))
         self._set(pp, "u_strobe", strobe_v)
         self._set(pp, "u_strobe_dark", self._dark_threshold(p))
         self._set(pp, "u_foudre", _unit(p["foudre_amount"], 0.0, 1.5) if bolt_on else 0.0)
         self._set(pp, "u_foudre_tex", 7)
         self._set(pp, "u_foudre_color", hex_to_rgb(str(p["foudre_color"])))
-        self._set(pp, "u_hue", math.radians(hue_deg))
+        self._set(pp, "u_hue", math.radians(hue_deg) + float(dv.hue))
         self._set(pp, "u_bg_level", bg_level)
         # Composition : symetrie / kaleidoscope, pixelisation, deformation globale (UV) et trainee (image precedente)
         self._set(pp, "u_csym", float(int(round(float(p["comp_sym"])))))
