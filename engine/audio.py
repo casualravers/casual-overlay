@@ -23,7 +23,9 @@ from engine.deps import np, sd
 
 # Taille du bloc de capture = pas d'analyse (le fil d'analyse traite chaque bloc recu). 256 a 48 kHz = 5,3 ms (issue #110, fin du lot 3) ;
 # `CASUAL_AUDIO_BLOCK=512` (secours : carte son qui crepite) ; repli automatique a 512 si la carte deborde (voir `OverflowCounter`).
-CAPTURE_BLOCK = 256
+# 512 par defaut : a 256, une carte son en WASAPI (poste de dev, 14/11/2026) perdait des blocs sans lever `input_overflow` (enregistrement : 1221 trous,
+# 54 s de silence sur 124 s ; 2 trous la veille a 512). `CASUAL_AUDIO_BLOCK=256` garde l'essai a 256, avec le repli a 512 (pertes vues par `block_gap`).
+CAPTURE_BLOCK = 512
 OVERFLOW_MAX = 5                  # debordements toleres ...
 OVERFLOW_WINDOW_S = 60.0          # ... sur cette fenetre ; au-dela, la session rouvre l'entree avec des blocs de 512 (une fois)
 
@@ -32,6 +34,11 @@ def capture_block() -> int:
     """Taille de bloc a utiliser : `CASUAL_AUDIO_BLOCK` s'il vaut 256 ou 512, sinon `CAPTURE_BLOCK`."""
     val = os.environ.get("CASUAL_AUDIO_BLOCK", "").strip()
     return int(val) if val in ("256", "512") else CAPTURE_BLOCK
+
+
+def block_gap(prev_end, t_end: float, frames: int, rate: int) -> bool:
+    """Bloc perdu sans drapeau du pilote : l'horodatage du bloc saute de plus de deux blocs depuis le precedent (une gigue d'un bloc est normale)."""
+    return prev_end is not None and (t_end - prev_end) > 2.5 * frames / rate
 
 
 class OverflowCounter:
@@ -512,6 +519,7 @@ class SoundDeviceInput:
         self.ring = ring
         self.tap = None                  # point d'ecoute de l'enregistrement : tap(bloc stereo float32 copie, instant de fin) ; None = aucun cout
         self.tap_errors = 0
+        self._prev_end = None            # fin du bloc precedent (horloge des blocs) : un saut = bloc perdu, meme sans drapeau du pilote
         self.stream = sd.InputStream(
             device=device, channels=self.channels, samplerate=self.rate, blocksize=blocksize,
             dtype="float32", latency="low", callback=self._callback)
@@ -523,6 +531,11 @@ class SoundDeviceInput:
             if getattr(status, "input_overflow", False):             # seulement les blocs perdus (pas les autres alertes, au demarrage du flux)
                 self.overflows.note(now)
         t_end = now - capture_age(time_info, frames, self.rate)
+        oc = getattr(self, "overflows", None)
+        if oc is not None and block_gap(getattr(self, "_prev_end", None), t_end, frames, self.rate) and not getattr(status, "input_overflow", False):
+            self.dropped = getattr(self, "dropped", 0) + 1
+            oc.note(now)
+        self._prev_end = t_end
         self.ring.write(indata[:, 0] if self.channels == 1 else indata.mean(axis=1), t_end)
         tap = self.tap
         if tap is not None:              # enregistrement en cours : le bloc stereo est copie (le pilote reutilise son tampon) ; une erreur ici ne touche jamais l'analyse
