@@ -312,6 +312,7 @@ def install(c):
         rafale d'effets ~1,5 s ; le flash blanc est dose par le style (jamais en mode Foudre, ou la grande decharge part a la place)."""
         params["drop_fx"] = int(params.get("drop_fx", 0)) + 1
         params["foudre_drop"] = int(params.get("foudre_drop", 0)) + 1              # mode Foudre : grande decharge a pleine profondeur
+        rhythm_ui["t_drop"] = time.monotonic()                                     # un detecteur qui voit ensuite le meme drop ne le relance pas
 
     def do_drop() -> None:
         """Le Drop : relache la montee s'il y en a une, et lance TOUJOURS l'impact complet (meme sans montee en cours)."""
@@ -497,7 +498,7 @@ def install(c):
             bb = button(f, build_text(), start_build, row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["build"] = bb
             Tooltip(bb, "Montee : en quelques secondes, la reactivite, le strobe (de 0,5 a 16 Hz, lent au depart) et la teinte (jusqu'a +120 degres) montent progressivement. "
-                        "Un deuxieme appui (ou Drop) relache d'un coup : flash blanc et retour aux reglages normaux.")
+                        "Un deuxieme appui (ou Drop) relache d'un coup : impact du Drop et retour aux reglages normaux.")
             drop = button(f, "Drop", do_drop, row=2, column=3, sticky="w", padx=6, pady=(3, 0))
             Tooltip(drop, "Drop : un impact qui change a chaque fois (onde de choc geante, coup de zoom, fracture, negatif ou implosion, jamais deux fois "
                           "le meme de suite) + une rafale d'effets d'environ 1,5 s. Marche aussi sans montee en cours ; relache la montee s'il y en a une. "
@@ -540,7 +541,7 @@ def install(c):
             cpick = tk.Button(crow, text="...", command=pick_color, padx=6)
             cpick.pack(side="left", padx=(6, 0))
             Tooltip(cpick, "Couleur du halo de la foudre (le coeur est toujours blanc).")
-            sinfo.grid(row=6, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
+            sinfo.grid(row=7, column=0, columnspan=6, sticky="w", padx=6, pady=(6, 0))
             vj_ui["strobe_info"] = sinfo
             Tooltip(sinfo, "Strobe auto : la raison de son dernier eclair (accent de groove, kick au pic, drop, montee...). Mode Foudre : profondeur et charge de l'arbre.")
             vj_ui["foudre_widgets"] = [*reach, *amount, cname, centry, cpick]
@@ -977,10 +978,10 @@ def install(c):
         auto = auto_on()
         if build_ui["t0"] is not None and rhythm_ui.get("manual_build"):
             return                                           # montee lancee a la main : les detecteurs ne la relachent pas
-        recent = time.monotonic() - rhythm_ui.get("t_drop", -99.0) < 4.0       # deux detecteurs voient le meme drop : un seul flash
+        recent = time.monotonic() - rhythm_ui.get("t_drop", -99.0) < 4.0       # deux detecteurs (ou le bouton puis un detecteur) voient le meme drop : un seul impact
         if auto and build_ui["t0"] is not None:
             params["strobe_why"] = why
-            do_drop()                                        # relache la montee : flash + eclair
+            do_drop()                                        # relache la montee : impact du Drop
             rhythm_ui["t_drop"] = time.monotonic()
         elif auto and not recent:
             params["strobe_why"] = why

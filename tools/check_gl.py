@@ -1948,6 +1948,20 @@ def check_drop_render() -> None:
     none_ = int(np.abs(frame() - base).max())
     check(none_ <= 2, "dosage 0 : le drop ne change rien", str(none_))
     p["drop_amount"] = 1.0
+    clock[0] += 5.0
+    p["drop_fx"] += 1
+    clock[0] += 0.05
+    hit = float(np.abs(frame() - base).mean())
+    gl.panic(p)
+    clock[0] += 0.02
+    cut = int(np.abs(frame() - base).max())
+    check(hit > 6.0 and cut <= 2, "PANIQUE pendant un drop : l'image redevient normale tout de suite", f"{hit:.1f} {cut}")
+    r2 = gl.Renderer(ctx, size, None)
+    r2.drop_clock = lambda: clock[0]
+    r2.video_tex.write(np.ascontiguousarray(bg).tobytes())
+    p2 = dict(p, drop_fx=5, drop_clear=3)
+    r2.draw(fbo, size, idle, p2, clock[0])
+    check(r2.drop.count == 0, "au lancement, un compteur drop_fx deja non nul ne declenche rien", str(r2.drop.count))
 
 
 def check_render() -> None:
@@ -3038,6 +3052,17 @@ def check_drop() -> None:
     e2.trigger(0.0, style="onde")
     e2.trigger(0.5, style="coup")
     check(e2.values(0.55).zoom > 0 and e2.style == "coup", "un drop pendant un autre repart de zero avec le nouveau style")
+    e2.clear()
+    check(e2.values(0.6) is neutral, "clear (PANIQUE): le drop en cours est coupe net")
+    e3 = dr.DropFx()
+    e3.trigger(0.0, style="negatif")
+    check(e3.values(0.05, foudre=True).invert <= 0.4 < e3.values(0.05).invert, "mode Foudre: le negatif est attenue (pas de blanc plein ecran)")
+    e3.trigger(0.0, style="implosion")
+    check(max(abs(e3.values(t_ / 100.0, amount=1.5).implode) for t_ in range(1, 200)) <= 0.85, "implosion a 150 %: aspiration plafonnee (l'image ne se replie pas)")
+    from core import controls as ctl
+    pp = {"drop_clear": 2}
+    ctl.panic(pp)
+    check(pp["drop_clear"] == 3, "panique: coupe l'effet du Drop en cours (compteur drop_clear +1)")
 
 
 def check_capture_block() -> None:
@@ -6266,7 +6291,7 @@ def gui_expand_steps(c, s, out) -> None:
     fx0 = int(params.get("drop_fx", 0))
     drops0 = params["foudre_drop"]
     vjc["drop"]()
-    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, int(params.get("drop_fx", 0)) == fx0 + 1, True, params["foudre_drop"] == drops0 + 1)
+    out["x_build"] = (0.0 < started <= 1.0, params["build"] == 0.0, int(params.get("drop_fx", 0)) == fx0 + 1, sc["msg"].get() == "DROP", params["foudre_drop"] == drops0 + 1)
     # issue #89 : le Drop part aussi SANS montee en cours (meme effet complet)
     fx1 = int(params.get("drop_fx", 0))
     vjc["drop"]()

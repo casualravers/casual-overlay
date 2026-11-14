@@ -312,6 +312,7 @@ class Renderer:
         self.flash_t = -10.0              # instant (time.monotonic) du dernier flash de transition du VJ
         self.drop = DropFx()              # effet du Drop (issue #89) : style tire au hasard + rafale d'effets, lance par le compteur drop_fx
         self._dropfx_seen: int | None = None
+        self._dropclear_seen: int | None = None
         self.drop_clock = time.monotonic  # horloge du Drop (remplacee par les tests)
         self.noise_out = (0.0, 0.0)      # (houle, coup) x force, pour l'indicateur de la GUI
         self._melt_t = 0.0          # cycles de fonte ecoules (partie entiere = cycles complets)
@@ -465,6 +466,11 @@ class Renderer:
 
     def _drop_values(self, p: dict):
         """Effet du Drop a cet instant : un increment du compteur `drop_fx` lance un drop (style tire au hasard), puis ses courbes."""
+        c = int(p.get("drop_clear", 0))
+        if c != self._dropclear_seen:
+            if self._dropclear_seen is not None:
+                self.drop.clear()                      # PANIQUE : le drop en cours est coupe net
+            self._dropclear_seen = c
         n = int(p.get("drop_fx", 0))
         if self._dropfx_seen is None:
             self._dropfx_seen = n                      # au lancement : le compteur deja la ne declenche rien

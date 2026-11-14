@@ -76,6 +76,10 @@ class DropFx:
         self.count += 1
         return self.style
 
+    def clear(self) -> None:
+        """Coupe net le drop en cours (PANIQUE) : valeurs neutres jusqu'au prochain `trigger`."""
+        self.t0 = None
+
     def values(self, now: float, amount: float = 1.0, foudre: bool = False) -> DropValues:
         """Ce que le rendu applique a l'instant `now`. `amount` dose tout (0 = rien) ; `foudre` : pas de flash blanc."""
         if self.t0 is None or amount <= 0.0:
@@ -116,7 +120,8 @@ class DropFx:
                 flash = 0.6 * math.exp(-(t - 0.3) / 0.12)
         if foudre:
             flash = 0.0
+            invert *= 0.35                                                 # pas de blanc plein ecran en mode Foudre (fond sombre -> clair)
         k = a * fade
         return DropValues(boost=min(burst * k, 1.5), kick=kick * k, since=t, force=tuple(f * k for f in force), flash=min(flash * k, 1.0),
                           zoom=zoom * k, shake=(shake[0] * k, shake[1] * k), slices=min(slices * k, 1.0), invert=min(invert * k, 1.0),
-                          hue=hue * k, implode=implode * k, seed=self.seed)
+                          hue=hue * k, implode=max(-0.85, min(implode * k, 0.85)), seed=self.seed)    # au-dela, l'aspiration replie l'image

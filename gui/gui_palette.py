@@ -44,7 +44,7 @@ def install(c):
             ("Scene suivante", "next vj", c.vj_advance),
             ("Scene precedente", "retour back", c.back_scene),
             ("Montee", "build", c.start_build),
-            ("Drop", "lacher flash", c.do_drop),
+            ("Drop", "impact lacher", c.do_drop),
             ("Strobe : un eclair", "flash blanc", strobe_flash),
             ("Tap tempo", "bpm rythme", c.do_tap),
             ("Temps 1 : le temps qui tombe est le premier", "grille mesure phase", c.do_one),
