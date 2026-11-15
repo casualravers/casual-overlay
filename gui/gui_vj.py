@@ -696,7 +696,7 @@ def install(c):
             Tooltip(rec_btn, "Enregistre ce que la projection affiche, avec le son de l'entree audio choisie (onglet Affichage), dans un MP4 pret a poster ou a monter. "
                              "Touche E dans la fenetre de rendu. La fenetre de projection montre l'image enregistree : changer sa taille ne change pas le fichier.")
             radios(f, "rec_format", (("Vertical", "vertical"), ("Vertical HD", "vertical_hd"), ("Horizontal", "horizontal"), ("Carre", "carre")), row=0, col=2, span=4,
-                   tip="Format de l'image : vertical 1080x1920 (TikTok, Reels), vertical HD 720x1280 (plus leger : pour les looks lourds comme les cellules, qui ne tiennent pas "
+                   tip="Format de l'image : vertical 1080x1920 (TikTok, Reels ; le format de chaque lancement, fond rogne au centre), vertical HD 720x1280 (plus leger : pour les looks lourds comme les cellules, qui ne tiennent pas "
                        "30 images/s en 1080x1920 sur un GPU integre), horizontal 1920x1080, carre 1080x1080. Pris au demarrage de l'enregistrement.")
             radios(f, "rec_fps", (("30 i/s", 30), ("60 i/s", 60)), row=1, col=0, span=3,
                    tip="Images par seconde. 60 ne tient pas en 1080x1920 sur un GPU integre (l'alerte « images dupliquees » le dira) : reserve-le au vertical HD.")

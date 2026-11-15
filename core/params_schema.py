@@ -233,6 +233,9 @@ assert len({p.key for p in TABLE}) == len(TABLE), "cle en double dans la table d
 assert all(p.scope in SCOPES for p in TABLE)
 
 BY_KEY: dict[str, Param] = {p.key: p for p in TABLE}
+# Reglages qui repartent de leur defaut a chaque lancement (ni gl_params.json ni la reprise apres arret brutal ne les ramenent) :
+# l'enregistrement est toujours en vertical 1080x1920 (TikTok, Reels) ; un autre format se choisit pour la session.
+LAUNCH_DEFAULT_KEYS = ("rec_format",)
 
 
 def keys(*scopes: str) -> tuple[str, ...]:
