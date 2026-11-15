@@ -4325,6 +4325,36 @@ def check_claude_md() -> None:
     check(not bad, "pointeurs: core/, engine/, gui/, tools/, gl_shaders/ ont leur CLAUDE.md, qui ne pointe (par des liens qui se resolvent) que vers des fiches existantes", str(bad))
 
 
+def check_rec_vertical_default() -> None:
+    """Enregistrement : vertical 1080x1920 (TikTok, Reels) a chaque lancement, jamais un ancien choix ramene par la reprise ou gl_params.json."""
+    print("Enregistrement vertical par defaut")
+    import json as _json
+    import tempfile
+    from pathlib import Path as _P
+    from core import autosave as asv
+    from core import params as prm
+    from core import params_schema as ps
+    from core import recording as core_rec
+    check(ps.BY_KEY["rec_format"].default == "vertical" and core_rec.FORMATS["vertical"] == (1080, 1920),
+          "defaut: vertical 1080x1920")
+    with tempfile.TemporaryDirectory() as d:
+        snap = _P(d) / "autosave.json"
+        snap.write_text(_json.dumps({"saved_at": 0, "params": {"rec_format": "horizontal", "master": 1.5}}), encoding="utf-8")
+        rec, _msg = asv.recover_autosave(prm.load_params(), snap)
+        check(rec["rec_format"] == "vertical" and rec["master"] == 1.5,
+              "reprise apres arret brutal: les reglages reviennent, pas le format d'enregistrement (vertical)", str((rec["rec_format"], rec["master"])))
+        saved = _P(d) / "gl_params.json"
+        saved.write_text(_json.dumps({"rec_format": "carre", "master": 1.25}), encoding="utf-8")
+        old = prm.PARAMS_PATH
+        prm.PARAMS_PATH = saved
+        try:
+            lp = prm.load_params()
+        finally:
+            prm.PARAMS_PATH = old
+        check(lp["rec_format"] == "vertical" and lp["master"] == 1.25, "gl_params.json: le format sauve n'est pas repris au lancement",
+              str((lp["rec_format"], lp["master"])))
+
+
 def check_ripple_downbeat() -> None:
     """Onde de choc sur le 1er temps de la mesure (au lieu de chaque kick) : instant du dernier « 1 », remplacement du seul vecteur de l'onde de choc."""
     print("Onde de choc sur le 1er temps")
@@ -12205,7 +12235,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -12218,7 +12248,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
