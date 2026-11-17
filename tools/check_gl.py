@@ -4625,6 +4625,40 @@ def check_rd_cover() -> None:
     check(0.7 < ratio(sq) < 1.4 and float(sq.std()) > 30.0, "carre (enregistrement): proportions gardees", f"rapport {ratio(sq):.2f}")
 
 
+def check_kaleidoscope_frame() -> None:
+    """Kaleidoscope (composition, `comp_sym` = 4) dans un cadre d'un autre rapport (enregistrement vertical / carre) : le repli sort du cadre, il doit etre
+    reflechi (miroir) et non ecrase sur les bords (bandes sans variation en haut et en bas)."""
+    print("Kaleidoscope : cadre vertical, carre, paysage")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+
+    def render(size, cover):
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        r = gl.Renderer(ctx, size, None)
+        r.video_cover = cover
+        pr = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="stochastique", bg_sto_field="noise", auto_phase=0, holo_on=0.0, fx_on=[0, 0, 0, 0, 0],
+                  comp_sym=4, comp_seg=6, comp_rot=0.0, logo_path="")
+        st = {"bass": 0.4, "mid": 0.3, "high": 0.2, "rms": 0.3, "beat": 0.0, "since_beat": 5.0, "beats": 0}
+        for i in range(3):
+            r.draw(fbo, size, st, pr, i * 0.1)
+        return np.frombuffer(fbo.read(components=3, alignment=1), np.uint8).reshape(size[1], size[0], 3).astype(float).mean(axis=2)
+
+    def ratio(img):
+        """Variation horizontale / verticale dans le quart haut puis le quart bas : ~1 = motif sans direction privilegiee ; grand = bandes ecrasees (p clampe)."""
+        h = img.shape[0]
+        out = []
+        for reg in (img[: h // 4], img[-h // 4:]):
+            out.append(float(np.abs(np.diff(reg, axis=1)).mean() / max(np.abs(np.diff(reg, axis=0)).mean(), 1e-9)))
+        return out
+    for name, size, cover in (("vertical", (486, 864), True), ("carre", (600, 600), True), ("paysage 16:9", (864, 486), False)):
+        r_ = ratio(render(size, cover))
+        check(all(0.6 < v < 1.6 for v in r_), f"kaleidoscope {name}: le repli couvre tout le cadre (pas de bandes ecrasees en haut et en bas)",
+              f"variation horizontale / verticale {r_[0]:.2f} (haut) {r_[1]:.2f} (bas)")
+
+
 def check_rec_vertical_default() -> None:
     """Enregistrement : vertical 1080x1920 (TikTok, Reels) a chaque lancement, jamais un ancien choix ramene par la reprise ou gl_params.json."""
     print("Enregistrement vertical par defaut")
@@ -12618,7 +12652,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -12633,7 +12667,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover"),
+               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),

@@ -230,6 +230,7 @@ vec2 comp_uv(vec2 uv) {
         a = abs(mod(a, seg) - seg * 0.5);
         q = r * vec2(cos(a), sin(a));
         p = q / vec2(aspect, 1.0) + 0.5;
+        p = 1.0 - abs(1.0 - mod(p, 2.0));                    // le repli sort du cadre (coins d'un cadre vertical : rayon > demi-largeur) : reflechi en miroir, jamais ecrase sur le bord
     }
     return clamp(p, 0.0, 1.0);
 }
