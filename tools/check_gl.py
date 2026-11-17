@@ -4592,6 +4592,39 @@ def check_clips() -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+def check_rd_cover() -> None:
+    """Enregistrement vertical / carre : le labyrinthe (grille de simulation 16:9) est ROGNE au centre comme le fond video, pas etire dans le cadre."""
+    print("Labyrinthe : cadre d'un autre rapport pendant un enregistrement")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+
+    def render(size, cover, frames=160):
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        r = gl.Renderer(ctx, size, None)
+        r.video_cover = cover
+        pr = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe", auto_phase=0, holo_on=0.0, bg_speed=2.0, fx_on=[0, 0, 0, 0, 0],
+                  bg_rd_color1="#ffffff", bg_rd_color2="#ffffff", bg_rd_color3="#ffffff", bg_rd_ground="#000000")
+        st = {"bass": 0.4, "mid": 0.3, "high": 0.2, "rms": 0.3, "beat": 0.0, "since_beat": 5.0, "beats": 0}
+        for i in range(frames):
+            r.draw(fbo, size, st, pr, i * 0.1)
+        return np.frombuffer(fbo.read(components=3, alignment=1), np.uint8).reshape(size[1], size[0], 3).astype(float).mean(axis=2)
+
+    def ratio(img):
+        return float(np.abs(np.diff(img, axis=1)).mean() / max(np.abs(np.diff(img, axis=0)).mean(), 1e-9))
+    land = render((768, 432), False)
+    land_cover = render((768, 432), True)
+    port = render((243, 432), True)
+    sq = render((432, 432), True)
+    check(0.7 < ratio(land) < 1.4 and float(land.std()) > 30.0, "paysage 16:9: motif net et isotrope", f"rapport {ratio(land):.2f}, ecart-type {land.std():.0f}")
+    check(np.array_equal(land, land_cover), "16:9 pendant un enregistrement: rien ne change (meme image, pixel pour pixel)")
+    check(0.7 < ratio(port) < 1.4 and float(port.std()) > 30.0,
+          "vertical (enregistrement): le labyrinthe garde ses proportions (variation horizontale ~ verticale), il n'est pas etire", f"rapport {ratio(port):.2f}")
+    check(0.7 < ratio(sq) < 1.4 and float(sq.std()) > 30.0, "carre (enregistrement): proportions gardees", f"rapport {ratio(sq):.2f}")
+
+
 def check_rec_vertical_default() -> None:
     """Enregistrement : vertical 1080x1920 (TikTok, Reels) a chaque lancement, jamais un ancien choix ramene par la reprise ou gl_params.json."""
     print("Enregistrement vertical par defaut")
@@ -12585,7 +12618,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -12600,7 +12633,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips"),
+               "check_sphere_mode", "check_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),
