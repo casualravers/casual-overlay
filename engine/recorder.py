@@ -18,6 +18,7 @@ from typing import Callable
 from core import recording as core_rec
 from core import sessionlog
 from core.latency import effective_lead_ms
+from engine.clips import generate as generate_clips
 from engine.deps import moderngl, np
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # pas de fenetre de console qui clignote sous Windows
@@ -449,13 +450,17 @@ class RecordingControl:
     """Ce que la boucle GL possede : zero ou un enregistrement. La boucle appelle `frame_target` avant `Renderer.draw` et `after_draw` apres ; `toggle` /
     `start` / `stop` viennent des commandes (touche E, bouton) ; `close` a la fermeture de la projection. L'assemblage du MP4 (quelques secondes pour un
     long enregistrement) se fait dans un fil : la projection ne gele pas. Etat lu par la GUI : `s.status["rec"]` (voyant, pendant l'enregistrement),
-    `s.status["rec_done"]` (`{"path", "warning"}` une fois le fichier ecrit), `s.status["msg"]` (messages).
+    `s.status["rec_done"]` (`{"path", "warning"}` une fois le fichier ecrit), `s.status["msg"]` (messages), `s.status["rec_clips"]` (extraits automatiques,
+    reglage `rec_clips` : `{"state", "clips", "message", "txt"}`, `state` = `analyse` pendant le calcul ; calcules dans le fil d'assemblage, apres l'ecriture du MP4).
     """
 
     STATUS_EVERY_S = 0.25
 
-    def __init__(self, s, ctx, renderer, which=shutil.which, factory: Callable | None = None):
+    def __init__(self, s, ctx, renderer, which=shutil.which, factory: Callable | None = None, clips_fn: Callable | None = None):
         self.s, self.ctx, self.renderer = s, ctx, renderer
+        self._clips_fn = clips_fn or generate_clips
+        self._clips_on = False                                  # reglage `rec_clips` pris au demarrage de l'enregistrement
+        self._ffmpeg: str | None = None
         self._which = which
         self._factory = factory or (lambda ffmpeg, directory, fmt, fps, delay_ms, **kw: Recorder(ffmpeg, directory, fmt, fps, delay_ms, **kw))
         self._run: RecordingRun | None = None
@@ -504,7 +509,10 @@ class RecordingControl:
             return
         self._audio_src = src
         self._last_status = 0.0
+        self._clips_on = float(params.get("rec_clips", 0.0)) >= 0.5
+        self._ffmpeg = ffmpeg
         self.s.status.pop("rec_done", None)
+        self.s.status.pop("rec_clips", None)                    # la liste d'extraits est celle du dernier enregistrement
         self.s.status["msg"] = f"Enregistrement : {recorder.size[0]}x{recorder.size[1]} a {recorder.fps} images/s, encodeur {recorder.encoder}"
         sessionlog.event(f"Enregistrement demarre : {recorder.path} ({recorder.size[0]}x{recorder.size[1]}, {recorder.fps} i/s, {recorder.encoder}, "
                          f"audio {'oui' if audio_input is not None else 'non'})")
@@ -536,6 +544,7 @@ class RecordingControl:
         run.release()
         self.s.status.pop("rec", None)
         recorder = run.recorder
+        clips_on, ffmpeg = self._clips_on, self._ffmpeg
         if reason:
             self.s.status["msg"] = reason
 
@@ -550,6 +559,15 @@ class RecordingControl:
             else:
                 self.s.status["msg"] = warning or "Enregistrement : rien d'ecrit."
                 sessionlog.event(f"Enregistrement sans fichier : {warning}")
+            if clips_on and path and ffmpeg:
+                self.s.status["rec_clips"] = {"state": "analyse", "clips": [], "message": "Extraits : analyse...", "txt": None}
+                try:
+                    result = self._clips_fn(path, ffmpeg)
+                except Exception as exc:                    # le MP4 est deja sauve : une panne des extraits ne le touche jamais
+                    sessionlog.error("Extraits automatiques", exc)
+                    result = {"state": "erreur", "clips": [], "message": f"Extraits impossibles : {exc}", "txt": None}
+                self.s.status["rec_clips"] = result
+                self.s.status["msg"] = result["message"]
         thread = threading.Thread(target=finish, name="rec-assemble", daemon=False)          # non daemon : fermer l'appli attend la fin de l'assemblage
         self._threads = [t for t in self._threads if t.is_alive()] + [thread]
         thread.start()
