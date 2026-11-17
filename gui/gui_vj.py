@@ -6,12 +6,14 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 from __future__ import annotations
 
 from core import explain
+from core import highlights as core_hl
 from core import recording as core_rec
 from core import scenes
 from core import sessionlog
 from tkinter import colorchooser, ttk
 import audio2wave_gl as gl
 import json
+import os
 import shutil
 import icons
 import skin
@@ -200,6 +202,20 @@ def install(c):
         except tk.TclError:
             vj_ui.pop("rec_btn", None)
             vj_ui.pop("rec_label", None)
+        lb, cl_label = vj_ui.get("clips_list"), vj_ui.get("clips_label")                 # extraits automatiques du dernier enregistrement (issue #148)
+        if lb is not None and cl_label is not None:
+            try:
+                info = s.status.get("rec_clips") or {}
+                sig = (info.get("state"), info.get("message"), tuple((c["number"], c["path"]) for c in info.get("clips", [])))
+                if rec_cache.get("clips_sig") != sig:                                   # rien a refaire (et le choix de la liste est garde) tant que rien ne change
+                    rec_cache["clips_sig"] = sig
+                    lb.delete(0, "end")
+                    for c in info.get("clips", []):
+                        lb.insert("end", f"{c['number']}   {core_hl.mmss(c['start'])} - {core_hl.mmss(c['end'])}   {c['kind']}")
+                    cl_label.configure(text=info.get("message", ""))
+            except tk.TclError:
+                vj_ui.pop("clips_list", None)
+                vj_ui.pop("clips_label", None)
     vj_ui["rec_refresh"] = rec_refresh
 
     def sync_master_panel() -> None:
@@ -731,6 +747,49 @@ def install(c):
             vj_ui["rec_label"] = rec_label
             Tooltip(rec_label, "Pendant l'enregistrement : duree, taille (estimee), crete du son en dBFS (SATURE = le son a touche la pleine echelle : l'enregistrement est brut, "
                                "baisse le niveau a la source), images dupliquees (le GPU n'a pas suivi) et encodeur. Les avertissements s'affichent dessous.")
+            # Extraits automatiques (issue #148) : case, voyant d'une ligne, liste de hauteur fixe (3 lignes) ; la liste ne decale rien en se remplissant.
+            toggle(f, "rec_clips", "Extraits automatiques",
+                   "Apres l'arret d'un enregistrement de plus de 60 s, propose 3 a 5 extraits de 15 a 30 s calés sur les moments forts du son (un drop avec sa montee, ou un pic), "
+                   "prets a poster : fichiers -extrait-N.mp4, une vignette et un texte a cote de l'enregistrement. Ajoute un calcul (quelques secondes par extrait) : coupe par defaut.",
+                   row=5, column=0, columnspan=6, sticky="w", padx=6, pady=(3, 0))
+            clips_label = tk.Label(f, text="", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", width=60)
+            clips_label.grid(row=6, column=0, columnspan=6, sticky="w", padx=6)
+            vj_ui["clips_label"] = clips_label
+            clips_list = tk.Listbox(f, height=3, width=44, activestyle="none", exportselection=False, bg=a2w.GUI_BG, fg=a2w.GUI_FG, bd=0, highlightthickness=0,
+                                    selectbackground=SCENE_COLOR, selectforeground=BANNER_FG)
+            clips_list.grid(row=7, column=0, columnspan=4, sticky="we", padx=(6, 3), pady=(2, 0))
+            vj_ui["clips_list"] = clips_list
+            Tooltip(clips_list, "Les extraits du dernier enregistrement : numero (1 = le meilleur), minutage dans l'enregistrement, type (drop = un drop avec sa montee, pic = un passage fort).")
+
+            def _open_folder(folder: str) -> None:
+                try:
+                    os.startfile(folder)                                                 # Windows ; ailleurs : sans effet
+                except (AttributeError, OSError):
+                    pass
+            vj_ui["rec_open"] = _open_folder
+
+            def open_clips_dir() -> None:
+                clips = (s.status.get("rec_clips") or {}).get("clips") or []
+                folder = os.path.dirname(clips[0]["path"]) if clips else core_rec.resolve_dir(str(params.get("rec_dir", core_rec.DEFAULT_DIR)))
+                vj_ui["rec_open"](folder)                                                # remplacable par les tests : jamais d'explorateur ouvert pendant les verifications
+
+            def discard_clip() -> None:
+                info = s.status.get("rec_clips") or {}
+                sel = clips_list.curselection()
+                if not sel or sel[0] >= len(info.get("clips", [])):
+                    return
+                clips = list(info["clips"])
+                core_hl.discard_clip(clips.pop(sel[0]))
+                s.status["rec_clips"] = {**info, "clips": clips, "message": f"{len(clips)} extrait(s) pret(s)" if clips else "Extraits : tous jetes."}
+                rec_refresh()
+            side = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
+            side.grid(row=7, column=4, columnspan=2, sticky="nw", padx=3, pady=(2, 0))
+            open_btn = button(side, "Ouvrir le dossier", open_clips_dir, row=0, column=0, sticky="we")
+            open_btn.configure(width=16)
+            Tooltip(open_btn, "Ouvre le dossier des extraits (celui de l'enregistrement).")
+            drop_btn = button(side, "Jeter", discard_clip, row=1, column=0, sticky="we", pady=(3, 0))
+            drop_btn.configure(width=16)
+            Tooltip(drop_btn, "Supprime les fichiers de l'extrait choisi dans la liste (video et vignette).")
             rec_refresh()
 
         new_tab("Rec", fill_8)
