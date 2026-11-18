@@ -3021,8 +3021,29 @@ def check_capture_block() -> None:
         au.SoundDeviceInput(17, au.RingBuffer(48000))
     finally:
         au.sd = real_sd
-    check(au.CAPTURE_LATENCY_S == 0.03 and FakeSd.opened.get("latency") == au.CAPTURE_LATENCY_S and FakeSd.opened.get("blocksize") == au.CAPTURE_BLOCK,
-          "tampon: l'entree s'ouvre avec 30 ms de tampon (pas « low ») et le bloc courant", str(FakeSd.opened.get("latency")))
+    inp_ = None
+    au.sd = FakeSd
+    try:
+        inp_ = au.SoundDeviceInput(17, au.RingBuffer(48000))
+    finally:
+        au.sd = real_sd
+    check(au.CAPTURE_LATENCY_S == 0.1 and FakeSd.opened.get("latency") == au.CAPTURE_LATENCY_S and FakeSd.opened.get("blocksize") == au.CAPTURE_BLOCK,
+          "tampon: l'entree s'ouvre avec 100 ms de tampon (pas « low » : a 22 ms, 2,3 s perdues sur 15 sous charge ; a 30 ms, 0,2 s) et le bloc courant", str(FakeSd.opened.get("latency")))
+    check(inp_ is not None and inp_.latency_ms <= au.ANNOUNCED_LATENCY_CAP_MS + 1e-9 and au.ANNOUNCED_LATENCY_CAP_MS == 25.0,
+          "tampon: la latence annoncee (avance automatique, repli sans horodatage) reste celle d'un tampon court : le tampon de securite n'ajoute pas de retard de livraison",
+          str(getattr(inp_, "latency_ms", None)))
+    FakeSd.InputStream.__init__.__defaults__ = None
+    class ShortSd(FakeSd):
+        class InputStream(FakeSd.InputStream):
+            def __init__(self, **kw):
+                super().__init__(**kw)
+                self.latency = 0.012
+    au.sd = ShortSd
+    try:
+        short_ = au.SoundDeviceInput(17, au.RingBuffer(48000))
+    finally:
+        au.sd = real_sd
+    check(abs(short_.latency_ms - 12.0) < 1e-6, "tampon: une latence deja plus courte que le plafond est rendue telle quelle", str(short_.latency_ms))
     # --- bloc perdu sans drapeau du pilote (WASAPI) : vu au saut de l'horodatage des blocs
     r_ = 48000
     check(not au.block_gap(None, 1.0, 256, r_) and not au.block_gap(1.0, 1.0 + 256 / r_, 256, r_)
