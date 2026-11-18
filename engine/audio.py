@@ -29,7 +29,13 @@ CAPTURE_BLOCK = 512
 # Tampon de la carte son (secondes, passe a `sd.InputStream(latency=...)`). « low » donnait 22 ms en WASAPI sur une Focusrite et perdait ~3 % du son
 # SANS drapeau ni zeros, meme sans charge (3,88 s recues sur 4) : enregistrement qui crepite. 30 ms (annonce 41 ms) : rien de perdu, meme avec le GIL
 # tenu 150 ms toutes les 0,6 s (tools : mesure du 14/11/2026). Le tampon n'ajoute pas de retard a la livraison des blocs (un bloc part des qu'il est plein).
-CAPTURE_LATENCY_S = 0.03
+# Mais SOUS CHARGE (x264 1080x1920 en arriere-plan + 3 fils Python qui tiennent le GIL, mesure du 18/11/2026 sur la Focusrite : les callbacks arrivent jusqu'a 63 ms
+# en retard) : « low » 22 ms = 2,3 s perdues sur 15, 30 ms = 0,2 s, 60 ms et plus = rien. Les enregistrements du 18/11 crepitaient surtout dans les 10 premieres
+# secondes (le demarrage du REC charge la machine : ffmpeg, cible 1080x1920) et le crepitement suivait les images dupliquees. 100 ms : marge de plus d'un callback en retard.
+CAPTURE_LATENCY_S = 0.1
+# Latence annoncee pour l'avance automatique (repli sans horodatage du pilote) : plafonnee a celle d'un tampon court (« low » = 22 ms). Le tampon de securite ne
+# retarde pas la livraison (le pilote partage reveille l'appli a chaque periode de ~10 ms) : sans plafond, l'avance estimee gonflerait de ~70 ms (non verifie au projecteur).
+ANNOUNCED_LATENCY_CAP_MS = 25.0
 OVERFLOW_MAX = 5                  # debordements toleres ...
 OVERFLOW_WINDOW_S = 60.0          # ... sur cette fenetre ; au-dela, la session rouvre l'entree avec des blocs de 512 (une fois)
 
@@ -560,7 +566,7 @@ class SoundDeviceInput:
 
     @property
     def latency_ms(self) -> float:
-        return float(self.stream.latency) * 1000.0
+        return min(float(self.stream.latency) * 1000.0, ANNOUNCED_LATENCY_CAP_MS)
 
 
 def capture_latency_ms(src) -> float:
