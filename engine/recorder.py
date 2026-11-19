@@ -511,7 +511,8 @@ class RecordingControl:
         run.release()
         self.s.status.pop("rec", None)
         recorder = run.recorder
-        perf_text = run.perf.summary(self.s.status.get("gpu_ms"), self.s.status.get("gpu_budget_ms"))
+        perf = getattr(run, "perf", None)
+        perf_text = perf.summary(self.s.status.get("gpu_ms"), self.s.status.get("gpu_budget_ms")) if perf is not None else "rendu : non mesure"
         clips_on, ffmpeg = self._clips_on, self._ffmpeg
         if reason:
             self.s.status["msg"] = reason
