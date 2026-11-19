@@ -5,6 +5,7 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 """
 from __future__ import annotations
 
+from core import bestof as core_bo
 from core import explain
 from core import highlights as core_hl
 from core import recording as core_rec
@@ -17,6 +18,7 @@ import os
 import shutil
 import icons
 import skin
+import threading
 import time
 import tkinter as tk
 
@@ -229,6 +231,20 @@ def install(c):
             except tk.TclError:
                 vj_ui.pop("clips_list", None)
                 vj_ui.pop("clips_label", None)
+        bo_label = vj_ui.get("bestof_label")                                              # best of de la soiree (issue #106)
+        if bo_label is not None:
+            try:
+                now = time.monotonic()
+                if now - rec_cache.get("bo_t", -99.0) > 3.0:                              # compter les fichiers du dossier : pas a chaque passage
+                    rec_cache["bo_t"] = now
+                    from engine import bestof as eb
+                    rec_cache["bo_n"] = len(eb.list_media(vj_ui["bestof_dir"]()))
+                info = s.status.get("bestof") or {}
+                text = "Best of : montage en cours..." if vj_ui.get("bestof_busy") else (info.get("message") or f"Best of : {rec_cache.get('bo_n', 0)} media(s) gardes ce soir")
+                if bo_label.cget("text") != text:
+                    bo_label.configure(text=text)
+            except tk.TclError:
+                vj_ui.pop("bestof_label", None)
     vj_ui["rec_refresh"] = rec_refresh
 
     def sync_master_panel() -> None:
@@ -822,6 +838,64 @@ def install(c):
             drop_btn = button(side, "Jeter", discard_clip, row=1, column=0, sticky="we", pady=(3, 0))
             drop_btn.configure(width=16)
             Tooltip(drop_btn, "Supprime les fichiers de l'extrait choisi dans la liste (video et vignette).")
+
+            # Best of de la soiree (issue #106) : les medias recus du site sont gardes pendant la soiree (~/.audio2wave/medias/<soiree>) ; ce bouton les monte
+            # en une video verticale sur la musique choisie, dans le dossier des enregistrements. Hauteur fixe : un voyant d'une ligne, rien ne bouge.
+            from engine import bestof as eb
+            bo_settings = core_bo.load_settings()
+            vj_ui["bestof_dir"] = eb.media_dir
+            vj_ui["bestof_build"] = eb.build
+            bo_row = tk.Frame(f, bg=a2w.GUI_PANEL_BG)
+            bo_row.grid(row=8, column=0, columnspan=6, sticky="we", padx=6, pady=(8, 0))
+
+            def music_text() -> str:
+                name = os.path.basename(bo_settings["music"]) or "aucune"
+                return "musique : " + (name if len(name) <= 28 else name[:25] + "...")
+
+            def ask_music() -> str:
+                return filedialog.askopenfilename(parent=root, title="Musique du best of", filetypes=[("Audio", "*.mp3 *.wav *.m4a *.flac *.ogg *.aac"), ("Tous les fichiers", "*.*")])
+            vj_ui["bestof_ask_music"] = ask_music
+
+            def pick_music() -> None:
+                chosen = vj_ui["bestof_ask_music"]()                                  # remplacable par les tests : jamais de fenetre bloquante
+                if chosen:
+                    bo_settings["music"] = chosen
+                    core_bo.save_settings(bo_settings)
+                    music_label.configure(text=music_text())
+
+            def run_bestof() -> None:
+                if vj_ui.get("bestof_busy"):
+                    return
+                ffmpeg = vj_ui.get("bestof_ffmpeg") or shutil.which("ffmpeg")
+                if not ffmpeg:
+                    s.status["bestof"] = {"state": "erreur", "message": "Best of : ffmpeg introuvable."}
+                    rec_refresh()
+                    return
+                folder, music = vj_ui["bestof_dir"](), bo_settings["music"]
+                out_dir = core_rec.resolve_dir(str(params.get("rec_dir", core_rec.DEFAULT_DIR)))
+                vj_ui["bestof_busy"] = True
+                s.status["bestof"] = {}
+
+                def work() -> None:
+                    try:
+                        s.status["bestof"] = vj_ui["bestof_build"](folder, music, out_dir, ffmpeg)
+                    except Exception as exc:                                          # jamais de fil mort sans message
+                        s.status["bestof"] = {"state": "erreur", "message": f"Best of impossible : {exc}"}
+                    finally:
+                        vj_ui["bestof_busy"] = False
+                threading.Thread(target=work, name="bestof", daemon=True).start()
+                rec_refresh()
+            bo_btn = button(bo_row, "Monter le best of", run_bestof, row=0, column=0)
+            bo_btn.configure(width=18)
+            Tooltip(bo_btn, "Monte une video verticale avec les medias recus du site ce soir (doodles et photos, tous, sans validation), chacun plein cadre quelques secondes, sur la musique "
+                            "choisie. Le fichier best-of-<date>.mp4 est ecrit dans le dossier des enregistrements. Les medias sont gardes tant que « Recuperer les medias » est coche.")
+            music_btn = button(bo_row, "Musique...", pick_music, row=0, column=1, padx=(6, 0))
+            Tooltip(music_btn, "Choisis la musique du best of (un fichier libre de droits : mp3, wav, m4a...). Elle fixe la duree : chaque media dure entre 1,5 et 5 s.")
+            music_label = tk.Label(bo_row, text=music_text(), bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", width=32)
+            music_label.grid(row=0, column=2, sticky="w", padx=(8, 0))
+            bo_label = tk.Label(f, text="", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG, anchor="w", width=60)
+            bo_label.grid(row=9, column=0, columnspan=6, sticky="w", padx=6)
+            vj_ui["bestof_label"] = bo_label
             rec_refresh()
 
         new_tab("Rec", fill_8)

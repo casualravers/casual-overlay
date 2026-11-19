@@ -49,8 +49,9 @@ class DoodleFeed:
     afficher), ensuite chaque nouveau fichier valide est decode et mis dans `s.doodle_queue`. Les parametres reseau sont injectables."""
 
     def __init__(self, s, config_loader=dd.load_config, post=http_post, get=http_get, poll_s: float = dd.POLL_S,
-                 clock=time.monotonic) -> None:
+                 clock=time.monotonic, saver=None) -> None:
         self.s = s
+        self._save = saver                        # saver(nom, octets) : garde le fichier d'origine pour le best of de la soiree (issue #106) ; None = rien n'est garde
         self._load, self._post, self._get = config_loader, post, get
         self.poll_s, self._clock = poll_s, clock
         self.seen = dd.Seen()
@@ -132,6 +133,11 @@ class DoodleFeed:
                 sessionlog.event(f"Doodles : fichier ignore - {name} : {exc}")
                 continue
             self.s.doodle_queue.put({"name": name, "rgba": rgba, "w": w, "h": h})
+            if self._save is not None:
+                try:
+                    self._save(name, data)
+                except Exception as exc:             # garder le media pour le best of ne doit jamais empecher de l'afficher
+                    sessionlog.event(f"Best of : media non garde ({exc})")
             self.received += 1
             sessionlog.event(f"Doodles : {name} recu ({w}x{h})")
         if error:

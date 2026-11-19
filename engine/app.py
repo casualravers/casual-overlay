@@ -10,6 +10,7 @@ from core.automation import merge_automation
 from core.autosave import clear_autosave, recover_autosave
 from core.params import load_params
 from engine.audio import RingBuffer, find_input_device
+from engine.bestof import save_media
 from engine.doodle_feed import DoodleFeed
 from engine.projection import Projection, gl_main
 from engine.session import AudioController, NoDeviceManager, Session
@@ -90,7 +91,7 @@ def run_app(args, live, live_args, render_size: tuple[int, int], gui_loader=None
     if recovery_msg:
         s.status["msg"] = recovery_msg
         print(recovery_msg, file=sys.stderr)
-    feed = DoodleFeed(s)                                  # doodles du site : le fil dort tant que la case est decochee
+    feed = DoodleFeed(s, saver=save_media)                                # doodles du site : le fil dort tant que la case est decochee
     clean = False
     try:
         feed.start()
