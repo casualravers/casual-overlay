@@ -112,6 +112,18 @@ les basses).
   image a 0,3 (le motif y evolue deux fois moins vite), 15 a 0,5, 24 a 1. `core.reaction.step_load` entre dans l'estimation de la securite GPU.
   `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
   `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, relance a la symetrie, rafale, epaisseur).
+  **Fluidite** (issue #189 ; spec : `docs/plans/2026-11-19-labyrinthe-fluide-189.md`) : le motif « claquait » a la naissance d'une tache, a la
+  soudure de deux points et a la rupture d'une ligne (une image = ~10 pas : le pont franchit le seuil 0,25 +/- 0,02 d'un coup ; un germe etait un
+  disque plein de V = 1 pose en un pas). Deux corrections : (1) **affichage lisse** : `ReactionDiffusion.smooth(alpha)` garde une copie affichee
+  (ping-pong, meme format que l'etat, une passe a la taille de la grille, cout negligeable) qui rattrape l'etat (`mix(affiche, etat, alpha)`,
+  `core.reaction.display_alpha(dt reel, bg_rd_smooth)` : tau = 0,25 s x fluidite, independant de la cadence, `dt` REEL et non multiplie par le
+  tempo : un motif fige est rejoint) ; `scene.frag` lit `display` (texture unite 6). La simulation n'est pas touchee. Grille neuve ou redimensionnee :
+  l'affichage repart de l'etat ; reactivation de la palette : recopie (alpha 1) ; relance (garde-fou, symetrie) : fondu. (2) **germes doux** :
+  profil gaussien de hauteur `SEED_PEAK` 0,4 (moitie au rayon, rien au-dela de 2 rayons, `seed_value`, meme formule dans `rd_step.frag`), la
+  simulation fait grandir la tache elle-meme ; l'etat initial (`reset`) garde ses disques pleins. **Mesure** (`check_rd_fluide`, kick toutes les
+  20 images, aire qui bascule d'un coup dans une fenetre 9 x 9 cellules) : 80 cellules sur 81 avant, ~60 avec les germes doux seuls, ~17 avec la
+  fluidite 0,5 par defaut (6 a 10 a la naissance) ; sans kick l'evolution ne fait basculer que ~7 cellules par image (pas de vrai saut). Curseur
+  « Fluidite » (`bg_rd_smooth`, 0,5 ; 0 = affichage brut). Bord : jamais plus fin que `0,7 x fwidth(V)` (grille fine sur grand ecran).
 - Les phases d'animation (`_bg_scroll`, `_bg_flip_t`) sont **integrees image par image**
   (`dt * vitesse`), pas calculees par `vitesse * temps` : changer la vitesse dans la GUI ne
   fait jamais sauter le motif.

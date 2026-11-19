@@ -180,3 +180,36 @@ def steps_for(acc: float, dt: float, speed: float, energy: float, cells: int | N
     acc += max(dt, 0.0) * STEPS_PER_S * max(speed, 0.0) * (1.0 + max(energy, 0.0))
     whole = math.floor(acc)
     return min(whole, MAX_STEPS if cells is None else max_steps(cells)), acc - whole
+
+
+# Fluidite (issue #189) : l'image affichee n'est pas l'etat brut de la simulation mais une copie qui le rattrape en douceur (lissage
+# exponentiel, une passe a la taille de la grille). Une soudure ou une rupture, qui fait franchir le seuil a un pont en une image, devient un
+# gonflement / amincissement continu. La simulation elle-meme n'est pas touchee (formes, vitesse, couches identiques).
+SMOOTH_TAU_MAX = 0.25           # constante de temps de l'affichage a bg_rd_smooth = 1, en secondes
+SEED_REACH = 2.0                # germe doux : profil gaussien coupe a deux rayons
+# Hauteur du germe doux : la simulation fait grandir la tache elle-meme (naissance continue) au lieu d'un disque plein pose d'un coup.
+# Mesure (check_rd_fluide, kicks toutes les 20 images) : plus gros saut local 80 cellules avec l'ancien disque de V = 1, 52 a 0,4 sans
+# lissage, 6 a 10 a 0,4 avec la fluidite 0,5 ; a 0,3 la tache nait encore mais plus lentement (V 0,29 apres 300 pas).
+SEED_PEAK = 0.4
+
+
+def display_alpha(dt: float, smooth: float) -> float:
+    """Part de l'ecart a l'etat que l'affichage rattrape pendant `dt` secondes (temps REEL de l'image, pas multiplie par le tempo : un motif
+    fige doit quand meme etre rejoint). `smooth` 0..1 : 0 = l'affichage suit l'etat sans retard (rendu d'avant), 1 = tau de 0,25 s."""
+    try:
+        s = min(max(float(smooth), 0.0), 1.0)
+    except (TypeError, ValueError):
+        s = 0.0
+    if not s == s or s <= 0.0:                              # nan = invalide
+        return 1.0
+    if dt <= 0.0:
+        return 0.0
+    return 1.0 - math.exp(-float(dt) / (SMOOTH_TAU_MAX * s))
+
+
+def seed_value(r: float, radius: float) -> float:
+    """V pose par un germe a `r` cellules de son centre (profil gaussien : SEED_PEAK au centre, moitie au rayon, 0 au-dela de SEED_REACH
+    rayons). Avec le lissage de l'affichage, la tache nait au centre et grandit au lieu d'apparaitre d'un coup. Meme formule que `rd_step.frag`."""
+    if radius <= 0.0 or r > SEED_REACH * radius:
+        return 0.0
+    return SEED_PEAK * math.exp(-math.log(2.0) * (r / radius) ** 2)

@@ -26,6 +26,14 @@ class ReactionDiffusion:
                      "void main() { o = texture(u_src, v_uv); }\n")      # recopie bilineaire (changement de taille de la grille)
         self.copy_prog = ctx.program(vertex_shader=vert, fragment_shader=copy_frag)
         self.copy_vao = ctx.vertex_array(self.copy_prog, [(vbo, "2f", "in_pos")])
+        smooth_frag = ("#version 330\nuniform sampler2D u_state;\nuniform sampler2D u_shown;\nuniform float u_alpha;\nin vec2 v_uv;\nout vec4 o;\n"
+                       "void main() { vec2 s = texture(u_state, v_uv).rg; vec2 d = texture(u_shown, v_uv).rg; o = vec4(mix(d, s, u_alpha), 0.0, 1.0); }\n")
+        self.smooth_prog = ctx.program(vertex_shader=vert, fragment_shader=smooth_frag)   # affichage lisse (issue #189) : rattrape l'etat
+        self.smooth_vao = ctx.vertex_array(self.smooth_prog, [(vbo, "2f", "in_pos")])
+        self.disp_tex: list = []                              # affichage lisse, ping-pong (meme format que l'etat) ; vide = pas de lissage
+        self.disp_fbo: list = []
+        self.disp_cur = 0
+        self._disp_ok = False                                 # False : le prochain lissage recopie l'etat (grille neuve ou redimensionnee)
         self._resize_t: float | None = None                   # instant du dernier changement de taille de la grille
         self.zone_tex = self.zone_fbo = None                  # carte (F, K) des zones, a la taille de la grille
         self.tex: list = []
@@ -40,9 +48,57 @@ class ReactionDiffusion:
     def texture(self):
         return self.tex[self.cur]
 
+    @property
+    def display(self):
+        """Texture a afficher : l'affichage lisse si `smooth` a deja tourne sur cette grille, sinon l'etat brut."""
+        return self.disp_tex[self.disp_cur] if self._disp_ok and self.disp_tex else self.tex[self.cur]
+
+    def smooth(self, alpha: float) -> None:
+        """Un pas de lissage de l'affichage : affiche = mix(affiche, etat, alpha) (une passe a la taille de la grille, ~80 000 cellules).
+        Grille neuve ou redimensionnee : recopie l'etat (alpha 1). Allocation impossible : l'affichage reste l'etat brut."""
+        if not self.tex:
+            return
+        if not self.disp_tex:
+            try:
+                self.disp_tex = [self.ctx.texture(self.size, 2, dtype=self.dtype) for _ in range(2)]
+                self.disp_fbo = [self.ctx.framebuffer(color_attachments=[t]) for t in self.disp_tex]
+            except Exception:
+                self.disp_tex, self.disp_fbo = [], []
+                return
+            for t in self.disp_tex:
+                t.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                t.repeat_x = t.repeat_y = True
+            self.disp_cur, self._disp_ok = 0, False
+        if not self._disp_ok:
+            alpha = 1.0
+        prev = self.ctx.fbo
+        w, h = self.size
+        dst = 1 - self.disp_cur
+        self.disp_fbo[dst].viewport = (0, 0, w, h)
+        self.disp_fbo[dst].use()
+        self.tex[self.cur].use(0)
+        self.disp_tex[self.disp_cur].use(1)
+        prog = self.smooth_prog
+        for name, value in (("u_state", 0), ("u_shown", 1), ("u_alpha", float(min(max(alpha, 0.0), 1.0)))):
+            if name in prog:
+                prog[name].value = value
+        self.smooth_vao.render(moderngl.TRIANGLE_STRIP)
+        self.disp_cur, self._disp_ok = dst, True
+        if prev is not None:
+            prev.use()
+
+    def read_display_v(self):
+        """V affiche (lisse) en float32, forme (h, w), haut en premier."""
+        w, h = self.size
+        raw = np.frombuffer(self.display.read(), dtype=np.float16 if self.dtype == "f2" else np.float32)
+        return raw.reshape(h, w, 2)[::-1, :, 1].astype(np.float32)
+
     def _alloc(self, size: tuple[int, int]) -> None:
         for obj in (*self.fbo, *self.tex, *(o for o in (self.zone_fbo, self.zone_tex) if o is not None)):
             obj.release()
+        for obj in (*self.disp_fbo, *self.disp_tex):            # l'affichage lisse suit la grille : reallouee au prochain lissage
+            obj.release()
+        self.disp_tex, self.disp_fbo, self._disp_ok = [], [], False
         self.tex, self.fbo = [], []
         self.zone_tex = self.zone_fbo = None
         # RG32F d'abord : en RG16F un increment F x (1 - U) plus petit que le demi-ulp pres de 1 est perdu et le motif se fige en un
