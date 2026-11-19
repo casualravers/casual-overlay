@@ -197,3 +197,57 @@ def audio_cut_warning(cuts: int, cut_s: float) -> str | None:
         return None
     return (f"Son : {cuts} coupure{'s' if cuts > 1 else ' '}({cut_s * 1000:.0f} ms de silence ajoute) : la carte son a perdu des blocs. "
             "Ferme les autres programmes.")
+
+
+class RenderPerf:
+    """Sante du rendu PENDANT un enregistrement (19/11/2026 : 50 % d'images dupliquees et des gels de plus d'1 s sans aucune trace de ce que faisait la boucle GL).
+
+    `read(ms)` : duree de la lecture de l'image (elle attend le GPU, en gardant le verrou Python : c'est le suspect) ; `frame(now)` : instant de chaque image rendue
+    (les ecarts). `summary(gpu_ms, budget_ms)` : une ligne pour le journal. Rien n'est garde au-dela de quelques compteurs.
+    """
+
+    SLOW_READ_MS = 50.0                  # une lecture plus longue qu'une image a 20 i/s
+    ALERT_READ_MS = 300.0                # une lecture qui gele l'interface : une ligne de journal tout de suite (au plus MAX_ALERTS par enregistrement)
+    SLOW_GAP_S = 0.066                   # deux images rendues a plus de 66 ms l'une de l'autre (moins de 15 i/s)
+    MAX_ALERTS = 8
+
+    def __init__(self) -> None:
+        self.reads = 0
+        self.read_sum = 0.0
+        self.read_max = 0.0
+        self.slow_reads = 0
+        self.frames = 0
+        self.gaps = 0
+        self.gap_max = 0.0
+        self.alerts = 0
+        self._last: float | None = None
+
+    def read(self, ms: float) -> bool:
+        """Compte une lecture ; vrai si elle merite une ligne de journal immediate."""
+        self.reads += 1
+        self.read_sum += ms
+        self.read_max = max(self.read_max, ms)
+        if ms > self.SLOW_READ_MS:
+            self.slow_reads += 1
+        if ms > self.ALERT_READ_MS and self.alerts < self.MAX_ALERTS:
+            self.alerts += 1
+            return True
+        return False
+
+    def frame(self, now: float) -> None:
+        self.frames += 1
+        if self._last is not None:
+            gap = now - self._last
+            self.gap_max = max(self.gap_max, gap)
+            if gap > self.SLOW_GAP_S:
+                self.gaps += 1
+        self._last = now
+
+    def summary(self, gpu_ms: float | None = None, budget_ms: float | None = None) -> str:
+        if not self.reads:
+            return "rendu : aucune lecture d'image"
+        text = (f"rendu : lecture de l'image moy {self.read_sum / self.reads:.1f} ms, max {self.read_max:.0f} ms, {self.slow_reads} de plus de {self.SLOW_READ_MS:.0f} ms ; "
+                f"ecart max entre images rendues {self.gap_max * 1000:.0f} ms, {self.gaps} de plus de {self.SLOW_GAP_S * 1000:.0f} ms")
+        if gpu_ms:
+            text += f" ; GPU moy {gpu_ms:.1f} ms" + (f" (budget {budget_ms:.1f} ms)" if budget_ms else "")
+        return text

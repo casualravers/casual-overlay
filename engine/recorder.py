@@ -31,130 +31,7 @@ SILENT_WARN_S = 1.0                # plus de son depuis cette duree : avertissem
 class RecorderError(Exception):
     """Un enregistrement qui ne peut pas demarrer (message destine a l'utilisateur)."""
 
-GAP_S = 0.04                       # une PERTE SIGNALEE (pilote : input_overflow, ou bloc abandonne par la file) avec plus de 40 ms d'ecart d'horodatage est comblee par du silence
-GAP_HARD_S = 1.0                   # sans signal du pilote, seul un trou de plus d'1 s (carte debranchee) est comble : un bloc livre EN RETARD (verrou Python tenu, interface
-                                   # qui gele) arrive entier juste apres, y ajouter du silence ferait glisser la fin du son (18/11/2026 : 126 trous de 35 a 61 ms, 5,2 s de silence en trop sur 162 s)
-T_FIRST_REFINE_S = 3.0             # le 1er bloc peut arriver en retard (le demarrage du REC charge la machine) : l'instant de depart se corrige sur les premieres secondes
-CHUNK_FRAMES = 1 << 16             # le silence d'un long trou est ecrit par morceaux (pas de gros tableau d'un coup)
-
-
-class RawAudioWriter:
-    """Range les blocs stereo `float32` de la capture dans un fichier brut `f32le` entrelace, sur un fil a part.
-
-    `push` est appele par le callback audio : il ne bloque jamais (file pleine = bloc perdu, compte dans `lost`). Les blocs sont dates ;
-    un bloc qui manque (file pleine, carte debranchee un instant) est remplace par du silence pour que la duree du fichier reste celle
-    de l'enregistrement, y compris en fin de fichier (jusqu'au dernier instant recu). Attributs lus par l'interface : `t_first` (instant du premier
-    echantillon, sur l'horloge des blocs), `peak` (crete absolue depuis le debut, 0..1), `frames`, `bytes_written`, `lost`.
-    """
-
-    def __init__(self, path: str, channels: int, rate: int, max_queue: int = 512):
-        self.path = path
-        self.channels = channels
-        self.rate = rate
-        self.t_first: float | None = None
-        self.peak = 0.0
-        self.frames = 0                                   # echantillons par canal ecrits (silence compris)
-        self.bytes_written = 0
-        self.lost = 0
-        self.cuts = 0                                     # coupures comblees en silence (pertes signalees, carte disparue) ...
-        self.cut_frames = 0                               # ... et leur duree en echantillons
-        self.late_blocks = 0                              # blocs livres en retard de plus de GAP_S (information : rien n'est ajoute au fichier)
-        self.late_max_s = 0.0
-        self.error: str | None = None                     # erreur d'ecriture (cle retiree, disque plein) : le fil vide la file sans bloquer
-        self._t_last_end: float | None = None             # fin du dernier bloc RECU (meme perdu)
-        self._pushed = 0                                  # echantillons recus par push (meme abandonnes), pour corriger l'instant de depart
-        self._lost_pending = False                        # un bloc a ete abandonne (file pleine) : le prochain porte la perte
-        self._closed = False
-        self._lock = threading.Lock()
-        self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
-        self._thread = threading.Thread(target=self._run, name="rec-audio", daemon=True)
-        self._thread.start()
-
-    def push(self, block, t_end: float, lost: bool = False) -> None:
-        """Appele par le callback audio (jamais bloquant). `block` : (echantillons, canaux) float32 ; `t_end` : instant de fin du bloc (celui de l'arrivee quand le
-        pilote ne date pas ses blocs) ; `lost` : le pilote a signale des blocs perdus (input_overflow) avant celui-ci."""
-        if self._closed:
-            return
-        frames = len(block)
-        self._pushed += frames
-        start = t_end - self._pushed / self.rate          # instant du premier echantillon DEDUIT de ce bloc : au plus tard (un bloc arrive jamais en avance)
-        if self.t_first is None:
-            self.t_first = t_end - frames / self.rate
-        elif not lost and not self._lost_pending and self._pushed / self.rate <= T_FIRST_REFINE_S and start < self.t_first:
-            self.t_first = start                          # le plus petit ecart = le bloc le moins retarde : l'instant le plus juste
-        self._t_last_end = t_end
-        peak = float(np.abs(block).max()) if frames else 0.0
-        if peak > self.peak:
-            self.peak = peak
-        try:
-            self._queue.put_nowait((block, t_end, lost or self._lost_pending))
-            self._lost_pending = False
-        except queue.Full:
-            self.lost += 1
-            self._lost_pending = True
-
-    @property
-    def t_last_end(self) -> float | None:
-        """Instant de fin du dernier bloc recu (None tant qu'aucun n'est arrive) : l'enregistreur s'en sert pour dire que le son a disparu."""
-        return self._t_last_end
-
-    def close(self, end_t: float | None = None) -> None:
-        """Vide la file, comble le silence de fin et ferme le fichier. `end_t` : instant de fin de l'enregistrement (le son qui a disparu en
-        cours de route est complete en silence jusque-la). Sans effet la deuxieme fois."""
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-        if end_t is not None and self.t_first is not None and (self._t_last_end is None or end_t > self._t_last_end):
-            self._t_last_end = end_t
-        self._queue.put(None)
-        self._thread.join(timeout=30)
-
-    # --- fil d'ecriture -------------------------------------------------------------------------------
-
-    def _write(self, handle, data: bytes) -> None:
-        handle.write(data)
-        self.bytes_written += len(data)
-
-    def _silence(self, handle, frames: int) -> None:
-        silence = bytes(4 * self.channels * min(frames, CHUNK_FRAMES))
-        while frames > 0:
-            k = min(frames, CHUNK_FRAMES)
-            self._write(handle, silence[:4 * self.channels * k])
-            self.frames += k
-            frames -= k
-
-    def _fill_to(self, handle, instant: float, signalled: bool = False) -> None:
-        """Ecrit du silence si le fichier est en retard sur `instant` (horloge des blocs) : de plus de `GAP_S` quand une perte est SIGNALEE, de plus de `GAP_HARD_S`
-        sinon. Un simple retard de livraison n'est pas une perte : les echantillons arrivent, le silence les ferait glisser."""
-        expected = self.t_first + self.frames / self.rate
-        gap = instant - expected
-        if gap > GAP_S and not signalled:
-            self.late_blocks += 1
-            self.late_max_s = max(self.late_max_s, gap)
-        if gap > (GAP_S if signalled else GAP_HARD_S):
-            frames = int(round(gap * self.rate))
-            self._silence(handle, frames)
-            self.cuts += 1
-            self.cut_frames += frames
-
-    def _run(self) -> None:
-        try:
-            with open(self.path, "wb") as handle:
-                while True:
-                    item = self._queue.get()
-                    if item is None:
-                        break
-                    block, t_end, lost = item
-                    self._fill_to(handle, t_end - len(block) / self.rate, lost)
-                    self._write(handle, np.ascontiguousarray(block, dtype="<f4").tobytes())
-                    self.frames += len(block)
-                if self._t_last_end is not None and self.t_first is not None:
-                    self._fill_to(handle, self._t_last_end, self._lost_pending)       # fin : le son disparu en cours de route (plus d'1 s) ou des blocs abandonnes
-        except OSError as exc:          # cle retiree, disque plein : on garde ce qui est ecrit et on vide la file (close() ne doit jamais bloquer)
-            self.error = str(exc)
-            while self._queue.get() is not None:
-                pass
+from engine.audio_capture import (CHUNK_FRAMES, GAP_HARD_S, GAP_S, T_FIRST_REFINE_S, CaptureChild, RawAudioWriter, child_command)      # noqa: E402,F401 (re-exportes : le reste du programme et les tests les prennent ici)
 
 
 _ENCODER_CACHE: dict = {}                    # (ffmpeg, encodeur) -> resultat : lancer 1 a 4 ffmpeg a chaque REC gelait la projection (fil GL)
@@ -212,7 +89,7 @@ class Recorder:
     """
 
     def __init__(self, ffmpeg: str, directory: str, fmt: str = "vertical", fps: int = 30, delay_ms: float = 40.0, audio_input=None, hardware: bool = False, *,
-                 size: tuple[int, int] | None = None, now_fn: Callable[[], datetime] = datetime.now, free_bytes: Callable[[str], int] | None = None,
+                 audio_process: bool = True, size: tuple[int, int] | None = None, now_fn: Callable[[], datetime] = datetime.now, free_bytes: Callable[[str], int] | None = None,
                  listed_encoders: Callable[[], list[str]] | None = None, test_encoder: Callable[[str], bool] | None = None):
         self.ffmpeg = ffmpeg
         self.mux_ffmpeg = ffmpeg                                  # separe pour que l'echec de l'assemblage se teste
@@ -235,7 +112,9 @@ class Recorder:
         self.duplicated = 0
         self._t0: float | None = None                             # instant de la premiere image
         self._proc = None
-        self._writer: RawAudioWriter | None = None
+        self._writer = None                                       # RawAudioWriter (dans le programme) ou CaptureChild (processus a part) : memes attributs
+        self._audio_pending = False                               # le processus de son n'est pas encore pret : aucune image n'est ecrite
+        self.audio_process = audio_process
         self._queue: queue.Queue = queue.Queue(maxsize=QUEUE_FRAMES)
         self._thread: threading.Thread | None = None
         self._video_error: str | None = None
@@ -281,17 +160,58 @@ class Recorder:
             self._cleanup(("video", "log"))
             raise RecorderError(f"ffmpeg ne demarre pas : {exc}") from exc
         if self.audio_input is not None:
-            self._writer = RawAudioWriter(self._tmp("audio"), 2, int(self.audio_input.rate))
-            self.audio_input.tap = self._writer.push
+            self._start_audio()
         self._thread = threading.Thread(target=self._video_run, name="rec-video", daemon=True)
         self._thread.start()
         self._started = True
         self._next_disk_check = self.fps                          # premiere relecture apres une seconde d'images
 
+    # --- son -------------------------------------------------------------------------------------------
+
+    def _start_audio(self) -> None:
+        """Le son va dans un processus a part (un gel du programme ne le perd plus) quand l'entree le permet (`capture_device`) ; sinon, ou si ce processus ne
+        peut pas ouvrir la carte son, dans le programme (ecoute par `tap`). Le processus demarre en arriere-plan : `due` ne rend aucune image tant qu'il n'est pas pret
+        (la projection ne gele pas, et l'image et le son partent ensemble)."""
+        inp = self.audio_input
+        device = getattr(inp, "capture_device", None)
+        if device is not None and self.audio_process:
+            try:
+                command = child_command(device, int(inp.rate), int(getattr(inp, "channels", 2)), int(getattr(inp, "blocksize", 512)),
+                                        float(getattr(inp, "capture_latency_s", 0.1)), self._tmp("audio"))
+                self._writer = CaptureChild.spawn(command, self._tmp("audio"), 2, int(inp.rate))
+                self._audio_pending = True
+                return
+            except OSError as exc:
+                sessionlog.event(f"Son de l'enregistrement : processus separe impossible ({exc}), enregistrement dans le programme")
+        self._start_audio_in_process()
+
+    def _start_audio_in_process(self) -> None:
+        self._writer = RawAudioWriter(self._tmp("audio"), 2, int(self.audio_input.rate))
+        self.audio_input.tap = self._writer.push
+        self._audio_pending = False
+
+    def _poll_audio(self, now: float) -> bool:
+        """Vrai tant qu'il faut attendre le processus de son. Pret : on continue ; echec ou delai depasse : repli sur l'ecoute dans le programme."""
+        child = self._writer
+        if not self._audio_pending:
+            return False
+        if child.state == "ready":
+            self._audio_pending = False
+            sessionlog.event("Son de l'enregistrement : capture dans un processus separe")
+            return False
+        if child.state == "failed" or child.timed_out(time.monotonic()) or not child.alive:
+            child.abandon()
+            sessionlog.event(f"Son de l'enregistrement : processus separe indisponible ({child.reason or 'delai depasse'}), enregistrement dans le programme")
+            self._start_audio_in_process()
+            return False
+        return True
+
     # --- images ----------------------------------------------------------------------------------------
 
     def due(self, now: float) -> int:
         """Nombre d'images a ecrire a l'instant `now` (la premiere fixe l'instant zero de la video)."""
+        if self._audio_pending and self._poll_audio(now):
+            return 0
         if self._t0 is None:
             self._t0 = now
         return core_rec.frames_due(self._t0, now, self.fps, self.sent)
@@ -382,6 +302,9 @@ class Recorder:
         if self._stopped or not self._started:
             return self._result
         self._stopped = True
+        if self._audio_pending:                                   # arrete avant que le processus de son soit pret : rien a attendre
+            self._writer.abandon()
+            self._writer, self._audio_pending = None, False
         try:
             self._queue.put(None, timeout=QUEUE_TIMEOUT_S)
         except queue.Full:              # encodeur fige : le fil video est coince dans write(), on tue ffmpeg pour le debloquer
@@ -406,7 +329,7 @@ class Recorder:
         self._log.close()
         audio_ok = False
         if self._writer is not None:
-            if self.audio_input.tap == self._writer.push:
+            if self.audio_input.tap is not None and self.audio_input.tap == getattr(self._writer, "push", None):
                 self.audio_input.tap = None
             end_t = self._t0 + self.sent / self.fps if self._t0 is not None else None
             self._writer.close(end_t=end_t)
@@ -465,6 +388,7 @@ class RecordingRun:
     def __init__(self, ctx, renderer, recorder: Recorder):
         self.ctx, self.renderer, self.recorder = ctx, renderer, recorder
         self.size = recorder.size
+        self.perf = core_rec.RenderPerf()
         self.tex = ctx.texture(self.size, 4)
         self.tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.fbo = ctx.framebuffer(color_attachments=[self.tex])
@@ -473,8 +397,14 @@ class RecordingRun:
     def finish_frame(self, now: float, screen, screen_size: tuple[int, int]) -> None:
         """Apres le rendu de l'image : l'ecrit (une fois, ou plusieurs si le rendu a du retard : la duree reste juste), puis la copie dans la fenetre."""
         count = self.recorder.due(now)
+        self.perf.frame(now)
         if count > 0:
-            self.recorder.write(self.fbo.read(components=3, alignment=1), count)      # lecture synchrone : l'image est celle de cet instant
+            t0 = time.perf_counter()
+            data = self.fbo.read(components=3, alignment=1)                           # lecture synchrone : l'image est celle de cet instant
+            ms = (time.perf_counter() - t0) * 1000.0
+            if self.perf.read(ms):
+                sessionlog.event(f"Lecture d'image lente pendant l'enregistrement : {ms:.0f} ms (le GPU n'a pas rendu l'image a temps ; tout le programme attend pendant ce temps)")
+            self.recorder.write(data, count)
         self.renderer.blit_fit(screen, self.tex, self.size, screen_size)
 
     def release(self) -> None:
@@ -581,6 +511,7 @@ class RecordingControl:
         run.release()
         self.s.status.pop("rec", None)
         recorder = run.recorder
+        perf_text = run.perf.summary(self.s.status.get("gpu_ms"), self.s.status.get("gpu_budget_ms"))
         clips_on, ffmpeg = self._clips_on, self._ffmpeg
         if reason:
             self.s.status["msg"] = reason
@@ -596,7 +527,7 @@ class RecordingControl:
                 audio_ = ""
                 if w_ is not None:                              # la sante du son dans le journal : sans elle, un enregistrement qui grésille ne laisse aucune trace
                     audio_ = f", son : {recorder.audio_cuts} coupure(s) de {recorder.audio_cut_s * 1000:.0f} ms, {w_.late_blocks} livraison(s) en retard (max {w_.late_max_s * 1000:.0f} ms)"
-                sessionlog.event(f"Enregistrement termine : {path} ({recorder.sent} images, {recorder.duplicated} dupliquees{audio_})")
+                sessionlog.event(f"Enregistrement termine : {path} ({recorder.sent} images, {recorder.duplicated} dupliquees{audio_}) ; {perf_text}")
             else:
                 self.s.status["msg"] = warning or "Enregistrement : rien d'ecrit."
                 sessionlog.event(f"Enregistrement sans fichier : {warning}")
