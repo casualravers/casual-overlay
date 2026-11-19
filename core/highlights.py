@@ -188,10 +188,10 @@ def estimate_bpm(flux, step_s: float, lo: float = 60.0, hi: float = 200.0) -> fl
 
 # --- fichiers et commandes ffmpeg ------------------------------------------------------------------------------------------
 
-def clip_names(base_path: str, n: int) -> tuple[str, str]:
-    """(video, vignette) du n-ieme extrait, a cote de l'enregistrement : `<nom>-extrait-N.mp4` / `.jpg`."""
+def clip_names(base_path: str, n: int) -> str:
+    """Video du n-ieme extrait, a cote de l'enregistrement : `<nom>-extrait-N.mp4`."""
     root = os.path.splitext(base_path)[0]
-    return f"{root}-extrait-{n}.mp4", f"{root}-extrait-{n}.jpg"
+    return f"{root}-extrait-{n}.mp4"
 
 
 def clip_command(ffmpeg: str, src: str, out: str, start: float, duration: float) -> list[str]:
@@ -201,11 +201,6 @@ def clip_command(ffmpeg: str, src: str, out: str, start: float, duration: float)
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
             "-bsf:v", "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
             "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-movflags", "+faststart", out]
-
-
-def thumb_command(ffmpeg: str, src: str, out: str, at: float) -> list[str]:
-    """Une image JPEG a l'instant `at` (le drop)."""
-    return [ffmpeg, "-y", "-loglevel", "error", "-ss", f"{at:.3f}", "-i", src, "-frames:v", "1", "-q:v", "3", out]
 
 
 def mmss(seconds: float) -> str:
@@ -225,13 +220,12 @@ def caption_text(base_name: str, clips, numbers=None) -> str:
 
 
 def discard_clip(entry: dict) -> bool:
-    """« Jeter » : supprime la video et la vignette d'un extrait (`entry` = un dict de `engine.clips.make_clips`). Deja absents = sans erreur.
+    """« Jeter » : supprime la video d'un extrait (`entry` = un dict de `engine.clips.make_clips`). Deja absente = sans erreur.
     True si la video n'existe plus ensuite."""
-    for key in ("path", "thumb"):
-        target = entry.get(key)
-        if target:
-            try:
-                os.remove(target)
-            except OSError:
-                pass
+    target = entry.get("path")
+    if target:
+        try:
+            os.remove(target)
+        except OSError:
+            pass
     return not (entry.get("path") and os.path.exists(entry["path"]))

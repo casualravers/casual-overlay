@@ -1479,7 +1479,7 @@ def check_gui() -> None:
           "onglet Rec (GUI): la liste des extraits suit le voyant (rien, analyse, extraits prets avec minutage et type)", str((cg.get("empty"), cg.get("analysing"), cg.get("ready"))))
     check(len(set(cg.get("heights") or [(0,), (1,)])) == 1, "onglet Rec (GUI): la liste d'extraits ne change ni la hauteur de l'onglet, ni celle de la liste ni celle du voyant", str(cg.get("heights")))
     check(len(cg.get("opened") or []) == 1 and cg.get("nothing") == (2, 2, True)
-          and cg.get("after") == (1, [2], False, False, True, "1 extrait(s) pret(s)"),
+          and cg.get("after") == (1, [2], False, True, "1 extrait(s) pret(s)"),
           "onglet Rec (GUI): Ouvrir le dossier ouvre celui des extraits ; Jeter sans choix ne fait rien, avec un choix supprime ses fichiers et sa ligne", str((cg.get("opened"), cg.get("nothing"), cg.get("after"))))
     bm = out.get("bgv_modes", {})
     check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
@@ -4422,18 +4422,15 @@ def check_highlights() -> None:
     cmd = hl.clip_command("ffmpeg", "in.mp4", "out.mp4", 42.2, 19.8)
     check(cmd[0] == "ffmpeg" and cmd.index("-ss") < cmd.index("-i") and "-t" in cmd and "libx264" in cmd and cmd[-1] == "out.mp4" and "faststart" in " ".join(cmd),
           "clip_command: decoupe precise (-ss avant -i, -t) en re-encodage x264", " ".join(cmd))
-    tc = hl.thumb_command("ffmpeg", "in.mp4", "out.jpg", 50.0)
-    check("-frames:v" in tc and tc[-1] == "out.jpg" and tc.index("-ss") < tc.index("-i"), "thumb_command: une image a l'instant du drop")
-    check(hl.clip_names("dir/casual-x.mp4", 2) == ("dir/casual-x-extrait-2.mp4", "dir/casual-x-extrait-2.jpg"), "clip_names: -extrait-N.mp4 / .jpg a cote de l'enregistrement")
+    check(hl.clip_names("dir/casual-x.mp4", 2) == "dir/casual-x-extrait-2.mp4" and not hasattr(hl, "thumb_command"), "clip_names: -extrait-N.mp4 a cote de l'enregistrement, plus de vignette")
     import shutil as _sh
     tmpd = Path(tempfile.mkdtemp(prefix="casual-discard-"))
     (tmpd / "a-extrait-1.mp4").write_bytes(b"x")
-    (tmpd / "a-extrait-1.jpg").write_bytes(b"y")
-    ent = {"path": str(tmpd / "a-extrait-1.mp4"), "thumb": str(tmpd / "a-extrait-1.jpg")}
+    ent = {"path": str(tmpd / "a-extrait-1.mp4")}
     okd = hl.discard_clip(ent)
     again = hl.discard_clip(ent)
-    check(okd and again and not list(tmpd.iterdir()) and hl.discard_clip({"path": str(tmpd / "absent.mp4"), "thumb": None}) and hl.mmss(62.9) == "01:02",
-          "discard_clip: supprime la video et la vignette, deja absents = sans erreur ; mmss")
+    check(okd and again and not list(tmpd.iterdir()) and hl.discard_clip({"path": str(tmpd / "absent.mp4")}) and hl.mmss(62.9) == "01:02",
+          "discard_clip: supprime la video, deja absente = sans erreur ; mmss")
     _sh.rmtree(tmpd, ignore_errors=True)
     txt = hl.caption_text("casual-x", [hl.Clip(42.2, 62.0, 0.7, "drop", 50.0), hl.Clip(100.0, 120.0, 0.5, "pic", 110.0)])
     check("00:42" in txt and "01:02" in txt and "drop" in txt and "pic" in txt and "#vj" in txt and "casual-x" in txt,
@@ -4582,17 +4579,22 @@ def check_clips() -> None:
     check(res["state"] == "pret" and len(files) >= 1 and files[0]["kind"] == "drop" and abs(files[0]["start"] + 8.0 - 35.0) < 1.5,
           "generate: un enregistrement de 75 s avec un drop a 35 s donne un extrait « drop »", str(res))
     f0 = files[0] if files else {}
-    check(f0 and Path(f0["path"]).name == "casual-test-extrait-1.mp4" and Path(f0["path"]).is_file() and Path(f0["thumb"]).is_file()
-          and abs(duration(f0["path"]) - (f0["end"] - f0["start"])) < 0.3,
-          "extrait: fichier a cote de l'enregistrement, duree demandee a 0,3 s pres, vignette presente", str(f0))
-    txt = root / "casual-test-extraits.txt"
-    check(txt.is_file() and "#vj" in txt.read_text(encoding="utf-8") and res.get("txt") == str(txt), "extraits: fichier texte avec minutages et hashtags a cote")
-    check(not list(root.glob("*.tmp.*")), "extraits: aucun fichier provisoire laisse")
+    folder = root / "casual-test"
+    check(f0 and Path(f0["path"]).name == "casual-test-extrait-1.mp4" and Path(f0["path"]).parent == folder and Path(f0["path"]).is_file()
+          and abs(duration(f0["path"]) - (f0["end"] - f0["start"])) < 0.3 and not list(root.rglob("*.jpg")),
+          "extrait: dans le dossier de l'enregistrement, duree demandee a 0,3 s pres, pas de vignette", str(f0))
+    txt = folder / "casual-test-extraits.txt"
+    check(txt.is_file() and "#vj" in txt.read_text(encoding="utf-8") and res.get("txt") == str(txt), "extraits: fichier texte avec minutages et hashtags dans le dossier")
+    check(res.get("video") == str(folder / "casual-test.mp4") and (folder / "casual-test.mp4").is_file() and not mp4.exists(),
+          "extraits: un dossier par ensemble, l'enregistrement y est range avec ses extraits", str(res.get("video")))
+    check(not list(root.rglob("*.tmp.*")), "extraits: aucun fichier provisoire laisse")
     # --- trop court : rien n'est ecrit
     short = make_mp4("court", 30.0, 12.0)
     r2 = ec.generate(str(short), ffmpeg)
-    check(r2["state"] == "trop_court" and not r2["clips"] and not list(root.glob("court-extrait*")), "generate: moins de 60 s = pas d'extrait, aucun fichier", str(r2))
+    check(r2["state"] == "trop_court" and not r2["clips"] and not list(root.rglob("court-extrait*")) and short.is_file() and not (root / "court").exists(),
+          "generate: moins de 60 s = pas d'extrait, pas de dossier, l'enregistrement reste ou il est", str(r2))
     # --- disque presque plein : on ne decoupe pas
+    mp4 = folder / "casual-test.mp4"                                           # l'enregistrement a ete range dans son dossier
     r3 = ec.generate(str(mp4), ffmpeg, free_bytes=lambda d: 50 * 1024 * 1024)
     check(r3["state"] == "disque" and not r3["clips"], "generate: moins de 200 Mo libres = pas de decoupe", str(r3["state"]))
     # --- un extrait qui echoue n'arrete pas les autres, sans fichier a moitie fait
@@ -4606,9 +4608,9 @@ def check_clips() -> None:
                 stderr = "echec simule"
             return Bad()
         return real_run(cmd, **kw)
-    r4 = ec.make_clips(str(root / "casual-test.mp4"), clips2, ffmpeg, run=flaky)
+    r4 = ec.make_clips(str(folder / "casual-test.mp4"), clips2, ffmpeg, run=flaky)
     good = [Path(c["path"]).name for c in r4]
-    check(good == ["casual-test-extrait-2.mp4"] and Path(r4[0]["path"]).is_file() and not list(root.glob("*.tmp.*")),
+    check(good == ["casual-test-extrait-2.mp4"] and Path(r4[0]["path"]).is_file() and not list(root.rglob("*.tmp.*")),
           "make_clips: un extrait qui echoue est saute, les autres sont faits, pas de provisoire", str(good))
     shutil.rmtree(root, ignore_errors=True)
 
@@ -7712,10 +7714,9 @@ def gui_clips_steps(c, s, out) -> None:
     tmpd = Path(tempfile.mkdtemp(prefix="casual-gui-clips-"))
     entries = []
     for n, (a, b, kind) in enumerate(((42.2, 62.0, "drop"), (100.0, 120.0, "pic")), 1):
-        mp4, jpg = tmpd / f"casual-x-extrait-{n}.mp4", tmpd / f"casual-x-extrait-{n}.jpg"
+        mp4 = tmpd / f"casual-x-extrait-{n}.mp4"
         mp4.write_bytes(b"x")
-        jpg.write_bytes(b"y")
-        entries.append({"number": n, "path": str(mp4), "thumb": str(jpg), "start": a, "end": b, "kind": kind})
+        entries.append({"number": n, "path": str(mp4), "start": a, "end": b, "kind": kind})
     heights = []
 
     def tab_h():
@@ -7741,7 +7742,7 @@ def gui_clips_steps(c, s, out) -> None:
     lb.selection_set(0)
     widget("Button", "Jeter").invoke()
     ui["rec_refresh"]()
-    after = (lb.size(), [e["number"] for e in s.status["rec_clips"]["clips"]], Path(entries[0]["path"]).exists(), Path(entries[0]["thumb"]).exists(),
+    after = (lb.size(), [e["number"] for e in s.status["rec_clips"]["clips"]], Path(entries[0]["path"]).exists(),
              Path(entries[1]["path"]).is_file(), label.cget("text"))
     heights.append(tab_h())
     out["clips_gui"] = {"toggle": (start, on, off), "empty": empty, "analysing": analysing, "ready": ready, "opened": opened, "nothing": nothing, "after": after, "heights": heights}

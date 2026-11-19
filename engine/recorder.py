@@ -568,6 +568,9 @@ class RecordingControl:
                     result = {"state": "erreur", "clips": [], "message": f"Extraits impossibles : {exc}", "txt": None}
                 self.s.status["rec_clips"] = result
                 self.s.status["msg"] = result["message"]
+                moved = result.get("video")
+                if moved and moved != path:                 # le MP4 a ete range dans le dossier de ses extraits
+                    self.s.status["rec_done"] = {**self.s.status["rec_done"], "path": moved}
         thread = threading.Thread(target=finish, name="rec-assemble", daemon=False)          # non daemon : fermer l'appli attend la fin de l'assemblage
         self._threads = [t for t in self._threads if t.is_alive()] + [thread]
         thread.start()
