@@ -31,7 +31,10 @@ SILENT_WARN_S = 1.0                # plus de son depuis cette duree : avertissem
 class RecorderError(Exception):
     """Un enregistrement qui ne peut pas demarrer (message destine a l'utilisateur)."""
 
-GAP_S = 0.04                       # un trou de plus de 40 ms dans l'horodatage des blocs est comble par du silence (la gigue normale est de quelques ms)
+GAP_S = 0.04                       # une PERTE SIGNALEE (pilote : input_overflow, ou bloc abandonne par la file) avec plus de 40 ms d'ecart d'horodatage est comblee par du silence
+GAP_HARD_S = 1.0                   # sans signal du pilote, seul un trou de plus d'1 s (carte debranchee) est comble : un bloc livre EN RETARD (verrou Python tenu, interface
+                                   # qui gele) arrive entier juste apres, y ajouter du silence ferait glisser la fin du son (18/11/2026 : 126 trous de 35 a 61 ms, 5,2 s de silence en trop sur 162 s)
+T_FIRST_REFINE_S = 3.0             # le 1er bloc peut arriver en retard (le demarrage du REC charge la machine) : l'instant de depart se corrige sur les premieres secondes
 CHUNK_FRAMES = 1 << 16             # le silence d'un long trou est ecrit par morceaux (pas de gros tableau d'un coup)
 
 
@@ -53,29 +56,42 @@ class RawAudioWriter:
         self.frames = 0                                   # echantillons par canal ecrits (silence compris)
         self.bytes_written = 0
         self.lost = 0
+        self.cuts = 0                                     # coupures comblees en silence (pertes signalees, carte disparue) ...
+        self.cut_frames = 0                               # ... et leur duree en echantillons
+        self.late_blocks = 0                              # blocs livres en retard de plus de GAP_S (information : rien n'est ajoute au fichier)
+        self.late_max_s = 0.0
         self.error: str | None = None                     # erreur d'ecriture (cle retiree, disque plein) : le fil vide la file sans bloquer
         self._t_last_end: float | None = None             # fin du dernier bloc RECU (meme perdu)
+        self._pushed = 0                                  # echantillons recus par push (meme abandonnes), pour corriger l'instant de depart
+        self._lost_pending = False                        # un bloc a ete abandonne (file pleine) : le prochain porte la perte
         self._closed = False
         self._lock = threading.Lock()
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._thread = threading.Thread(target=self._run, name="rec-audio", daemon=True)
         self._thread.start()
 
-    def push(self, block, t_end: float) -> None:
-        """Appele par le callback audio (jamais bloquant). `block` : (echantillons, canaux) float32 ; `t_end` : instant de fin du bloc."""
+    def push(self, block, t_end: float, lost: bool = False) -> None:
+        """Appele par le callback audio (jamais bloquant). `block` : (echantillons, canaux) float32 ; `t_end` : instant de fin du bloc (celui de l'arrivee quand le
+        pilote ne date pas ses blocs) ; `lost` : le pilote a signale des blocs perdus (input_overflow) avant celui-ci."""
         if self._closed:
             return
         frames = len(block)
+        self._pushed += frames
+        start = t_end - self._pushed / self.rate          # instant du premier echantillon DEDUIT de ce bloc : au plus tard (un bloc arrive jamais en avance)
         if self.t_first is None:
             self.t_first = t_end - frames / self.rate
+        elif not lost and not self._lost_pending and self._pushed / self.rate <= T_FIRST_REFINE_S and start < self.t_first:
+            self.t_first = start                          # le plus petit ecart = le bloc le moins retarde : l'instant le plus juste
         self._t_last_end = t_end
         peak = float(np.abs(block).max()) if frames else 0.0
         if peak > self.peak:
             self.peak = peak
         try:
-            self._queue.put_nowait((block, t_end))
+            self._queue.put_nowait((block, t_end, lost or self._lost_pending))
+            self._lost_pending = False
         except queue.Full:
             self.lost += 1
+            self._lost_pending = True
 
     @property
     def t_last_end(self) -> float | None:
@@ -108,12 +124,19 @@ class RawAudioWriter:
             self.frames += k
             frames -= k
 
-    def _fill_to(self, handle, instant: float) -> None:
-        """Ecrit du silence si le fichier est en retard de plus de `GAP_S` sur `instant` (par rapport a l'horloge des blocs)."""
+    def _fill_to(self, handle, instant: float, signalled: bool = False) -> None:
+        """Ecrit du silence si le fichier est en retard sur `instant` (horloge des blocs) : de plus de `GAP_S` quand une perte est SIGNALEE, de plus de `GAP_HARD_S`
+        sinon. Un simple retard de livraison n'est pas une perte : les echantillons arrivent, le silence les ferait glisser."""
         expected = self.t_first + self.frames / self.rate
         gap = instant - expected
-        if gap > GAP_S:
-            self._silence(handle, int(round(gap * self.rate)))
+        if gap > GAP_S and not signalled:
+            self.late_blocks += 1
+            self.late_max_s = max(self.late_max_s, gap)
+        if gap > (GAP_S if signalled else GAP_HARD_S):
+            frames = int(round(gap * self.rate))
+            self._silence(handle, frames)
+            self.cuts += 1
+            self.cut_frames += frames
 
     def _run(self) -> None:
         try:
@@ -122,12 +145,12 @@ class RawAudioWriter:
                     item = self._queue.get()
                     if item is None:
                         break
-                    block, t_end = item
-                    self._fill_to(handle, t_end - len(block) / self.rate)
+                    block, t_end, lost = item
+                    self._fill_to(handle, t_end - len(block) / self.rate, lost)
                     self._write(handle, np.ascontiguousarray(block, dtype="<f4").tobytes())
                     self.frames += len(block)
                 if self._t_last_end is not None and self.t_first is not None:
-                    self._fill_to(handle, self._t_last_end)
+                    self._fill_to(handle, self._t_last_end, self._lost_pending)       # fin : le son disparu en cours de route (plus d'1 s) ou des blocs abandonnes
         except OSError as exc:          # cle retiree, disque plein : on garde ce qui est ecrit et on vide la file (close() ne doit jamais bloquer)
             self.error = str(exc)
             while self._queue.get() is not None:
@@ -328,10 +351,22 @@ class Recorder:
             silent = (time.monotonic() if now is None else now) - self._writer.t_last_end
             if silent > SILENT_WARN_S:
                 warning = f"Plus de son depuis {silent:.0f} s : la carte son est-elle branchee ?"
-        warning = warning or core_rec.drop_warning(self.duplicated, self.sent)
+        if warning is None:
+            warning = " ".join(w for w in (core_rec.drop_warning(self.duplicated, self.sent), core_rec.audio_cut_warning(self.audio_cuts, self.audio_cut_s)) if w) or None
         return {"recording": self._started and not self._stopped, "seconds": seconds, "bytes": size + int(seconds * core_rec.AAC_BYTES_PER_S),
                 "peak_db": core_rec.peak_db(peak), "clipped": core_rec.clipped(peak), "dropped": self.duplicated, "frames": self.sent,
+                "audio_cuts": self.audio_cuts, "audio_cut_ms": self.audio_cut_s * 1000.0,
                 "encoder": self.encoder, "warning": warning, "path": self.path, "should_stop": self.should_stop}
+
+    @property
+    def audio_cuts(self) -> int:
+        """Coupures du son comblees en silence (blocs perdus par la carte son) ; 0 sans son."""
+        return self._writer.cuts if getattr(self, "_writer", None) else 0
+
+    @property
+    def audio_cut_s(self) -> float:
+        w = getattr(self, "_writer", None)
+        return w.cut_frames / w.rate if w else 0.0
 
     # --- arret et assemblage ---------------------------------------------------------------------------
 
@@ -378,6 +413,8 @@ class Recorder:
             audio_ok = self._writer.t_first is not None and self._writer.bytes_written > 0
             if not audio_ok and not self.warning:
                 self.warning = "Aucun son recu de la carte son : la video est sans son."
+            if audio_ok and not self.warning:
+                self.warning = core_rec.audio_cut_warning(self.audio_cuts, self.audio_cut_s)           # dit tout de suite si le son est abime
         if self.sent == 0:
             self._cleanup()
             self.warning = self.warning or "Aucune image enregistree."
@@ -555,7 +592,11 @@ class RecordingControl:
             if path:
                 said = "" if not reason or reason == warning else reason + " "          # la raison de l'arret reste dite (le message de fin ne l'ecrase pas)
                 self.s.status["msg"] = f"{said}Enregistrement sauve : {path}" + (f" ({warning})" if warning else "")
-                sessionlog.event(f"Enregistrement termine : {path} ({recorder.sent} images, {recorder.duplicated} dupliquees)")
+                w_ = getattr(recorder, "_writer", None)
+                audio_ = ""
+                if w_ is not None:                              # la sante du son dans le journal : sans elle, un enregistrement qui grésille ne laisse aucune trace
+                    audio_ = f", son : {recorder.audio_cuts} coupure(s) de {recorder.audio_cut_s * 1000:.0f} ms, {w_.late_blocks} livraison(s) en retard (max {w_.late_max_s * 1000:.0f} ms)"
+                sessionlog.event(f"Enregistrement termine : {path} ({recorder.sent} images, {recorder.duplicated} dupliquees{audio_})")
             else:
                 self.s.status["msg"] = warning or "Enregistrement : rien d'ecrit."
                 sessionlog.event(f"Enregistrement sans fichier : {warning}")

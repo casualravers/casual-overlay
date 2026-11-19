@@ -527,7 +527,7 @@ class SoundDeviceInput:
         self.name = info["name"]
         self.channels = max(1, min(2, int(info["max_input_channels"])))
         self.ring = ring
-        self.tap = None                  # point d'ecoute de l'enregistrement : tap(bloc stereo float32 copie, instant de fin) ; None = aucun cout
+        self.tap = None                  # point d'ecoute de l'enregistrement : tap(bloc stereo float32 copie, instant de fin, perte signalee) ; None = aucun cout
         self.tap_errors = 0
         self._prev_end = None            # fin du bloc precedent (horloge des blocs) : un saut = bloc perdu, meme sans drapeau du pilote
         self.stream = sd.InputStream(
@@ -536,9 +536,10 @@ class SoundDeviceInput:
 
     def _callback(self, indata, frames, time_info, status):
         now = time.monotonic()
+        lost = bool(status) and bool(getattr(status, "input_overflow", False))             # blocs perdus signales par le pilote (pas les autres alertes, au demarrage du flux)
         if status:
             self.dropped = getattr(self, "dropped", 0) + 1
-            if getattr(status, "input_overflow", False):             # seulement les blocs perdus (pas les autres alertes, au demarrage du flux)
+            if lost:
                 self.overflows.note(now)
         t_end = now - capture_age(time_info, frames, self.rate)
         oc = getattr(self, "overflows", None)
@@ -550,7 +551,7 @@ class SoundDeviceInput:
         tap = self.tap
         if tap is not None:              # enregistrement en cours : le bloc stereo est copie (le pilote reutilise son tampon) ; une erreur ici ne touche jamais l'analyse
             try:
-                tap(indata.copy() if self.channels == 2 else np.repeat(indata, 2, axis=1), t_end)
+                tap(indata.copy() if self.channels == 2 else np.repeat(indata, 2, axis=1), t_end, lost)
             except Exception:
                 self.tap_errors += 1
 

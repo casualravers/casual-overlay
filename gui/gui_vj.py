@@ -752,7 +752,7 @@ def install(c):
             rec_label.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=(4, 0))
             vj_ui["rec_label"] = rec_label
             Tooltip(rec_label, "Pendant l'enregistrement : duree, taille (estimee), crete du son en dBFS (SATURE = le son a touche la pleine echelle : l'enregistrement est brut, "
-                               "baisse le niveau a la source), images dupliquees (le GPU n'a pas suivi) et encodeur. Les avertissements s'affichent dessous.")
+                               "baisse le niveau a la source), images dupliquees (le rendu n'a pas suivi : machine ou interface trop chargees), coupures du son (blocs perdus par la carte son) et encodeur. Les avertissements s'affichent dessous.")
             # Extraits automatiques (issue #148) : case, voyant d'une ligne, liste de hauteur fixe (3 lignes) ; la liste ne decale rien en se remplissant.
             toggle(f, "rec_clips", "Extraits automatiques",
                    "Apres l'arret d'un enregistrement de plus de 60 s, propose 3 a 5 extraits de 15 a 30 s calés sur les moments forts du son (un drop avec sa montee, ou un pic), "

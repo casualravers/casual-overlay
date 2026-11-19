@@ -3660,6 +3660,10 @@ def check_recording() -> None:
     check(rec.clipped(1.0) and rec.clipped(0.9995) and not rec.clipped(0.9), "crete: saturation a partir de 0,999")
     w = rec.drop_warning(3, 100)
     check(w is not None and "vertical_hd" in w and rec.drop_warning(2, 100) is None and rec.drop_warning(0, 0) is None, "alerte: au-dela de 2 % d'images dupliquees, elle propose vertical_hd", str(w))
+    check(w is not None and "GPU" not in w and "rendu" in w, "alerte: elle ne met plus le GPU en cause (mesure du 19/11/2026 : 6 a 9 ms par image au pire, c'est le processus qui est charge)", str(w))
+    cw = rec.audio_cut_warning(3, 0.12)
+    check(cw is not None and "3 coupures" in cw and "120 ms" in cw and "1 coupure " in rec.audio_cut_warning(1, 0.05) and rec.audio_cut_warning(0, 0.0) is None,
+          "alerte son: nombre de coupures et duree de silence ajoute, rien s'il n'y en a pas", str(cw))
 
     # --- reglages
     check(rec.clean_fps(30) == 30 and rec.clean_fps(60) == 60 and rec.clean_fps(45) == 60 and rec.clean_fps(0) == 30 and rec.clean_fps("x") == 30, "reglage: cadence ramenee a 30 ou 60")
@@ -3705,6 +3709,7 @@ def check_recorder_audio() -> None:
     def fake_device(channels, tap=None):
         dev = ea.SoundDeviceInput.__new__(ea.SoundDeviceInput)            # sans ouvrir de peripherique
         dev.rate, dev.channels, dev.ring, dev.tap, dev.tap_errors = rate, channels, ea.RingBuffer(1 << 14), tap, 0
+        dev.overflows = ea.OverflowCounter()
         return dev
 
     # --- liste des entrees : une seule ligne par entree physique (WASAPI) quand elle existe, sauf l'entree qui tourne
@@ -3728,7 +3733,7 @@ def check_recorder_audio() -> None:
 
     # --- point d'ecoute : les blocs stereo arrivent entiers, l'analyse mono ne change pas
     got = []
-    dev = fake_device(2, tap=lambda block, t_end: got.append((block, t_end)))
+    dev = fake_device(2, tap=lambda block, t_end, lost=False: got.append((block, t_end)))
     ref = fake_device(2)
     t0 = time.monotonic()
     for b in blocks:
@@ -3739,16 +3744,29 @@ def check_recorder_audio() -> None:
     check(np.array_equal(dev.ring.latest(4096), ref.ring.latest(4096)) and abs(float(np.abs(dev.ring.latest(4096)).max())) > 0.1, "tap: l'analyse mono recoit les memes valeurs avec ou sans point d'ecoute")
     got[0][0][0, 0] = 99.0
     check(blocks[0][0, 0] != 99.0, "tap: le bloc recu est une copie (le tampon du pilote est reutilise)")
-    mono = fake_device(1, tap=lambda block, t_end: got.append((block, t_end)))
+    mono = fake_device(1, tap=lambda block, t_end, lost=False: got.append((block, t_end)))
     got.clear()
     mono._callback(blocks[0][:, :1].copy(), n, info, None)
     check(got[0][0].shape == (n, 2) and np.array_equal(got[0][0][:, 0], blocks[0][:, 0]) and np.array_equal(got[0][0][:, 1], blocks[0][:, 0]), "tap: un peripherique mono donne deux canaux identiques")
 
-    def boom(block, t_end):
+    def boom(block, t_end, lost=False):
         raise RuntimeError("disque")
     bad = fake_device(2, tap=boom)
     bad._callback(blocks[0], n, info, None)
     check(bad.tap_errors == 1 and np.abs(bad.ring.latest(n)).max() > 0.1, "tap: une erreur de l'enregistreur n'arrete pas l'analyse (compteur tap_errors)")
+
+    # --- etat du Recorder : les coupures du son remontent au voyant (sans demarrer ffmpeg : objet minimal)
+    rc = er.Recorder.__new__(er.Recorder)
+    rc.sent, rc.fps, rc.path, rc._started, rc._stopped, rc.warning, rc.duplicated, rc.encoder, rc.should_stop = 90, 30, None, True, False, None, 0, "libx264", False
+    rc.audio_input = types.SimpleNamespace(rate=rate)
+    wr = er.RawAudioWriter(str(Path(tempfile.mkdtemp(prefix="casual-rec-")) / "s.raw"), 2, rate)
+    rc._writer = wr
+    wr.push(blocks[0], 100.0 + n / rate)
+    wr.push(blocks[1], 100.0 + 7 * n / rate, lost=True)                    # perte signalee de 5 blocs (53 ms, au-dela du seuil de 40 ms)
+    wr.close()
+    st_ = rc.status(now=wr.t_last_end)
+    check(st_["audio_cuts"] == 1 and abs(st_["audio_cut_ms"] - 5 * n / rate * 1000) < 1.0 and "1 coupure" in (st_["warning"] or ""),
+          "voyant du REC: les coupures du son sont comptees et signalees", str((st_["audio_cuts"], st_["audio_cut_ms"], st_["warning"])))
 
     tmp = Path(tempfile.mkdtemp(prefix="casual-rec-"))
 
@@ -3774,12 +3792,53 @@ def check_recorder_audio() -> None:
     w = er.RawAudioWriter(str(tmp / "gap.raw"), 2, rate)
     for k in range(10):
         w.push(blocks[k], base + (k + 1) * n / rate)
-    for k in range(15, 20):                                               # 5 blocs jamais arrives (carte debranchee un instant)
-        w.push(blocks[k], base + (k + 1) * n / rate)
+    for k in range(15, 20):                                               # 5 blocs jamais arrives, SIGNALES par le pilote (input_overflow)
+        w.push(blocks[k], base + (k + 1) * n / rate, lost=(k == 15))
     w.close()
     data = read_raw(tmp / "gap.raw")
     check(data.shape[0] == 20 * n and np.array_equal(data[:10 * n], np.concatenate(blocks[:10])) and not data[10 * n:15 * n].any() and np.array_equal(data[15 * n:], np.concatenate(blocks[15:20])),
-          "trou: 5 blocs manquants = 5 blocs de silence, le reste a sa place, duree juste", f"{data.shape}")
+          "perte signalee: 5 blocs manquants = 5 blocs de silence, le reste a sa place, duree juste", f"{data.shape}")
+    check(w.cuts == 1 and abs(w.cut_frames - 5 * n) <= 1, "perte signalee: une coupure comptee, avec sa duree", str((w.cuts, w.cut_frames)))
+
+    # --- livraison EN RETARD (verrou Python tenu, interface qui gele) : les echantillons arrivent tous, juste apres ; AUCUN silence ne doit etre ajoute
+    w = er.RawAudioWriter(str(tmp / "late.raw"), 2, rate)
+    for k in range(20):
+        arrival = base + (k + 1) * n / rate
+        if 10 <= k < 15:
+            arrival = base + 11 * n / rate + 0.080                         # bloc 10 en retard de 80 ms, les suivants arrivent en rafale juste apres
+        w.push(blocks[k], arrival)
+    w.close()
+    data = read_raw(tmp / "late.raw")
+    check(data.shape[0] == 20 * n and np.array_equal(data, np.concatenate(blocks[:20])) and w.cuts == 0 and w.cut_frames == 0,
+          "livraison en retard de 80 ms: tous les echantillons arrivent, aucun silence ajoute (avant : 80 ms de trou, et la fin du son glissait)", f"{data.shape} coupures {w.cuts}")
+    check(w.late_blocks >= 1 and w.late_max_s >= 0.07, "livraison en retard: comptee (information) sans toucher au fichier", str((w.late_blocks, w.late_max_s)))
+
+    # --- carte disparue plus d'une seconde, sans signal du pilote : le silence garde la duree
+    w = er.RawAudioWriter(str(tmp / "gone.raw"), 2, rate)
+    for k in range(10):
+        w.push(blocks[k], base + (k + 1) * n / rate)
+    gone = int(1.5 * rate / n)                                              # 1,5 s sans bloc
+    for k in range(10, 20):
+        w.push(blocks[k], base + (k + 1 + gone) * n / rate)
+    w.close()
+    data = read_raw(tmp / "gone.raw")
+    check(abs(data.shape[0] - (20 + gone) * n) <= 1 and w.cuts == 1 and not data[10 * n:(10 + gone) * n].any(),
+          "carte disparue plus d'1 s: comblee en silence meme sans signal", f"{data.shape[0] / n:.1f} blocs, attendu {20 + gone}")
+
+    # --- instant de depart du son : le 1er bloc peut arriver en retard (le demarrage du REC charge la machine) ; les suivants le corrigent
+    w = er.RawAudioWriter(str(tmp / "first.raw"), 2, rate)
+    for k in range(30):
+        w.push(blocks[k], base + (k + 1) * n / rate + (0.080 if k == 0 else 0.0))
+    w.close()
+    check(abs(w.t_first - base) < 1e-6, "depart du son: le premier bloc en retard de 80 ms ne decale pas le fichier (les blocs suivants donnent l'instant juste)", str(w.t_first - base))
+
+    # --- le callback transmet la perte signalee par le pilote
+    seen_lost = []
+    dev3 = fake_device(2, tap=lambda block, t_end, lost=False: seen_lost.append(lost))
+    dev3._callback(blocks[0], n, info, None)
+    dev3._callback(blocks[1], n, info, types.SimpleNamespace(input_overflow=True))
+    dev3._callback(blocks[2], n, info, types.SimpleNamespace(input_overflow=False))
+    check(seen_lost == [False, True, False], "tap: la perte signalee par le pilote (input_overflow) est transmise a l'enregistreur", str(seen_lost))
 
     # --- ecriture trop lente : file pleine, blocs perdus, duree gardee
     class Slow(er.RawAudioWriter):
@@ -3791,7 +3850,7 @@ def check_recorder_audio() -> None:
         w.push(blocks[k], base + (k + 1) * n / rate)
     w.close()
     data = read_raw(tmp / "slow.raw")
-    check(w.lost >= 10 and abs(data.shape[0] - 40 * n) <= 2 and w.frames == data.shape[0],
+    check(w.lost >= 10 and abs(data.shape[0] - 40 * n) <= 2 and w.frames == data.shape[0] and w.cuts >= 1,
           "file pleine: les blocs perdus sont comptes (jamais de blocage du callback) et remplaces par du silence, y compris en fin de fichier", f"perdus {w.lost}, {data.shape[0]} echantillons pour {40 * n}")
 
     # --- silence permanent : crete au plancher
@@ -10297,6 +10356,7 @@ def check_device_cache() -> None:
 
 def check_uistats() -> None:
     """Mesure de la fluidite de l'interface (core/uistats.py) : horloge injectee, aucune attente reelle."""
+    import types
     from core import uistats as ui
     now = [0.0]
     said = []
@@ -10327,6 +10387,24 @@ def check_uistats() -> None:
     st.stalls.clear()
     st.stall(400.0)
     check(st.stalls and st.stalls[-1][1] == "refresh_scene_bar", "uistats: le gel est attribue a l'operation lente de la fenetre", str(st.stalls))
+    # --- allegement de l'interface pendant un REC (19/11/2026 : le fil Tk passe de 13 % a 52 % d'occupation des que l'enregistrement demarre)
+    g = ui.ValueGate(0.004)
+    check(g.changed("a", 0.5) and not g.changed("a", 0.502) and g.changed("a", 0.51) and not g.changed("a", 0.51) and g.changed("b", 0.5) and g.changed("a", 0.4),
+          "uistats: un curseur suivi n'est redessine que si sa valeur a change de plus d'un pas visible (par curseur)")
+    tr = ui.Throttle(0.15)
+    check(tr.ready(10.0) and not tr.ready(10.05) and not tr.ready(10.149) and tr.ready(10.15) and not tr.ready(10.2) and tr.ready(10.31),
+          "uistats: le limiteur laisse passer une fois par periode")
+
+    class Fr:
+        def __init__(self, name, line, back=None, file="gui/gl_gui.py"):
+            self.f_code = types.SimpleNamespace(co_name=name, co_filename=file)
+            self.f_lineno, self.f_back = line, back
+    deep = Fr("meter", 12, Fr("run_due", 40, Fr("ui_pump", 88, Fr("callit", 1, file="tkinter/__init__.py"))))
+    gl = Fr("loop", 570, Fr("gl_main", 20), file="engine/projection.py")
+    txt = ui.format_stacks({1: deep, 2: gl, 3: Fr("format", 1)}, {1: "MainThread", 2: "gl", 3: "stall-dump"}, skip_ident=3, depth=3)
+    check("MainThread" in txt and "meter:12" in txt and "run_due:40" in txt and "gl :" in txt.replace("gl:", "gl :") and "loop:570" in txt and "stall-dump" not in txt and "callit" not in txt,
+          "uistats: piles des fils pour le journal (fil Tk et fil de rendu en tete, le fil qui regarde ecarte, profondeur bornee)", txt)
+
     check(any("refresh_scene_bar" in line for line in st.report()) and "Derniers gels" in "\n".join(st.report()), "uistats: rapport lisible")
     ran = []
     sch = ui.Scheduler(stats=None, on_error=lambda n, e: ran.append(("err", n)))

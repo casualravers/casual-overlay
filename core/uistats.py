@@ -5,6 +5,8 @@ et ordonnanceur unique des rafraichissements periodiques.
   une operation plus lente que `SLOW_MS` est signalee (journal de session, au plus une fois par seconde et par nom).
 - `StallWatch` : mesure le retard d'une minuterie reguliere ; un retard anormal = le fil Tk a ete bloque (gel), avec le nom de
   l'operation en cours si elle est connue.
+- `ValueGate`, `Throttle` : allegement de l'interface (un curseur suivi n'est redessine que s'il a visiblement change ; une tache lente se limite pendant un REC).
+- `format_stacks` : piles des fils pour le journal quand l'interface gele (qui tient le verrou Python ?).
 - `Scheduler` : une seule boucle pour tous les rafraichissements periodiques (voyants, mesures, statut...) au lieu d'une minuterie Tk
   par rafraichissement ; chaque tache a sa periode, une erreur dans une tache ne tue jamais les autres.
 """
@@ -149,3 +151,50 @@ class Scheduler:
             return ceil
         soonest = min(t[1] for t in self.tasks.values())
         return min(max((soonest - now) * 1000.0, floor), ceil)
+
+
+class ValueGate:
+    """Ne laisse passer une valeur que si elle a change d'au moins `min_step` depuis la derniere acceptee (par cle). Les curseurs suivis par l'automatisation
+    etaient reecrits a chaque passage (variable Tk + etiquette + redessin) pour des variations invisibles : c'etait la premiere depense du fil Tk."""
+
+    def __init__(self, min_step: float = 0.004) -> None:
+        self.min_step = min_step
+        self.last: dict = {}
+
+    def changed(self, key, value: float) -> bool:
+        old = self.last.get(key)
+        if old is not None and abs(value - old) < self.min_step:
+            return False
+        self.last[key] = value
+        return True
+
+
+class Throttle:
+    """Au plus un passage par `period_s` (horloge fournie par l'appelant)."""
+
+    def __init__(self, period_s: float) -> None:
+        self.period_s = period_s
+        self._last = -1e18
+
+    def ready(self, now: float) -> bool:
+        if now - self._last >= self.period_s:
+            self._last = now
+            return True
+        return False
+
+
+def format_stacks(frames: dict, names: dict, skip_ident=None, depth: int = 4, max_threads: int = 8) -> str:
+    """Texte court des piles de fils (`frames` = `sys._current_frames()`, `names` = ident -> nom du fil) pour le journal : un fil par segment, `depth` appels de
+    la pile la plus interne `fonction:ligne` ; le fil Tk (MainThread) et le fil de rendu d'abord, le fil qui regarde (`skip_ident`) ecarte."""
+    rows = []
+    for ident, frame in frames.items():
+        if ident == skip_ident:
+            continue
+        name = names.get(ident, str(ident))
+        chain, f = [], frame
+        while f is not None and len(chain) < depth:
+            chain.append(f"{f.f_code.co_name}:{f.f_lineno}")
+            f = f.f_back
+        rows.append((0 if name == "MainThread" else (1 if name == "gl" else 2), name, " < ".join(chain)))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return " | ".join(f"{name}: {chain}" for _rank, name, chain in rows[:max_threads])

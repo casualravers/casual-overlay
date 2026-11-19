@@ -26,7 +26,7 @@ FORMATS: dict[str, tuple[int, int]] = {
 DEFAULT_FORMAT = "vertical"
 DEFAULT_DIR = "~/Videos/casual-overlay"
 HARDWARE_ENCODERS = ("h264_nvenc", "h264_amf", "h264_qsv")      # ordre de preference quand l'encodeur materiel est demande
-DROP_WARN_RATIO = 0.02                                         # au-dela, le GPU n'a pas suivi : message
+DROP_WARN_RATIO = 0.02                                         # au-dela, le rendu n'a pas suivi : message
 CLIP_LEVEL = 0.999                                             # crete (0..1) a partir de laquelle on parle de saturation
 FLOOR_DB = -120.0
 AUDIO_RATE_OUT = 48000
@@ -183,8 +183,17 @@ def clipped(peak: float) -> bool:
 
 
 def drop_warning(dropped: int, total: int) -> str | None:
-    """Message si plus de 2 % des images ont ete dupliquees (le GPU n'a pas suivi), sinon None."""
+    """Message si plus de 2 % des images ont ete dupliquees (le rendu n'a pas suivi), sinon None. Mesure du 19/11/2026 : le GPU n'est pas en cause (6 a 9 ms par image au pire,
+    lecture comprise) ; c'est le processus (interface, autres programmes) qui est trop charge."""
     if total <= 0 or dropped / total <= DROP_WARN_RATIO:
         return None
-    return (f"{100 * dropped / total:.0f} % d'images dupliquees : le GPU n'a pas suivi. "
-            "Choisis le format vertical_hd (720x1280), coupe les cellules ou baisse la cadence.")
+    return (f"{100 * dropped / total:.0f} % d'images dupliquees : le rendu n'a pas suivi (machine ou interface trop chargees). "
+            "Ferme les autres programmes, choisis le format vertical_hd (720x1280) ou baisse la cadence.")
+
+
+def audio_cut_warning(cuts: int, cut_s: float) -> str | None:
+    """Message si le son a ete coupe (blocs PERDUS par la carte son, comblés par du silence ; un simple retard de livraison n'en est pas un), sinon None."""
+    if cuts <= 0:
+        return None
+    return (f"Son : {cuts} coupure{'s' if cuts > 1 else ' '}({cut_s * 1000:.0f} ms de silence ajoute) : la carte son a perdu des blocs. "
+            "Ferme les autres programmes.")
