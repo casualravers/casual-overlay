@@ -62,6 +62,8 @@ check(starts_with(live.AutomationManager.__init__,
       "AutomationManager(root, tooltip_cls, panel_bg, muted_fg, accent, curve_label, on_editor_open)",
       str(params(live.AutomationManager.__init__)))
 check(hasattr(live.AutomationManager, "default_on_editor_open"), "AutomationManager.default_on_editor_open")
+check(hasattr(live.AutomationManager, "default_open_editor") and hasattr(snap, "CURVE_EDITOR_HOOK"),
+      "fenetre de courbe remplacable : AutomationManager.default_open_editor(manager, attr), snap.CURVE_EDITOR_HOOK(root, state, attr)")
 for method in ("register", "tick", "capture", "apply", "open_editor"):
     check(callable(getattr(live.AutomationManager, method, None)), f"AutomationManager.{method}")
 check(starts_with(live.AutomationManager.register, ["self", "holder", "attr", "label", "lo", "hi"]),
