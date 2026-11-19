@@ -2,7 +2,8 @@
 reglage de la musique). Stdlib seulement : les fichiers et ffmpeg sont dans `engine/bestof.py`.
 
 Le montage : les medias recus (doodles et photos du site) sont gardes sur disque pendant la soiree ; un bouton les assemble en une video
-verticale (chaque media plein cadre, fondus), sur une musique choisie par l'utilisateur. Aucune moderation : tout ce qui a ete affiche est monte.
+verticale (chaque media plein cadre, fondus), sur une musique choisie par l'utilisateur. Aucune moderation : tout ce qui a ete affiche est monte,
+sans limite de nombre (la musique est rejouee en boucle si la video est plus longue qu'elle).
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from pathlib import Path
 SETTINGS_NAME = "bestof.json"
 SLOT_MIN_S = 1.5              # duree minimale d'un media dans le montage
 SLOT_MAX_S = 5.0              # et maximale (peu de medias : on ne s'attarde pas)
-MAX_MEDIA = 60                # plafond (la commande ffmpeg liste chaque media : limite de longueur de commande de Windows)
+BATCH = 30                    # medias encodes par commande ffmpeg (la ligne de commande de Windows est limitee : aucun plafond de medias, ils sont montes par lots)
 ROLLOVER_H = 6                # une soiree qui passe minuit reste la meme jusqu'a 6 h du matin
 FADE_S = 0.35                 # fondu d'entree et de sortie de chaque media
 END_FADE_S = 1.5              # fondu final de la musique
@@ -66,42 +67,39 @@ def out_name(key: str) -> str:
 
 
 def plan(count: int, music_s: float) -> tuple[int, float]:
-    """(nombre de medias gardes, duree de chacun en secondes). La musique fixe la duree totale : chaque media dure musique / nombre
-    (entre SLOT_MIN_S et SLOT_MAX_S) ; trop de medias pour la musique = on garde ce qu'elle permet."""
+    """(nombre de medias, duree de chacun en secondes). TOUS les medias sont montes : chacun dure musique / nombre, entre SLOT_MIN_S et SLOT_MAX_S ;
+    quand il y en a beaucoup, la video depasse la musique, qui est alors rejouee en boucle."""
     if count <= 0 or music_s <= 0.0:
         return 0, 0.0
-    n = max(1, min(int(count), MAX_MEDIA, int(music_s // SLOT_MIN_S)))
-    slot = min(max(music_s / n, SLOT_MIN_S), SLOT_MAX_S)
-    return n, min(slot, music_s)
+    return int(count), min(max(music_s / count, SLOT_MIN_S), SLOT_MAX_S)
 
 
-def select_even(items: list, n: int) -> list:
-    """`n` elements repartis sur toute la liste (le premier et le dernier compris)."""
-    if n <= 0 or not items:
-        return []
-    if n >= len(items):
-        return list(items)
-    if n == 1:
-        return [items[0]]
-    last = len(items) - 1
-    return [items[round(i * last / (n - 1))] for i in range(n)]
-
-
-def build_command(ffmpeg: str, images: list[str], music: str, out: str, slot_s: float, size: tuple[int, int] = SIZE, fps: int = FPS, fade_s: float = FADE_S) -> list[str]:
-    """Commande ffmpeg : chaque image plein cadre (bandes noires, jamais deformee) pendant `slot_s`, fondus, puis la musique (fondu final) ; duree = n x slot_s."""
+def segment_command(ffmpeg: str, images: list[str], out: str, slot_s: float, size: tuple[int, int] = SIZE, fps: int = FPS, fade_s: float = FADE_S) -> list[str]:
+    """Un lot d'images -> un segment video SANS son : chaque image plein cadre (bandes noires, jamais deformee) pendant `slot_s`, avec un fondu d'entree et de sortie."""
     w, h = size
-    total = len(images) * slot_s
     fade = min(fade_s, slot_s / 3.0)
     cmd = [ffmpeg, "-y", "-loglevel", "error"]
     for img in images:
         cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{slot_s:.3f}", "-i", img]
-    cmd += ["-i", music]
     parts = [f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={fps},format=yuv420p,"
              f"fade=t=in:st=0:d={fade:.3f},fade=t=out:st={slot_s - fade:.3f}:d={fade:.3f}[v{i}]" for i in range(len(images))]
     parts.append("".join(f"[v{i}]" for i in range(len(images))) + f"concat=n={len(images)}:v=1:a=0[v]")
-    cmd += ["-filter_complex", ";".join(parts), "-map", "[v]", "-map", f"{len(images)}:a",
-            "-af", f"afade=t=out:st={max(0.0, total - END_FADE_S):.3f}:d={END_FADE_S}", "-t", f"{total:.3f}",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-g", str(fps),
-            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+    return cmd + ["-filter_complex", ";".join(parts), "-map", "[v]", "-an",
+                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-g", str(fps),
+                  "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", out]
+
+
+def concat_list(segments: list[str]) -> str:
+    """Contenu du fichier de liste de l'assembleur `concat` de ffmpeg (chemins entre apostrophes, barres obliques)."""
+    return "".join("file '" + s.replace("\\", "/").replace("'", "'\\''") + "'\n" for s in segments)
+
+
+def join_command(ffmpeg: str, list_file: str, music: str, out: str, total_s: float, loop_music: bool, fps: int = FPS) -> list[str]:
+    """Assemble les segments (video copiee telle quelle) et pose la musique : rejouee en boucle si la video est plus longue, fondu final, duree exacte."""
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", list_file]
+    if loop_music:
+        cmd += ["-stream_loop", "-1"]
+    cmd += ["-i", music, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+            "-af", f"afade=t=out:st={max(0.0, total_s - END_FADE_S):.3f}:d={END_FADE_S}", "-t", f"{total_s:.3f}",
             "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-movflags", "+faststart", out]
     return cmd

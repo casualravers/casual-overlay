@@ -11428,17 +11428,21 @@ def check_bestof() -> None:
     check(bo.evening_key(day(2026, 11, 19, 23, 30)) == "2026-11-19" and bo.evening_key(day(2026, 11, 20, 2, 15)) == "2026-11-19" and bo.evening_key(day(2026, 11, 20, 7, 0)) == "2026-11-20",
           "soiree: une soiree qui passe minuit reste la meme (changement de jour a 6 h)")
     check(bo.safe_name("1792-abc.png") == "1792-abc.png" and bo.safe_name("../../x y\\z?.png") == "z_.png" and bo.safe_name("") == "media", "nom: un nom du site ne sort jamais du dossier")
-    check(bo.plan(0, 60.0) == (0, 0.0) and bo.plan(10, 60.0) == (10, 5.0) and bo.plan(100, 60.0) == (40, 1.5) and bo.plan(20, 60.0) == (20, 3.0),
-          "plan: duree par media = musique / nombre (entre 1,5 et 5 s), trop de medias = on en garde ce que la musique permet", str((bo.plan(10, 60.0), bo.plan(100, 60.0), bo.plan(20, 60.0))))
-    check(bo.plan(3, 2.0) == (1, 2.0) and bo.plan(200, 1e6)[0] == bo.MAX_MEDIA, "plan: musique tres courte = un seul media ; plafond de medias (longueur de la commande)")
-    check(bo.select_even(list(range(10)), 10) == list(range(10)) and bo.select_even(list(range(10)), 1) == [0] and len(bo.select_even(list(range(100)), 40)) == 40
-          and bo.select_even(list(range(100)), 40)[0] == 0 and bo.select_even(list(range(100)), 40)[-1] == 99 and bo.select_even([], 3) == [],
-          "choix: les medias gardes sont repartis sur toute la soiree (premier et dernier compris)")
-    cmd = bo.build_command("ffmpeg", ["a.png", "b.jpg"], "musique.mp3", "out.mp4", 3.0, (720, 1280))
-    joined = " ".join(cmd)
-    check(cmd[0] == "ffmpeg" and cmd.count("-loop") == 2 and "a.png" in cmd and "b.jpg" in cmd and "musique.mp3" in cmd and cmd[-1] == "out.mp4" and "concat=n=2:v=1:a=0" in joined
-          and "scale=720:1280" in joined and "pad=720:1280" in joined and "afade=t=out" in joined and "-t 6.000" in joined and "libx264" in joined and "aac" in joined,
-          "commande: images plein cadre vertical, fondus, concat, musique avec fondu final, duree exacte", joined)
+    check(bo.plan(0, 60.0) == (0, 0.0) and bo.plan(10, 60.0) == (10, 5.0) and bo.plan(20, 60.0) == (20, 3.0) and bo.plan(100, 60.0) == (100, 1.5) and bo.plan(5000, 60.0) == (5000, 1.5),
+          "plan: duree par media = musique / nombre (entre 1,5 et 5 s) ; AUCUNE limite de medias (la video depasse alors la musique)", str((bo.plan(10, 60.0), bo.plan(100, 60.0), bo.plan(5000, 60.0))))
+    check(bo.plan(3, 2.0) == (3, 1.5) and not hasattr(bo, "MAX_MEDIA") and bo.BATCH >= 2, "plan: une musique tres courte n'enleve aucun media ; plus de plafond (lots de BATCH medias par commande)")
+    seg = bo.segment_command("ffmpeg", ["a.png", "b.jpg"], "seg.mp4", 3.0, (720, 1280))
+    sj = " ".join(seg)
+    check(seg[0] == "ffmpeg" and seg.count("-loop") == 2 and "a.png" in seg and "b.jpg" in seg and seg[-1] == "seg.mp4" and "concat=n=2:v=1:a=0" in sj and "scale=720:1280" in sj
+          and "pad=720:1280" in sj and "fade=t=in" in sj and "-an" in seg and "libx264" in sj and "-t 3.000" in sj and "musique" not in sj,
+          "segment: images plein cadre vertical, bandes noires, fondus, concat, sans son", sj)
+    lst = bo.concat_list(["C:\\tmp\\a.mp4", "it's.mp4"])
+    check(lst == "file 'C:/tmp/a.mp4'\nfile 'it'\\''s.mp4'\n", "liste de segments: barres obliques, apostrophe protegee", repr(lst))
+    jn = bo.join_command("ffmpeg", "liste.txt", "musique.mp3", "out.mp4", 20.0, True)
+    jn2 = bo.join_command("ffmpeg", "liste.txt", "musique.mp3", "out.mp4", 6.0, False)
+    check("-stream_loop" in jn and jn.index("-stream_loop") < jn.index("musique.mp3") and "-stream_loop" not in jn2 and "copy" in jn and "afade=t=out:st=18.500:d=1.5" in " ".join(jn)
+          and "-t" in jn and "20.000" in jn and jn[-1] == "out.mp4" and "aac" in jn,
+          "assemblage: video copiee, musique rejouee en boucle seulement si la video est plus longue, fondu final, duree exacte", " ".join(jn))
     check(bo.out_name("2026-11-19") == "best-of-2026-11-19.mp4", "nom du fichier du best of")
     tmp = Path(tempfile.mkdtemp(prefix="casual-bestof-"))
     try:
@@ -11491,6 +11495,17 @@ def check_bestof_engine() -> None:
         check(eb.build(root / "vide", str(music), str(out_dir), ffmpeg)["state"] == "vide" and eb.build(folder, "", str(out_dir), ffmpeg)["state"] == "musique"
               and eb.build(folder, str(root / "nope.wav"), str(out_dir), ffmpeg)["state"] == "musique" and eb.build(folder, str(music), str(out_dir), ffmpeg, free_bytes=lambda d: 1)["state"] == "disque",
               "montage: sans media, sans musique, musique introuvable ou disque presque plein = un etat clair, aucune exception")
+        many = root / "beaucoup"
+        for i in range(5):
+            eb.save_media(f"2000-{i}.png", png_bytes(8, 8, (i * 40, 0, 0, 255)), night, many)
+        short = root / "courte.wav"
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330:duration=4", str(short)], check=True)
+        res5 = eb.build(next((many).iterdir()), str(short), str(out_dir / "lots"), ffmpeg, batch=2)
+        mp5 = Path(res5["path"] or "x")
+        dur5 = float(subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(mp5)], capture_output=True, text=True).stdout.strip() or 0)
+        streams5 = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(mp5)], capture_output=True, text=True).stdout.split()
+        check(res5["state"] == "pret" and res5["count"] == 5 and abs(dur5 - 7.5) < 0.5 and sorted(streams5) == ["audio", "video"] and not list((out_dir / "lots").glob("*.work")) and not list((out_dir / "lots").glob("*.tmp.mp4")),
+              "montage: 5 medias par lots de 2 sur 4 s de musique = tous montes (7,5 s, 1,5 s chacun), musique rejouee en boucle, dossier de travail supprime", str((res5, dur5, streams5)))
         bad = eb.build(folder, str(music), str(out_dir), ffmpeg, run=lambda *a, **k: subprocess.CompletedProcess(a, 1, b"", b"") if "-filter_complex" in a[0] else subprocess.run(*a, **k))
         check(bad["state"] == "erreur" and not list(out_dir.glob("*.tmp.mp4")), "montage: ffmpeg en echec = erreur annoncee, fichier provisoire retire")
     finally:

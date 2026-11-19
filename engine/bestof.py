@@ -68,9 +68,10 @@ def music_duration(path: str, ffmpeg: str, run=subprocess.run) -> float:
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
-def build(folder: Path, music: str, out_dir: str, ffmpeg: str, *, run=subprocess.run, free_bytes=None) -> dict:
+def build(folder: Path, music: str, out_dir: str, ffmpeg: str, *, run=subprocess.run, free_bytes=None, batch: int = bo.BATCH) -> dict:
     """Monte le best of du dossier `folder`. Rend `{"state", "message", "path", "count"}` ; `state` : `pret`, `vide` (aucun media), `musique`
-    (absente ou illisible), `disque` (moins de 200 Mo), `erreur`."""
+    (absente ou illisible), `disque` (moins de 200 Mo), `erreur`. Tous les medias sont montes, par lots de `batch` (un segment
+    par lot, puis un assemblage sans re-encodage avec la musique) : aucune limite de nombre."""
     free_bytes = free_bytes or (lambda d: shutil.disk_usage(d).free)
 
     def out(state: str, message: str, path: str | None = None, count: int = 0) -> dict:
@@ -89,13 +90,25 @@ def build(folder: Path, music: str, out_dir: str, ffmpeg: str, *, run=subprocess
         if free_bytes(out_dir) < MIN_FREE_BYTES:
             return out("disque", "Best of : moins de 200 Mo libres, pas de montage.")
         count, slot = bo.plan(len(images), music_s)
-        chosen = bo.select_even(images, count)
+        total = count * slot
         target = os.path.join(out_dir, bo.out_name(folder.name))
         tmp = target[:-4] + ".tmp.mp4"
+        work = target[:-4] + ".work"
         try:
-            done = run(bo.build_command(ffmpeg, chosen, music, tmp, slot), capture_output=True, timeout=1800, creationflags=_NO_WINDOW)
+            os.makedirs(work, exist_ok=True)
+            segments = []
+            for n, start in enumerate(range(0, count, max(1, batch)), 1):
+                seg = os.path.join(work, f"segment-{n:04d}.mp4")
+                done = run(bo.segment_command(ffmpeg, images[start:start + max(1, batch)], seg, slot), capture_output=True, timeout=1800, creationflags=_NO_WINDOW)
+                if done.returncode != 0 or not os.path.isfile(seg):
+                    raise RuntimeError("ffmpeg a echoue (segment)")
+                segments.append(seg)
+            listing = os.path.join(work, "liste.txt")
+            with open(listing, "w", encoding="utf-8") as handle:
+                handle.write(bo.concat_list(segments))
+            done = run(bo.join_command(ffmpeg, listing, music, tmp, total, total > music_s), capture_output=True, timeout=1800, creationflags=_NO_WINDOW)
             if done.returncode != 0 or not os.path.isfile(tmp):
-                raise RuntimeError("ffmpeg a echoue")
+                raise RuntimeError("ffmpeg a echoue (assemblage)")
             os.replace(tmp, target)
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             try:
@@ -103,8 +116,10 @@ def build(folder: Path, music: str, out_dir: str, ffmpeg: str, *, run=subprocess
             except OSError:
                 pass
             return out("erreur", f"Best of impossible : {exc}")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     except Exception as exc:                          # jamais d'exception vers le fil appelant
         sessionlog.error("Best of", exc)
         return out("erreur", f"Best of impossible : {exc}")
-    sessionlog.event(f"Best of : {count} media(s) sur {len(images)}, {count * slot:.0f} s -> {target}")
-    return out("pret", f"Best of pret : {count} media(s), {count * slot:.0f} s", target, count)
+    sessionlog.event(f"Best of : {count} media(s), {total:.0f} s -> {target}")
+    return out("pret", f"Best of pret : {count} media(s), {total:.0f} s", target, count)
