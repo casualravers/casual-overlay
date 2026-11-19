@@ -3696,6 +3696,150 @@ def check_recording() -> None:
           "voyant: plus d'une heure, pas de signal, saturation signalee")
 
 
+def check_audio_capture() -> None:
+    """Enregistrement : le son capte dans un PROCESSUS A PART (19/11/2026 : 15 gels de plus d'1 s en 3 min, le callback de la carte son ne passait plus), repli sur
+    l'ecoute dans le programme, et sante du rendu pendant un enregistrement (`RenderPerf`). Aucun peripherique : le processus lit une source de test."""
+    print("Enregistrement : son dans un processus separe, repli, sante du rendu")
+    import shutil
+    import types
+    import engine.audio_capture as ac
+    import engine.recorder as er
+    from core import recording as core_rec
+
+    # --- protocole : lignes JSON et commande d'arret
+    check(ac.parse_line('{"ready": true, "peak": 0.5}') == {"ready": True, "peak": 0.5} and ac.parse_line("pas du json") is None and ac.parse_line("[1, 2]") is None and ac.parse_line("") is None,
+          "protocole: une ligne du fils est du JSON, tout le reste est ignore (message de bibliotheque, ligne coupee)")
+    check(ac.parse_stop(ac.stop_command(12.5)) == (True, 12.5) and ac.parse_stop(ac.stop_command(None)) == (True, None) and ac.parse_stop("bonjour") == (False, None) and ac.parse_stop("") == (False, None),
+          "protocole: `stop <instant>` et `stop -` arretent le fils, une autre ligne ne fait rien")
+    cmd = ac.child_command(3, 48000, 2, 512, 0.1, "x.raw")
+    check(os.path.basename(cmd[1]) == "audio_capture.py" and cmd[cmd.index("--device") + 1] == "3" and cmd[cmd.index("--latency") + 1] == "0.1" and cmd[cmd.index("--out") + 1] == "x.raw",
+          "commande du fils: script autonome, entree, tampon de la carte son (celui du programme), fichier de sortie", str(cmd))
+
+    # --- le vrai processus, source de test : demarrage, etat, arret propre, fichier complet
+    tmp = Path(tempfile.mkdtemp(prefix="casual-cap-"))
+    out = str(tmp / "a.raw")
+    child = ac.CaptureChild.spawn(ac.child_command(0, 48000, 2, 512, 0.1, out, source="test"), out, 2, 48000)
+    t_spawn = time.monotonic()
+    deadline = t_spawn + 20.0
+    while child.state == "starting" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    check(child.state == "ready", "processus de son: pret apres le demarrage (flux ouvert)", f"{child.state} {child.reason}")
+    time.sleep(1.2)
+    check(child.frames > 20000 and 0.15 < child.peak < 0.25 and child.t_first is not None and abs(child.t_first - t_spawn) < 15.0 and child.t_last_end is not None and time.monotonic() - child.t_last_end < 1.0,
+          "processus de son: l'etat arrive en direct (echantillons, crete, instants sur l'horloge commune)", f"frames={child.frames} peak={child.peak} t_first={child.t_first}")
+    end_t = time.monotonic()
+    child.close(end_t=end_t)
+    size = os.path.getsize(out)
+    check(child.state == "done" and size == child.bytes_written and size == child.frames * 8 and child.cuts == 0 and not child.alive and child.frames > 48000,
+          "processus de son: arret demande = fichier ferme, complet (8 octets par echantillon stereo), sans coupure, processus termine", f"{child.state} {size} octets {child.frames} echantillons {child.cuts} coupures")
+    child.close()                                  # deuxieme fois : sans effet, sans erreur
+    pcm = np.fromfile(out, dtype="<f4").reshape(-1, 2)
+    check(len(pcm) == child.frames and abs(float(np.abs(pcm).max()) - 0.2) < 0.02 and np.array_equal(pcm[:, 0], pcm[:, 1]), "processus de son: le fichier contient le signal, stereo")
+
+    # --- le programme meurt (stdin ferme) : le fils termine proprement, fichier ecrit
+    out2 = str(tmp / "b.raw")
+    orphan = ac.CaptureChild.spawn(ac.child_command(0, 48000, 2, 512, 0.1, out2, source="test"), out2, 2, 48000)
+    deadline = time.monotonic() + 20.0
+    while orphan.state == "starting" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.5)
+    orphan.proc.stdin.close()
+    try:
+        orphan.proc.wait(timeout=15)
+    except Exception:
+        orphan.proc.kill()
+    check(not orphan.alive and os.path.getsize(out2) > 20000, "processus de son: ne survit jamais au programme (stdin ferme = arret propre, ce qui est capte est garde)")
+
+    # --- carte son introuvable : le fils le dit et ne laisse rien
+    out3 = str(tmp / "c.raw")
+    bad = ac.CaptureChild.spawn(ac.child_command(99999, 48000, 2, 512, 0.1, out3), out3, 2, 48000)
+    deadline = time.monotonic() + 20.0
+    while bad.state == "starting" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    check(bad.state == "failed" and bad.reason and not os.path.exists(out3), "processus de son: entree introuvable = echec annonce avec sa raison, aucun fichier laisse", f"{bad.state} {bad.reason}")
+    bad.close()
+
+    # --- Recorder : attend le processus, ne rend aucune image en attendant, retombe sur l'ecoute dans le programme
+    class FakeChild:
+        def __init__(self, state="starting", alive=True, timeout=False):
+            self.state, self.reason, self._alive, self._timeout, self.abandoned = state, "carte occupee", alive, timeout, False
+            self.t_first, self.peak, self.t_last_end, self.cuts, self.cut_frames, self.late_blocks, self.late_max_s, self.bytes_written, self.rate = None, 0.0, None, 0, 0, 0, 0.0, 0, 48000
+
+        alive = property(lambda self: self._alive)
+
+        def timed_out(self, now):
+            return self._timeout
+
+        def abandon(self):
+            self.abandoned, self.state = True, "failed"
+
+        def close(self, end_t=None):
+            pass
+
+    def recorder_with(child):
+        inp = types.SimpleNamespace(rate=48000, channels=2, tap=None, capture_device=3, blocksize=512, capture_latency_s=0.1)
+        rec = er.Recorder("ffmpeg", str(tmp), "carre", 30, 0.0, audio_input=inp, size=(320, 180))
+        rec.path = str(tmp / "r.mp4")
+        old = (er.CaptureChild, er.child_command)
+        er.CaptureChild = types.SimpleNamespace(spawn=lambda command, path, channels, rate: child)
+        er.child_command = lambda *a, **k: ["python"]
+        try:
+            rec._start_audio()
+        finally:
+            er.CaptureChild, er.child_command = old
+        return rec, inp
+
+    child = FakeChild()
+    rec, inp = recorder_with(child)
+    check(rec._writer is child and rec._audio_pending and inp.tap is None, "Recorder: entree reelle = son confie au processus separe, pas d'ecoute dans le programme")
+    check(rec.due(100.0) == 0 and rec.due(100.5) == 0 and rec._t0 is None, "Recorder: aucune image (et pas d'instant zero) tant que le processus de son n'est pas pret : la projection ne gele pas et l'image part avec le son")
+    child.state = "ready"
+    check(rec.due(101.0) == 1 and rec._t0 == 101.0 and not rec._audio_pending and rec._writer is child, "Recorder: processus pret = les images partent, l'instant zero est celui de la 1re image")
+    child = FakeChild(state="failed")
+    rec, inp = recorder_with(child)
+    check(rec.due(100.0) == 1 and child.abandoned and isinstance(rec._writer, er.RawAudioWriter) and inp.tap == rec._writer.push and not rec._audio_pending,
+          "Recorder: processus en echec = repli immediat sur l'ecoute dans le programme (le son n'est jamais perdu faute de processus)")
+    rec._writer.close()
+    for label, child in (("delai depasse", FakeChild(timeout=True)), ("processus mort", FakeChild(alive=False))):
+        rec, inp = recorder_with(child)
+        check(rec.due(100.0) == 1 and child.abandoned and inp.tap == rec._writer.push, f"Recorder: {label} = repli sur l'ecoute dans le programme")
+        rec._writer.close()
+    rec, inp = recorder_with(FakeChild())
+    pending = rec._writer
+    rec._started = True
+    rec._proc = types.SimpleNamespace(stdin=types.SimpleNamespace(close=lambda: None), wait=lambda timeout=None: 0, kill=lambda: None)
+    rec._log = types.SimpleNamespace(close=lambda: None)
+    rec._thread = types.SimpleNamespace(join=lambda timeout=None: None, is_alive=lambda: False)
+    rec.stop()
+    check(pending.abandoned and rec._writer is None and not rec._audio_pending, "Recorder: arret avant que le processus soit pret = il est abandonne, on n'attend rien")
+    inp = types.SimpleNamespace(rate=48000, channels=2, tap=None)
+    rec = er.Recorder("ffmpeg", str(tmp), "carre", 30, 0.0, audio_input=inp, size=(320, 180))
+    rec.path = str(tmp / "s.mp4")
+    rec._start_audio()
+    check(isinstance(rec._writer, er.RawAudioWriter) and inp.tap == rec._writer.push and rec.due(5.0) == 1, "Recorder: entree sans numero de peripherique (synthetique, tests) = ecoute dans le programme comme avant")
+    rec._writer.close()
+    off = er.Recorder("ffmpeg", str(tmp), "carre", 30, 0.0, audio_input=types.SimpleNamespace(rate=48000, channels=2, tap=None, capture_device=3), audio_process=False, size=(320, 180))
+    off.path = str(tmp / "o.mp4")
+    off._start_audio()
+    check(isinstance(off._writer, er.RawAudioWriter), "Recorder: `audio_process=False` force l'ecoute dans le programme")
+    off._writer.close()
+
+    # --- sante du rendu pendant un enregistrement
+    perf = core_rec.RenderPerf()
+    check(perf.summary() == "rendu : aucune lecture d'image", "RenderPerf: rien a dire sans lecture")
+    for k in range(30):
+        perf.frame(k / 30.0)
+        perf.read(4.0)
+    perf.frame(30 / 30.0 + 0.5)                  # une image 0,5 s apres la precedente
+    alert = [perf.read(ms) for ms in (60.0, 310.0, 40.0)]
+    s = perf.summary(8.0, 25.0)
+    check(alert == [False, True, False] and perf.slow_reads == 2 and abs(perf.read_max - 310.0) < 1e-9 and perf.gaps == 1 and abs(perf.gap_max - 0.5 - 1 / 30.0 + 1 / 30.0) < 0.05 and "GPU moy 8.0 ms" in s and "max 310 ms" in s and "1 de plus de 66 ms" in s,
+          "RenderPerf: lectures lentes comptees, alerte au-dela de 300 ms, ecarts entre images, resume pour le journal", s)
+    quiet = core_rec.RenderPerf()
+    check(sum(quiet.read(400.0) for _ in range(20)) == core_rec.RenderPerf.MAX_ALERTS, "RenderPerf: au plus 8 alertes de journal par enregistrement (pas d'inondation)")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_recorder_audio() -> None:
     """Enregistrement (issue #140) : point d'ecoute stereo de la capture audio et fichier brut (`RawAudioWriter`)."""
     print("Enregistrement : point d'ecoute audio et fichier brut")
@@ -12869,7 +13013,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -12882,7 +13026,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

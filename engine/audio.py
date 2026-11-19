@@ -16,6 +16,7 @@ from core.onset import FastAttack, KickClassifier, OnsetDetector, WideRise
 from core.phase import PhaseTracker
 from core.pulse import LeadGate, PulseClock
 from core.rhythm import Rhythm
+from engine.audio_capture import capture_age        # noqa: F401 (la capture du son de l'enregistrement, dans un processus a part, date ses blocs de la meme facon)
 from engine.deps import np, sd
 
 
@@ -500,21 +501,6 @@ def print_audio_devices(file=sys.stdout) -> None:
             print(f"  {i:3d}  [{api}] {d['name']}  ({d['default_samplerate']:.0f} Hz)", file=file)
 
 
-def capture_age(time_info, frames: int, rate: float, max_age_s: float = 1.0) -> float:
-    """Age (secondes) du DERNIER echantillon d'un bloc au moment du callback : horloge du pilote (`currentTime` moins l'instant
-    de capture du premier echantillon, `inputBufferAdcTime`, plus la duree du bloc). Un pilote qui ne renseigne pas ces temps (0, valeurs
-    absurdes, negatives ou absentes) donne 0 : le bloc est alors date a l'instant du callback, comme avant."""
-    try:
-        adc = float(time_info.inputBufferAdcTime)
-        cur = float(time_info.currentTime)
-    except (AttributeError, TypeError, ValueError):
-        return 0.0
-    if adc <= 0.0 or cur <= 0.0:
-        return 0.0
-    age = cur - (adc + frames / float(rate))
-    return age if 0.0 <= age <= max_age_s else 0.0
-
-
 class SoundDeviceInput:
     """Capture sounddevice en callback (mono, blocs courts) vers un RingBuffer ; chaque bloc est date a sa capture."""
 
@@ -526,6 +512,10 @@ class SoundDeviceInput:
         self.rate = int(info["default_samplerate"])
         self.name = info["name"]
         self.channels = max(1, min(2, int(info["max_input_channels"])))
+        try:
+            self.capture_device = int(info["index"])      # numero sounddevice : l'enregistrement l'ouvre aussi, dans un processus a part (engine.audio_capture)
+        except (KeyError, TypeError, ValueError):
+            self.capture_device = None                    # entree sans numero connu : l'enregistrement ecoute dans le programme
         self.ring = ring
         self.tap = None                  # point d'ecoute de l'enregistrement : tap(bloc stereo float32 copie, instant de fin, perte signalee) ; None = aucun cout
         self.tap_errors = 0
@@ -533,6 +523,7 @@ class SoundDeviceInput:
         self.stream = sd.InputStream(
             device=device, channels=self.channels, samplerate=self.rate, blocksize=blocksize,
             dtype="float32", latency=CAPTURE_LATENCY_S, callback=self._callback)
+        self.capture_latency_s = CAPTURE_LATENCY_S
 
     def _callback(self, indata, frames, time_info, status):
         now = time.monotonic()
