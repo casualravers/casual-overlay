@@ -52,8 +52,10 @@ void main() {
         }
         vec2 d = p - u_seeds[i].xy;
         d = (d - floor(d + 0.5)) * u_grid;                  // ecart le plus court sur la grille en boucle, en cellules
-        if (length(d) <= u_seeds[i].z) {
-            v = 1.0;
+        float r = length(d);
+        float rad = u_seeds[i].z;
+        if (rad > 0.0 && r <= 2.0 * rad) {                  // germe doux (issue #189) : gaussien, 0,4 au centre, moitie au rayon (core.reaction.seed_value)
+            v = max(v, 0.4 * exp(-0.6931472 * (r / rad) * (r / rad)));
         }
     }
     f_color = vec4(clamp(u, 0.0, 1.0), clamp(v, 0.0, 1.0), 0.0, 1.0);

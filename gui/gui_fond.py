@@ -126,6 +126,8 @@ def install(c):
     param_slider(rz, "Vide", "bg_rd_void", 0.0, 1.0, 0.05, "Zones sans matiere (et zones denses) qui derivent.")
     param_slider(rz, "Derive", "bg_rd_drift", 0.0, 1.0, 0.05, "Vitesse de deplacement des zones (formes et vides).")
     param_slider(rz, "Epaisseur des couches", "bg_rd_layers", 0.0, 1.0, 0.05, "Couche 1 large dessous, couche 3 fine dessus.")
+    param_slider(rz, "Fluidite", "bg_rd_smooth", 0.0, 1.0, 0.05,
+                 "Naissances, soudures et ruptures sans saut d'une image a l'autre (0 = rendu brut, 1 = tres coulant).")
     param_radio(rz, "Symetrie", "bg_rd_sym", (("Aucune", "none"), ("Miroir G-D", "mirror_lr"), ("Miroir H-B", "mirror_tb"),
                                                ("Quadrants", "quad"), ("Rotation", "rot")),
                 tooltip="Symetrie de la croissance. Changer ce reglage relance le motif.")

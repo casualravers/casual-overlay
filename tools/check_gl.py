@@ -11666,11 +11666,11 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 14 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 15 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
-          and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0,
-          "labyrinthe: 14 reglages du fond (zones, vides, couches, symetrie), valeurs par defaut neutres")
+          and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0 and d["bg_rd_smooth"] == 0.5,
+          "labyrinthe: 15 reglages du fond (zones, vides, couches, symetrie, fluidite), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
@@ -12311,6 +12311,94 @@ def check_textcycle() -> None:
         scene, _info, _rec = rz.draw_scene(random.Random(seed), rz.clean_settings({"bg_sources": [], "overlay": ["text"], "text": "UN | DEUX | TROIS"}), rz.Context(memory={}))
         got.add(scene["overlay"].get("text_content"))
     check(got == {"UN", "DEUX", "TROIS"}, "randomizer: les textes saisis sont tous tires, un par scene", str(got))
+
+
+def check_rd_fluide_pure() -> None:
+    print("Labyrinthe fluide : lissage de l'affichage et germes doux (core/reaction.py, issue #189)")
+    import math
+    from core import reaction as rc
+    a = rc.display_alpha
+    check(a(1 / 60, 0.0) == 1.0 and a(0.0, 0.0) == 1.0 and a(-1.0, 0.0) == 1.0, "fluidite 0 : l'affichage suit l'etat sans retard (rendu d'avant)")
+    check(a(0.0, 0.4) == 0.0 and a(-0.1, 0.4) == 0.0, "aucun temps ecoule : l'affichage ne bouge pas")
+    check(0.0 < a(1 / 60, 1.0) < a(1 / 60, 0.4) < a(1 / 60, 0.1) < 1.0, "plus fluide = l'affichage rattrape l'etat plus lentement",
+          str((a(1 / 60, 1.0), a(1 / 60, 0.4), a(1 / 60, 0.1))))
+    check(abs((1 - a(1 / 120, 0.4)) ** 2 - (1 - a(1 / 60, 0.4))) < 1e-12, "independant de la cadence : deux images a 120 Hz = une a 60 Hz")
+    check(abs((1 - a(rc.SMOOTH_TAU_MAX, 1.0)) - math.exp(-1.0)) < 1e-12 and rc.SMOOTH_TAU_MAX == 0.25
+          and abs((1 - a(0.125, 0.5)) - math.exp(-1.0)) < 1e-12 and gl.DEFAULT_PARAMS["bg_rd_smooth"] == 0.5,
+          "constante de temps : 0,25 s a fluidite 1, 0,125 s a 0,5 (defaut)")
+    check(a(1 / 60, 7.0) == a(1 / 60, 1.0) and a(1 / 60, float("nan")) == 1.0, "fluidite bornee (au-dela de 1 = 1, valeur invalide = 0)")
+    s = rc.seed_value
+    check(rc.SEED_PEAK == 0.4 and s(0.0, 3.0) == 0.4 and abs(s(3.0, 3.0) - 0.2) < 1e-12 and s(3.0 * rc.SEED_REACH + 0.01, 3.0) == 0.0
+          and rc.SEED_REACH == 2.0, "germe doux : 0,4 au centre, moitie au rayon, rien au-dela de deux rayons")
+    vals = [s(r / 4, 3.0) for r in range(0, 25)]
+    check(all(x >= y for x, y in zip(vals, vals[1:])) and s(1.0, 0.0) == 0.0, "germe doux : decroit du centre vers le bord ; rayon nul = rien")
+
+
+def check_rd_fluide() -> None:
+    print("Labyrinthe fluide : pas de saut d'une image a l'autre a la naissance, la soudure et la rupture (issue #189)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+
+    def mask(v):                                              # meme bord que rd_layer() de scene.frag (seuil 0,25)
+        x = np.clip((v - 0.23) / 0.04, 0.0, 1.0)
+        return x * x * (3.0 - 2.0 * x)
+
+    def local_jump(d, k=9):                                   # aire qui bascule d'un coup dans une fenetre k x k (grille en boucle)
+        c = d.copy()
+        for axis in (0, 1):
+            acc = np.zeros_like(c)
+            for o in range(-(k // 2), k // 2 + 1):
+                acc += np.roll(c, o, axis=axis)
+            c = acc
+        return float(c.max())
+
+    def run(smooth, frames=150):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(1.0)
+        r.reset(3)
+        for _ in range(40):
+            r.step(20, 0.7)
+        r.smooth(1.0)
+        prev, worst, k = mask(r.read_display_v()), 0.0, 0
+        for f in range(frames):
+            seeds = []
+            if f % 20 == 5:                                   # un kick toutes les 20 images : 3 germes
+                k += 1
+                seeds = [(x, y, rc.SEED_RADIUS) for x, y in rc.kick_seeds(k)]
+            r.step(10, 0.7, seeds)
+            r.smooth(rc.display_alpha(1 / 60, smooth))
+            cur = mask(r.read_display_v())
+            worst = max(worst, local_jump(np.abs(cur - prev)))
+            prev = cur
+        return r, worst
+
+    raw, j_raw = run(0.0)
+    soft, j_soft = run(float(gl.DEFAULT_PARAMS["bg_rd_smooth"]))
+    # Mesure : l'ancien disque de V = 1 sans lissage faisait basculer 80 cellules d'une fenetre 9 x 9 en une image ; germe doux seul ~52,
+    # germe doux + fluidite 0,5 ~17 (6 a 10 a la naissance meme).
+    check(j_raw > 35.0, "fluidite 0 : on mesure bien des sauts (germes, soudures)", f"{j_raw:.1f} cellules d'un coup")
+    check(j_soft < 25.0 and j_soft < 0.5 * j_raw, "fluidite par defaut : le plus gros saut local d'une image a l'autre est bien plus petit",
+          f"{j_soft:.1f} contre {j_raw:.1f} cellules (sur 81)")
+    cover_raw, cover_soft = float((raw.read_v() > 0.25).mean()), float((soft.read_display_v() > 0.25).mean())
+    check(abs(cover_raw - cover_soft) < 0.05, "pas de flou general : la couverture affichee reste celle du motif", f"{cover_soft:.3f} / {cover_raw:.3f}")
+    for _ in range(120):                                       # motif fige (tempo 0) : l'affichage rejoint l'etat
+        soft.smooth(rc.display_alpha(1 / 60, 0.4))
+    check(float(np.abs(soft.read_display_v() - soft.read_v()).max()) < 1e-3, "motif fige : l'affichage rejoint l'etat en quelques dixiemes de seconde")
+    soft.ensure(1.5)
+    soft.smooth(rc.display_alpha(1 / 60, 0.4))
+    check(soft.read_display_v().shape == soft.read_v().shape and float(np.abs(soft.read_display_v() - soft.read_v()).max()) < 1e-6,
+          "taille de grille changee : l'affichage repart de l'etat (pas de melange de deux grilles)")
+    fresh = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+    fresh.ensure(1.0)
+    fresh.reset(0)
+    check(np.array_equal(fresh.read_display_v(), fresh.read_v()), "sans lissage demande, l'affichage est l'etat (texture de la simulation)")
 
 
 def check_reaction_pure() -> None:
@@ -13396,12 +13484,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
@@ -13421,7 +13509,7 @@ ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui val
 # (`check_groupes`). Equilibre vise : ~5 a 8 minutes chacun sur le serveur ; le groupe `gui` garde les verifications dont `check_gui` depend.
 GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
-    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
+    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),

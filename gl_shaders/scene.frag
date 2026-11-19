@@ -188,7 +188,8 @@ float rd_layer(vec2 p, float angle, float thr) {
     float ar = u_res.x / max(u_res.y, 1.0);
     vec2 q = p + u_rd.x * vec2(cos(angle) / ar, sin(angle));     // decalage isotrope a l'ecran
     float v = texture(u_rd_tex, u_rd_crop.xy + vec2(q.x, 1.0 - q.y) * u_rd_crop.zw).g;     // la grille est 16:9 : un autre cadre la lit rognee (cellules rondes, pas etirees)
-    float w = max(u_rd.y * 4.0, 0.02);                            // bord net sans crenelage (V varie vite pres du seuil)
+    // bord net sans crenelage (V varie vite pres du seuil) ; jamais plus fin qu'un pixel d'ecran (fwidth : grille fine sur grand ecran)
+    float w = max(max(u_rd.y * 4.0, 0.02), 0.7 * fwidth(v));
     return smoothstep(thr - w, thr + w, v);
 }
 
