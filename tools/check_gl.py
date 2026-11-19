@@ -11520,7 +11520,7 @@ def check_doodles() -> None:
             return files[name]
         return post, get
 
-    files = {"old.png": png, "new1.png": png, "bad.png": b"pas une image" * 4, "new2.jpg": jpg}
+    files = {"old.png": png, "new1.png": png + b"1", "bad.png": b"pas une image" * 4, "new2.jpg": jpg}
     post, get = fake_net(files)
     seen = dd.Seen()
     seen.arm([{"name": "old.png", "created_at": "2026-01-01"}])
@@ -11529,10 +11529,36 @@ def check_doodles() -> None:
           "tour: nouveaux fichiers valides rendus, fichier invalide ecarte et journalise", str((good and [n for n, _ in good], rejected, error)))
     check(dd.poll_once(cfg, seen, post, get) == ([], [], ""), "tour suivant: rien de nouveau, rien a refaire")
     seen2 = dd.Seen()
-    post2, get2 = fake_net({"a.png": png, "b.png": png, "c.png": png}, fail=("b.png",))
+    post2, get2 = fake_net({"a.png": png, "b.png": png + b"b", "c.png": png + b"c"}, fail=("b.png",))
     good, rejected, error = dd.poll_once(cfg, seen2, post2, get2)
     check([n for n, _ in good] == ["a.png"] and "b.png" in error and "b.png" not in seen2.names and "c.png" not in seen2.names,
           "tour: coupure en cours de route = fichiers deja recus gardes, le fichier en echec sera reessaye", str((good and [n for n, _ in good], error)))
+
+    # --- #108 : une photo apparaissait en double. Journal reel : 1792879143727-xrq7yc.jpg et 1792879143757-59lv7f.jpg, 30 ms d'ecart, meme taille
+    #     (1200x1600) = le site a envoye le meme fichier deux fois sous deux noms. Un fichier au contenu deja affiche recemment n'est pas reaffiche.
+    twin_files = {"1792879143727-xrq7yc.jpg": jpg, "1792879143757-59lv7f.jpg": jpg, "autre.png": png}
+    tpost, tget = fake_net(twin_files)
+    tseen = dd.Seen()
+    tseen.arm([])
+    good, rejected, error = dd.poll_once(cfg, tseen, tpost, tget)
+    check([n for n, _ in good] == ["1792879143727-xrq7yc.jpg", "autre.png"] and len(rejected) == 1 and "1792879143757-59lv7f.jpg" in rejected[0]
+          and "doublon" in rejected[0] and "1792879143727-xrq7yc.jpg" in rejected[0] and error == "",
+          "doublon (#108): le meme fichier envoye deux fois sous deux noms n'est affiche qu'une fois, le journal dit de quel fichier il est le doublon", str((good and [n for n, _ in good], rejected)))
+    check(dd.poll_once(cfg, tseen, tpost, tget) == ([], [], "") and "1792879143757-59lv7f.jpg" in tseen.names,
+          "doublon: le fichier ecarte est marque vu (pas retelecharge a chaque tour)")
+    twin_files["plus_tard.jpg"] = jpg
+    tpost, tget = fake_net(twin_files)
+    good, rejected, error = dd.poll_once(cfg, tseen, tpost, tget)
+    check(good == [] and len(rejected) == 1 and "plus_tard.jpg" in rejected[0], "doublon: la meme photo renvoyee plus tard est aussi reconnue")
+    bseen = dd.Seen()
+    bseen.arm([])
+    many = {f"f{i:03d}.png": png + str(i).encode() for i in range(dd.DUP_MEMORY + 1)}
+    bpost, bget = fake_net(many)
+    good, rejected, error = dd.poll_once(cfg, bseen, bpost, bget)
+    check(len(good) == dd.DUP_MEMORY + 1 and not rejected and len(bseen.digests) == dd.DUP_MEMORY,
+          "doublon: la memoire des contenus est bornee (les plus anciens sont oublies)", str(len(bseen.digests)))
+    check(bseen.twin("rejoue2.png", png + b"0") is None and bseen.twin("rejoue3.png", png + str(dd.DUP_MEMORY).encode()) == "f%03d.png" % dd.DUP_MEMORY,
+          "doublon: un contenu oublie peut etre reaffiche, un contenu recent non")
 
     # --- le fil (faux reseau, horloge injectee)
     class FakeS:
@@ -11589,13 +11615,13 @@ def check_doodles() -> None:
     fd.tick()
     check("reseau" in fs.status["doodles"], "fil: erreur reseau = statut, le fil continue", fs.status["doodles"])
     del live_files["__down__"]
-    live_files["after.png"] = png
+    live_files["after.png"] = png + b"a"
     clock["t"] = 27.0
     fd.tick()
     check([g["name"] for g in drain(fs.doodle_queue)] == ["after.png"], "fil: apres une coupure, on reprend au tour suivant")
     fs.params["doodle_on"] = 0.0
     fd.tick()
-    live_files["while_off.png"] = png
+    live_files["while_off.png"] = png + b"w"
     clock["t"] = 40.0
     fd.tick()
     fs.params["doodle_on"] = 1.0

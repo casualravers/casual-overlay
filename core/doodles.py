@@ -3,8 +3,10 @@ cycle de vie, mur de medias). Stdlib seulement : aucun reseau, aucune image, auc
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 
@@ -24,6 +26,7 @@ TILT_RAD = 0.30               # inclinaison de depart / d'arrivee (~17 degres)
 MAX_HEIGHT_FRAC = 0.45        # hauteur maximale d'une photo (fraction de la hauteur de l'ecran)
 TEXT_HEIGHT_FRAC = 0.30       # hauteur d'un media decoupe (texte, dessin : beaucoup de transparence) : plus petit, il est deja lisible
 CUTOUT_SHARE = 0.10           # part de pixels transparents au-dela de laquelle un media est un texte / dessin et non une photo
+DUP_MEMORY = 64               # contenus des derniers fichiers affiches gardes pour reperer un fichier envoye deux fois (#108)
 CONFIG_NAME = "depot.json"
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -101,6 +104,7 @@ class Seen:
 
     def __init__(self) -> None:
         self.names: set[str] = set()
+        self.digests: OrderedDict[str, str] = OrderedDict()      # empreinte du contenu -> nom du fichier affiche (les DUP_MEMORY derniers)
 
     def arm(self, listing: list[dict]) -> None:
         self.names = {e["name"] for e in listing}
@@ -112,6 +116,19 @@ class Seen:
 
     def mark(self, name: str) -> None:
         self.names.add(name)
+
+    def twin(self, name: str, data: bytes) -> str | None:
+        """Nom du fichier deja affiche qui a EXACTEMENT ce contenu (le site envoie parfois la meme photo deux fois, sous deux noms a quelques ms
+        d'ecart : #108), sinon None et le contenu est retenu comme affiche. Memoire bornee : un tres vieux contenu peut reapparaitre."""
+        digest = hashlib.sha1(data).hexdigest()
+        first = self.digests.get(digest)
+        if first is not None:
+            self.digests.move_to_end(digest)
+            return first
+        self.digests[digest] = name
+        while len(self.digests) > DUP_MEMORY:
+            self.digests.popitem(last=False)
+        return None
 
 
 def sniff(data: bytes) -> str | None:
@@ -299,6 +316,10 @@ def poll_once(config: dict, seen: Seen, http_post: Callable, http_get: Callable)
         seen.mark(name)
         if kind is None:
             rejected.append(f"{name} : {why}")
+            continue
+        twin = seen.twin(name, data)
+        if twin is not None:
+            rejected.append(f"{name} : doublon de {twin} (meme contenu)")
         else:
             good.append((name, data))
     return good, rejected, error
