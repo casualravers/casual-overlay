@@ -12977,6 +12977,8 @@ def main() -> None:
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+            import gc
+            gc.collect()                                   # les objets Tk orphelins sont liberes ICI (fil principal) : le ramasse-miettes dans un autre fil fait avorter le processus (Tcl_AsyncDelete)
     print()
     try:                                                   # information (rien n'echoue) : operations les plus lentes de l'interface pendant les tests
         import gl_gui as gg_stats
