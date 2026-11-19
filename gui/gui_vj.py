@@ -322,6 +322,7 @@ def install(c):
             return
         build_ui["t0"] = time.monotonic()
         params["build"] = 0.0
+        params["build_auto"] = 1.0 if auto else 0.0       # montee des detecteurs : ses eclairs suivent la case Strobe auto (#184)
         rhythm_ui["manual_build"] = not auto              # montee lancee a la main : seul le bouton Drop la relache
         rhythm_ui["auto_build"] = False                   # une montee lancee a la main n'est jamais annulee par les detecteurs (les appels automatiques le reposent apres)
         scene_msg.set(f"Montee sur {float(params.get('build_time', 16.0)):.0f} s : reactivite, strobe et teinte montent puis restent au maximum jusqu'au drop (bouton Drop)")
