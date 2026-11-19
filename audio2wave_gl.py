@@ -71,7 +71,8 @@ from core.params import (  # noqa: E402,F401
     menu_layout, split_folder, differs_from, FOLDER_SEP, normalize_preset_name
 )
 from core.automation import (  # noqa: E402,F401
-    AUTOMATION_POINTS, AUTOMATION_SPECS, FX_EFFECTS, curve_points, default_automation, merge_automation, _list_key, get_param,
+    AUTOMATION_POINTS, AUTOMATION_SPECS, CURVE_VERSION, DEFAULT_RANGES, FX_EFFECTS, curve_points, default_automation, legacy_to_full,
+    merge_automation, rescale_points, _list_key, get_param,
     set_param, set_fx_link, AutomationEngine
 )
 from core.controls import (  # noqa: E402,F401

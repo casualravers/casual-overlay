@@ -713,6 +713,49 @@ def check_gui() -> None:
             snap = auto.snapshot()
             out["auto_snapshot"] = (snap["bg_hue"]["enabled"], snap["logo_x"]["enabled"], snap["bg_tile"]["period"],
                                     isinstance(snap["bg_hue"]["points"], list), snap["bg_hue"]["value"])
+            # fenetre de courbe de casual-overlay (gui_curve) : grande, graduee, dessin, Inverser, Plein, Actif, marque de version
+            try:
+                import gui_curve as gc_
+                import types as _ty
+                auto.open_editor("bg_rd_void")
+                root.update()
+                st_ = auto.state["bg_rd_void"]
+                win_, cv_ = st_["editor"], st_["canvas"]
+                size_ = (int(cv_.cget("width")), int(cv_.cget("height")))
+                auto.open_editor("bg_rd_void")                       # une seule fenetre par reglage
+                tops_ = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.winfo_exists() and str(w.title()).startswith("Courbe")]
+                n_ = len(st_["points"])
+                auto._on_drag(_ty.SimpleNamespace(x=gc_.PAD_L, y=gc_.PAD_T), "bg_rd_void")                       # point 1 tout en haut
+                auto._on_drag(_ty.SimpleNamespace(x=gc_.CANVAS_W - gc_.PAD_R, y=gc_.CANVAS_H - gc_.PAD_B), "bg_rd_void")   # glisse jusqu'au dernier, en bas
+                auto._on_release(None, "bg_rd_void")
+                drawn_ = list(st_["points"])
+                painted_ = all(drawn_[i] > drawn_[i + 1] for i in range(n_ - 1))     # les points sautes sont peints en ligne droite
+                buttons_ = {}
+                stack_ = [win_]
+                while stack_:
+                    w_ = stack_.pop()
+                    for ch_ in w_.winfo_children():
+                        if ch_.winfo_class() == "Button":
+                            buttons_[str(ch_.cget("text"))] = ch_
+                        stack_.append(ch_)
+                buttons_["Inverser"].invoke()
+                inverted_ = abs(st_["points"][0] - 0.0) < 1e-9 and abs(st_["points"][-1] - 1.0) < 1e-9
+                auto.state["bg_rd_void"]["points"] = [0.4, 0.6] * (n_ // 2)
+                buttons_["Plein 0-100 %"].invoke()
+                stretched_ = min(st_["points"]) == 0.0 and max(st_["points"]) == 1.0
+                was_ = st_["enabled"].get()
+                st_["_active"].invoke()
+                toggled_ = st_["enabled"].get() != was_
+                st_["_active"].invoke()
+                labels_ = [cv_.itemcget(i, "text") for i in cv_.find_all() if cv_.type(i) == "text"]
+                graded_ = any("100 %" in t and "1,00" in t for t in labels_) and any(t.strip().startswith("0 %") for t in labels_)
+                marked_ = auto.capture()["bg_rd_void"].get("v") == gl.CURVE_VERSION
+                buttons_["Fermer"].invoke()
+                root.update()
+                closed_ = st_["editor"] is None and not win_.winfo_exists()
+                out["curve_editor"] = (size_[0] >= 520 and size_[1] >= 240, len(tops_) == 1, painted_, inverted_, stretched_, toggled_, graded_, marked_, closed_)
+            except Exception as exc_:
+                out["curve_editor"] = repr(exc_)
             c["auto_master_var"].set(0)
             root.after(600, step4b)
 
@@ -1674,6 +1717,9 @@ def check_gui() -> None:
           "texte tape (plusieurs lignes) et police ecrits dans les parametres", repr(out.get("typed")))
     check(out.get("auto_snapshot") == (False, True, 33.0, True, None),
           "AutomationManager.snapshot(): etat relu en types simples apres capture / apply (plus de lecture de .state)", str(out.get("auto_snapshot")))
+    check(out.get("curve_editor") == (True,) * 9,
+          "fenetre de courbe: grande, une seule par reglage, glisser peint la courbe, Inverser, Plein 0-100 %, Actif, graduee en % et en valeur, marque v = 2, Fermer",
+          str(out.get("curve_editor")))
     check(out.get("auto_registered"), "tous les reglages automatisables ont leur editeur de courbe (audio2wave)",
           f"{out.get('compact_buttons')} boutons")
     check(out.get("sync_enabled") == (False, True) and out.get("sync_period") == 33.0 and out.get("sync_master") == 0.0,
@@ -9256,7 +9302,7 @@ def check_masters() -> None:
           "masters: 100 % par defaut, hors presets et scenes (reglages de salle)")
     import copy
     spec = gl.AUTOMATION_SPECS["bg_hue"]
-    lo, hi, period = spec[1], spec[2], spec[4]
+    (lo, hi), period = gl.DEFAULT_RANGES["bg_hue"], spec[4]          # la courbe par defaut tient dans l'ancienne plage
     for tempo, real in ((1.0, period / 4), (0.5, period / 2), (2.0, period / 8), (0.0, period)):
         p = copy.deepcopy(d)
         p["_automation"], p["tempo"] = gl.default_automation(), tempo
@@ -9647,7 +9693,7 @@ def check_automation() -> None:
         return p
 
     engine, p = gl.AutomationEngine(), fresh()
-    lo, hi, period = specs["bg_hue"][1], specs["bg_hue"][2], specs["bg_hue"][4]
+    (lo, hi), period = gl.DEFAULT_RANGES["bg_hue"], specs["bg_hue"][4]          # la courbe par defaut tient dans l'ancienne plage
     engine.step(p, 100.0)
     check(abs(p["bg_hue"] - (lo + hi) / 2) < 1e-9, "debut de cycle: milieu de la plage (sinus)", f"{p['bg_hue']:.3f}")
     engine.step(p, 100.0 + period / 4)
@@ -9702,14 +9748,72 @@ def check_automation() -> None:
     try:
         p = gl.load_params()
         p["_automation"] = gl.merge_automation({"bg_tile": {"enabled": False, "period": 12.5,
-                                                            "points": [0.1] * 12}})
+                                                            "points": [0.1] * 12, "v": gl.CURVE_VERSION}})
         p["auto_master"] = 0.0
         gl.save_params(p)
         back = gl.load_params()
-        check(back["_automation"]["bg_tile"] == {"enabled": False, "period": 12.5, "points": [0.1] * 12}
+        check(back["_automation"]["bg_tile"] == {"enabled": False, "period": 12.5, "points": [0.1] * 12, "v": gl.CURVE_VERSION}
               and back["auto_master"] == 0.0, "automations et interrupteur general sauves puis recharges")
     finally:
         core_params.PARAMS_PATH = original
+
+
+def check_automation_plage() -> None:
+    """Courbes d'automation sur toute la plage du curseur (0 a 100 %), anciennes courbes converties a l'identique (pur)."""
+    print("-- automations : de 0 a 100 % du curseur, presets d'avant intacts (pur)")
+    import json
+    import random as _rnd
+    import re
+    from core import automation as au_
+    here = Path(__file__).resolve().parent.parent
+    src = "".join(path.read_text(encoding="utf-8") for path in sorted((here / "gui").glob("gui_*.py")))
+    sliders = {m.group(1): (float(m.group(2)), float(m.group(3))) for m in re.finditer(r'param_slider\(\w+, "[^"]*", "(\w+)", ([-\d.]+), ([-\d.]+),', src)}
+    off = [(k, (s[1], s[2]), sliders[k]) for k, s in au_.AUTOMATION_SPECS.items() if k in sliders and (s[1], s[2]) != sliders[k]]
+    lists = [k for k in au_.AUTOMATION_SPECS if k.startswith(("fx_int", "fxl_int"))]
+    check(not off and all(k in sliders for k in au_.AUTOMATION_SPECS if k not in lists)
+          and all(au_.AUTOMATION_SPECS[k][1:3] == (0.0, 2.0) for k in lists),
+          "plages: chaque courbe couvre toute la plage de son curseur (bas de l'editeur = 0 %, haut = 100 %)", str(off[:3]))
+    check(au_.AUTOMATION_SPECS["bg_rd_void"][1:3] == (0.0, 1.0), "plages: le Vide du labyrinthe va de 0 a 1")
+    check(set(au_.DEFAULT_RANGES) == set(au_.AUTOMATION_SPECS)
+          and all(s[1] <= au_.DEFAULT_RANGES[k][0] < au_.DEFAULT_RANGES[k][1] <= s[2] for k, s in au_.AUTOMATION_SPECS.items()),
+          "plages: les anciennes plages (courbes par defaut, conversion) tiennent dans celles des curseurs")
+
+    def value(key, points, rng):
+        return [rng[0] + (rng[1] - rng[0]) * p for p in points]
+    rg = _rnd.Random(5)
+    worst = 0.0
+    for key, spec in au_.AUTOMATION_SPECS.items():
+        old = [rg.random() for _ in range(au_.AUTOMATION_POINTS)]
+        new = au_.merge_automation({key: {"points": old, "period": 9.0, "enabled": True}})[key]
+        for a, b in zip(value(key, old, au_.DEFAULT_RANGES[key]), value(key, new["points"], spec[1:3])):
+            worst = max(worst, abs(a - b) / (spec[2] - spec[1]))
+    check(worst < 1e-9, "conversion: une courbe sauvee avant (sans marque) donne exactement les memes valeurs", f"pire ecart {worst:.2e}")
+    once = au_.merge_automation({"bg_rd_void": {"points": [0.0, 1.0] * 6, "enabled": True}})
+    twice = au_.merge_automation(au_.merge_automation(once))
+    check(once == twice and all(e.get("v") == au_.CURVE_VERSION for e in once.values())
+          and abs(once["bg_rd_void"]["points"][1] - 0.6) < 1e-9 and abs(once["bg_rd_void"]["points"][0] - 0.15) < 1e-9,
+          "conversion: jamais deux fois (marque v = 2 sur chaque entree) ; 0..1 d'avant = 15 % .. 60 % du Vide", str(once["bg_rd_void"]["points"][:2]))
+    full = au_.merge_automation({"bg_rd_void": {"points": [0.0, 1.0] * 6, "enabled": True, "v": au_.CURVE_VERSION}})
+    p = json.loads(json.dumps(gl.DEFAULT_PARAMS))
+    p["_automation"] = full
+    eng = au_.AutomationEngine()
+    seen = []
+    for i in range(int(107 * 60) + 1):
+        eng.step(p, i / 60.0)
+        seen.append(p["bg_rd_void"])
+    check(min(seen) < 1e-6 and max(seen) > 1.0 - 1e-6, "pleine plage: une courbe de bas en haut fait varier le Vide de 0 a 100 %",
+          f"{min(seen):.3f} .. {max(seen):.3f}")
+    # les courbes par defaut ne changent pas de valeurs (rien ne bouge pour qui ne touche a rien)
+    d = au_.default_automation()
+    same = all(abs(x - y) < 1e-9 for k in d for x, y in zip(value(k, d[k]["points"], au_.AUTOMATION_SPECS[k][1:3]),
+                                                           value(k, au_.curve_points(au_.AUTOMATION_SPECS[k][3], seed=list(d).index(k)), au_.DEFAULT_RANGES[k])))
+    check(same, "courbes par defaut: memes valeurs qu'avant (dans les anciennes plages)")
+    # presets / scenes : une ancienne entree chargee par le chemin des presets overlay est convertie, une nouvelle non
+    cur = {"_automation": au_.default_automation()}
+    vals = gl.overlay_preset_values({"_automation": {"fx_int0": {"points": [0.5] * 12, "enabled": True}}}, cur)
+    v0 = vals["_automation"]["fx_int0"]
+    check(abs(v0["points"][0] - (0.4 + 0.8 * 0.5) / 2.0) < 1e-9 and v0["v"] == au_.CURVE_VERSION,
+          "presets: une ancienne courbe d'un preset overlay garde sa valeur (0,8 d'intensite)", str(v0["points"][0]))
 
 
 def check_params() -> None:
@@ -13192,7 +13296,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -13205,7 +13309,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
