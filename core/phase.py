@@ -127,6 +127,7 @@ class PhaseTracker:
         self._last_kick: float | None = None
         self._drop_arm: float | None = None
         self.drops = 0                     # nombre de drops vus (le kick revient apres un vide pendant une montee / cassure)
+        self.drop_kick: float | None = None  # instant du premier kick du retour, au dernier drop
         self._slope_long = 0.0              # memes mesures sur 20 s : une montee lente (16 mesures) gagne trop peu sur 8 s
         self._top_slope_long = 0.0
         self._top_gain_long = 1.0
@@ -215,6 +216,7 @@ class PhaseTracker:
             self._drop_arm = now
         elif self._drop_arm is not None and now - self._drop_arm <= DROP_CONFIRM_S:
             self.drops += 1
+            self.drop_kick = self._drop_arm           # le premier kick du retour : le « 1 » de la phrase (Temps 1 auto, core/rhythm.py)
             self._drop_arm = None
 
     def _classify(self, now: float, kick_rate: float, rhythm_state: str, calm: float = CALM_ABS, quiet: float = QUIET_ABS, build_min: float = BUILD_MIN) -> str:

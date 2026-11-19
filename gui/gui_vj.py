@@ -73,9 +73,13 @@ def install(c):
     def bpm_text() -> str:
         """BPM detecte (kicks) s'il est fiable, sinon celui du tap tempo."""
         det = detected_bpm()
+        r = rhythm_source()
+        grid = getattr(r, "grid", None)
+        one = explain.one_text(getattr(grid, "origin", None) if grid is not None and grid.active else None)      # d'ou vient le 1 de la grille (#164)
+        one = ("  " + one) if one else ""
         if det:
-            return f"{det:.0f} BPM auto"
-        return f"{tap_state['bpm']:.0f} BPM (tap)" if tap_state["bpm"] else "\u2014 BPM"
+            return f"{det:.0f} BPM auto" + one
+        return (f"{tap_state['bpm']:.0f} BPM (tap)" if tap_state["bpm"] else "\u2014 BPM") + one
 
     def knob_text(key: str, value: float, dec: int, unit: str) -> str:
         """Valeur affichee a droite d'un curseur de master. Tempo auto sans BPM detecte : « -- BPM » (le curseur reste a 120, mais ce n'est pas un tempo mesure)."""
@@ -475,12 +479,16 @@ def install(c):
             vj_ui["one"] = one
             Tooltip(one, "Appuie sur le premier temps de la mesure (touche virgule dans la fenetre de rendu) : le strobe auto tombe alors sur les 1 "
                          "et le VJ « en rythme » change de scene exactement sur un 1. La grille se recale seule sur les kicks et s'efface quand ils "
-                         "disparaissent.")
+                         "disparaissent. Avec « Temps 1 auto », le 1 se pose aussi tout seul (reprise des kicks, drop) ; ton appui reste prioritaire.")
             bpm = vj_ui["bpm"] = tk.Label(f, text="\u2014 BPM", bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG)
             bpm.grid(row=3, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             toggle(f, "bpm_auto", "Tempo auto", "Le master du tempo suit le BPM detecte a partir des kicks (120 BPM = 100 %). "
                                                  "Il faut des kicks reguliers : sans BPM fiable, le tempo ne bouge pas.",
                    row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            toggle(f, "one_auto", "Temps 1 auto", "Sans appui sur « Temps 1 », le 1 de la phrase se pose seul : sur le premier kick d'une reprise "
+                                                  "(apres un vide) et sur le kick qui revient au drop. Il sert au strobe auto, au VJ en rythme, a l'onde de choc "
+                                                  "sur le 1 et aux fins de cycles 8 / 16 / 32. Une grille posee a la main n'est jamais deplacee.",
+                   row=4, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             toggle(f, "gpu_cap", "Securite GPU", "Quand le VJ enchaine une scene, ses effets couteux (cellules, halo, fonte) sont coupes si, ajoutes a la charge mesuree "
                                                   "du GPU, ils ne tiendraient plus dans le budget d'une image. Une scene choisie a la main n'est jamais touchee.",
                    row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))

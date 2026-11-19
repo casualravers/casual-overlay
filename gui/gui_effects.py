@@ -127,6 +127,11 @@ def install(c):
                          "Le « 1 » se cale sur la grille Temps 1 (onglet Masters, touche virgule) ; sans grille, il est pris au hasard parmi les kicks. "
                          "kick = a chaque kick, comme avant.")
 
+    accent_var = tk.DoubleVar(value=params.get("cycle_accent", 1.0))       # renforts de fin de cycle (#164)
+    bind_param("cycle_accent", accent_var)
+    add_slider(zone_fx, "Renfort fins de cycle", 0.0, 1.0, 0.05, accent_var, length=110,
+               tooltip="En groove et au pic (effets auto) : glitch et aberration plus forts sur le dernier temps d'un cycle de 8, les 2 derniers d'un 16 "
+                       "et les 4 derniers d'un 32 (le 32 finit le plus fort). Compte depuis le 1 de la grille (Temps 1, manuel ou auto). 0 = aucun renfort.")
     master_var = tk.DoubleVar(value=params["master"])
     bind_param("master", master_var)
     add_slider(zone_fx, "Intensite globale", 0.0, 2.0, 0.1, master_var, length=110)

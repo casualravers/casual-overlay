@@ -529,6 +529,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             params["sync_lead_est"] = lead_est.value
             s.status["lead_parts"] = dict(lead_est.parts)
         analyzer.lead_s = effective_lead_ms(params) / 1000.0                                   # avance des effets sur kick (lot 4) : auto ou manuelle
+        analyzer.rhythm.auto_one = float(params.get("one_auto", 1.0)) >= 0.5                  # Temps 1 auto (#164)
         analyzer.extractor.layer_sens = {"bg": float(params.get("sens_bg", 1.0)), "logo": float(params.get("sens_logo", 1.0))}      # kick par couche
 
         u0 = time.perf_counter()

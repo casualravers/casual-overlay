@@ -24,9 +24,13 @@ BAND_SOURCES = {"sub": (0,), "corps": (2, 3), "presence": (4, 5), "air": (6, 7)}
 # nom -> (subdivisions par temps, un evenement sur N) : « pouls » = chaque temps, « croches » = 2 par temps, « doubles » = 4 par temps,
 # « mesure » = 1 temps sur 4, « phrase8 / 16 / 32 » = 1 temps sur 8 / 16 / 32 (#85)
 PULSE_GRIDS = {"pouls": (1, 1), "croches": (2, 1), "doubles": (4, 1), "mesure": (1, 4), "phrase8": (1, 8), "phrase16": (1, 16), "phrase32": (1, 32)}
-SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto", *BAND_SOURCES, "elan", *PULSE_GRIDS)
+# FINS de cycles (#164) : nom -> (longueur du cycle en temps, nombre de derniers temps) ; un evenement sur chacun de ces temps. Comptes depuis le
+# « 1 » de la grille (Temps 1, manuel ou auto) : sans grille, rien (une fin tomberait n'importe ou).
+END_GRIDS = {"fin8": (8, 1), "fin16": (16, 2), "fin32": (32, 4)}
+PHRASE_BEATS = 32
+SOURCES = ("tout", "basses", "mediums", "aigus", "kick", "frappes", "snare", "rien", "auto", *BAND_SOURCES, "elan", *PULSE_GRIDS, *END_GRIDS)
 # Menus : les sources par famille, une ligne de separation entre deux familles (voir gui_effects.source_menu)
-SOURCE_GROUPS = (("tout", "basses", "mediums", "aigus", "kick", "frappes", "rien", "auto"), (*BAND_SOURCES, "elan"), tuple(PULSE_GRIDS))
+SOURCE_GROUPS = (("tout", "basses", "mediums", "aigus", "kick", "frappes", "snare", "rien", "auto"), (*BAND_SOURCES, "elan"), (*PULSE_GRIDS, *END_GRIDS))
 RISE_REF = 3.0              # montee d'enveloppe (unites / s) qui donne un « elan » de 1
 DEFAULT = "tout"
 PULSE_DECAY_S = 0.20        # decroissance de l'enveloppe d'un evenement de pulsation (comme celle du kick)
@@ -36,7 +40,48 @@ LAYERS = ("bg", "logo")
 LABELS = {"tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick", "frappes": "Frappes", "rien": "Rien", "auto": "Auto",
           "elan": "Elan (montee du son)", "sub": "Sub-basses", "corps": "Corps (150-1000 Hz)", "presence": "Presence (1-5 kHz)", "air": "Air (5-12 kHz)",
           "pouls": "Pouls (chaque temps)", "croches": "Pouls x2 (croches)", "doubles": "Pouls x4 (doubles)", "mesure": "Mesure (1 temps sur 4)",
-          "phrase8": "Phrase (1 temps sur 8)", "phrase16": "Phrase (1 temps sur 16)", "phrase32": "Phrase (1 temps sur 32)"}
+          "phrase8": "Phrase (1 temps sur 8)", "phrase16": "Phrase (1 temps sur 16)", "phrase32": "Phrase (1 temps sur 32)",
+          "snare": "Caisse claire (2 et 4)", "fin8": "Fin de 8 (dernier temps)", "fin16": "Fin de 16 (2 derniers temps)", "fin32": "Fin de 32 (4 derniers temps)"}
+
+
+def cycle_end(name: str, beat: int) -> bool:
+    """Vrai si le temps numero `beat` (depuis le « 1 » de la grille) est l'un des derniers temps du cycle `name` (`END_GRIDS`)."""
+    n, tail = END_GRIDS[name]
+    return int(beat) % n >= n - tail
+
+
+# Renforts de fin de cycle (#164) : le glitch et l'aberration sont plus forts sur les derniers temps d'un cycle, d'autant plus que le cycle est long.
+BOOST_END8, BOOST_END16, BOOST_END32 = 1.3, 1.5, (1.6, 2.0)      # fin de 32 : de 1,6 a 2 en montant sur ses 4 temps
+ACCENT_FX = (2, 3)                       # indices du glitch et de l'aberration dans les vecteurs par effet
+
+
+def phrase_boost(pos, strength: float = 1.0) -> float:
+    """Multiplicateur du temps `pos` de la phrase (0..31 depuis le « 1 ») ; 1 hors des fins de cycles ou sans grille (`pos` None).
+    `strength` (0..1, master « Renfort fins de cycle ») le rapproche de 1."""
+    if pos is None:
+        return 1.0
+    p = int(pos) % PHRASE_BEATS
+    if cycle_end("fin32", p):
+        lo, hi = BOOST_END32
+        b = lo + (hi - lo) * (p - (PHRASE_BEATS - END_GRIDS["fin32"][1])) / (END_GRIDS["fin32"][1] - 1)
+    elif cycle_end("fin16", p):
+        b = BOOST_END16
+    elif cycle_end("fin8", p):
+        b = BOOST_END8
+    else:
+        return 1.0
+    return 1.0 + (b - 1.0) * min(max(float(strength), 0.0), 1.0)
+
+
+def accent_vectors(vecs, boost: float) -> list:
+    """Copie des quatre vecteurs (bass, high, beat, since) d'une couche ou le glitch et l'aberration sont multiplies par `boost` (plafonnes a 1)."""
+    out = list(vecs)
+    if boost == 1.0:
+        return out
+    for i in ACCENT_FX:
+        v = out[i]
+        out[i] = (min(v[0] * boost, 1.0), min(v[1] * boost, 1.0), min(v[2] * boost, 1.0), v[3])
+    return out
 
 # Source « auto » : chaque couche prend la source que le tableau donne pour la phase du morceau en cours (core/phase.py). (fond, logo)
 AUTO_TABLE = {
@@ -48,6 +93,7 @@ AUTO_TABLE = {
     "peak": ("kick", "kick"),            # tout bat ensemble
 }
 HIT_RECENT_S = 4.0                       # groove : le logo suit les frappes aigues si on en a vu depuis moins de ce temps, sinon les aigus
+SNARE_RECENT_S = 4.0                     # groove / pic : l'aberration du logo suit la caisse claire si on en a entendu une depuis moins de ce temps
 FADE_S = 1.5                             # fondu entre deux sources choisies par Auto (jamais de saut a l'image)
 
 
@@ -79,6 +125,8 @@ def _fx(wobble=REST, ripple=REST, glitch=REST, chroma=REST) -> dict:
 
 # phase -> couche -> effet -> (source, dosage). Le fond porte les basses / le kick, le logo les frappes / aigus : ils ne battent pas a l'unisson.
 # Hors du pic, deux effets au plus par couche ; au pic les quatre effets sont actifs mais repartis entre les deux couches. A regler a l'oeil.
+# #164 : en groove et au pic, chaque impact a son temps : l'onde de choc sur le 1 (`ripple_beat` = mesure), l'aberration du logo sur la caisse
+# claire (2 et 4, voir `auto_fx`), le glitch sur les charleys / l'air.
 FX_TABLE = {
     "silence": {"bg": _fx(wobble=("basses", DERIVE)), "logo": _fx(chroma=("rien", DERIVE))},
     "ambient": {"bg": _fx(wobble=("basses", DERIVE)), "logo": _fx(chroma=("rien", DERIVE))},
@@ -92,15 +140,19 @@ FX_TABLE = {
 }
 
 
-def auto_fx(phase, since_hit=None) -> dict | None:
+def auto_fx(phase, since_hit=None, since_snare=None) -> dict | None:
     """Assignations {couche: {effet: (source, dosage)}} que le mode auto donne pour une phase ; None si la phase est inconnue ou absente
-    (comportement d'avant : un seul vecteur par couche). Groove : l'aberration du logo suit les frappes si on en a vu depuis moins de `HIT_RECENT_S`, sinon les aigus."""
+    (comportement d'avant : un seul vecteur par couche). L'aberration du logo, en groove : la caisse claire si on en a entendu une depuis moins de
+    `SNARE_RECENT_S`, sinon les frappes (depuis moins de `HIT_RECENT_S`), sinon les aigus ; au pic : la caisse claire, sinon le kick."""
     if phase not in FX_TABLE:
         return None
     table = {layer: dict(effects) for layer, effects in FX_TABLE[phase].items()}
+    snare = since_snare is not None and float(since_snare) < SNARE_RECENT_S
     if phase == "groove":
         recent = since_hit is not None and float(since_hit) < HIT_RECENT_S
-        table["logo"]["chroma"] = ("frappes" if recent else "aigus", table["logo"]["chroma"][1])
+        table["logo"]["chroma"] = ("snare" if snare else "frappes" if recent else "aigus", table["logo"]["chroma"][1])
+    elif phase == "peak" and snare:
+        table["logo"]["chroma"] = ("snare", table["logo"]["chroma"][1])
     return table
 
 
@@ -134,6 +186,8 @@ def layer_levels(state: dict, source, layer: str = "bg") -> tuple[float, float, 
         return 0.0, 0.0, beat, since
     if source == "frappes":             # seulement les attaques des aigus : charleys, claps (rythme secondaire)
         return 0.0, 0.0, float(state.get("hit", 0.0)), float(state.get("since_hit", NO_KICK))
+    if source == "snare":               # les attaques que le classifieur range dans la famille « caisse claire » (temps 2 et 4 si elle est sur le temps)
+        return 0.0, 0.0, float(state.get("snare", 0.0)), float(state.get("since_snare", NO_KICK))
     if source in BAND_SOURCES:          # une bande fine : son enveloppe continue (le corps du son, pas seulement l'impact), sans attaque
         bands = state.get("bands")
         v = max((float(bands[i]) for i in BAND_SOURCES[source] if bands is not None and i < len(bands)), default=0.0)
@@ -142,7 +196,7 @@ def layer_levels(state: dict, source, layer: str = "bg") -> tuple[float, float, 
         rises = state.get("band_rise")
         r = min(max((float(v) for v in rises), default=0.0) / RISE_REF, 1.0) if rises is not None else 0.0
         return r, r, 0.0, NO_KICK
-    if source in PULSE_GRIDS:           # la grille de la pulsation : des evenements reguliers meme sans kick sur chaque temps (silence si la pulsation est perdue)
+    if source in PULSE_GRIDS or source in END_GRIDS:      # la grille de la pulsation : des evenements reguliers meme sans kick sur chaque temps (silence si la pulsation est perdue)
         since = (state.get("pulse_since") or {}).get(source)
         if since is None:
             return 0.0, 0.0, 0.0, NO_KICK
