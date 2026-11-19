@@ -8,7 +8,7 @@ import queue
 import sys
 import threading
 import time
-from core import params as core_params, params_schema, sessionlog
+from core import gpulog, params as core_params, params_schema, sessionlog
 from core.automation import AutomationEngine, set_fx_link
 from core import phase as core_phase
 from core.latency import LeadEstimator, effective_lead_ms
@@ -212,6 +212,7 @@ def _gl_main(s: Session) -> None:
         sessionlog.event(f"Projection : moniteur en ({window.mx},{window.my}) {window.mw}x{window.mh} ; reglages sur {avoid} ; "
                          f"{len(glfw.get_monitors())} moniteur(s) : {[tuple(glfw.get_monitor_pos(m)) for m in glfw.get_monitors()]}")
         ctx = moderngl.create_context()
+        sessionlog.event(gpulog.gpu_line(str(ctx.info.get("GL_RENDERER", "?")), str(ctx.info.get("GL_VENDOR", ""))))
         mode = glfw.get_video_mode(monitor)
         wx, wy = glfw.get_window_pos(window.handle)
         ww, wh = glfw.get_window_size(window.handle)
@@ -458,6 +459,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     bgvideo = s.bgvideo = BgVideoManager(s.render_size, s.status)     # fond "video" : decodage lance / arrete selon les reglages
     query = ctx.query(time=True)      # une image sur 8 (toutes avec --stats) : le garde-fou de charge et les mesures
     guard = PerfGuard(glfw.get_video_mode(window.monitor).refresh_rate or 60)
+    gpu_log = gpulog.GpuLog(guard.budget_ms)
     frame_i = 0
     perf_warned = False
     t0 = time.monotonic()
@@ -616,6 +618,9 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
             gpu_ms += elapsed
             gpu_n += 1
             warning = guard.update(elapsed, time.monotonic(), params)
+            line = gpu_log.note(elapsed, getattr(s, "active_scene", None), time.monotonic(), recording.active)
+            if line:
+                sessionlog.event(line)                 # quel temps GPU, sur quelle scene : de quoi comprendre une alerte « GPU trop charge »
             if recording.active:
                 warning = None                  # l'avertissement compare au budget de l'AFFICHAGE (60 Hz) ; l'enregistrement a le sien (images dupliquees)
             s.status["gpu_ms"], s.status["gpu_budget_ms"] = guard.avg, guard.budget_ms       # lus par la securite GPU du VJ (core.safety)

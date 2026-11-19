@@ -3840,6 +3840,43 @@ def check_audio_capture() -> None:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_gpulog() -> None:
+    """Journal du temps GPU par scene (19/11/2026) : une ligne toutes les 30 s, la scene active, hors budget signale ; le nom du GPU au demarrage."""
+    print("Journal du temps GPU par scene")
+    from core import gpulog
+    check(gpulog.gpu_line("AMD Radeon RX 5500M", "ATI Technologies Inc.") == "Projection : GPU AMD Radeon RX 5500M (ATI Technologies Inc.)" and gpulog.gpu_line("X") == "Projection : GPU X",
+          "journal: le nom du GPU qui dessine est ecrit au demarrage de la projection")
+    g = gpulog.GpuLog(16.9)
+    out = [g.note(5.0, "Calme", 100.0 + k * 0.1, False) for k in range(100)]            # 10 s : rien a dire
+    check(all(o is None for o in out), "journal: rien avant la fin de la periode (30 s)")
+    line = None
+    for k in range(100, 400):
+        r = g.note(5.0 if k % 2 else 7.0, "Calme", 100.0 + k * 0.1, False)
+        line = line or r
+    check(line and '"Calme" moy 5.7 ms' in line and "301 mesures" in line and "HORS BUDGET" not in line and "16.9 ms disponibles" in line and "pendant un enregistrement" not in line, "journal: une ligne par periode avec la scene, la moyenne et le budget", str(line))
+    h = gpulog.GpuLog(16.9, period_s=1000.0)
+    for k in range(60):
+        h.note(49.0, "Labyrinthe lourd", 0.0 + k * 0.5, False)
+    for k in range(60):
+        r2 = h.note(3.0, "Legere", 30.0 + k * 0.5, False)
+    line = h.flush(60.0) or ""
+    check('"Labyrinthe lourd" moy 49.0 ms' in line and "Legere" in line and line.index("Labyrinthe lourd") < line.index("Legere") and "HORS BUDGET" in line, "journal: la scene la plus lourde est citee en premier, la moyenne hors budget est signalee", line)
+    big = gpulog.GpuLog(10.0, period_s=1.0)
+    out = None
+    for k, name in enumerate("ABCDE"):
+        for i in range(3):
+            big.note(10.0 + k, name, 0.0 + k * 0.1 + i * 0.01, False)
+    out = big.note(20.0, "A", 5.0, False)
+    check(out and out.count(" moy ") == 4 and "autre(s)" in out and "HORS BUDGET" in out, "journal: trois scenes au plus par ligne, le reste est compte ; la moyenne au-dessus du budget est signalee", str(out))
+    rec = gpulog.GpuLog(16.9, period_s=1.0)
+    rec.note(5.0, "S", 0.0, True)
+    out = rec.note(5.0, "S", 2.0, True)
+    check(out and "pendant un enregistrement" in out, "journal: un enregistrement est dit (le rendu est alors a la taille du format)", str(out))
+    check(gpulog.GpuLog(16.9).flush(1.0) is None and gpulog.GpuLog(16.9).note(5.0, None, 0.0) is None, "journal: sans mesure, pas de ligne")
+    none = gpulog.GpuLog(16.9, period_s=0.0)
+    check("(aucune scene)" in (none.note(5.0, None, 1.0) or ""), "journal: scene inconnue nommee")
+
+
 def check_recorder_audio() -> None:
     """Enregistrement (issue #140) : point d'ecoute stereo de la capture audio et fichier brut (`RawAudioWriter`)."""
     print("Enregistrement : point d'ecoute audio et fichier brut")
@@ -13028,7 +13065,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -13041,7 +13078,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
