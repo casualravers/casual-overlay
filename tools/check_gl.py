@@ -11492,10 +11492,12 @@ def check_doodles() -> None:
     check(dd.height_for(0.0) == dd.MAX_HEIGHT_FRAC and dd.height_for(0.05) == dd.MAX_HEIGHT_FRAC and dd.height_for(0.5) == dd.TEXT_HEIGHT_FRAC
           and dd.height_for(1.0) == dd.TEXT_HEIGHT_FRAC and dd.TEXT_HEIGHT_FRAC < dd.MAX_HEIGHT_FRAC,
           "taille: une photo (opaque) est grande, un texte ou dessin detoure (beaucoup de transparence) garde la taille moderee")
-    a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, 14.3, 14.65, 15, 16)]
+    L = dd.LIFE_S
+    a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, L - 0.7, L - 0.35, L, L + 1)]
     check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
-          and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
-    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, 14.55, 15.0))
+          and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie", str(a))
+    check(dd.LIFE_S == 45.0, "cycle de vie: un doodle ou une photo reste affiche 45 s")
+    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, L - 0.45, L))
     check(abs(p0[0]) < 1e-9 and abs(p0[1]) > 0.2 and 1.05 < p1[0] < 1.15 and p2 == (1.0, 0.0) and p3 == (1.0, 0.0)
           and p4[0] > 1.0 and p5 == (0.0, 0.0) and dd.pose(1.0, -1)[1] == dd.pose(1.0, 1)[1] == 0.0
           and dd.pose(0.1, -1)[1] == -dd.pose(0.1, 1)[1] and dd.pose(-1.0) == (0.0, 0.0),
@@ -11505,8 +11507,8 @@ def check_doodles() -> None:
     for i in range(7):
         dropped += wall.add(i, (0, 0, 0.1, 0.1), 100.0 + i)
     check(len(wall) == dd.MAX_VISIBLE == 3 and dropped == [0, 1, 2, 3] and [it["id"] for it in wall.items] == [4, 5, 6], "mur: 3 medias au plus, le plus ancien part", str(dropped))
-    check(wall.step(110.0) == [] and wall.step(119.5) == [4] and len(wall) == 2, "mur: les medias expires sont retires")
-    check(len(wall.visible(112.0)) == 2 and wall.clear() == [5, 6] and len(wall) == 0, "mur: visibles puis vide")
+    check(wall.step(110.0) == [] and wall.step(104.5 + dd.LIFE_S) == [4] and len(wall) == 2, "mur: les medias expires sont retires")
+    check(len(wall.visible(106.5 + dd.LIFE_S - 40.0)) == 2 and wall.clear() == [5, 6] and len(wall) == 0, "mur: visibles puis vide")
 
     # --- un tour d'interrogation avec un faux reseau
     def fake_net(files, fail=()):
@@ -11745,7 +11747,7 @@ def check_doodles() -> None:
         return (xx.max() - xx.min() + 1, yy.max() - yy.min() + 1) if len(xx) else (0, 0), im
     (w5, h5), _im5 = anim_box(5.0)
     (wa, ha), _ima = anim_box(0.3)
-    (wb, hb), _imb = anim_box(14.9)
+    (wb, hb), _imb = anim_box(dd.LIFE_S - 0.1)
     check(w5 > 0 and 0 < wa and wa * ha != w5 * h5 and 0 < wb * hb < w5 * h5, "doodle: apparition et disparition animees (taille et inclinaison changent)", f"{(w5, h5)} {(wa, ha)} {(wb, hb)}")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
     def doodle_render(pre=None, **kw):
@@ -11796,8 +11798,8 @@ def check_doodles() -> None:
     for _ in range(8):
         r4.add_doodle(half, time.monotonic() - 5.0)
     check(len(r4.wall) == 3 and len(r4.doodle_tex) == 3, "rendu: 3 doodles au plus, les textures des evinces sont liberees", f"{len(r4.wall)} {len(r4.doodle_tex)}")
-    r4._draw_doodles(fbo, size, time.monotonic() + 60.0)
-    check(len(r4.wall) == 0 and not r4.doodle_tex, "rendu: apres 15 s tout est retire et libere")
+    r4._draw_doodles(fbo, size, time.monotonic() + dd.LIFE_S + 5.0)
+    check(len(r4.wall) == 0 and not r4.doodle_tex, "rendu: apres 45 s tout est retire et libere")
     # la panique n'y touche pas (meme regle que le logo et le texte)
     r5 = gl.Renderer(ctx, size, None)
     r5.add_doodle(half, time.monotonic() - 5.0)
