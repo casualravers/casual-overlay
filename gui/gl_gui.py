@@ -1489,6 +1489,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     diagnostic_report = gui_audio_ctl.diagnostic_report
     meter = gui_audio_ctl.meter
     status_label = gui_audio_ctl.status_label
+    set_status = gui_audio_ctl.set_status
 
     # ---- Reglages incompatibles grises : un effet coupe, ou une palette qui ignore ces curseurs
     gates = gui_gates.Gates(a2w.GUI_MUTED_FG)
@@ -2398,8 +2399,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         if auto_master_var.get() != int(float(params["auto_master"]) >= 0.5):
             auto_master_var.set(int(float(params["auto_master"]) >= 0.5))
         st = s.status
-        parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("perf", "logo", "doodles", "msg") if st.get(k)]
-        status_label.config(text="  |  ".join(parts))
+        parts = [f"{st.get('fps', 0):.0f} fps"] + [st[k] for k in ("logo", "doodles", "msg") if st.get(k)]
+        set_status("  |  ".join(parts), st.get("perf"))                  # « GPU trop charge » : en rouge, a part
 
     def update_meter() -> None:
         if s.status.get("rec") and not meter_throttle.ready(time.perf_counter()):
@@ -2606,7 +2607,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                        "drop": drop_media, "a2w_clear": a2w_clear, "bg_clear": bg_clear, "add_random": add_random_scene, "add_random5": add_random_scenes, "duplicate": duplicate_last_scene, "flush": flush_pending_inputs, "dnd": dnd, "entry_vj": set_entry_vj, "rename_scene": rename_scene_now,
                        "thumb": thumb_photo, "add_entry": add_entry_now, "remove_entry": remove_entry_now,
                        "move_entry": move_entry_now, "move_to": move_entry_to, "apply_auto": lambda name: (vj_auto.__setitem__("on", True), apply_scene_core(name), vj_auto.__setitem__("on", False)), "undo": lambda: undo_now(), "redo": lambda: redo_now(), "panel_ops": panel_ops, "strip": lambda: proj_ui.get("strip"), "media_current": media_from_current, "media_clear": media_clear},
-            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "bug_btn": gui_audio_ctl.bug_btn, "bug_report": gui_audio_ctl.bug_report, "pulse_label": pulse_label, "status_label": status_label, "update_meter": update_meter, "lead_label": gui_audio_ctl.lead_label, "lead_mode": gui_audio_ctl.lead_mode, "lead_var": gui_audio_ctl.lead_var, "pattern_box": pattern_box, "sto_box": sto_box, "rd_box": rd_box, "vj_ui": vj_ui, "synced": synced,"bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
+            "fx_int_vars": fx_int_vars, "text_widget_sync": sync_widgets, "master_var": master_var, "bg_var": bg_var, "diag_report": diagnostic_report, "diag_btn": diag_btn, "bug_btn": gui_audio_ctl.bug_btn, "bug_report": gui_audio_ctl.bug_report, "pulse_label": pulse_label, "status_label": status_label, "alert_label": gui_audio_ctl.alert_label, "set_status": set_status, "update_meter": update_meter, "lead_label": gui_audio_ctl.lead_label, "lead_mode": gui_audio_ctl.lead_mode, "lead_var": gui_audio_ctl.lead_var, "pattern_box": pattern_box, "sto_box": sto_box, "rd_box": rd_box, "vj_ui": vj_ui, "synced": synced,"bgvid_box": bgvid_box, "bgv_var": bgv_var, "drop_bg_video": drop_bg_video,
             "bg_color1_var": bg_color1_var, "bg_color2_var": bg_color2_var,
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,

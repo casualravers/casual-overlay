@@ -11,6 +11,11 @@ from core import params_schema
 from engine import diagnostics
 import tkinter as tk
 
+ALERT_FG = "#ff5a4d"          # rouge des alertes du statut (meme rouge que la barre des basses)
+STATUS_LINES = 5              # lignes du statut (alerte comprise) : hauteur FIXE de la rangee des mesures
+ALERT_LINES = 3               # lignes que prend une alerte « GPU trop charge ... » (3 a la largeur de 230 px)
+ALERT_RESERVED = 1            # ligne que l'etiquette d'alerte garde en permanence (vide) : une etiquette Tk vide prend quand meme une ligne
+
 
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
@@ -292,8 +297,25 @@ def install(c):
         meter.create_text(4, y0 + 5, text=name, anchor="w", fill=a2w.GUI_MUTED_FG, font=a2w.GUI_FONT_SMALL)
         bars[name] = meter.create_rectangle(52, y0, 52, y0 + 10, fill=color, width=0)
 
-    status_label = tk.Label(meter_row, text="", fg=a2w.GUI_MUTED_FG, anchor="nw", justify="left", wraplength=230, width=32, height=5)
-    status_label.pack(side="left", padx=(10, 0), anchor="n")
+    # statut a droite des mesures : 5 lignes EN TOUT, toujours. Le texte gris est en haut ; sous lui, une ligne reservee (vide) que l'alerte rouge (GPU trop charge)
+    # agrandit a 3 lignes en prenant 2 lignes au texte gris : la hauteur de la rangee ne change jamais (rien ne decale ce que l'utilisateur vise). Les deux etiquettes
+    # restent toujours en place (seule leur hauteur change) : un pack / grid fait apres coup sur l'etiquette plantait Tk (violation d'acces) dans la fenetre de test.
+    status_box = tk.Frame(meter_row)
+    status_box.pack(side="left", padx=(10, 0), anchor="n")
+    status_label = tk.Label(status_box, text="", fg=a2w.GUI_MUTED_FG, anchor="nw", justify="left", wraplength=230, width=32, height=STATUS_LINES - ALERT_RESERVED)
+    status_label.pack(side="top", anchor="nw")
+    alert_label = tk.Label(status_box, text="", fg=ALERT_FG, anchor="nw", justify="left", wraplength=230, width=32, height=ALERT_RESERVED, bd=0, pady=0)
+    alert_label.pack(side="top", anchor="nw")
+
+    def set_status(text: str, alert: str | None = None) -> None:
+        """Texte gris du statut ; `alert` (ex. « GPU trop charge ... ») en rouge au-dessus, a la place de lignes du texte gris."""
+        want = alert or ""
+        if alert_label.cget("text") != want:
+            lines = ALERT_LINES if want else ALERT_RESERVED
+            alert_label.config(text=want, height=lines)
+            status_label.config(height=STATUS_LINES - lines)
+        if status_label.cget("text") != text:
+            status_label.config(text=text)
 
     import types
-    return types.SimpleNamespace(pulse_label=pulse_label, lead_label=lead_label, lead_gate=lead_gate, lead_mode=lead_mode, lead_var=lead_var, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, bug_btn=bug_btn, bug_report=bug_report, meter=meter, status_label=status_label)
+    return types.SimpleNamespace(set_status=set_status, alert_label=alert_label, pulse_label=pulse_label, lead_label=lead_label, lead_gate=lead_gate, lead_mode=lead_mode, lead_var=lead_var, remote_box=remote_box, auto_master_var=auto_master_var, bars=bars, diag_btn=diag_btn, diagnostic_report=diagnostic_report, bug_btn=bug_btn, bug_report=bug_report, meter=meter, status_label=status_label)

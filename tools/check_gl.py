@@ -8201,6 +8201,21 @@ def gui_lead_steps(c, s, out) -> None:
         root.update_idletasks()
         heights.append((tab.winfo_reqheight(), c["pulse_label"].winfo_reqheight(), c["status_label"].winfo_reqheight(), c["lead_label"].winfo_reqheight()))
     out["aff_height"] = heights
+    # alerte « GPU trop charge » : rouge, a part, et la hauteur de la rangee ne bouge pas (le statut gris perd les lignes que l'alerte prend)
+    alert = "GPU trop charge: 49 ms par image pour 17 ms disponibles - coupe cellules (V) ou halo (C)"
+    c["set_status"]("17 fps  |  Logo : x.png", None)
+    root.update_idletasks()
+    h_calm, grey_calm = tab.winfo_reqheight(), c["status_label"].winfo_reqheight()
+    c["set_status"]("17 fps  |  Logo : x.png", alert)
+    root.update_idletasks()
+    h_alert, lab = tab.winfo_reqheight(), c["alert_label"]
+    check(lab.winfo_height() > 0 and lab.cget("text") == alert and str(lab.cget("fg")).lower() == "#ff5a4d" and "GPU trop charge" not in c["status_label"].cget("text"),
+          "statut: l'alerte « GPU trop charge » est affichee en rouge, a part du texte gris", f"{lab.winfo_height()} {lab.cget('fg')}")
+    check(h_alert == h_calm and c["status_label"].winfo_reqheight() < grey_calm, "statut: la hauteur de la rangee ne change pas quand l'alerte apparait (le texte gris cede ses lignes)", f"{h_calm} -> {h_alert}")
+    c["set_status"]("17 fps  |  Logo : x.png", None)
+    root.update_idletasks()
+    check(c["alert_label"].cget("text") == "" and tab.winfo_reqheight() == h_calm and c["status_label"].winfo_reqheight() == grey_calm,
+          "statut: l'alerte levee, le texte gris retrouve ses lignes et la rangee sa hauteur", f"{tab.winfo_reqheight()} vs {h_calm}")
 
     def walk(w):
         yield w
