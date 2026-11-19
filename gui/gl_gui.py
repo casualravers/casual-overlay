@@ -71,6 +71,9 @@ from core.latency import effective_lead_ms
 STATS = uistats.Stats(log=sessionlog.event)           # duree des operations de l'interface et gels du fil Tk (rapport : menu « reglages VJ »)
 REFRESH_MS = 500
 METER_MS = 60
+METER_REC_S = 0.15                     # pendant un REC le vu-metre et le suivi des curseurs automatises passent a ~7 Hz : le fil Tk partage son verrou avec le rendu et la capture du son
+STALL_DUMP_S = 0.45                    # un fil Tk qui ne bat plus depuis ce temps = gel : les piles des fils vont au journal
+FOLLOW_STEP = 0.004                    # un curseur automatise n'est reecrit que s'il a change de plus que cela (changement invisible = redessin inutile)
 BRIDGE_MS = 100
 AUTOMATION_SYNC_MS = 200
 HEX_DIGITS = "0123456789abcdefABCDEF"
@@ -694,14 +697,36 @@ def run_gui(s, live, on_ready=None, boot=None) -> None:
             boot.close()
         root.after(REVEAL_DELAY_MS, reveal)
     watch = uistats.StallWatch(period_ms=50.0)
+    heartbeat = {"t": time.perf_counter()}
 
     def stall_watch() -> None:
-        late = watch.beat(time.perf_counter())
+        now = time.perf_counter()
+        heartbeat["t"] = now
+        late = watch.beat(now)
         if late:
             STATS.stall(late)
         root.after(50, stall_watch)
 
+    def stall_dumper() -> None:
+        """Fil qui regarde : quand le fil Tk ne bat plus depuis plus de STALL_DUMP_S, ecrit dans le journal ce que font TOUS les fils a cet instant (un gel de 1 s ne laissait
+        que « IHM gelee 1032 ms pendant ui_pump » : on ne savait jamais qui tenait le verrou Python). Au plus une fois par gel et par 5 s."""
+        last_dump, seen = -1e9, None
+        while not s.finished_event.is_set():
+            time.sleep(0.1)
+            beat = heartbeat["t"]
+            now = time.perf_counter()
+            if now - beat > STALL_DUMP_S and beat != seen and now - last_dump > 5.0:
+                seen, last_dump = beat, now
+                try:
+                    names = {t.ident: t.name for t in threading.enumerate()}
+                    rec = "REC en cours" if s.status.get("rec") else "pas de REC"
+                    sessionlog.event(f"Gel de l'interface ({(now - beat) * 1000:.0f} ms et plus, {rec}) : "
+                                     + uistats.format_stacks(sys._current_frames(), names, skip_ident=threading.get_ident()))
+                except Exception:
+                    pass
+
     root.after(50, stall_watch)
+    threading.Thread(target=stall_dumper, name="stall-dump", daemon=True).start()
     root.mainloop()
 
 
@@ -2322,14 +2347,19 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     refresh_scene_bar()
     after(250, vj_tick)
 
+    follow_gate = uistats.ValueGate(FOLLOW_STEP)
+    meter_throttle = uistats.Throttle(METER_REC_S)
+
     def follow_automation() -> None:
-        """params -> curseurs: les curseurs automatises suivent la valeur calculee par le moteur."""
+        """params -> curseurs: les curseurs automatises suivent la valeur calculee par le moteur (seulement si elle a visiblement change)."""
         if float(params["auto_master"]) >= 0.5:
             data = params["_automation"]
             for key, var in auto_vars.items():
                 if data.get(key, {}).get("enabled"):
                     try:
-                        var.set(round(float(gl.get_param(params, key)), 3))
+                        value = round(float(gl.get_param(params, key)), 3)
+                        if follow_gate.changed(key, value):
+                            var.set(value)
                     except (tk.TclError, ValueError):
                         pass
 
@@ -2372,6 +2402,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         status_label.config(text="  |  ".join(parts))
 
     def update_meter() -> None:
+        if s.status.get("rec") and not meter_throttle.ready(time.perf_counter()):
+            return                                              # REC en cours : ~7 Hz au lieu de 16 Hz (le rendu et le son passent avant le vu-metre)
         follow_automation()
         state = s.audio.analyzer.latest()
         for name, item in bars.items():
