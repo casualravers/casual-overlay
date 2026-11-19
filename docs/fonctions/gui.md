@@ -60,6 +60,14 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
 - **Accent d'audio2wave** : leur `GUI_ACCENT` (turquoise) devient `theme.LIVE` par le point d'extension `common.set_gui_accent`
   (`apply_a2w_palette()`, avant `live.style_gui` : leurs widgets le lisent a la creation ; Snap / Ridge, importes plus tard, lisent la
   valeur de `common`). `skin` reconnait leurs boutons a accent par `theme.LIVE`.
+- **Fenetre « courbe » de casual-overlay** (`gui/gui_curve.py`, `curve_manager_class(live)` : classe derivee de
+  `live.AutomationManager`, la copie d'audio2wave n'est pas modifiee) : fenetre plus grande (trace 560 x 260 au lieu de 220 x 90),
+  graduee a 0 / 25 / 50 / 75 / 100 % avec la vraie valeur du reglage, courbe remplie, poignees qui s'eclairent au survol, glisser qui
+  peint la courbe (les points sautes par un geste rapide sont remplis en ligne droite), lecture du point vise, ligne « valeur
+  actuelle » (`value_reader` = `params`, rafraichie toutes les 100 ms), case « Actif » (la meme variable que `~`), formes de depart,
+  outils **Inverser** et **Plein 0-100 %** (`invert_points`, `stretch_points`), vitesse, Echap ferme. `capture()` ajoute la marque de
+  version (`"v": 2`, voir logo.md, Automations). Test : `check_gui` (« fenetre de courbe: ... »). Les gestionnaires crees par les
+  `build_gui` d'audio2wave (panneaux Live / Snap / Ridge) gardent leur fenetre, habillee par le crochet ci-dessous.
 - **Fenetre « courbe »** (editeur d'audio2wave) : `install_curve_skin` affecte le crochet de classe
   `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)`, appele une fois la fenetre construite (aussi pour les
   gestionnaires crees par les `build_gui` d'audio2wave) : `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour

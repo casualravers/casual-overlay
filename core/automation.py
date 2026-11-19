@@ -21,46 +21,72 @@ MIN_PERIOD_S = 0.3              # periode de courbe la plus courte (curseur « V
 AUTOMATION_POINTS = 12       # meme valeur que AUTOMATE_CURVE_POINTS d'audio2wave (compatibilite des editeurs)
 
 # cle de params -> (libelle, min, max, courbe, periode en s, active par defaut). Min/max = plage
-# de l'automation (plus etroite que celle du curseur: un reglage automatise est PILOTE, le curseur
-# suit). Periodes volontairement premieres entre elles (pas de multiple commun) pour que
+# de la courbe = TOUTE la plage du curseur de la GUI : le bas de l'editeur = 0 % du curseur, le haut = 100 %.
+# Periodes volontairement premieres entre elles (pas de multiple commun) pour que
 # l'ensemble ne se repete jamais a l'identique. Actives par defaut: ce qui donne de la vie sans
 # rien deplacer (teinte, angle, carreaux, intensites d'effets); position, taille et opacite du
 # logo sont proposees mais coupees (une marque ne doit pas se promener sans qu'on l'ait voulu).
 AUTOMATION_SPECS: dict[str, tuple] = {
-    "bg_hue":           ("Teinte", 0.0, 0.5, "sinus", 79, True),
-    "bg_angle":         ("Angle du degrade", 20.0, 160.0, "sinus", 53, True),
-    "bg_speed":         ("Vitesse", 0.4, 1.8, "sinus", 37, True),
-    "bg_tile":          ("Taille des carreaux", 50.0, 150.0, "sinus", 29, True),
-    "bg_checker":       ("Contraste du damier", 0.06, 0.32, "sinus", 23, True),
-    "bg_flip":          ("Cadence du damier", 0.5, 3.5, "triangle", 47, True),
-    # Palette labyrinthe : plages resserrees dans la zone ou le motif reste vivant ; ni taille (recopie de l'etat), ni symetrie (brutal).
-    "bg_rd_shape":      ("Forme du labyrinthe", 0.3, 0.9, "sinus", 73, True),
-    "bg_rd_offset":     ("Ecart des couches", 0.004, 0.030, "sinus", 89, True),
-    "bg_rd_mix":        ("Variete des zones", 0.2, 0.9, "triangle", 97, True),
-    "bg_rd_layers":     ("Epaisseur des couches", 0.1, 0.8, "sinus", 101, True),
-    "bg_rd_free":       ("Liberte de la symetrie", 0.2, 0.8, "sinus", 103, True),
-    "bg_rd_void":       ("Vide du labyrinthe", 0.15, 0.6, "sinus", 107, True),
-    "bg_rd_scale":      ("Taille du motif", 0.6, 1.6, "sinus", 127, False),     # coupee par defaut : chaque changement de taille floute un peu le motif
-    "logo_x":           ("Position X", 0.35, 0.65, "sinus", 43, False),
-    "logo_y":           ("Position Y", 0.42, 0.58, "sinus", 31, False),
-    "logo_scale":       ("Taille (image)", 0.30, 0.42, "sinus", 13, False),
-    "text_scale":       ("Taille du texte", 0.12, 0.20, "sinus", 13, False),
-    "logo_opacity":     ("Opacite", 0.6, 1.0, "sinus", 19, False),
-    "logo_pulse":       ("Pulsation", 0.05, 0.30, "sinus", 21, True),
-    "logo_glow":        ("Contour lumineux", 0.4, 1.5, "sinus", 11, True),
-    "logo_glow_radius": ("Rayon du contour", 0.6, 1.6, "sinus", 17, True),
-    "fx_int0":          ("Intensite wobble", 0.4, 1.2, "sinus", 19, True),
-    "fx_int1":          ("Intensite onde de choc", 0.4, 1.3, "sinus", 41, True),
-    "fx_int2":          ("Intensite aberration", 0.3, 1.2, "sinus", 7, True),
-    "fx_int3":          ("Intensite glitch", 0.15, 1.0, "aleatoire", 61, True),
-    "fx_int4":          ("Intensite logo", 0.6, 1.2, "sinus", 59, True),
+    "bg_hue":           ("Teinte", 0.0, 1.0, "sinus", 79, True),
+    "bg_angle":         ("Angle du degrade", 0.0, 360.0, "sinus", 53, True),
+    "bg_speed":         ("Vitesse", 0.0, 4.0, "sinus", 37, True),
+    "bg_tile":          ("Taille des carreaux", 20.0, 300.0, "sinus", 29, True),
+    "bg_checker":       ("Contraste du damier", 0.0, 1.0, "sinus", 23, True),
+    "bg_flip":          ("Cadence du damier", 0.0, 8.0, "triangle", 47, True),
+    # Palette labyrinthe : ni taille par defaut (recopie de l'etat), ni symetrie (brutal).
+    "bg_rd_shape":      ("Forme du labyrinthe", 0.0, 1.0, "sinus", 73, True),
+    "bg_rd_offset":     ("Ecart des couches", 0.0, 0.05, "sinus", 89, True),
+    "bg_rd_mix":        ("Variete des zones", 0.0, 1.0, "triangle", 97, True),
+    "bg_rd_layers":     ("Epaisseur des couches", 0.0, 1.0, "sinus", 101, True),
+    "bg_rd_free":       ("Liberte de la symetrie", 0.0, 1.0, "sinus", 103, True),
+    "bg_rd_void":       ("Vide du labyrinthe", 0.0, 1.0, "sinus", 107, True),
+    "bg_rd_scale":      ("Taille du motif", 0.3, 2.0, "sinus", 127, False),     # coupee par defaut : chaque changement de taille floute un peu le motif
+    "logo_x":           ("Position X", 0.0, 1.0, "sinus", 43, False),
+    "logo_y":           ("Position Y", 0.0, 1.0, "sinus", 31, False),
+    "logo_scale":       ("Taille (image)", 0.05, 0.95, "sinus", 13, False),
+    "text_scale":       ("Taille du texte", 0.03, 0.6, "sinus", 13, False),
+    "logo_opacity":     ("Opacite", 0.0, 1.0, "sinus", 19, False),
+    "logo_pulse":       ("Pulsation", 0.0, 0.5, "sinus", 21, True),
+    "logo_glow":        ("Contour lumineux", 0.0, 3.0, "sinus", 11, True),
+    "logo_glow_radius": ("Rayon du contour", 0.0, 3.0, "sinus", 17, True),
+    "fx_int0":          ("Intensite wobble", 0.0, 2.0, "sinus", 19, True),
+    "fx_int1":          ("Intensite onde de choc", 0.0, 2.0, "sinus", 41, True),
+    "fx_int2":          ("Intensite aberration", 0.0, 2.0, "sinus", 7, True),
+    "fx_int3":          ("Intensite glitch", 0.0, 2.0, "aleatoire", 61, True),
+    "fx_int4":          ("Intensite logo", 0.0, 2.0, "sinus", 59, True),
     # Effets de la couche logo (utiles seulement quand fx_link = 0). Periodes differentes de celles
     # du fond: les deux couches ne respirent pas en phase.
-    "fxl_int0":         ("Logo: intensite wobble", 0.4, 1.2, "sinus", 67, True),
-    "fxl_int1":         ("Logo: intensite onde de choc", 0.4, 1.3, "sinus", 31, True),
-    "fxl_int2":         ("Logo: intensite aberration", 0.3, 1.2, "sinus", 71, True),
-    "fxl_int3":         ("Logo: intensite glitch", 0.15, 1.0, "aleatoire", 83, True),
+    "fxl_int0":         ("Logo: intensite wobble", 0.0, 2.0, "sinus", 67, True),
+    "fxl_int1":         ("Logo: intensite onde de choc", 0.0, 2.0, "sinus", 31, True),
+    "fxl_int2":         ("Logo: intensite aberration", 0.0, 2.0, "sinus", 71, True),
+    "fxl_int3":         ("Logo: intensite glitch", 0.0, 2.0, "aleatoire", 83, True),
 }
+
+# Anciennes plages des courbes (avant la version 2, quand une courbe ne couvrait qu'une partie du curseur). Elles servent a deux choses :
+#  * les courbes PAR DEFAUT restent dans ces plages (zones ou le motif reste vivant : rien ne change pour qui ne touche a rien) ;
+#  * une courbe sauvee avant la version 2 (presets, scenes, sets, reglages) est convertie a la lecture, a l'identique (memes valeurs).
+DEFAULT_RANGES: dict[str, tuple[float, float]] = {
+    "bg_hue": (0.0, 0.5), "bg_angle": (20.0, 160.0), "bg_speed": (0.4, 1.8), "bg_tile": (50.0, 150.0), "bg_checker": (0.06, 0.32),
+    "bg_flip": (0.5, 3.5), "bg_rd_shape": (0.3, 0.9), "bg_rd_offset": (0.004, 0.030), "bg_rd_mix": (0.2, 0.9), "bg_rd_layers": (0.1, 0.8),
+    "bg_rd_free": (0.2, 0.8), "bg_rd_void": (0.15, 0.6), "bg_rd_scale": (0.6, 1.6), "logo_x": (0.35, 0.65), "logo_y": (0.42, 0.58),
+    "logo_scale": (0.30, 0.42), "text_scale": (0.12, 0.20), "logo_opacity": (0.6, 1.0), "logo_pulse": (0.05, 0.30), "logo_glow": (0.4, 1.5),
+    "logo_glow_radius": (0.6, 1.6), "fx_int0": (0.4, 1.2), "fx_int1": (0.4, 1.3), "fx_int2": (0.3, 1.2), "fx_int3": (0.15, 1.0),
+    "fx_int4": (0.6, 1.2), "fxl_int0": (0.4, 1.2), "fxl_int1": (0.4, 1.3), "fxl_int2": (0.3, 1.2), "fxl_int3": (0.15, 1.0),
+}
+CURVE_VERSION = 2            # marque « v » de chaque entree : 2 = points sur toute la plage du curseur ; absente = ancienne plage (a convertir)
+
+
+def rescale_points(points, src: tuple[float, float], dst: tuple[float, float]) -> list[float]:
+    """Points 0..1 exprimes sur la plage `src` -> les memes valeurs exprimees sur `dst` (bornes a 0..1)."""
+    (a, b), (c, d) = src, dst
+    span = (d - c) or 1.0
+    return [min(max((a + (b - a) * float(p) - c) / span, 0.0), 1.0) for p in points]
+
+
+def legacy_to_full(key: str, points) -> list[float]:
+    """Points d'une courbe d'avant la version 2 (plage `DEFAULT_RANGES`) -> points sur toute la plage du curseur."""
+    spec = AUTOMATION_SPECS[key]
+    return rescale_points(points, DEFAULT_RANGES.get(key, (spec[1], spec[2])), (spec[1], spec[2]))
 
 FX_EFFECTS = 4               # wobble, ripple, chroma, glitch: les effets qui se deforment par couche
 
@@ -80,13 +106,17 @@ def curve_points(name: str, n: int = AUTOMATION_POINTS, seed: int = 7) -> list[f
 
 
 def default_automation() -> dict:
-    """Etat initial {cle: {"enabled", "points", "period"}}: celui de AUTOMATION_SPECS."""
-    return {key: {"enabled": bool(spec[5]), "points": curve_points(spec[3], seed=i), "period": float(spec[4])}
+    """Etat initial {cle: {"enabled", "points", "period", "v"}}: celui de AUTOMATION_SPECS ; la forme de depart tient dans
+    l'ancienne plage (`DEFAULT_RANGES`), exprimee sur toute la plage du curseur."""
+    return {key: {"enabled": bool(spec[5]), "points": legacy_to_full(key, curve_points(spec[3], seed=i)), "period": float(spec[4]),
+                  "v": CURVE_VERSION}
             for i, (key, spec) in enumerate(AUTOMATION_SPECS.items())}
 
 
 def merge_automation(saved) -> dict:
-    """Etat sauve valide, complete par les valeurs par defaut (cle absente ou entree invalide)."""
+    """Etat sauve valide, complete par les valeurs par defaut (cle absente ou entree invalide). Une courbe sans la marque
+    `v` = `CURVE_VERSION` (sauvee avant la version 2) est convertie de son ancienne plage a toute la plage du curseur :
+    elle donne exactement les memes valeurs. Toute entree rendue porte la marque (jamais deux conversions)."""
     merged = default_automation()
     if isinstance(saved, dict):
         for key, entry in saved.items():
@@ -95,7 +125,8 @@ def merge_automation(saved) -> dict:
             points = entry.get("points")
             if isinstance(points, list) and len(points) == AUTOMATION_POINTS \
                     and all(isinstance(v, (int, float)) for v in points):
-                merged[key]["points"] = [min(max(float(v), 0.0), 1.0) for v in points]
+                clean = [min(max(float(v), 0.0), 1.0) for v in points]
+                merged[key]["points"] = clean if entry.get("v") == CURVE_VERSION else legacy_to_full(key, clean)
             if isinstance(entry.get("period"), (int, float)) and entry["period"] > 0:
                 merged[key]["period"] = float(entry["period"])
             if "enabled" in entry:

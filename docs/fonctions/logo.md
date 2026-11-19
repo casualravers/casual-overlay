@@ -199,9 +199,14 @@ case `~`, bouton de courbe, presets sinus/triangle/carre/dents de scie/aleatoire
   200 ms (remplacement atomique du dict) et fait suivre les curseurs automatises toutes les
   60 ms. On n'appelle pas `AutomationManager.tick`, c'est ce moteur qui pilote.
 - `AUTOMATION_SPECS` (cle -> libelle, min, max, courbe, periode, active par defaut) est la
-  source unique : la GUI s'en sert pour enregistrer les editeurs, le moteur pour les plages
-  (plus etroites que celles des curseurs : un reglage automatise est PILOTE, le curseur suit ;
-  tant que la case `~` est cochee, deplacer le curseur a la main est ecrase).
+  source unique : la GUI s'en sert pour enregistrer les editeurs, le moteur pour les plages.
+  **Depuis la version 2 des courbes, min / max = TOUTE la plage du curseur** (bas de l'editeur = 0 %, haut = 100 % ; avant, une
+  plage plus etroite : le Vide du labyrinthe n'allait que de 15 a 60 %, demande de l'utilisateur). Les anciennes plages restent dans
+  `DEFAULT_RANGES` : les courbes PAR DEFAUT y tiennent toujours (memes valeurs qu'avant pour qui ne touche a rien), et une courbe
+  sauvee avant (presets overlay / fond, scenes, sets, `gl_params.json`, auto-sauvegarde) est convertie a la lecture par
+  `merge_automation` (`legacy_to_full`) : memes valeurs, a 1e-16 pres. Chaque entree porte la marque `"v": 2` (`CURVE_VERSION`,
+  posee par `default_automation`, `merge_automation` et la capture de l'editeur) : sans elle une courbe serait reconvertie a
+  chaque lecture. Le curseur suit ; tant que la case `~` est cochee, le deplacer a la main est ecrase.
 - **Actives par defaut** (23) : fond (dont 5 de la palette labyrinthe), effets, contour du logo, pulsation. **Coupees par
   defaut** : position X/Y, tailles et opacite du logo (une marque ne doit pas se promener sans
   l'avoir voulu). Periodes toutes differentes entre les actives (79, 53, 37, 29, 23...), donc

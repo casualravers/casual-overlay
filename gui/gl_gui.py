@@ -1211,7 +1211,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     # audio2wave_gl (AutomationEngine, fil de rendu): ici on ne fait qu'editer l'etat (copie dans
     # params["_automation"]) et faire suivre les curseurs.
     params["_automation"] = gl.merge_automation(params.get("_automation"))
-    automation = live.AutomationManager(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, OVERLAY_COLOR)
+    import gui_curve                                  # fenetre de courbe propre a casual-overlay (plus grande, graduee, de 0 a 100 % du curseur)
+    automation = gui_curve.curve_manager_class(live)(root, Tooltip, a2w.GUI_PANEL_BG, a2w.GUI_MUTED_FG, OVERLAY_COLOR)
+    automation.value_reader = lambda key: gl.get_param(params, key)
     auto_vars: dict[str, tk.Variable] = {}
 
     def add_auto(z: Zone, r: int, key: str, var: tk.Variable) -> None:
