@@ -38,7 +38,7 @@ Fiche de [CLAUDE.md](../../CLAUDE.md) (issue #132 : detail deplace tel quel). Fi
 
 ## Charge GPU : garde-fou et mesure
 
-- **Garde-fou** (`PerfGuard`, audio2wave_gl.py) : une image sur 8 (toutes avec `--stats`) est chronometree par une
+- **Garde-fou** (`PerfGuard`, audio2wave_gl.py) : une image sur 8 (toutes avec `--stats`) est chronometree par une **Affichage de l'alerte** (19/11/2026) : le texte « GPU trop charge » est en ROUGE, dans une etiquette a part sous le statut gris (`gui_audio.set_status(texte, alerte)`) ; la rangee garde 5 lignes en tout (le texte gris en perd 2 pendant l'alerte, une ligne reste reservee en permanence), donc rien ne se decale ; les deux etiquettes restent en place, seule leur hauteur change (un `pack` / `grid` fait apres coup sur l'etiquette a plante Tk). Hors enregistrement seulement : pendant un REC l'alerte est coupee (le rendu est a la taille du format, voir medias-externes.md).
   requete GPU ; moyenne lissee comparee au budget d'une image a 60 Hz au plus (un ecran a 144 Hz ne rend pas le budget
   impossible). Au-dessus de 90 % du budget pendant 2 s : message dans la ligne de statut de la GUI (`status["perf"]`,
   en tete) et une fois sur stderr, qui nomme les effets couteux allumes (cellules > halo > fonte) ou conseille
