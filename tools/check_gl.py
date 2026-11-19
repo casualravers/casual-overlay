@@ -8809,45 +8809,64 @@ def check_strobe_auto() -> None:
             k = 1 if kicks_every and abs((now - 100.0) % kicks_every) < dt / 2 else 0
             h = 1 if hit_every and abs((now - 100.0) % hit_every) < dt / 2 else 0
             nk += k
-            fire, dark = brain.update(now, phase, since, k, h, (nk - 1) % 8 if grid and k else (None if not grid else 0))
+            fire, dark = brain.update(now, phase, since, k, h, (nk - 1) if grid and k else (None if not grid else 0))
             if fire:
                 fires.append((round(now - 100.0, 2), dark))
         return fires
 
+    def gaps(fires):
+        return [b - a for (a, _), (b, _) in zip(fires, fires[1:])]
+
     for quiet_phase in (None, "silence", "ambient", "break"):
         check(run(quiet_phase, 0.0, 200) == [], f"strobe auto: jamais d'eclair en phase {quiet_phase}")
-    peak = run("peak", 0.0, 200)
-    check(len(peak) >= 18 and all(d == 1.0 for _, d in peak), "strobe auto: un eclair par kick en pic, toute l'image", str(len(peak)))
-    fast = run("peak", 0.0, 200, kicks_every=0.1)
-    check(len(fast) <= 34 and all(b - a >= sa.PEAK_GAP_S - 0.051 for (a, _), (b, _) in zip(fast, fast[1:])),
-          "strobe auto: en pic, jamais plus de ~3 eclairs par seconde meme sur des kicks rapproches", str(len(fast)))
-    grid = run("groove", 0.0, 400, grid=True)
-    check(len(grid) == 3 and [f for f, _ in grid] == [0.0, 8.0, 16.0] and all(d == sa.DARK_GROOVE for _, d in grid),
-          "strobe auto: en groove avec la grille, un accent discret sur le 1, toutes les ~4 mesures au plus", str(grid))
-    bare = run("groove", 0.0, 400)
-    check([f for f, _ in bare] == [7.5, 15.5], "strobe auto: en groove sans grille ni frappes, un kick sur 16 au pire", str(bare))
-    hits = run("groove", 0.0, 400, hit_every=4.0)
-    check(2 <= len(hits) <= 6 and all(b - a >= sa.HIT_ACCENT_GAP_S - 0.05 for (a, _), (b, _) in zip(hits, hits[1:])),
-          "strobe auto: en groove, une frappe des aigus donne un accent (3 s d'ecart au moins)", str(hits))
+    # #185 : le pic n'eclaire plus chaque kick (rafale continue coupee par le limiteur toutes les 11 s en soiree)
+    peak = run("peak", 0.0, 1200, grid=True)                          # 60 s a 120 BPM, grille connue
+    check([f for f, _ in peak][:3] == [0.0, 4.0, 8.0] and all(d == 1.0 for _, d in peak) and len(peak) <= 15,
+          "strobe auto: au pic, un eclair sur le 1 d'une mesure sur deux (toutes les 4 s a 120 BPM), plus a chaque kick", str(len(peak)))
+    bare_peak = run("peak", 0.0, 1200)
+    check(bare_peak and bare_peak[0][0] == 3.5 and all(g >= sa.PEAK_GAP_S - 0.051 for g in gaps(bare_peak)) and len(bare_peak) <= 16,
+          "strobe auto: au pic sans grille, un kick sur 8, jamais moins de 3 s entre deux eclairs", str([f for f, _ in bare_peak][:4]))
+    fast = run("peak", 0.0, 1200, kicks_every=0.1)
+    check(len(fast) <= 20 and all(g >= sa.PEAK_GAP_S - 0.051 for g in gaps(fast)),
+          "strobe auto: au pic, jamais plus d'un eclair toutes les 3 s meme sur des kicks tres rapproches (20 par minute au plus)", str(len(fast)))
+    grid = run("groove", 0.0, 800, grid=True)
+    check([f for f, _ in grid] == [0.0, 16.0, 32.0] and all(d == sa.DARK_GROOVE for _, d in grid),
+          "strobe auto: en groove avec la grille, un accent discret au debut de chaque phrase de 32 temps (16 s a 120 BPM)", str(grid))
+    bare = run("groove", 0.0, 800)
+    check([f for f, _ in bare] == [15.5, 31.5], "strobe auto: en groove sans grille, un kick sur 32 (et 15 s d'ecart au moins)", str(bare))
+    hits = run("groove", 0.0, 200, hit_every=3.0)
+    check(hits == [], "strobe auto: en groove, les frappes aigues (claps, caisses claires) ne declenchent plus d'accent", str(hits))
+    # montee : rien avant 4 s de montee confirmee, puis de 0,5 a 4 eclairs par seconde
+    check(sa.auto_build_hz(0.0) is None and sa.auto_build_hz(3.9) is None and abs(sa.auto_build_hz(sa.BUILD_CONFIRM_S) - 0.5) < 1e-9
+          and abs(sa.auto_build_hz(sa.BUILD_CONFIRM_S + sa.BUILD_RAMP_S) - 4.0) < 1e-9 and abs(sa.auto_build_hz(500.0) - 4.0) < 1e-9,
+          "strobe auto: cadence d'une montee auto : aucune avant 4 s, puis 0,5 -> 4 eclairs par seconde")
+    false_build = run("build", 100.0, 70)
+    check(false_build == [], "strobe auto: une fausse montee qui dure moins de 4 s ne fait aucun eclair", str(false_build))
     b = sa.StrobeBrain()
     run("build", 100.0, 1, brain=b)
     drop = b.update(100.5, "peak", 100.5, 0, 0, None)
     check(drop == (True, 1.0), "strobe auto: le passage montee -> pic donne un gros eclair (le drop)")
     check(not sa.StrobeBrain().update(100.0, "peak", 0.0, 0, 0, None)[0], "strobe auto: en pic sans kick, pas d'eclair")
     rb = sa.StrobeBrain()
-    rb.update(100.0, "peak", 0.0, 1, 0, None)
+    rb.update(100.0, "peak", 0.0, 1, 0, 0)
     reasons = [rb.reason]
     rb2 = sa.StrobeBrain()
     rb2.update(100.0, "groove", 0.0, 1, 0, 0)
     reasons.append(rb2.reason)
     rb3 = sa.StrobeBrain()
-    rb3.update(100.0, "build", 0.0, 0, 0, None)
+    rb3.update(100.0, "build", 90.0, 0, 0, None)
     reasons.append(rb3.reason)
-    check(reasons[0] == "kick au pic" and "le 1 de la mesure" in reasons[1] and reasons[2].startswith("montee"), "strobe auto: chaque eclair a sa raison, affichee dans l'interface", str(reasons))
-    build = run("build", 100.0, 320)
-    first, second = [f for f, _ in build if f < 8.0], [f for f, _ in build if f >= 8.0]
-    check(22 <= len(build) <= 32 and len(second) > len(first) * 1.5 and all(d == sa.DARK_BUILD for _, d in build),
-          "strobe auto: pendant une montee la cadence accelere (0,5 puis jusqu'a 4 Hz)", f"{len(build)} eclairs, {len(first)} puis {len(second)}")
+    check(reasons[0].startswith("pic") and "phrase" in reasons[1] and reasons[2].startswith("montee"), "strobe auto: chaque eclair a sa raison, affichee dans l'interface", str(reasons))
+    build = run("build", 100.0, 400)                                  # 20 s de montee
+    first, second = [f for f, _ in build if f < 12.0], [f for f, _ in build if f >= 12.0]
+    check(build and build[0][0] >= sa.BUILD_CONFIRM_S - 0.051 and 8 <= len(build) <= 30 and len(second) > len(first) and all(d == sa.DARK_BUILD for _, d in build),
+          "strobe auto: pendant une montee la cadence accelere (0,5 puis jusqu'a 4 Hz), apres 4 s de montee confirmee", f"{len(build)} eclairs, {len(first)} puis {len(second)}")
+    cb, cg = sa.StrobeBrain(), sa.StrobeBrain()
+    run("peak", 0.0, 1200, grid=True, brain=cb)
+    run("groove", 0.0, 800, grid=True, brain=cg)
+    check(cb.counts.get("pic", 0) >= 10 and cg.counts.get("groove", 0) >= 2 and sa.minute_text(cb.counts, 3).startswith("Strobe auto :")
+          and "pic" in sa.minute_text(cb.counts, 3) and "3 montee" in sa.minute_text(cb.counts, 3) and sa.minute_text({}, 0) == "",
+          "strobe auto: eclairs comptes par raison, une ligne de journal par minute (rien si rien n'est parti)", sa.minute_text(cb.counts, 3))
     busy = sa.StrobeBrain()
     quiet_ = [busy.update(100.0 + i * 0.05, "peak" if i > 10 else "build", 0.0, 1, 1, 0, busy=True)[0] for i in range(60)]
     check(not any(quiet_) and not busy.update(103.5, "peak", 0.0, 0, 0, None)[0], "strobe auto: pendant une montee en cours le cerveau se tait (c'est la montee qui eclaire), meme au passage au pic")
@@ -9376,11 +9395,11 @@ def check_masters() -> None:
           "strobe au kick : arme, eclair a chaque kick seulement ; un 2e appui desarme")
     # strobe auto : decide seul selon la phase du morceau (core/strobe_auto.py), dans le vrai rendu
     ap = dict(d, strobe_auto=1.0)
-    peak = dict(quiet, phase={"name": "peak", "since": time.monotonic() - 30.0}, beats=0, hits=0)
+    peak = dict(quiet, phase={"name": "peak", "since": time.monotonic() - 30.0}, beats=0, hits=0, beat_index=0)
     ar = gl.Renderer(ctx, size, None)
     ar._strobe(ap, dict(peak))
     time.sleep(0.4)
-    check(ar._strobe(ap, dict(peak, beats=1)) > 0.9 and ar.strobe_fired == 1, "strobe auto: un kick en pic donne un eclair")
+    check(ar._strobe(ap, dict(peak, beats=1)) > 0.9 and ar.strobe_fired == 1, "strobe auto: le kick du 1 en pic donne un eclair")
     time.sleep(0.12)
     check(ar._strobe(dict(ap, strobe_auto=0.0), dict(peak, beats=2)) == 0.0, "strobe auto coupe: aucun eclair, meme en pic")
     cold = gl.Renderer(ctx, size, None)
@@ -9560,6 +9579,25 @@ def check_masters() -> None:
         time.sleep(0.004)
     check(fires >= 3 and br._strobe(dict(d, build=0.0), quiet) <= 1.0 and gl.Renderer(ctx, size, None)._strobe(dict(d, build=0.0, strobe_on=0.0), quiet) == 0.0,
           "montee: le strobe part tout seul (jusqu'a 16 Hz) sans etre arme", str(fires))
+
+    # #184 : une montee AUTOMATIQUE (phases, cassure) n'eclaire que si « Strobe auto » est coche ; #185 : rien avant 4 s, 4 Hz au plus
+    def auto_build_fires(strobe_auto, started_ago, seconds=0.6):
+        rr = gl.Renderer(ctx, size, None)
+        pp = dict(d, strobe_on=0.0, build=0.5, build_auto=1.0, strobe_auto=strobe_auto)
+        rr._strobe(pp, quiet)
+        rr._build_t0 = time.monotonic() - started_ago
+        before, t_end = rr.strobe_fired, time.monotonic() + seconds
+        while time.monotonic() < t_end:
+            rr._strobe(pp, quiet)
+            time.sleep(0.004)
+        return rr.strobe_fired - before, rr
+    off_n, _ = auto_build_fires(0.0, 30.0)
+    early_n, _ = auto_build_fires(1.0, 1.0)
+    late_n, late_r = auto_build_fires(1.0, 30.0, 1.1)
+    check(off_n == 0, "montee automatique, Strobe auto coupe : aucun eclair (#184)", str(off_n))
+    check(early_n == 0 and 2 <= late_n <= 6 and late_r.auto_counts.get("montee", 0) >= 2 and late_r.auto_builds == 1,
+          "montee automatique, Strobe auto coche : rien avant 4 s, puis 4 eclairs par seconde au plus (pas 16), comptes pour le journal",
+          f"debut {early_n}, ensuite {late_n} en 1,1 s, {late_r.auto_counts}")
     first = gl.Renderer(ctx, size, None)
     check(first._strobe(dict(d, strobe_on=0.0, build=1e-6), quiet) > 0.9,
           "montee: le premier eclair part des le debut de la montee (pas quelques secondes apres le clic)")

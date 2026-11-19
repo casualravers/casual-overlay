@@ -16,6 +16,7 @@ from core import qrcode
 from core.audio_layers import (EFFECTS, DownbeatGate, EffectBank, LayerFilter, SourceMixer, accent_vectors, auto_fx, auto_sources, has_kick, layer_levels,
                                phrase_boost, ripple_on_downbeat)
 from core.pulse import cycle_seconds, swell as pulse_swell
+from core import strobe_auto as core_strobe
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceiling
@@ -289,6 +290,10 @@ class Renderer:
         self._strobe_hits, self._strobe_auto_now, self._strobe_auto_dark = 0, False, 1.0
         self._strobe_len = STROBE_FLASH_S                                           # duree du dernier eclair (plus courte pour ceux de la montee a cadence elevee)
         self.strobe_fired = 0                                                       # eclairs acceptes (compteur : la mesure de latence le lit)
+        self._build_t0: float | None = None                                         # debut de la montee en cours (cadence de la montee auto)
+        self.auto_counts: dict[str, int] = {}                                       # eclairs du strobe auto acceptes par famille (journal par minute)
+        self.auto_builds = 0                                                        # montees automatiques commencees (journal par minute)
+        self._minute_t0: float | None = None
         self._breath_t = self._hue_phase = self._comp_t = self._comp_rot = 0.0        # phases integrees (respiration, teinte, composition)
         self._bp_swell = 0.5                                                          # respiration sur la pulsation : valeur du dernier rendu (0..1)
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
@@ -519,26 +524,52 @@ class Renderer:
         ph = state.get("phase") or {}
         auto_fire, auto_dark = self.strobe_brain.update(now, ph.get("name"), ph.get("since"), new_kicks, new_hits, state.get("beat_index"),
                                                         busy=_unit(p.get("build", 0.0)) > 0.0)
-        if float(p.get("strobe_auto", 0.0)) >= 0.5:
+        auto_on = float(p.get("strobe_auto", 0.0)) >= 0.5
+        if auto_on:
             fire = fire or auto_fire
         build = _unit(p.get("build", 0.0))
+        build_auto = float(p.get("build_auto", 0.0)) >= 0.5          # montee lancee par les detecteurs (phases, cassure), pas par le bouton
+        if build > 0.0 and self._build_t0 is None:
+            self._build_t0 = now
+            if build_auto:
+                self.auto_builds += 1
+        elif build <= 0.0:
+            self._build_t0 = None
         timed = True
         build_fire = False
-        if build > 0.0 and not fire:                                  # montee : eclairs automatiques de 0,5 a 16 Hz (lents au debut), le premier tout de suite
-            fire = now - self._strobe_last >= 1.0 / build_strobe_hz(build)
-            timed = not fire                                          # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
-            build_fire = fire
+        build_hz = None
+        if build > 0.0 and not fire:
+            if build_auto:
+                # montee automatique (#184, #185) : ses eclairs sont ceux du STROBE AUTO, donc rien s'il est coupe ; rien pendant 4 s (une fausse
+                # montee ne clignote pas), puis de 0,5 a 4 eclairs par seconde. Ses autres effets (reactivite, teinte) restent ceux des phases.
+                build_hz = core_strobe.auto_build_hz(now - self._build_t0) if auto_on else None
+            else:
+                build_hz = build_strobe_hz(build)                     # montee lancee a la main : eclairs de 0,5 a 16 Hz, le premier tout de suite
+            if build_hz is not None:
+                fire = now - self._strobe_last >= 1.0 / build_hz
+                timed = not fire                                      # eclairs de la seule montee : jamais coupes par la duree max (drop ou bouton)
+                build_fire = fire
         if fire and self.strobe_limiter.allow(now, float(p["strobe_max_hz"]), float(p["strobe_max_s"]), timed):
             self._strobe_last = now
             # un eclair de la montee raccourcit quand la cadence monte : sinon, a 10 eclairs par seconde, l'image restait presque blanche
-            self._strobe_len = build_flash_s(min(build_strobe_hz(build), float(p["strobe_max_hz"]))) if build_fire else STROBE_FLASH_S
+            self._strobe_len = build_flash_s(min(build_hz, float(p["strobe_max_hz"]))) if build_fire else STROBE_FLASH_S
             self.strobe_fired += 1
-            self._strobe_auto_now = bool(auto_fire and not manual_fire and float(p.get("strobe_auto", 0.0)) >= 0.5)
+            self._strobe_auto_now = bool(auto_fire and not manual_fire and auto_on)
             self._strobe_auto_dark = auto_dark
+            kind = self.strobe_brain.kind if self._strobe_auto_now else ("montee" if (build_fire and build_auto) else "")
+            if kind:
+                self.auto_counts[kind] = self.auto_counts.get(kind, 0) + 1
             self.strobe_info = (self.strobe_brain.reason if self._strobe_auto_now else ("montee (eclairs de plus en plus rapides)" if (build > 0.0 and not manual_fire) else (str(p.get("strobe_why") or "") or "manuel")), now)
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
+        if self._minute_t0 is None:
+            self._minute_t0 = now
+        elif now - self._minute_t0 >= 60.0:                           # une ligne par minute : de quoi regler les seuils sur de vraies soirees
+            text = core_strobe.minute_text(self.auto_counts, self.auto_builds)
+            if text:
+                sessionlog.event(text)
+            self.auto_counts, self.auto_builds, self._minute_t0 = {}, 0, now
         if p.get("strobe_kind") == "foudre":                          # mode Foudre : les eclairs acceptes deviennent des decharges (lues par `draw`), jamais de blanc
             return 0.0
         return max(0.0, 1.0 - (now - self._strobe_last) / self._strobe_len)
