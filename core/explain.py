@@ -48,6 +48,14 @@ def fx_line(fx_now: dict | None) -> str:
     return "effets : " + "  |  ".join(x for x in (bg, logo) if x)
 
 
+ONE_TEXTS = {"manuel": "1 manuel", "drop": "1 auto (drop)", "reprise": "1 auto (reprise)"}
+
+
+def one_text(origin: str | None) -> str:
+    """D'ou vient le « 1 » de la grille (Temps 1, #164) : vide sans grille."""
+    return ONE_TEXTS.get(origin, "") if origin else ""
+
+
 def phase_effects_text(mult: dict | None, enabled: bool = True) -> str:
     """Ce que les phases auto font aux masters : « tempo x0,30 | reactivite x0,60 | effets x0,35 | derive de teinte 3 deg/s »."""
     if not enabled or not mult:

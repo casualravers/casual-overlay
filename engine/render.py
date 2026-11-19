@@ -13,7 +13,8 @@ from pathlib import Path
 from core import sessionlog
 from core import doodles
 from core import qrcode
-from core.audio_layers import EFFECTS, DownbeatGate, EffectBank, LayerFilter, SourceMixer, auto_fx, auto_sources, has_kick, layer_levels, ripple_on_downbeat
+from core.audio_layers import (EFFECTS, DownbeatGate, EffectBank, LayerFilter, SourceMixer, accent_vectors, auto_fx, auto_sources, has_kick, layer_levels,
+                               phrase_boost, ripple_on_downbeat)
 from core.pulse import cycle_seconds, swell as pulse_swell
 from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
@@ -293,7 +294,8 @@ class Renderer:
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
         self.sources_now = ("tout", "tout", False, False)                              # (fond, logo, fond en auto, logo en auto) : affiche dans l'interface
         self.strobe_info: tuple[str, float] | None = None                            # (raison, instant) du dernier eclair : affiche dans l'interface
-        self._downbeat = DownbeatGate()                                               # onde de choc sur le 1er temps de la mesure (`ripple_beat`)
+        self.cycle_boost = 1.0                                                        # renfort de fin de cycle de l'image en cours (#164)
+        self._downbeat = DownbeatGate()                                            # onde de choc sur le 1er temps de la mesure (`ripple_beat`)
         self._fx_bank = EffectBank()                                                   # reactivite par effet (mode auto) : un vecteur audio par effet et par couche
         self._fx_filters = {layer: [LayerFilter() for _ in EFFECTS] for layer in ("bg", "logo")}
         self._fx_t = None
@@ -846,7 +848,7 @@ class Renderer:
         lg_bass, lg_high, lg_beat = lg_au[0], lg_au[1], lg_au[2]
         # Reactivite par effet (mode auto avec phase connue) : un vecteur audio par effet et par couche, chacun avec sa source et son dosage ;
         # sinon les quatre effets lisent le vecteur de la couche (comportement d'avant, image identique). Le logo lie prend sa propre colonne si le fond est en auto.
-        fx_tab = auto_fx(phase_name, state.get("since_hit"))
+        fx_tab = auto_fx(phase_name, state.get("since_hit"), state.get("since_snare"))
         bg_fx = bg_auto and fx_tab is not None
         logo_fx = (bg_auto if linked else logo_auto) and fx_tab is not None
         fdt = 0.0 if self._fx_t is None else min(max(t - self._fx_t, 0.0), 0.1)
@@ -864,6 +866,13 @@ class Renderer:
         since_down = self._downbeat.update(t, state)                                   # appele a chaque image : le compte des kicks reste juste
         if p.get("ripple_beat", "mesure") == "mesure":                                 # l'onde de choc ne part que sur le « 1 » de la mesure
             au_bg_fx, au_logo_fx = ripple_on_downbeat(au_bg_fx, since_down), ripple_on_downbeat(au_logo_fx, since_down)
+        # Renforts de fin de cycle (#164) : groove et pic en mode auto par effet, glitch et aberration plus forts sur les derniers temps d'un 8 / 16 / 32
+        self.cycle_boost = phrase_boost(state.get("phrase_pos"), float(p.get("cycle_accent", 1.0))) if phase_name in ("groove", "peak") else 1.0
+        if self.cycle_boost != 1.0:
+            if bg_fx:
+                au_bg_fx = accent_vectors(au_bg_fx, self.cycle_boost)
+            if logo_fx:
+                au_logo_fx = accent_vectors(au_logo_fx, self.cycle_boost)
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt

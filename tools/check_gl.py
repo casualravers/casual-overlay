@@ -5257,6 +5257,133 @@ def check_bands_pulse() -> None:
     check(an_off.pulse_events == {} and an_off.latest()["pulse_since"] == {}, "pulsation: sans kick ni BPM, aucun evenement (les sources de pulsation se taisent)")
 
 
+def check_structure() -> None:
+    """Effets cales sur la structure du morceau (#164) : Temps 1 auto, caisse claire, fins de cycles 8 / 16 / 32, renforts."""
+    print("-- structure du morceau : Temps 1 auto, caisse claire, fins de cycles")
+    from core import audio_layers as al, explain, rhythm as rh
+    # --- grille : le recalage deplace l'ancre de PHRASES entieres (avant : d'une mesure, le compte des 8 / 16 / 32 glissait a chaque kick)
+    g = rh.BeatGrid()
+    g.set_one(0.0, 120.0)
+    check(g.origin == "manuel", "temps 1: un appui pose une grille « manuelle »", str(g.origin))
+    for n in range(1, 200):
+        g.nudge(n * 0.5, 120.0)
+    check(g.beat_index(100.0) % 32 == 200 % 32, "grille: le recalage sur les kicks garde le compte des phrases (temps 200 = temps 8 de la phrase de 32)",
+          str(g.beat_index(100.0)))
+    g.clear()
+    check(g.origin is None and not g.active, "grille: effacee = plus d'origine")
+
+    def run(r, t0, n, period=0.5):
+        for k in range(n):
+            r.update(t0 + k * period, {}, True)
+    # reprise : sans appui, le premier kick apres un vide devient le 1, des que le BPM est connu
+    r = rh.Rhythm()
+    run(r, 10.0, 30)
+    check(r.grid.active and r.grid.origin == "reprise" and r.grid.beat_index(10.0) % 32 == 0,
+          "temps 1 auto: le premier kick d'une reprise devient le 1 de la phrase", f"{r.grid.origin} {r.grid.beat_index(10.0) if r.grid.active else None}")
+    # drop : le kick qui revient devient le 1 (la grille auto est reancree)
+    r.on_drop(13.5)
+    check(r.grid.origin == "drop" and r.grid.beat_index(13.5) % 32 == 0, "temps 1 auto: au drop, le kick du retour devient le 1",
+          f"{r.grid.origin} {r.grid.beat_index(13.5)}")
+    # l'appui reste prioritaire : une grille manuelle n'est jamais deplacee par l'auto
+    r2 = rh.Rhythm()
+    r2.grid.set_one(10.0, 120.0)
+    run(r2, 10.0, 30)
+    r2.on_drop(13.5)
+    check(r2.grid.origin == "manuel" and r2.grid.beat_index(10.0) % 32 == 0, "temps 1 auto: une grille posee a la main n'est jamais deplacee (drop compris)",
+          f"{r2.grid.origin} {r2.grid.beat_index(10.0)}")
+    r3 = rh.Rhythm()
+    r3.auto_one = False
+    run(r3, 10.0, 30)
+    r3.on_drop(13.5)
+    check(not r3.grid.active, "temps 1 auto: coupe, aucune grille sans appui")
+    # vide : la grille s'efface et n'est pas reancree sur l'ancienne reprise ; la reprise suivante pose un nouveau 1
+    r4 = rh.Rhythm()
+    run(r4, 10.0, 20)
+    r4.update(27.0, {}, False)
+    r4.update(28.0, {}, False)
+    check(not r4.grid.active, "temps 1 auto: apres 5 s sans kick la grille s'efface et reste effacee (pas de 1 perime)")
+    run(r4, 30.25, 30)
+    check(r4.grid.active and r4.grid.origin == "reprise" and r4.grid.beat_index(30.25) % 32 == 0, "temps 1 auto: la reprise suivante pose un nouveau 1",
+          f"{r4.grid.origin} {r4.grid.beat_index(30.25) if r4.grid.active else None}")
+    check(explain.one_text(None) == "" and "manuel" in explain.one_text("manuel") and "drop" in explain.one_text("drop") and "reprise" in explain.one_text("reprise"),
+          "temps 1: le voyant dit d'ou vient le 1")
+    # --- fins de cycles : dernier temps d'un 8, 2 derniers d'un 16, 4 derniers d'un 32
+    check([p for p in range(32) if al.cycle_end("fin8", p)] == [7, 15, 23, 31] and [p for p in range(32) if al.cycle_end("fin16", p)] == [14, 15, 30, 31]
+          and [p for p in range(32) if al.cycle_end("fin32", p)] == [28, 29, 30, 31] and al.cycle_end("fin8", 39) and not al.cycle_end("fin8", 40),
+          "fins de cycles: fin8 = dernier temps de 8, fin16 = 2 derniers de 16, fin32 = 4 derniers de 32")
+    b = [al.phrase_boost(p) for p in range(32)]
+    check(b[0] == 1.0 and b[6] == 1.0 and b[7] == 1.3 and b[14] == b[15] == 1.5 and b[23] == 1.3 and abs(b[28] - 1.6) < 1e-9 and abs(b[31] - 2.0) < 1e-9
+          and b[28] < b[29] < b[30] < b[31] and b[30] > b[15] > b[7],
+          "renforts: x1,3 en fin de 8, x1,5 en fin de 16, de x1,6 a x2 sur la fin de 32 (le 32 finit le plus fort)", str(b))
+    check(al.phrase_boost(None) == 1.0 and al.phrase_boost(31, 0.0) == 1.0 and abs(al.phrase_boost(31, 0.5) - 1.5) < 1e-9,
+          "renforts: sans grille rien ; le master les regle (0 = aucun renfort)")
+    vecs = [(0.5, 0.5, 0.5, 0.1)] * 4
+    acc = al.accent_vectors(vecs, 1.6)
+    check(acc[0] == vecs[0] and acc[1] == vecs[1] and all(abs(x - 0.8) < 1e-9 for x in acc[2][:3] + acc[3][:3]) and acc[2][3] == 0.1 and al.accent_vectors(vecs, 1.0) == vecs,
+          "renforts: seuls le glitch et l'aberration sont renforces, le 'since' ne change pas", str(acc))
+    check(al.accent_vectors([(0.8, 0.8, 0.8, 0.1)] * 4, 2.0)[3][:3] == (1.0, 1.0, 1.0), "renforts: plafonnes a 1")
+    sp = {"bass": 0.0, "high": 0.0, "beat": 0.0, "since_beat": 9.0, "pulse_since": {"fin32": 0.0, "fin8": 0.2}}
+    check(al.layer_levels(sp, "fin32")[2] == 1.0 and 0.3 < al.layer_levels(sp, "fin8")[2] < 0.4 and al.layer_levels(sp, "fin16") == (0.0, 0.0, 0.0, al.NO_KICK),
+          "fins de cycles: sources de pulsation (enveloppe qui part sur l'evenement), muettes sans evenement")
+    check(all(s in al.SOURCES and s in al.LABELS for s in ("snare", *al.END_GRIDS)) and [s for grp in al.SOURCE_GROUPS for s in grp] == list(al.SOURCES),
+          "sources: caisse claire et fins de cycles dans les menus")
+    # --- caisse claire : source, tableau auto (groove : caisse claire > frappes > aigus ; pic : caisse claire, sinon kick)
+    st = {"bass": 0.8, "high": 0.3, "beat": 0.9, "since_beat": 0.2, "snare": 0.6, "since_snare": 0.05}
+    check(al.layer_levels(st, "snare") == (0.0, 0.0, 0.6, 0.05) and al.layer_levels({"bass": 0.8, "high": 0.3, "beat": 0.9, "since_beat": 0.2}, "snare") == (0.0, 0.0, 0.0, al.NO_KICK)
+          and not al.has_kick("snare"), "caisse claire: la source suit les attaques de caisse claire, muette sans elles")
+    check(al.auto_fx("groove", 9.0, 1.0)["logo"]["chroma"][0] == "snare" and al.auto_fx("groove", 1.0, 9.0)["logo"]["chroma"][0] == "frappes"
+          and al.auto_fx("groove")["logo"]["chroma"][0] == "aigus", "effets auto: en groove l'aberration du logo suit la caisse claire (2 et 4), sinon les frappes, sinon les aigus")
+    check(al.auto_fx("peak", None, 1.0)["logo"]["chroma"][0] == "snare" and al.auto_fx("peak")["logo"]["chroma"][0] == "kick",
+          "effets auto: au pic l'aberration passe sur la caisse claire (plus a l'unisson de l'onde de choc), sinon le kick")
+    # --- extracteur : un rock synthetique (kick 1 et 3, caisse claire 2 et 4) donne des evenements de caisse claire sur 2 et 4
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import bench_kick as bk
+    from engine import audio as au
+    rate = 48000
+    x, _truth = bk._pattern(rate, 100, 24.0, 10, kick_steps=(0, 8), snare_steps=(4, 12), offbeat_bass=False, snare_body=0.3)
+    ex = au.FeatureExtractor(rate)
+    buf = np.zeros(ex.win_size, dtype=np.float32)
+    got = []
+    hop = bk.HOP
+    for i in range(0, len(x) - hop + 1, hop):
+        buf = np.concatenate((buf[hop:], x[i:i + hop]))
+        t = (i + hop) / rate
+        levels, _beat = ex.process(buf, hop / rate, t)
+        if levels.get("edge_snare"):
+            got.append(t)
+    snares = [bar * 2.4 + off for bar in range(11) for off in (0.6, 1.8) if 12.0 <= bar * 2.4 + off < 23.5]
+    late = [t for t in got if t >= 12.0]
+    hit = sum(1 for s in snares if any(-0.02 <= t - s <= 0.15 for t in late))
+    good = sum(1 for t in late if any(-0.02 <= t - s <= 0.15 for s in snares))
+    check(snares and hit >= 0.6 * len(snares) and late and good >= 0.8 * len(late),
+          "caisse claire: sur un rock synthetique, les caisses claires (2 et 4) sont reconnues et presque rien d'autre", f"{hit}/{len(snares)} vues, {good}/{len(late)} justes")
+    # --- analyseur : fins de cycles et position dans la phrase avec une grille ; rien sans grille
+    P = 60.0 / 124
+
+    def drive(with_grid):
+        an = au.AudioAnalyzer(au.RingBuffer(), au.FeatureExtractor(rate))
+        an.rhythm.bpm, an.phase.phase = 124.0, "groove"
+        if with_grid:
+            an.rhythm.grid.set_one(P + 0.016, 124.0)
+        pend = [(k * P + 0.016) for k in range(1, 70)]
+        t, i = 0.0, 0
+        while t < 30.0:
+            kick = False
+            while i < len(pend) and pend[i] <= t:
+                kick, i = True, i + 1
+            an._lead_step(t, kick)
+            t += 0.0107
+        return an, {k: an.pulse_events.get(k, 0) for k in al.END_GRIDS}
+    an, ev = drive(True)
+    beats = an.pulse_events.get("pouls", 0)
+    check(beats > 40 and all(abs(ev[k] - beats * tail / n) <= tail + 0.5 for k, (n, tail) in al.END_GRIDS.items()),
+          "fins de cycles: un temps sur 8 pour chaque fin (1 sur 8, 2 sur 16, 4 sur 32), a la grappe pres", f"{beats} temps, {ev}")
+    pos = an.latest().get("phrase_pos")
+    check(pos is not None and 0 <= pos < 32, "fins de cycles: latest() publie la position dans la phrase (0..31)", str(pos))
+    an0, ev0 = drive(False)
+    check(all(v == 0 for v in ev0.values()) and an0.latest().get("phrase_pos") is None, "fins de cycles: sans grille, aucune fin (elle tomberait n'importe ou)", str(ev0))
+
+
 def check_latence() -> None:
     print("Mesure de latence audio -> image (tools/mesure_latence.py)")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -8702,7 +8829,7 @@ def check_audio_layers_pure() -> None:
     check(al.layer_levels(st, "kick") == (0.0, 0.0, 0.9, 0.2), "sources: kick = seulement ce qui part des kicks")
     check(al.layer_levels(st, "rien") == (0.0, 0.0, 0.0, al.NO_KICK), "sources: rien = la couche ne reagit plus")
     check(al.layer_levels(st, "n'importe quoi") == al.layer_levels(st, "tout") and al.valid(None) == "tout", "sources: valeur inconnue = tout")
-    check([al.has_kick(s) for s in al.SOURCES] == [True, True, False, False, True, False, False, False] + [False] * (len(al.BAND_SOURCES) + 1 + len(al.PULSE_GRIDS)),
+    check([s for s in al.SOURCES if al.has_kick(s)] == ["tout", "basses", "kick"],
           "sources: has_kick (auto est resolue avant ; les bandes fines et la pulsation n'ont pas de kick)")
     st2 = dict(st, hit=0.7, since_hit=0.05, beat_bg=0.4, since_bg=0.6)
     check(al.layer_levels(st2, "frappes") == (0.0, 0.0, 0.7, 0.05) and al.layer_levels(st, "frappes") == (0.0, 0.0, 0.0, al.NO_KICK),
@@ -13065,7 +13192,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -13078,7 +13205,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

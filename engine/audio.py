@@ -11,7 +11,7 @@ import threading
 import time
 from collections import deque
 
-from core.audio_layers import PULSE_GRIDS
+from core.audio_layers import END_GRIDS, PHRASE_BEATS, PULSE_GRIDS, cycle_end
 from core.onset import FastAttack, KickClassifier, OnsetDetector, WideRise
 from core.phase import PhaseTracker
 from core.pulse import LeadGate, PulseClock
@@ -106,7 +106,7 @@ BANDS8 = (("sub", 20.0, 60.0, 0.012, 0.30), ("grave", 60.0, 150.0, 0.012, 0.25),
 BANDS8_GATE = 0.0005              # sous cette amplitude de bin : silence (comme BAND_GATE)
 RISE_MAX = 10.0                   # derivee publiee (unites d'enveloppe par seconde), plafonnee
 PULSE_USABLE = 0.30               # confiance minimale de l'horloge pour que les grilles de pulsation emettent des evenements
-EDGES = ("hit", "bg", "logo")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo
+EDGES = ("hit", "bg", "logo", "snare")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo, caisse claire (#164)
 STAMP_KEEP = 2048                 # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 256, ~22 s en blocs de 512)
 AGE_FLOOR_S = 3.0                 # fenetre du plancher du retard de capture (le retard stable, sans la gigue du fil d'analyse)
 AGE_SMOOTH_TAU_S = 0.5            # lissage du retard de capture publie
@@ -162,6 +162,7 @@ class FeatureExtractor:
         self.fast = FastAttack()
         self.classify = True                         # distingue kick et caisse claire (KickClassifier) ; False = comportement d'avant (banc)
         self.kick_class = KickClassifier()
+        self._snare = False                          # l'attaque tranchee a ce pas est une caisse claire (voir `_classify`)
         self._pending: tuple[float, object, bool] | None = None      # attaque en attente de classement : (instant, spectre d'avant, deja signalee)
         self._mag_hist: deque = deque()             # (instant, spectre de la bande d'attaque) des SPEC_KEEP_S dernieres secondes
         self.ref_age: float | None = None           # age du spectre de reference de la derniere attaque classee (tests)
@@ -211,8 +212,10 @@ class FeatureExtractor:
         levels["bands"], levels["band_rise"] = bands, rises            # enveloppes continues par bande et leur montee (voir core.audio_layers.BAND_SOURCES)
         beat = self._detect_kick(raw["bass"], dt, now, fast)
         spec = mag[self._att].copy()
+        self._snare = False
         if self.classify:
             beat = self._classify(beat, spec, now)
+        levels["edge_snare"] = self._snare                    # attaque rangee dans la famille « caisse claire » (source « snare », #164)
         self._mag_hist.append((now, spec))
         while self._mag_hist and now - self._mag_hist[0][0] > SPEC_KEEP_S:
             self._mag_hist.popleft()
@@ -244,6 +247,7 @@ class FeatureExtractor:
             if total > 1e-9:
                 low = math.log10(float((attack * self._att_low).sum()) + 1e-6)
                 kick = self.kick_class.is_kick(low)
+                self._snare = self.kick_class.armed and not kick and not already      # deux familles nettes et celle sans graves : une caisse claire
                 self.kick_class.observe(low)
                 if not already:
                     fire = kick
@@ -592,6 +596,8 @@ class AudioAnalyzer:
         self._pulse_wall: dict = {}             # nom de grille -> instant (monotonic) du dernier evenement
         self._pulse_usable = False
         self.pulse_events: dict = {}            # nom de grille -> nombre d'evenements emis (tests, diagnostic)
+        self.phrase_pos: int | None = None      # temps de la phrase de 32 (depuis le « 1 » de la grille) du dernier temps de la pulsation, None sans grille
+        self._seen_drops = 0                    # drops de PhaseTracker deja transmis au Temps 1 auto
         self.lead_s = 0.0                      # Â« Avance Â» en secondes (reglage sync_lead_ms, ecrit par la boucle de rendu) ; 0 = on reagit a la detection
         self.pulse_info: dict = {"state": "absente", "confidence": 0.0, "phase": None, "period_ms": 0.0, "delta_ms": 0.0, "lead_ms": 0.0,
                                  "predicting": False, "predicted": 0, "reactive": 0}
@@ -647,6 +653,9 @@ class AudioAnalyzer:
                 t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
                 self.rhythm.update(t_audio, levels, beat)
                 self.phase.update(t_audio, levels, beat, self.rhythm.state, self.rhythm.bpm)
+                if self.phase.drops != self._seen_drops:          # le kick revient apres un vide : ce kick est le « 1 » d'une phrase (Temps 1 auto)
+                    self._seen_drops = self.phase.drops
+                    self.rhythm.on_drop(self.phase.drop_kick if self.phase.drop_kick is not None else t_audio)
                 fire = self._lead_step(t_audio, beat)
             except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
                 fire = beat
@@ -674,9 +683,12 @@ class AudioAnalyzer:
         self._pulse_usable = usable
         if not usable:
             self._pulse_last_k.clear()
+            self.phrase_pos = None
             return
         wall = time.monotonic()
         grid = self.rhythm.grid
+        if not grid.active:
+            self.phrase_pos = None
         for name, (div, n) in PULSE_GRIDS.items():
             step = clk.period / div
             k = int(math.floor((t_audio + lead - clk.anchor) / step))
@@ -688,6 +700,13 @@ class AudioAnalyzer:
                 self._pulse_last_k[name] = k
                 if k - last > 2:
                     continue                                        # saut (horloge recreee, retard du fil) : pas de rafale
+                if name == "pouls" and grid.active:                 # chaque temps : sa place dans la phrase, et les fins de cycles (#164, seulement avec une grille)
+                    gb = grid.beat_index(clk.anchor + k * step)
+                    self.phrase_pos = gb % PHRASE_BEATS
+                    for end in END_GRIDS:
+                        if cycle_end(end, gb):
+                            self._pulse_wall[end] = wall
+                            self.pulse_events[end] = self.pulse_events.get(end, 0) + 1
                 if n > 1:
                     gi = grid.beat_index(clk.anchor + k * step) if grid.active else k       # Â« 1 temps sur N Â» : compte depuis le Â« 1 Â» de la grille si elle existe
                     if gi % n != 0:
@@ -726,6 +745,8 @@ class AudioAnalyzer:
             pulse["phase_now"] = None
         state["pulse"] = pulse
         state["pulse_since"] = ({name: min(now_wall - w, BEAT_IDLE_S) for name, w in self._pulse_wall.items()} if self._pulse_usable else {})
+        state["phrase_pos"] = self.phrase_pos if self._pulse_usable and self.rhythm.grid.active else None      # temps de la phrase (0..31) : renforts de fin de cycle
+        state["one_origin"] = self.rhythm.grid.origin if self.rhythm.grid.active else None      # d'ou vient le « 1 » (manuel / drop / reprise)
         state["lead_s"] = self.lead_s
         since = BEAT_IDLE_S if t_beat is None else min(time.monotonic() - t_beat, BEAT_IDLE_S)
         state["since_beat"] = since
@@ -733,7 +754,8 @@ class AudioAnalyzer:
         now = time.monotonic()
         for name, te in t_edge.items():                          # frappes aigues et kicks par couche (voir core/audio_layers.py)
             gap = BEAT_IDLE_S if te is None else min(now - te, BEAT_IDLE_S)
-            key = "hit" if name == "hit" else "beat_" + name
+            sharp = name in ("hit", "snare")                     # frappes et caisse claire : enveloppe vive ; kicks des couches : celle du kick
+            key = name if sharp else "beat_" + name
             state["since_" + name] = gap
-            state[key] = math.exp(-gap / (HIT_DECAY_TAU_S if name == "hit" else BEAT_DECAY_TAU_S)) if te is not None else 0.0
+            state[key] = math.exp(-gap / (HIT_DECAY_TAU_S if sharp else BEAT_DECAY_TAU_S)) if te is not None else 0.0
         return state

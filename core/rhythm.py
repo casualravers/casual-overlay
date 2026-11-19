@@ -17,6 +17,8 @@ BPM_MIN_CONFIDENCE = 0.45              # part des estimations qui s'accordent ; 
 KICK_SURE = 0.65                       # confiance des kicks au-dessus de laquelle on ne les contredit jamais
 TEMPO_SURE = 0.75                      # confiance du tempo du son qui permet de contredire des kicks peu surs
 BPM_LOST_S = 5.0                      # sans kick depuis ce temps, le BPM est perdu
+RESUME_GAP_S = 1.5                     # un kick apres un vide d'au moins ce temps ouvre une nouvelle serie (Temps 1 auto : son 1)
+DROP_REANCHOR_S = 4.0                  # un seul « 1 » par drop, meme si deux detecteurs le voient
 
 
 def fold_bpm(bpm: float, lo: float = BPM_LO, hi: float = BPM_HI) -> float:
@@ -185,6 +187,7 @@ class BeatGrid:
     l'instant du « 1 » le plus proche de `t`. Inactive tant qu'aucun « 1 » n'a ete donne ; effacee quand le BPM est perdu."""
 
     BEATS_PER_BAR = 4
+    PHRASE_BEATS = 32      # la plus longue phrase comptee (fins de cycles 8 / 16 / 32, #164) : le recalage deplace l'ancre de phrases entieres
     CAPTURE = 0.3          # un kick a moins de 0,3 temps d'une ligne de la grille la recale
     NUDGE = 0.15           # part de l'ecart corrigee a chaque kick
     SNAP_S = 0.4           # un « 1 » tape moins de 0,4 s apres un kick se cale sur ce kick (l'oreille entend le kick, le doigt suit)
@@ -192,6 +195,7 @@ class BeatGrid:
     def __init__(self) -> None:
         self.anchor: float | None = None
         self.period = 0.5
+        self.origin: str | None = None     # d'ou vient le « 1 » : « manuel » (appui), « drop » ou « reprise » (Temps 1 auto), None sans grille
 
     @property
     def active(self) -> bool:
@@ -199,10 +203,18 @@ class BeatGrid:
 
     def clear(self) -> None:
         self.anchor = None
+        self.origin = None
 
-    def set_one(self, now: float, bpm: float, last_kick: float | None = None) -> None:
+    def set_one(self, now: float, bpm: float, last_kick: float | None = None, origin: str = "manuel") -> None:
         self.period = 60.0 / min(max(float(bpm), 30.0), 300.0)
         self.anchor = last_kick if last_kick is not None and 0.0 <= now - last_kick <= self.SNAP_S else now
+        self.origin = origin
+
+    def anchor_at(self, t: float, bpm: float, origin: str) -> None:
+        """Le « 1 » tombe exactement a l'instant `t` (un kick deja date : Temps 1 auto)."""
+        self.period = 60.0 / min(max(float(bpm), 30.0), 300.0)
+        self.anchor = float(t)
+        self.origin = origin
 
     def pos(self, t: float) -> float:
         return (t - self.anchor) / self.period
@@ -230,9 +242,11 @@ class BeatGrid:
         """Un kick vient d'etre detecte : recale l'ancre et regle le pas sur le BPM detecte (sans faire sauter la grille)."""
         if self.anchor is None:
             return
-        bar = self.period * self.BEATS_PER_BAR
+        phrase = self.period * self.PHRASE_BEATS
         if bpm:
-            self.anchor = self.anchor + round((kick_t - self.anchor) / bar) * bar       # ancre ramenee pres de maintenant avant de changer le pas
+            # ancre ramenee pres de maintenant avant de changer le pas, de PHRASES entieres : le compte des temps modulo 8 / 16 / 32 ne change pas
+            # (avant : d'une mesure, le numero de temps reculait de 4 a chaque recalage et les phrases 8 / 16 / 32 tombaient n'importe ou)
+            self.anchor = self.anchor + math.floor((kick_t - self.anchor) / phrase) * phrase
             self.period += (60.0 / min(max(float(bpm), 30.0), 300.0) - self.period) * 0.5
         p = self.pos(kick_t)
         off = p - round(p)
@@ -262,6 +276,9 @@ class Rhythm:
         self._off = 0
         self.grid = BeatGrid()
         self.beat_index: int | None = None      # numero de temps (depuis le « 1 » de la grille) du dernier kick, None sans grille
+        self.auto_one = True                    # Temps 1 auto (#164) : le « 1 » se pose seul a la reprise des kicks et au drop (jamais sur une grille manuelle)
+        self._phrase_start: float | None = None  # premier kick de la serie en cours (apres un vide) : le « 1 » de la reprise
+        self._drop_t = -1e9                      # dernier « 1 » pose par un drop (deux detecteurs voient le meme drop : un seul ancrage)
 
     @property
     def drops(self) -> int:
@@ -277,6 +294,23 @@ class Rhythm:
         self.bpm, self.confidence, self._off, self._last_kick = None, 0.0, 0, None
         self.grid.clear()
         self.beat_index = None
+        self._phrase_start = None
+
+    def on_drop(self, t_kick: float) -> None:
+        """Un drop (le kick revient apres une cassure / une montee) : ce kick est le « 1 » d'une phrase. Ne touche jamais une grille posee a la main."""
+        if not self.auto_one or self.grid.origin == "manuel" or t_kick - self._drop_t < DROP_REANCHOR_S:
+            return
+        self._drop_t = t_kick
+        self._phrase_start = t_kick
+        if self.bpm:
+            self.grid.anchor_at(t_kick, self.bpm, "drop")
+            self.beat_index = self.grid.beat_index(self._last_kick) if self._last_kick is not None else None
+
+    def _auto_anchor(self, now: float) -> None:
+        """Reprise : pas de grille, des kicks recents et un BPM : le premier kick de la serie devient le « 1 »."""
+        if (self.auto_one and not self.grid.active and self.bpm and self._phrase_start is not None
+                and self._last_kick is not None and now - self._last_kick < BPM_LOST_S):
+            self.grid.anchor_at(self._phrase_start, self.bpm, "reprise")
 
     def _evaluate(self, now: float) -> None:
         tempo, tconf = self.tempo.estimate(now)             # periodicite du son, sans kick
@@ -325,6 +359,8 @@ class Rhythm:
         if "flux" in levels:
             self.tempo.feed(now, float(levels["flux"]))
         if beat:
+            if self._last_kick is None or now - self._last_kick >= RESUME_GAP_S:
+                self._phrase_start = now                # premier kick apres un vide : le « 1 » de la reprise (Temps 1 auto)
             self.est.feed(now)
             self._last_kick = now
             self.grid.nudge(now, self.bpm)
@@ -332,6 +368,7 @@ class Rhythm:
         if now - self._eval_at >= self.EVAL_EVERY_S:
             self._eval_at = now
             self._evaluate(now)
+            self._auto_anchor(now)
         top = max(float(levels.get("mid", 0.0)), float(levels.get("high", 0.0)))
         event = self.drop.update(now, float(levels.get("bass", 0.0)), float(levels.get("rms", 0.0)), top)
         if event == "build":
