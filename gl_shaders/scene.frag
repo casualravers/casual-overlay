@@ -40,6 +40,7 @@ uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (dej
 // Palette labyrinthe (u_bg_palette = 4) : etat d'une reaction-diffusion (r = U, g = V, grille en boucle, origine BAS gauche) lu trois
 // fois avec un petit decalage chacune : trois couches colorees decalees, posees dans l'ordre sur le fond.
 uniform sampler2D u_rd_tex;
+uniform vec4  u_rd_crop;       // partie de la simulation lue : decalage xy, part zw (0, 0, 1, 1 = toute la grille ; enregistrement vertical / carre = rognee au centre, comme le fond video)
 uniform vec4  u_rd;            // x = ecart des couches (fraction de la hauteur), y = demi-texel de la simulation (en hauteur)
 uniform vec3  u_rd_c1;
 uniform vec3  u_rd_c2;
@@ -186,7 +187,7 @@ vec3 stochastic_pattern(vec2 p) {
 float rd_layer(vec2 p, float angle, float thr) {
     float ar = u_res.x / max(u_res.y, 1.0);
     vec2 q = p + u_rd.x * vec2(cos(angle) / ar, sin(angle));     // decalage isotrope a l'ecran
-    float v = texture(u_rd_tex, vec2(q.x, 1.0 - q.y)).g;
+    float v = texture(u_rd_tex, u_rd_crop.xy + vec2(q.x, 1.0 - q.y) * u_rd_crop.zw).g;     // la grille est 16:9 : un autre cadre la lit rognee (cellules rondes, pas etirees)
     float w = max(u_rd.y * 4.0, 0.02);                            // bord net sans crenelage (V varie vite pres du seuil)
     return smoothstep(thr - w, thr + w, v);
 }

@@ -1058,6 +1058,7 @@ def check_gui() -> None:
                     gui_zoom_steps(c, s, out)
                     gui_macro_scroll_steps(c, s, out)
                     gui_rec_steps(c, s, out)
+                    gui_clips_steps(c, s, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -1472,6 +1473,15 @@ def check_gui() -> None:
           "bouton REC de la barre (a la place de PANIQUE): grise projection fermee, temps ecoule pendant l'enregistrement, un clic envoie la commande", str(rg.get("bar")))
     check(rg.get("palette") == (True, "Enregistrement : demarrer / arreter", "rec") and rg.get("help") and rg.get("tab_icon"),
           "onglet Rec (GUI): commande de la palette Ctrl+K, touche E dans l'aide, icone de l'onglet", str((rg.get("palette"), rg.get("help"), rg.get("tab_icon"))))
+    cg = out.get("clips_gui") or {}
+    check(cg.get("toggle") == (0.0, 1.0, 0.0), "onglet Rec (GUI): la case « Extraits automatiques » ecrit rec_clips (desactivee par defaut)", str(cg.get("toggle")))
+    check(cg.get("empty") == (0, "") and cg.get("analysing") == (0, "Extraits : analyse...")
+          and cg.get("ready") == (2, "2 extrait(s) pret(s)", "1   00:42 - 01:02   drop", "2   01:40 - 02:00   pic"),
+          "onglet Rec (GUI): la liste des extraits suit le voyant (rien, analyse, extraits prets avec minutage et type)", str((cg.get("empty"), cg.get("analysing"), cg.get("ready"))))
+    check(len(set(cg.get("heights") or [(0,), (1,)])) == 1, "onglet Rec (GUI): la liste d'extraits ne change ni la hauteur de l'onglet, ni celle de la liste ni celle du voyant", str(cg.get("heights")))
+    check(len(cg.get("opened") or []) == 1 and cg.get("nothing") == (2, 2, True)
+          and cg.get("after") == (1, [2], False, True, "1 extrait(s) pret(s)"),
+          "onglet Rec (GUI): Ouvrir le dossier ouvre celui des extraits ; Jeter sans choix ne fait rien, avec un choix supprime ses fichiers et sa ligne", str((cg.get("opened"), cg.get("nothing"), cg.get("after"))))
     bm = out.get("bgv_modes", {})
     check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
                  "video": (False, False, True, "video")},
@@ -3109,12 +3119,63 @@ def check_capture_block() -> None:
         b1 = au.capture_block()
         os.environ["CASUAL_AUDIO_BLOCK"] = "300"
         b2 = au.capture_block()
+        os.environ["CASUAL_AUDIO_BLOCK"] = "256"
+        b3 = au.capture_block()
     finally:
         os.environ.pop("CASUAL_AUDIO_BLOCK", None)
         if saved_env is not None:
             os.environ["CASUAL_AUDIO_BLOCK"] = saved_env
-    check(b0 == au.CAPTURE_BLOCK and b1 == 512 and b2 == au.CAPTURE_BLOCK, "bloc: CAPTURE_BLOCK par defaut, CASUAL_AUDIO_BLOCK=512 le force, valeur invalide ignoree",
-          str((b0, b1, b2)))
+    check(b0 == au.CAPTURE_BLOCK and b1 == 512 and b2 == au.CAPTURE_BLOCK and b3 == 256, "bloc: CAPTURE_BLOCK par defaut, CASUAL_AUDIO_BLOCK=512 / 256 le force, valeur invalide ignoree",
+          str((b0, b1, b2, b3)))
+    check(au.CAPTURE_BLOCK == 512, "bloc: 512 par defaut (a 256 une carte son en WASAPI perdait des blocs sans le signaler : son de l'enregistrement hache)",
+          str(au.CAPTURE_BLOCK))
+    # --- tampon de la carte son : 30 ms explicites (« low » = 22 ms en WASAPI sur la Focusrite : 3 % du son perdu sans drapeau, meme sans charge)
+    class FakeSd:
+        opened = {}
+
+        @staticmethod
+        def query_devices(device, kind):
+            return {"default_samplerate": 48000.0, "name": "fausse carte", "max_input_channels": 2}
+
+        class InputStream:
+            def __init__(self, **kw):
+                FakeSd.opened = kw
+                self.latency = kw.get("latency")
+    real_sd = au.sd
+    au.sd = FakeSd
+    try:
+        au.SoundDeviceInput(17, au.RingBuffer(48000))
+    finally:
+        au.sd = real_sd
+    inp_ = None
+    au.sd = FakeSd
+    try:
+        inp_ = au.SoundDeviceInput(17, au.RingBuffer(48000))
+    finally:
+        au.sd = real_sd
+    check(au.CAPTURE_LATENCY_S == 0.1 and FakeSd.opened.get("latency") == au.CAPTURE_LATENCY_S and FakeSd.opened.get("blocksize") == au.CAPTURE_BLOCK,
+          "tampon: l'entree s'ouvre avec 100 ms de tampon (pas « low » : a 22 ms, 2,3 s perdues sur 15 sous charge ; a 30 ms, 0,2 s) et le bloc courant", str(FakeSd.opened.get("latency")))
+    check(inp_ is not None and inp_.latency_ms <= au.ANNOUNCED_LATENCY_CAP_MS + 1e-9 and au.ANNOUNCED_LATENCY_CAP_MS == 25.0,
+          "tampon: la latence annoncee (avance automatique, repli sans horodatage) reste celle d'un tampon court : le tampon de securite n'ajoute pas de retard de livraison",
+          str(getattr(inp_, "latency_ms", None)))
+    FakeSd.InputStream.__init__.__defaults__ = None
+    class ShortSd(FakeSd):
+        class InputStream(FakeSd.InputStream):
+            def __init__(self, **kw):
+                super().__init__(**kw)
+                self.latency = 0.012
+    au.sd = ShortSd
+    try:
+        short_ = au.SoundDeviceInput(17, au.RingBuffer(48000))
+    finally:
+        au.sd = real_sd
+    check(abs(short_.latency_ms - 12.0) < 1e-6, "tampon: une latence deja plus courte que le plafond est rendue telle quelle", str(short_.latency_ms))
+    # --- bloc perdu sans drapeau du pilote (WASAPI) : vu au saut de l'horodatage des blocs
+    r_ = 48000
+    check(not au.block_gap(None, 1.0, 256, r_) and not au.block_gap(1.0, 1.0 + 256 / r_, 256, r_)
+          and not au.block_gap(1.0, 1.0 + 2 * 256 / r_, 256, r_) and au.block_gap(1.0, 1.0 + 3 * 256 / r_, 256, r_)
+          and not au.block_gap(1.0, 1.0 - 0.001, 256, r_),
+          "bloc perdu: un saut de l'horodatage de plus de 2 blocs compte comme un debordement (gigue d'un bloc toleree, premier bloc ignore)")
     # --- compteur de debordements : plus de OVERFLOW_MAX en OVERFLOW_WINDOW_S
     oc = au.OverflowCounter()
     for k in range(au.OVERFLOW_MAX):
@@ -4419,6 +4480,362 @@ def check_claude_md() -> None:
             if not (f_.parent / link_).resolve().is_file():
                 bad.append(f"{d_}/CLAUDE.md : lien {link_} ne se resout pas depuis {d_}/")
     check(not bad, "pointeurs: core/, engine/, gui/, tools/, gl_shaders/ ont leur CLAUDE.md, qui ne pointe (par des liens qui se resolvent) que vers des fiches existantes", str(bad))
+
+
+def check_highlights() -> None:
+    """Extraits automatiques (issue #148) : choix des moments forts a partir de la serie d'energie du son enregistre (core/highlights.py, pur)."""
+    print("Extraits automatiques : choix des moments")
+    from core import highlights as hl
+    S = 0.25
+
+    def series(seconds, bass, level=None):
+        n = int(seconds / S)
+        bs = [bass(i * S) for i in range(n)]
+        return [((level(i * S) if level else b), b) for i, b in enumerate(bs)]
+
+    def burst(t0, t1, high, low=0.1):
+        return lambda x: high if t0 <= x < t1 else low
+
+    # --- un creux puis un drop : un extrait « drop », 8 s avant et 12 s apres
+    e = series(100, burst(50, 80, 0.9))
+    cl = hl.pick_clips(e, S)
+    check(len(cl) == 1 and cl[0].kind == "drop" and abs(cl[0].at - 50.0) < 0.6 and abs(cl[0].start - 42.0) < 0.6 and abs(cl[0].end - 62.0) < 0.6,
+          "creux puis drop: un extrait « drop » de 8 s avant a 12 s apres", str(cl))
+    # --- un pic soutenu sans saut (courbe douce) : un extrait « pic » de 20 s centre
+    import math as _m
+    e = series(120, lambda x: 0.2 + 0.75 * _m.exp(-((x - 60.0) / 8.0) ** 2))
+    cl = hl.pick_clips(e, S)
+    check(len(cl) == 1 and cl[0].kind == "pic" and abs(cl[0].at - 60.0) < 1.0 and abs((cl[0].end - cl[0].start) - 20.0) < 0.6,
+          "pic soutenu sans drop: un extrait « pic » de 20 s centre sur le pic", str(cl))
+    # --- deux drops a moins de 20 s : un seul extrait (pas de chevauchement)
+    e = series(100, lambda x: 0.9 if (50 <= x < 53 or 59 <= x < 70) else 0.1)
+    cl = hl.pick_clips(e, S)
+    check(len(cl) == 1, "deux drops rapproches: un seul extrait (jamais de chevauchement)", str(cl))
+    # --- six drops espaces : cinq au plus, les plus forts, sans chevauchement
+    heights = {20: 0.6, 45: 0.95, 70: 0.7, 95: 0.85, 120: 0.5, 145: 0.9}
+    e = series(170, lambda x: next((h for t0, h in heights.items() if t0 <= x < t0 + 6), 0.1))
+    cl = hl.pick_clips(e, S)
+    ats = sorted(round(c.at) for c in cl)
+    ordered = sorted(cl, key=lambda c: c.start)
+    disjoint = all(a.end + 2.0 - 1e-9 <= b.start for a, b in zip(ordered, ordered[1:]))
+    check(len(cl) == 5 and 120 not in ats and disjoint and cl[0].score >= cl[-1].score and abs(cl[0].at - 45.0) < 0.6,
+          "six drops: cinq au plus, le plus faible ecarte, sans chevauchement, du meilleur au moins bon", str((ats, disjoint)))
+    # --- calage sur la grille (60 / bpm), ancre sur le drop : le drop reste dans l'extrait, 15 a 30 s
+    e = series(100, burst(50, 80, 0.9))
+    cl = hl.pick_clips(e, S, bpm=100.0)
+    c0 = cl[0]
+    k = (c0.at - c0.start) / 0.6
+    check(abs(c0.start - 42.2) < 0.05 and abs(c0.end - 62.0) < 0.05 and abs(k - round(k)) < 1e-6 and c0.start < c0.at < c0.end and 15.0 <= c0.end - c0.start <= 30.0,
+          "bpm: debut et fin sur la grille (periode 0,6 s ancree sur le drop), duree 15 a 30 s", str(c0))
+    # --- plat, trop court, vide
+    check(hl.pick_clips([(0.5, 0.5)] * 400, S) == [] and hl.pick_clips(series(10, burst(5, 10, 0.9)), S) == [] and hl.pick_clips([], S) == [],
+          "enregistrement plat, trop court ou vide: aucun extrait")
+    # --- bornes : marge de 1 s avec le debut et la fin, fenetre decalee (pas raccourcie)
+    cl = hl.pick_clips(series(60, burst(5, 30, 0.9)), S)
+    check(len(cl) == 1 and cl[0].start >= 1.0 - 1e-9 and abs((cl[0].end - cl[0].start) - 20.0) < 0.6, "debut: fenetre decalee, jamais avant 1 s", str(cl))
+    cl = hl.pick_clips(series(60, burst(55, 60, 0.9)), S)
+    check(len(cl) == 1 and cl[0].end <= 59.0 + 1e-9 and abs((cl[0].end - cl[0].start) - 20.0) < 0.6, "fin: fenetre decalee, jamais apres la duree moins 1 s", str(cl))
+    # --- normalisation par percentiles
+    nz = hl.normalize_series([float(i) for i in range(101)])
+    check(nz[0] == 0.0 and nz[-1] == 1.0 and abs(nz[50] - 0.5) < 0.02 and all(a <= b for a, b in zip(nz, nz[1:])) and hl.normalize_series([3.0] * 5) == [0.5] * 5
+          and hl.normalize_series([]) == [], "normalize_series: percentiles 5 a 95 -> 0..1, serie constante = 0,5, vide = vide")
+    # --- BPM par autocorrelation du flux d'attaques
+    flux = [1.0 if i % 25 == 0 else 0.0 for i in range(1500)]              # 30 s, une attaque toutes les 0,5 s a 20 ms de pas
+    b = hl.estimate_bpm(flux, 0.02)
+    check(b is not None and abs(b - 120.0) < 2.0 and hl.estimate_bpm([0.0] * 1500, 0.02) is None and hl.estimate_bpm([], 0.02) is None,
+          "estimate_bpm: 120 BPM retrouve, silence ou vide = None", str(b))
+    # --- commandes ffmpeg et noms
+    cmd = hl.clip_command("ffmpeg", "in.mp4", "out.mp4", 42.2, 19.8)
+    check(cmd[0] == "ffmpeg" and cmd.index("-ss") < cmd.index("-i") and "-t" in cmd and "libx264" in cmd and cmd[-1] == "out.mp4" and "faststart" in " ".join(cmd),
+          "clip_command: decoupe precise (-ss avant -i, -t) en re-encodage x264", " ".join(cmd))
+    check(hl.clip_names("dir/casual-x.mp4", 2) == "dir/casual-x-extrait-2.mp4" and not hasattr(hl, "thumb_command"), "clip_names: -extrait-N.mp4 a cote de l'enregistrement, plus de vignette")
+    import shutil as _sh
+    tmpd = Path(tempfile.mkdtemp(prefix="casual-discard-"))
+    (tmpd / "a-extrait-1.mp4").write_bytes(b"x")
+    ent = {"path": str(tmpd / "a-extrait-1.mp4")}
+    okd = hl.discard_clip(ent)
+    again = hl.discard_clip(ent)
+    check(okd and again and not list(tmpd.iterdir()) and hl.discard_clip({"path": str(tmpd / "absent.mp4")}) and hl.mmss(62.9) == "01:02",
+          "discard_clip: supprime la video, deja absente = sans erreur ; mmss")
+    _sh.rmtree(tmpd, ignore_errors=True)
+    txt = hl.caption_text("casual-x", [hl.Clip(42.2, 62.0, 0.7, "drop", 50.0), hl.Clip(100.0, 120.0, 0.5, "pic", 110.0)])
+    check("00:42" in txt and "01:02" in txt and "drop" in txt and "pic" in txt and "#vj" in txt and "casual-x" in txt,
+          "caption_text: minutages mm:ss, type et hashtags generiques")
+
+
+def _synth_drop_audio(seconds: float, drop_s: float, rate: int = 44100):
+    """Son synthetique : calme (grave tres faible) jusqu'a `drop_s`, puis des kicks (sinus 60 Hz qui retombe) toutes les 0,5 s = 120 BPM."""
+    n = int(seconds * rate)
+    x = np.zeros(n, dtype=np.float32)
+    tt = np.arange(n) / rate
+    x += (0.02 * np.sin(2 * np.pi * 100.0 * tt)).astype(np.float32)
+    kt = np.arange(int(drop_s * rate), n, int(0.5 * rate))
+    k = np.arange(int(0.3 * rate)) / rate
+    kick = (0.9 * np.sin(2 * np.pi * 60.0 * k) * np.exp(-k / 0.08)).astype(np.float32)
+    for s in kt:
+        seg = x[s:s + len(kick)]
+        seg += kick[:len(seg)]
+    return x, rate
+
+
+def _write_wav(path, x, rate: int) -> None:
+    import wave
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+
+
+def check_clips_control() -> None:
+    """Extraits automatiques : reglage `rec_clips` et branchement dans le fil d'assemblage de `RecordingControl` (sans OpenGL ni ffmpeg : faux enregistreur)."""
+    print("Extraits automatiques : branchement dans RecordingControl")
+    import types
+    import engine.recorder as er
+    from core import params_schema as ps
+    check(ps.BY_KEY["rec_clips"].default == 0.0 and ps.BY_KEY["rec_clips"].scope == "device",
+          "reglage: rec_clips desactive par defaut, portee device (ni preset ni scene)")
+
+    class FakeRecorder:
+        sent, duplicated, warning, fps = 900, 0, None, 30
+
+        def stop(self):
+            return "C:/x/casual.mp4"
+
+    class FakeRun:
+        recorder = FakeRecorder()
+
+        def release(self):
+            pass
+
+    def build(fn, on):
+        s = types.SimpleNamespace(status={})
+        ctl = er.RecordingControl(s, None, None, which=lambda n: "ffmpeg-x", clips_fn=fn)
+        ctl._run, ctl._clips_on, ctl._ffmpeg = FakeRun(), on, "ffmpeg-x"
+        return s, ctl
+
+    calls, seen = [], []
+    holder = {}
+
+    def fake(path, ffmpeg):
+        calls.append((path, ffmpeg))
+        seen.append(dict(holder["s"].status.get("rec_clips") or {}))
+        return {"state": "pret", "clips": [{"number": 1}], "message": "1 extrait(s) pret(s)", "txt": None}
+    s, ctl = build(fake, True)
+    holder["s"] = s
+    ctl.stop()
+    ctl.close()
+    check(calls == [("C:/x/casual.mp4", "ffmpeg-x")] and seen and seen[0].get("state") == "analyse" and s.status["rec_clips"]["state"] == "pret"
+          and "pret" in s.status["msg"] and s.status["rec_done"]["path"] == "C:/x/casual.mp4",
+          "option active: l'analyse part apres l'assemblage, voyant « analyse » puis le resultat, l'enregistrement reste sauve", str((calls, seen, s.status)))
+    calls.clear()
+    s, ctl = build(fake, False)
+    holder["s"] = s
+    ctl.stop()
+    ctl.close()
+    check(calls == [] and "rec_clips" not in s.status and s.status["rec_done"]["path"], "option coupee: aucune analyse, aucun voyant")
+
+    def boom(path, ffmpeg):
+        raise RuntimeError("panne simulee")
+    s, ctl = build(boom, True)
+    ctl.stop()
+    ctl.close()
+    check(s.status["rec_done"]["path"] == "C:/x/casual.mp4" and s.status["rec_clips"]["state"] == "erreur" and "panne simulee" in s.status["rec_clips"]["message"],
+          "analyse qui plante: l'enregistrement reste sauve, voyant d'erreur", str(s.status))
+
+
+def check_highlights_audio() -> None:
+    """Extraits automatiques : analyse du son d'un fichier (engine/highlights_audio.py, ffmpeg reel) : le drop et le BPM d'un son synthetique sont retrouves."""
+    print("Extraits automatiques : analyse du son (ffmpeg reel)")
+    import shutil
+    from core import highlights as hl
+    from engine import highlights_audio as ha
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        check(False, "ffmpeg disponible")
+        return
+    root = Path(tempfile.mkdtemp(prefix="casual-hl-"))
+    x, rate = _synth_drop_audio(40.0, 20.0)
+    wav = root / "drop.wav"
+    _write_wav(wav, x, rate)
+    energy, bpm, dur = ha.energy_series(str(wav), ffmpeg)
+    check(abs(dur - 40.0) < 0.3 and abs(len(energy) - 160) <= 2, "analyse: duree et nombre de fenetres (40 s, une toutes les 250 ms)", f"{dur:.2f} s, {len(energy)} fenetres")
+    check(all(0.0 <= a <= 1.0 and 0.0 <= b <= 1.0 for a, b in energy), "analyse: niveaux normalises 0..1")
+    check(bpm is not None and abs(bpm - 120.0) < 3.0, "analyse: BPM de 120 retrouve", str(bpm))
+    cl = hl.pick_clips(energy, 0.25, bpm=bpm)
+    check(len(cl) == 1 and cl[0].kind == "drop" and abs(cl[0].at - 20.0) < 1.0, "analyse + choix: le drop est retrouve a 20 s a une seconde pres", str(cl))
+    silent = root / "silence.wav"
+    _write_wav(silent, np.zeros(44100 * 30, dtype=np.float32), 44100)
+    e2, b2, d2 = ha.energy_series(str(silent), ffmpeg)
+    check(abs(d2 - 30.0) < 0.3 and b2 is None and hl.pick_clips(e2, 0.25) == [], "analyse: un fichier muet ne donne ni BPM ni extrait")
+    e3, b3, d3 = ha.energy_series(str(root / "absent.wav"), ffmpeg)
+    check(e3 == [] and b3 is None and d3 == 0.0, "analyse: fichier absent = serie vide, sans exception")
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def check_clips() -> None:
+    """Extraits automatiques : decoupe, vignette, texte (engine/clips.py, ffmpeg reel) et chaine complete `generate`."""
+    print("Extraits automatiques : decoupe (ffmpeg reel)")
+    import shutil
+    import subprocess
+    from core import highlights as hl
+    from engine import clips as ec
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        check(False, "ffmpeg et ffprobe disponibles")
+        return
+    root = Path(tempfile.mkdtemp(prefix="casual-clips-"))
+
+    def make_mp4(name, seconds, drop_s):
+        x, rate = _synth_drop_audio(seconds, drop_s)
+        wav = root / (name + ".wav")
+        _write_wav(wav, x, rate)
+        mp4 = root / (name + ".mp4")
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=black:s=320x180:r=25:d={seconds}", "-i", str(wav),
+                        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(mp4)], check=True)
+        return mp4
+
+    def duration(path):
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout
+        return float(out.strip())
+
+    mp4 = make_mp4("casual-test", 75.0, 35.0)
+    res = ec.generate(str(mp4), ffmpeg)
+    files = res.get("clips", [])
+    check(res["state"] == "pret" and len(files) >= 1 and files[0]["kind"] == "drop" and abs(files[0]["start"] + 8.0 - 35.0) < 1.5,
+          "generate: un enregistrement de 75 s avec un drop a 35 s donne un extrait « drop »", str(res))
+    f0 = files[0] if files else {}
+    folder = root / "casual-test"
+    check(f0 and Path(f0["path"]).name == "casual-test-extrait-1.mp4" and Path(f0["path"]).parent == folder and Path(f0["path"]).is_file()
+          and abs(duration(f0["path"]) - (f0["end"] - f0["start"])) < 0.3 and not list(root.rglob("*.jpg")),
+          "extrait: dans le dossier de l'enregistrement, duree demandee a 0,3 s pres, pas de vignette", str(f0))
+    txt = folder / "casual-test-extraits.txt"
+    check(txt.is_file() and "#vj" in txt.read_text(encoding="utf-8") and res.get("txt") == str(txt), "extraits: fichier texte avec minutages et hashtags dans le dossier")
+    check(res.get("video") == str(folder / "casual-test.mp4") and (folder / "casual-test.mp4").is_file() and not mp4.exists(),
+          "extraits: un dossier par ensemble, l'enregistrement y est range avec ses extraits", str(res.get("video")))
+    check(not list(root.rglob("*.tmp.*")), "extraits: aucun fichier provisoire laisse")
+    # --- trop court : rien n'est ecrit
+    short = make_mp4("court", 30.0, 12.0)
+    r2 = ec.generate(str(short), ffmpeg)
+    check(r2["state"] == "trop_court" and not r2["clips"] and not list(root.rglob("court-extrait*")) and short.is_file() and not (root / "court").exists(),
+          "generate: moins de 60 s = pas d'extrait, pas de dossier, l'enregistrement reste ou il est", str(r2))
+    # --- disque presque plein : on ne decoupe pas
+    mp4 = folder / "casual-test.mp4"                                           # l'enregistrement a ete range dans son dossier
+    r3 = ec.generate(str(mp4), ffmpeg, free_bytes=lambda d: 50 * 1024 * 1024)
+    check(r3["state"] == "disque" and not r3["clips"], "generate: moins de 200 Mo libres = pas de decoupe", str(r3["state"]))
+    # --- un extrait qui echoue n'arrete pas les autres, sans fichier a moitie fait
+    clips2 = [hl.Clip(10.0, 25.0, 0.9, "drop", 18.0), hl.Clip(30.0, 45.0, 0.8, "pic", 37.0)]
+    real_run = subprocess.run
+
+    def flaky(cmd, **kw):
+        if any("extrait-1" in str(a) for a in cmd):
+            class Bad:
+                returncode = 1
+                stderr = "echec simule"
+            return Bad()
+        return real_run(cmd, **kw)
+    r4 = ec.make_clips(str(folder / "casual-test.mp4"), clips2, ffmpeg, run=flaky)
+    good = [Path(c["path"]).name for c in r4]
+    check(good == ["casual-test-extrait-2.mp4"] and Path(r4[0]["path"]).is_file() and not list(root.rglob("*.tmp.*")),
+          "make_clips: un extrait qui echoue est saute, les autres sont faits, pas de provisoire", str(good))
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def check_rd_cover() -> None:
+    """Enregistrement vertical / carre : le labyrinthe (grille de simulation 16:9) est ROGNE au centre comme le fond video, pas etire dans le cadre."""
+    print("Labyrinthe : cadre d'un autre rapport pendant un enregistrement")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+
+    def render(size, cover, frames=160):
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        r = gl.Renderer(ctx, size, None)
+        r.video_cover = cover
+        pr = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe", auto_phase=0, holo_on=0.0, bg_speed=2.0, fx_on=[0, 0, 0, 0, 0],
+                  bg_rd_color1="#ffffff", bg_rd_color2="#ffffff", bg_rd_color3="#ffffff", bg_rd_ground="#000000")
+        st = {"bass": 0.4, "mid": 0.3, "high": 0.2, "rms": 0.3, "beat": 0.0, "since_beat": 5.0, "beats": 0}
+        for i in range(frames):
+            r.draw(fbo, size, st, pr, i * 0.1)
+        return np.frombuffer(fbo.read(components=3, alignment=1), np.uint8).reshape(size[1], size[0], 3).astype(float).mean(axis=2)
+
+    def ratio(img):
+        return float(np.abs(np.diff(img, axis=1)).mean() / max(np.abs(np.diff(img, axis=0)).mean(), 1e-9))
+    land = render((768, 432), False)
+    land_cover = render((768, 432), True)
+    port = render((243, 432), True)
+    sq = render((432, 432), True)
+    check(0.7 < ratio(land) < 1.4 and float(land.std()) > 30.0, "paysage 16:9: motif net et isotrope", f"rapport {ratio(land):.2f}, ecart-type {land.std():.0f}")
+    check(np.array_equal(land, land_cover), "16:9 pendant un enregistrement: rien ne change (meme image, pixel pour pixel)")
+    check(0.7 < ratio(port) < 1.4 and float(port.std()) > 30.0,
+          "vertical (enregistrement): le labyrinthe garde ses proportions (variation horizontale ~ verticale), il n'est pas etire", f"rapport {ratio(port):.2f}")
+    check(0.7 < ratio(sq) < 1.4 and float(sq.std()) > 30.0, "carre (enregistrement): proportions gardees", f"rapport {ratio(sq):.2f}")
+
+
+def check_kaleidoscope_frame() -> None:
+    """Kaleidoscope (composition, `comp_sym` = 4) dans un cadre d'un autre rapport (enregistrement vertical / carre) : le repli sort du cadre, il doit etre
+    reflechi (miroir) et non ecrase sur les bords (bandes sans variation en haut et en bas)."""
+    print("Kaleidoscope : cadre vertical, carre, paysage")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+
+    def render(size, cover):
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        r = gl.Renderer(ctx, size, None)
+        r.video_cover = cover
+        pr = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="stochastique", bg_sto_field="noise", auto_phase=0, holo_on=0.0, fx_on=[0, 0, 0, 0, 0],
+                  comp_sym=4, comp_seg=6, comp_rot=0.0, logo_path="")
+        st = {"bass": 0.4, "mid": 0.3, "high": 0.2, "rms": 0.3, "beat": 0.0, "since_beat": 5.0, "beats": 0}
+        for i in range(3):
+            r.draw(fbo, size, st, pr, i * 0.1)
+        return np.frombuffer(fbo.read(components=3, alignment=1), np.uint8).reshape(size[1], size[0], 3).astype(float).mean(axis=2)
+
+    def ratio(img):
+        """Variation horizontale / verticale dans le quart haut puis le quart bas : ~1 = motif sans direction privilegiee ; grand = bandes ecrasees (p clampe)."""
+        h = img.shape[0]
+        out = []
+        for reg in (img[: h // 4], img[-h // 4:]):
+            out.append(float(np.abs(np.diff(reg, axis=1)).mean() / max(np.abs(np.diff(reg, axis=0)).mean(), 1e-9)))
+        return out
+    for name, size, cover in (("vertical", (486, 864), True), ("carre", (600, 600), True), ("paysage 16:9", (864, 486), False)):
+        r_ = ratio(render(size, cover))
+        check(all(0.6 < v < 1.6 for v in r_), f"kaleidoscope {name}: le repli couvre tout le cadre (pas de bandes ecrasees en haut et en bas)",
+              f"variation horizontale / verticale {r_[0]:.2f} (haut) {r_[1]:.2f} (bas)")
+
+
+def check_rec_vertical_default() -> None:
+    """Enregistrement : vertical 1080x1920 (TikTok, Reels) a chaque lancement, jamais un ancien choix ramene par la reprise ou gl_params.json."""
+    print("Enregistrement vertical par defaut")
+    import json as _json
+    import tempfile
+    from pathlib import Path as _P
+    from core import autosave as asv
+    from core import params as prm
+    from core import params_schema as ps
+    from core import recording as core_rec
+    check(ps.BY_KEY["rec_format"].default == "vertical" and core_rec.FORMATS["vertical"] == (1080, 1920),
+          "defaut: vertical 1080x1920")
+    with tempfile.TemporaryDirectory() as d:
+        snap = _P(d) / "autosave.json"
+        snap.write_text(_json.dumps({"saved_at": 0, "params": {"rec_format": "horizontal", "master": 1.5}}), encoding="utf-8")
+        rec, _msg = asv.recover_autosave(prm.load_params(), snap)
+        check(rec["rec_format"] == "vertical" and rec["master"] == 1.5,
+              "reprise apres arret brutal: les reglages reviennent, pas le format d'enregistrement (vertical)", str((rec["rec_format"], rec["master"])))
+        saved = _P(d) / "gl_params.json"
+        saved.write_text(_json.dumps({"rec_format": "carre", "master": 1.25}), encoding="utf-8")
+        old = prm.PARAMS_PATH
+        prm.PARAMS_PATH = saved
+        try:
+            lp = prm.load_params()
+        finally:
+            prm.PARAMS_PATH = old
+        check(lp["rec_format"] == "vertical" and lp["master"] == 1.25, "gl_params.json: le format sauve n'est pas repris au lancement",
+              str((lp["rec_format"], lp["master"])))
 
 
 def check_ripple_downbeat() -> None:
@@ -7395,6 +7812,75 @@ def gui_rec_steps(c, s, out) -> None:
     for key, val in saved.items():
         params[key] = val
     ui["rec_dir_var"].set(saved["rec_dir"])
+    nb.select(0)
+    root.update()
+
+
+def gui_clips_steps(c, s, out) -> None:
+    """Onglet « Rec » : case « Extraits automatiques », liste des extraits du dernier enregistrement (hauteur fixe), Ouvrir le dossier, Jeter (issue #148)."""
+    root, params = c["root"], s.params
+    ui = c["vj_ui"]
+    nb = ui["tabs"][0]
+    names = [nb.tab(i, "text") for i in range(nb.index("end"))]
+    nb.select(names.index("Rec"))
+    root.update()
+    ui["rec_refresh"]()
+
+    def walk_(w):
+        yield w
+        for ch in w.winfo_children():
+            yield from walk_(ch)
+
+    def widget(cls, text):
+        return next((w for w in walk_(nb.nametowidget(nb.select())) if w.winfo_class() == cls and w.cget("text") == text), None)
+    saved = params.get("rec_clips", 0.0)
+    cb = widget("Checkbutton", "Extraits automatiques")
+    start = float(params.get("rec_clips", 0.0))
+    cb.invoke()
+    on = float(params["rec_clips"])
+    cb.invoke()
+    off = float(params["rec_clips"])
+    lb, label = ui["clips_list"], ui["clips_label"]
+    tmpd = Path(tempfile.mkdtemp(prefix="casual-gui-clips-"))
+    entries = []
+    for n, (a, b, kind) in enumerate(((42.2, 62.0, "drop"), (100.0, 120.0, "pic")), 1):
+        mp4 = tmpd / f"casual-x-extrait-{n}.mp4"
+        mp4.write_bytes(b"x")
+        entries.append({"number": n, "path": str(mp4), "start": a, "end": b, "kind": kind})
+    heights = []
+
+    def tab_h():
+        root.update_idletasks()
+        return (nb.nametowidget(nb.select()).winfo_reqheight(), lb.winfo_reqheight(), label.winfo_reqheight())
+    s.status.pop("rec_clips", None)
+    ui["rec_refresh"]()
+    empty = (lb.size(), label.cget("text"))
+    heights.append(tab_h())
+    s.status["rec_clips"] = {"state": "analyse", "clips": [], "message": "Extraits : analyse...", "txt": None}
+    ui["rec_refresh"]()
+    analysing = (lb.size(), label.cget("text"))
+    heights.append(tab_h())
+    s.status["rec_clips"] = {"state": "pret", "clips": list(entries), "message": "2 extrait(s) pret(s)", "txt": None}
+    ui["rec_refresh"]()
+    ready = (lb.size(), label.cget("text"), lb.get(0), lb.get(1))
+    heights.append(tab_h())
+    opened = []
+    ui["rec_open"] = opened.append
+    widget("Button", "Ouvrir le dossier").invoke()
+    widget("Button", "Jeter").invoke()                                         # rien de choisi : rien ne se passe
+    nothing = (lb.size(), len(s.status["rec_clips"]["clips"]), Path(entries[0]["path"]).is_file())
+    lb.selection_set(0)
+    widget("Button", "Jeter").invoke()
+    ui["rec_refresh"]()
+    after = (lb.size(), [e["number"] for e in s.status["rec_clips"]["clips"]], Path(entries[0]["path"]).exists(),
+             Path(entries[1]["path"]).is_file(), label.cget("text"))
+    heights.append(tab_h())
+    out["clips_gui"] = {"toggle": (start, on, off), "empty": empty, "analysing": analysing, "ready": ready, "opened": opened, "nothing": nothing, "after": after, "heights": heights}
+    s.status.pop("rec_clips", None)
+    params["rec_clips"] = saved
+    ui["rec_refresh"]()
+    import shutil as _sh
+    _sh.rmtree(tmpd, ignore_errors=True)
     nb.select(0)
     root.update()
 
@@ -12305,7 +12791,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -12318,7 +12804,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -12333,7 +12819,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render"),
+               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui"),

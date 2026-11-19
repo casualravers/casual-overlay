@@ -37,6 +37,7 @@ DEFAULT_PARAMS = params_schema.defaults(str(DEFAULT_LOGO))
 ROOM_KEYS = params_schema.ROOM_KEYS
 TRANSIENT_KEYS = params_schema.TRANSIENT_KEYS
 MEMORY_KEYS = params_schema.MEMORY_KEYS
+LAUNCH_DEFAULT_KEYS = params_schema.LAUNCH_DEFAULT_KEYS
 
 
 # --- Parametres en direct -------------------------------------------------------------
@@ -312,7 +313,7 @@ def load_params() -> dict:
     params = json.loads(json.dumps(DEFAULT_PARAMS))
     try:
         saved = json.loads(PARAMS_PATH.read_text(encoding="utf-8"))
-        params = coerce_params({k: v for k, v in saved.items() if k not in TRANSIENT_KEYS})
+        params = coerce_params({k: v for k, v in saved.items() if k not in TRANSIENT_KEYS and k not in LAUNCH_DEFAULT_KEYS})
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as exc:

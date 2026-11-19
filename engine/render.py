@@ -694,9 +694,10 @@ class Renderer:
         self._qr = (url, tex, side)
         return tex, side
 
-    def _labyrinth(self, sp, p: dict, dt: float, t: float, react: float, bg_au, state: dict, kicks_on: bool) -> None:
+    def _labyrinth(self, sp, p: dict, dt: float, t: float, react: float, bg_au, state: dict, kicks_on: bool, size: tuple[int, int] | None = None) -> None:
         """Palette labyrinthe : fait avancer la simulation (seulement si elle est affichee) et pose ses uniforms (texture unite 6).
-        `dt` deja multiplie par le master du tempo ; basses = forme et vitesse, kicks = germes, enveloppe du kick = ecart des couches."""
+        `dt` deja multiplie par le master du tempo ; basses = forme et vitesse, kicks = germes, enveloppe du kick = ecart des couches.
+        `size` = cadre du rendu : pendant un enregistrement (`video_cover`) la grille 16:9 est lue ROGNEE au centre pour un cadre d'un autre rapport (vertical, carre)."""
         active = p["bg_mode"] == "pattern" and p["bg_palette"] == "labyrinthe"
         beats = int(state.get("beats", 0))
         if active:
@@ -738,6 +739,7 @@ class Renderer:
             self.rd_note = "" if self.rd.dtype == "f4" or sym == "none" else "Liberte sans effet : etat de la simulation en 16 bits"
             self.rd.texture.use(6)
             w, h = self.rd.size
+            self._set(sp, "u_rd_crop", fit_cover((w, h), size) if self.video_cover and size else (0.0, 0.0, 1.0, 1.0))
             self._set(sp, "u_rd", (float(p["bg_rd_offset"]) * (1.0 + 1.5 * react * float(bg_au[2])), 0.5 / h,
                                   float(p["bg_rd_layers"]) * reaction.LAYER_SPREAD, 0.0))
             for key, name in (("bg_rd_color1", "u_rd_c1"), ("bg_rd_color2", "u_rd_c2"), ("bg_rd_color3", "u_rd_c3"), ("bg_rd_ground", "u_rd_ground")):
@@ -991,7 +993,7 @@ class Renderer:
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
         self._set(sp, "u_sto_au", (react * float(bg_au[0]), react * float(bg_au[2]),
                                    float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0, 0.0))
-        self._labyrinth(sp, p, dt, t, react, bg_au, state, react > 0 and react_m > 0 and has_kick(src_bg))
+        self._labyrinth(sp, p, dt, t, react, bg_au, state, react > 0 and react_m > 0 and has_kick(src_bg), (width, height))
         self._set(sp, "u_bg_frame", float(int(self._bg_clock * 30.0)))
         self._set(sp, "u_bg_c1", hex_to_rgb(p["bg_color1"], DEFAULT_PARAMS["bg_color1"]))
         self._set(sp, "u_bg_c2", hex_to_rgb(p["bg_color2"], DEFAULT_PARAMS["bg_color2"]))

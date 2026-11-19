@@ -32,7 +32,7 @@ class AudioController:
         self.synthetic = synthetic
         self.device = device
         self._factory = input_factory
-        self.block = block or capture_block()          # taille de bloc de capture en cours (256 ; 512 apres un repli)
+        self.block = block or capture_block()          # taille de bloc de capture en cours (512 ; 256 avec CASUAL_AUDIO_BLOCK=256, 512 apres un repli)
         self.fell_back = False
         self.on_message = on_message                   # rappel (texte) : statut de la GUI, pose par run_app
         self._guard_stop = threading.Event()
