@@ -209,6 +209,9 @@ def period_text(period: float) -> str:
     return f"{period:.1f} s/cycle" if period < 10 else f"{period:.0f} s/cycle"
 AUTOMATE_CANVAS_W = 220          # taille du petit editeur de courbe (Canvas), en pixels
 AUTOMATE_CANVAS_H = 90
+# Crochet pour un programme hote : remplace TOUTE la fenetre d'edition de courbe, `(root, state, attr)` ; `state` est le dict de
+# l'automation de ce reglage (label, lo, hi, enabled, points, period, start, editor). None = la fenetre de `build_gui`.
+CURVE_EDITOR_HOOK: Callable[[object, dict, str], None] | None = None
 
 
 def automate_curve_sinus(n: int) -> list[float]:
@@ -2438,6 +2441,9 @@ def build_gui(args: argparse.Namespace, size: tuple[int, int], status: dict,
         redraw_curve(attr)
 
     def open_curve_editor(attr: str) -> None:
+        if CURVE_EDITOR_HOOK is not None:
+            CURVE_EDITOR_HOOK(root, automation[attr], attr)
+            return
         state = automation[attr]
         existing = state["editor"]
         if existing is not None and existing.winfo_exists():

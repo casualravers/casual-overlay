@@ -720,33 +720,27 @@ def check_gui() -> None:
                 auto.open_editor("bg_rd_void")
                 root.update()
                 st_ = auto.state["bg_rd_void"]
-                win_, cv_ = st_["editor"], st_["canvas"]
+                cw_ = st_["_window"]
+                win_, cv_ = st_["editor"], cw_.canvas
                 size_ = (int(cv_.cget("width")), int(cv_.cget("height")))
                 auto.open_editor("bg_rd_void")                       # une seule fenetre par reglage
                 tops_ = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.winfo_exists() and str(w.title()).startswith("Courbe")]
                 n_ = len(st_["points"])
-                auto._on_drag(_ty.SimpleNamespace(x=gc_.PAD_L, y=gc_.PAD_T), "bg_rd_void")                       # point 1 tout en haut
-                auto._on_drag(_ty.SimpleNamespace(x=gc_.CANVAS_W - gc_.PAD_R, y=gc_.CANVAS_H - gc_.PAD_B), "bg_rd_void")   # glisse jusqu'au dernier, en bas
-                auto._on_release(None, "bg_rd_void")
+                cw_.on_drag(_ty.SimpleNamespace(x=gc_.PAD_L, y=gc_.PAD_T))                                  # point 1 tout en haut
+                cw_.on_drag(_ty.SimpleNamespace(x=gc_.CANVAS_W - gc_.PAD_R, y=gc_.CANVAS_H - gc_.PAD_B))    # glisse jusqu'au dernier, en bas
+                cw_.on_release()
                 drawn_ = list(st_["points"])
                 painted_ = all(drawn_[i] > drawn_[i + 1] for i in range(n_ - 1))     # les points sautes sont peints en ligne droite
-                buttons_ = {}
-                stack_ = [win_]
-                while stack_:
-                    w_ = stack_.pop()
-                    for ch_ in w_.winfo_children():
-                        if ch_.winfo_class() == "Button":
-                            buttons_[str(ch_.cget("text"))] = ch_
-                        stack_.append(ch_)
+                buttons_ = cw_.buttons
                 buttons_["Inverser"].invoke()
                 inverted_ = abs(st_["points"][0] - 0.0) < 1e-9 and abs(st_["points"][-1] - 1.0) < 1e-9
                 auto.state["bg_rd_void"]["points"] = [0.4, 0.6] * (n_ // 2)
                 buttons_["Plein 0-100 %"].invoke()
                 stretched_ = min(st_["points"]) == 0.0 and max(st_["points"]) == 1.0
                 was_ = st_["enabled"].get()
-                st_["_active"].invoke()
+                cw_.active.invoke()
                 toggled_ = st_["enabled"].get() != was_
-                st_["_active"].invoke()
+                cw_.active.invoke()
                 labels_ = [cv_.itemcget(i, "text") for i in cv_.find_all() if cv_.type(i) == "text"]
                 graded_ = any("100 %" in t and "1,00" in t for t in labels_) and any(t.strip().startswith("0 %") for t in labels_)
                 marked_ = auto.capture()["bg_rd_void"].get("v") == gl.CURVE_VERSION
@@ -9816,6 +9810,74 @@ def check_automation_plage() -> None:
           "presets: une ancienne courbe d'un preset overlay garde sa valeur (0,8 d'intensite)", str(v0["points"][0]))
 
 
+def check_curve_modes() -> None:
+    """Les courbes des panneaux d'audio2wave (Live, Ridge, Snap) s'ouvrent aussi dans la fenetre de casual-overlay (gui_curve)."""
+    print("fenetre de courbe des panneaux Live / Ridge / Snap")
+    import threading
+    import tkinter as tk
+    a2w_dir = str(Path(__file__).resolve().parent.parent / "sources" / "audio2wave")
+    gui_dir = str(Path(__file__).resolve().parent.parent / "gui")
+    for d in (a2w_dir, gui_dir):
+        if d not in sys.path:
+            sys.path.insert(0, d)
+    import audio2wave_live as lv
+    import audio2wave_ridge as rd
+    import audio2wave_snap as sn
+    import gui_curve as gc
+    import skin
+    saved = (lv.AutomationManager.__dict__.get("default_open_editor"), sn.CURVE_EDITOR_HOOK)
+    gc.install(lv, sn)
+    E = threading.Event
+    builds = (("live", lambda r: lv.build_gui(lv.parse_args(["-d", "x"]), 320, 180, {}, E(), E(), E(), root=r, compact=True)),
+              ("ridge", lambda r: rd.build_gui(rd.parse_args(["-d", "x"]), (320, 180), {}, E(), E(), root=r, compact=True)),
+              ("snap", lambda r: sn.build_gui(sn.parse_args(["-d", "x"]), (320, 180), {}, {}, E(), E(), root=r, compact=True)))
+    try:
+        for mode, build in builds:
+            root = tk.Tk()
+            try:
+                skin.install()
+                build(root)
+                root.update()
+                curve_buttons, stack = [], [root]
+                while stack:
+                    w = stack.pop()
+                    for ch in w.winfo_children():
+                        if ch.winfo_class() == "Button" and str(ch.cget("text")) == "∿":
+                            curve_buttons.append(ch)
+                        stack.append(ch)
+                if not curve_buttons:
+                    check(False, f"{mode}: au moins un bouton de courbe")
+                    continue
+                curve_buttons[0].invoke()
+                root.update()
+                tops = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and str(w.title()).startswith("Courbe : ")]
+                canvases = [c for t in tops for c in t.winfo_children()[0].winfo_children() if c.winfo_class() == "Canvas"]
+                big = bool(canvases) and int(canvases[0].cget("width")) == gc.CANVAS_W
+                curve_buttons[0].invoke()                       # deuxieme clic : la meme fenetre revient au premier plan
+                root.update()
+                again = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and str(w.title()).startswith("Courbe : ")]
+                check(len(tops) == 1 and big and len(again) == 1,
+                      f"{mode}: le bouton de courbe ouvre la fenetre de casual-overlay (grande, graduee), une seule fois", f"{len(tops)} {big} {len(again)}")
+                for t in again:
+                    t.event_generate("<Escape>")
+                root.update()
+                check(not [w for w in root.winfo_children() if isinstance(w, tk.Toplevel) and w.winfo_exists() and str(w.title()).startswith("Courbe")],
+                      f"{mode}: Echap ferme la fenetre de courbe")
+            finally:
+                for job in root.tk.splitlist(root.tk.call("after", "info")):     # rafraichissements programmes par le panneau : pas d'erreur Tk apres coup
+                    try:
+                        root.after_cancel(job)
+                    except tk.TclError:
+                        pass
+                root.destroy()
+    finally:
+        if saved[0] is None:
+            lv.AutomationManager.default_open_editor = None
+        else:
+            lv.AutomationManager.default_open_editor = saved[0]
+        sn.CURVE_EDITOR_HOOK = saved[1]
+
+
 def check_params() -> None:
     print("Reglages (touche P)")
     original = core_params.PARAMS_PATH
@@ -13309,7 +13371,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )

@@ -66,8 +66,15 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   peint la courbe (les points sautes par un geste rapide sont remplis en ligne droite), lecture du point vise, ligne « valeur
   actuelle » (`value_reader` = `params`, rafraichie toutes les 100 ms), case « Actif » (la meme variable que `~`), formes de depart,
   outils **Inverser** et **Plein 0-100 %** (`invert_points`, `stretch_points`), vitesse, Echap ferme. `capture()` ajoute la marque de
-  version (`"v": 2`, voir logo.md, Automations). Test : `check_gui` (« fenetre de courbe: ... »). Les gestionnaires crees par les
-  `build_gui` d'audio2wave (panneaux Live / Snap / Ridge) gardent leur fenetre, habillee par le crochet ci-dessous.
+  version (`"v": 2`, voir logo.md, Automations). Test : `check_gui` (« fenetre de courbe: ... »).
+  **Meme fenetre pour les panneaux d'audio2wave** (`gui_curve.install`, appele par `install_curve_skin`) : Live / Ridge / Sphere par le
+  crochet de classe `AutomationManager.default_open_editor(manager, attr)` (accent du gestionnaire), Snap par
+  `audio2wave_snap.CURVE_EDITOR_HOOK(root, state, attr)` (son editeur a lui, accent bleu) ; deux crochets ajoutes a la copie interne
+  (notes dans `sources/audio2wave/VENDORED.md`, ligne dans `check_contract.py`). `CurveWindow` ne travaille que sur le dict d'etat de la
+  courbe (le meme partout) et ne pose jamais `state["canvas"]` (l'ancien trace d'audio2wave n'y dessine pas) ; elle se redessine seule
+  quand les points changent ailleurs (preset charge) et, sans `value_reader`, calcule la « valeur actuelle » depuis la courbe (horloge
+  d'audio2wave). Leurs courbes couvraient deja toute la plage du curseur. Test : `check_curve_modes` (Live, Ridge, Snap).
+  Le crochet d'habillage ci-dessous ne sert plus que si aucune fenetre n'est installee.
 - **Fenetre « courbe »** (editeur d'audio2wave) : `install_curve_skin` affecte le crochet de classe
   `AutomationManager.default_on_editor_open(manager, fenetre, attr, canvas)`, appele une fois la fenetre construite (aussi pour les
   gestionnaires crees par les `build_gui` d'audio2wave) : `skin.zone` a l'accent du gestionnaire (violet pour le notre, bleu pour

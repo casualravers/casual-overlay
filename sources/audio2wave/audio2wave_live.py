@@ -1116,6 +1116,10 @@ class AutomationManager:
 
     AUTOMATION_KEY = "_automation"  # cle reservee dans un preset JSON, voir capture()/apply()
     default_on_editor_open: Callable[[object, object, str, object], None] | None = None
+    # Crochet de classe : un programme hote remplace TOUTE la fenetre d'edition par la sienne,
+    # `(manager, attr)` ; il lit / ecrit `manager.state[attr]` (label, lo, hi, enabled, points,
+    # period, start, editor). None = la fenetre ci-dessous.
+    default_open_editor: Callable[[object, str], None] | None = None
 
     def __init__(self, root: object, tooltip_cls: type, panel_bg: str, muted_fg: str, accent: str,
                  curve_label: str = "∿",
@@ -1194,6 +1198,10 @@ class AutomationManager:
         self.redraw(attr)
 
     def open_editor(self, attr: str) -> None:
+        opener = AutomationManager.default_open_editor
+        if opener is not None:
+            opener(self, attr)
+            return
         state = self.state[attr]
         existing = state["editor"]
         if existing is not None and existing.winfo_exists():

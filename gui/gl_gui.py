@@ -180,6 +180,13 @@ def install_curve_skin(live) -> None:
 
     # Crochet de classe : atteint aussi les gestionnaires crees par les build_gui d'audio2wave.
     live.AutomationManager.default_on_editor_open = on_editor_open
+    # Fenetre de courbe de casual-overlay (gui_curve) aussi pour les panneaux Live / Ridge / Sphere et Snap d'audio2wave.
+    import gui_curve
+    try:
+        import audio2wave_snap as snap_mod
+    except Exception:
+        snap_mod = None
+    gui_curve.install(live, snap_mod)
 
 
 def tidy_mode_gui(host, mode: str, widgets: dict) -> None:
