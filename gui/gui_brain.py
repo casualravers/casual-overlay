@@ -1155,10 +1155,348 @@ class MandalaView:
         return best
 
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# Vue tunnel : le temps vient vers soi, les pas a venir s'enfoncent dans la profondeur (instantane glissant : 4 pas de passe, 64 a venir)
+# ---------------------------------------------------------------------------------------------------------------------------
+
+TUN_STEPS = core_brain.PAGE_STEPS + 4          # pas de l'instantane glissant (les 4 premiers sont le passe)
+TUN_F = 300.0                                  # focale de la maquette (a l'echelle 1 : canvas 640 x 340)
+TUN_W0, TUN_H0 = 640.0, 340.0
+TUN_LANES = (-1.2, -0.4, 0.4, 1.2)             # bords des 3 voies (une par instrument) sur le sol
+TUN_XW, TUN_YF, TUN_YC = 1.7, -1.0, 1.1        # murs en x = +-1,7 ; sol ; plafond (le voile)
+TUN_ZMIN = 0.3                                 # un pas plus proche que cela de la camera n'est pas dessine
+TUN_MAX_CAUSES = 48
+TUN_CURSOR_MAX = 20.0
+
+
+def _tun_z(d: float) -> float:
+    """Profondeur du pas a la distance `d` (en pas) du present."""
+    return 2.0 + 0.12 * d
+
+
+class TunnelView:
+    """Couloir en perspective : sol a 3 voies (kick, snare, hi-hat), 4 pistes d'effets sur chaque mur, voile au plafond, cadre blanc du
+    present. Tout bouge a chaque image : le pool est cree a la construction (68 pas x 3 voies, 68 x 8 panneaux, nervures, voile, causes),
+    `update` ne fait que des `coords` sur les elements visibles et des `itemconfigure` quand le statut ou la couleur d'une case change.
+    Ordre de creation = ordre de dessin (du fond vers l'avant, comme la maquette). Pas d'alpha sous Tk : melange vers le fond (`blend`) ;
+    l'eclair du strobe eclaircit un rectangle de fond (pas de voile blanc au-dessus de la scene). Les points sont ramenes dans le canvas."""
+
+    def __init__(self, canvas: tk.Canvas) -> None:
+        self.canvas = canvas
+        self.w = self.h = 1
+        self.k, self.cx, self.cy = 1.0, 0.5, 0.5
+        self.min_z = 99.0                          # plus petite profondeur projetee a la derniere mise a jour (test : toujours > 0)
+        self._hov: list = []
+        self._used = {"causes": 0}
+        self._csig: dict = {}
+        self._psig: dict = {}
+        self._rib_sig: list = [None] * TUN_STEPS
+        self._strip_sig: list = [None] * TUN_STEPS
+        self._veil_sig: list = [None] * 5
+        self._cause_sig: list = [None] * TUN_MAX_CAUSES
+        self._bg_fill = None
+        self._hid_sig = None
+        cv = canvas
+        ins, trk = core_brain.INSTRUMENTS, core_brain.TRACKS
+        self._bgrect = cv.create_rectangle(0, 0, 1, 1, fill=tint(None), outline="")
+        self._ribs: list = [None] * TUN_STEPS
+        self._strips: list = [None] * TUN_STEPS
+        for i in range(TUN_STEPS - 1, -1, -1):
+            self._ribs[i] = tuple(cv.create_line(0, 0, 0, 0, fill="#161b2c", state="hidden") for _ in range(4))
+            self._strips[i] = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
+        self._long = [cv.create_line(0, 0, 0, 0, fill="#1c2236") for _ in range(4)] + \
+                     [cv.create_line(0, 0, 0, 0, fill="#222943") for _ in range(4)]
+        self._cells: dict = {}
+        self._panels: dict = {}
+        for i in range(TUN_STEPS - 1, -1, -1):
+            for kk in range(len(ins)):
+                top = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
+                front = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
+                m1 = cv.create_line(0, 0, 0, 0, state="hidden", width=1.2)
+                m2 = cv.create_line(0, 0, 0, 0, state="hidden", width=1.2)
+                self._cells[(i, kk)] = (top, front, m1, m2)
+            for k in range(len(trk)):
+                self._panels[(i, k)] = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
+        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden", width=1) for _ in range(5)]
+        self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3), width=1) for _ in range(TUN_MAX_CAUSES)]
+        self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(TUN_MAX_CAUSES)]
+        self._frame = cv.create_line(*([0, 0] * 5), fill="#e6e6e6", width=1.5)
+        self._ins_labels = [cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL) for r in ins]
+        self._trk_labels = [cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL,
+                                           anchor="w" if k < 4 else "e") for k, r in enumerate(trk)]
+
+    # ---- geometrie
+    def _pj(self, x: float, y: float, z: float) -> tuple[float, float]:
+        """Projection en perspective, ramenee dans le canvas. L'appelant garantit z >= TUN_ZMIN."""
+        s = TUN_F * self.k / z
+        if z < self.min_z:
+            self.min_z = z
+        return (min(max(self.cx + x * s, 0.0), float(self.w)), min(max(self.cy - y * s, 0.0), float(self.h)))
+
+    def _quad(self, item, a, b, c, d) -> None:
+        self.canvas.coords(item, *a, *b, *c, *d)
+
+    def layout(self, w: int, h: int) -> None:
+        self.w, self.h = max(1, w), max(1, h)
+        self.k = max(0.2, min(self.w / TUN_W0, self.h / TUN_H0))
+        self.cx, self.cy = self.w / 2, self.h / 2
+        self.min_z = 99.0
+        cv, pj = self.canvas, self._pj
+        cv.coords(self._bgrect, 0, 0, self.w, self.h)
+        zn, zf = _tun_z(-4), _tun_z(64)
+        for q, x in enumerate(TUN_LANES):
+            cv.coords(self._long[q], *pj(x, TUN_YF, zn), *pj(x, TUN_YF, zf))
+        for q, (x, y) in enumerate(((-TUN_XW, TUN_YF), (TUN_XW, TUN_YF), (-TUN_XW, TUN_YC), (TUN_XW, TUN_YC))):
+            cv.coords(self._long[4 + q], *pj(x, y, zn), *pj(x, y, zf))
+        zp = _tun_z(0)
+        cv.coords(self._frame, *pj(-TUN_XW, TUN_YF, zp), *pj(TUN_XW, TUN_YF, zp), *pj(TUN_XW, TUN_YC, zp), *pj(-TUN_XW, TUN_YC, zp),
+                  *pj(-TUN_XW, TUN_YF, zp))
+        for kk, it in enumerate(self._ins_labels):
+            x, y = pj((TUN_LANES[kk] + TUN_LANES[kk + 1]) / 2, TUN_YF, zp)
+            cv.coords(it, x, min(y + 12, self.h - 8))
+        for k, it in enumerate(self._trk_labels):
+            side, row = (-TUN_XW if k < 4 else TUN_XW), k % 4
+            x, y = pj(side, 0.9 - row * 0.48 - 0.23, zp)
+            cv.coords(it, x + (6 if k < 4 else -6), y)
+        self._rib_sig = [None] * TUN_STEPS
+        self._strip_sig = [None] * TUN_STEPS
+
+    @staticmethod
+    def _cell_text(row: str, status: str, v: float, p: float) -> str:
+        name = core_brain.label(row)
+        if status in ("real", "surprise"):
+            return f"{name} {round(v * 100)} % · " + ("surprise" if status == "surprise" else "realise")
+        if status == "miss":
+            return f"{name} predit {round(p * 100)} % · manque"
+        return f"{name} attendu a {round(p * 100)} %"
+
+    def _apply_cell(self, key, sig, bg: str) -> None:
+        """Statut ou valeur d'une case change : on reecrit tout (remplissage, contour, epaisseur) pour ne rien garder d'un autre aspect."""
+        cv = self.canvas
+        top, front, m1, m2 = self._cells[key]
+        status, v, p = sig[0], sig[1], sig[2]
+        col = core_brain.COLORS[core_brain.INSTRUMENTS[key[1]]]
+        if status in ("real", "surprise"):
+            a = 0.45 + 0.55 * v
+            cv.itemconfigure(top, fill=blend(col, a, bg), outline="#ffffff" if status == "surprise" else "",
+                             width=1.2 if status == "surprise" else 1, state="normal")
+            cv.itemconfigure(front, fill=blend(shade(col, 0.5), a, bg), outline="", width=1, state="normal")
+            cv.itemconfigure(m1, state="hidden")
+            cv.itemconfigure(m2, state="hidden")
+        elif status == "miss":
+            red = blend(MISS_FG, 0.8, bg)
+            cv.itemconfigure(top, state="hidden")
+            cv.itemconfigure(front, state="hidden")
+            cv.itemconfigure(m1, fill=red, width=1.2, state="normal")
+            cv.itemconfigure(m2, fill=red, width=1.2, state="normal")
+        else:                                                    # fantome : contour fin, d'autant plus net que la prediction est forte
+            line = blend(col, 0.15 + 0.6 * p, bg)
+            cv.itemconfigure(top, fill="", outline=line, width=1, state="normal")
+            cv.itemconfigure(front, fill="", outline=line, width=1, state="normal")
+            cv.itemconfigure(m1, state="hidden")
+            cv.itemconfigure(m2, state="hidden")
+
+    def _hide_cell(self, key) -> None:
+        for it in self._cells[key]:
+            self.canvas.itemconfigure(it, state="hidden")
+
+    # ---- mise a jour
+    def update(self, snap: dict, causes: bool, hidden: set, now: float) -> None:
+        cv, pj, C = self.canvas, self._pj, core_brain.COLORS
+        self.min_z = 99.0
+        header = snap.get("header") or {}
+        phase = header.get("phase")
+        bg = tint(phase)
+        first = int(snap.get("first", 0) or 0)
+        cursor = max(0.0, min(TUN_CURSOR_MAX, float(snap.get("cursor", 0.0))))
+        cur = int(cursor)
+        ins, trk = core_brain.INSTRUMENTS, core_brain.TRACKS
+        ph_steps = snap.get("phase_steps") or ()
+        veil = snap.get("veil") or ()
+        hsig = tuple(sorted(hidden))
+        if hsig != self._hid_sig:
+            self._hid_sig = hsig
+            for kk, r in enumerate(ins):
+                cv.itemconfigure(self._ins_labels[kk], fill=DIM if r in hidden else C[r])
+            for k, r in enumerate(trk):
+                cv.itemconfigure(self._trk_labels[k], fill=DIM if r in hidden else C[r])
+        # profondeurs par pas : (z du debut, z de la fin, z du milieu de la case) ; None = trop pres de la camera, pas dessine
+        alive = [_tun_z(i - cursor + 0.1) >= TUN_ZMIN and _tun_z(i - cursor) >= TUN_ZMIN for i in range(TUN_STEPS)]
+        hov: list = []
+        # nervures et bande des phases (le long du mur gauche)
+        for i in range(TUN_STEPS):
+            ribs, strip = self._ribs[i], self._strips[i]
+            if not alive[i]:
+                if self._rib_sig[i] is not None:
+                    for it in ribs:
+                        cv.itemconfigure(it, state="hidden")
+                    self._rib_sig[i] = None
+                if self._strip_sig[i] is not None:
+                    cv.itemconfigure(strip, state="hidden")
+                    self._strip_sig[i] = None
+                continue
+            d = i - cursor
+            z, z1 = _tun_z(d), _tun_z(d + 1)
+            bar = (first + i) % 16 == 0
+            if self._rib_sig[i] != bar:
+                self._rib_sig[i] = bar
+                cv.itemconfigure(ribs[0], fill="#3a4170" if bar else "#161b2c", state="normal")
+                for it in ribs[1:]:
+                    cv.itemconfigure(it, fill="#3a4170", state="normal" if bar else "hidden")
+            cv.coords(ribs[0], *pj(-TUN_XW, TUN_YF, z), *pj(TUN_XW, TUN_YF, z))
+            if bar:
+                cv.coords(ribs[1], *pj(-TUN_XW, TUN_YF, z), *pj(-TUN_XW, TUN_YC, z))
+                cv.coords(ribs[2], *pj(TUN_XW, TUN_YF, z), *pj(TUN_XW, TUN_YC, z))
+                cv.coords(ribs[3], *pj(-TUN_XW, TUN_YC, z), *pj(TUN_XW, TUN_YC, z))
+            ssig = (ph_steps[i] if i < len(ph_steps) else None, i <= cur, bg)
+            if self._strip_sig[i] != ssig:
+                self._strip_sig[i] = ssig
+                cv.itemconfigure(strip, fill=blend(PHASE_COLORS.get(ssig[0], DIM), 0.6 if ssig[1] else 0.15, bg), state="normal")
+            self._quad(strip, pj(-TUN_XW - 0.01, TUN_YF, z), pj(-1.25, TUN_YF, z), pj(-1.25, TUN_YF, z1), pj(-TUN_XW - 0.01, TUN_YF, z1))
+        # cases (3 voies)
+        new: dict = {}
+        for i, row, v, p, status in snap.get("cells", ()):
+            if row not in ins or not 0 <= i < TUN_STEPS or status is None or row in hidden or not alive[i]:
+                continue
+            new[(i, ins.index(row))] = (status, round(float(v), 2), round(float(p), 2), bg)
+        for key in [k for k in self._csig if k not in new]:
+            self._hide_cell(key)
+            del self._csig[key]
+        cellpt: dict = {}
+        for key, sig in new.items():
+            if self._csig.get(key) != sig:
+                self._csig[key] = sig
+                self._apply_cell(key, sig, bg)
+            i, kk = key
+            d = i - cursor
+            z0, z1, zm = _tun_z(d + 0.1), _tun_z(d + 0.9), _tun_z(d + 0.5)
+            x0, x1 = TUN_LANES[kk] + 0.08, TUN_LANES[kk + 1] - 0.08
+            top, front, m1, m2 = self._cells[key]
+            status = sig[0]
+            v, p = sig[1], sig[2]
+            if status in ("real", "surprise"):
+                y1 = TUN_YF + 0.15 + 0.45 * v
+                self._quad(top, pj(x0, y1, z0), pj(x1, y1, z0), pj(x1, y1, z1), pj(x0, y1, z1))
+                self._quad(front, pj(x0, TUN_YF, z0), pj(x1, TUN_YF, z0), pj(x1, y1, z0), pj(x0, y1, z0))
+                px, py = pj((x0 + x1) / 2, y1, zm)
+                cellpt[key] = (px, py)
+                hov.append((px, py, self._cell_text(ins[kk], status, v, p)))
+            elif status == "miss":
+                cv.coords(m1, *pj(x0 + 0.1, TUN_YF, z0), *pj(x1 - 0.1, TUN_YF, z1))
+                cv.coords(m2, *pj(x1 - 0.1, TUN_YF, z0), *pj(x0 + 0.1, TUN_YF, z1))
+                px, py = pj((x0 + x1) / 2, TUN_YF, zm)
+                hov.append((px, py, self._cell_text(ins[kk], status, v, p)))
+            else:
+                y1 = TUN_YF + 0.15 + 0.45 * p * 0.85
+                self._quad(top, pj(x0, y1, z0), pj(x1, y1, z0), pj(x1, y1, z1), pj(x0, y1, z1))
+                self._quad(front, pj(x0, TUN_YF, z0), pj(x1, TUN_YF, z0), pj(x1, y1, z0), pj(x0, y1, z0))
+                px, py = pj((x0 + x1) / 2, y1, z0)
+                hov.append((px, py, self._cell_text(ins[kk], status, v, p)))
+        # panneaux d'effets sur les murs : un seul par (pas, piste), le plus fort ; seuls le passe et le present sont poses
+        active: dict = {}
+        for i, track, strength, reason, cause in snap.get("fx", ()):
+            if track in hidden or track not in trk or not 0 <= i <= cur or i >= TUN_STEPS or not alive[i]:
+                continue
+            key = (i, trk.index(track))
+            old = active.get(key)
+            if old is None or float(strength) > old[0]:
+                active[key] = (float(strength), reason, cause)
+        for key in [k for k in self._psig if k not in active]:
+            cv.itemconfigure(self._panels[key], state="hidden")
+            del self._psig[key]
+        flash = 0.0
+        ppt: dict = {}
+        for key, (s, reason, cause) in sorted(active.items()):
+            i, k = key
+            s = max(0.0, min(1.0, s))
+            sig = (round(s, 2), bg)
+            if self._psig.get(key) != sig:
+                self._psig[key] = sig
+                cv.itemconfigure(self._panels[key], fill=blend(C[trk[k]], 0.4 + 0.6 * s, bg), state="normal")
+            d = i - cursor
+            z0, z1, zm = _tun_z(d + 0.1), _tun_z(d + 0.9), _tun_z(d + 0.5)
+            side, row = (-TUN_XW if k < 4 else TUN_XW), k % 4
+            ya, yb = 0.9 - row * 0.48 - 0.42, 0.9 - row * 0.48 - 0.04
+            self._quad(self._panels[key], pj(side, ya, z0), pj(side, yb, z0), pj(side, yb, z1), pj(side, ya, z1))
+            px, py = pj(side, (ya + yb) / 2, zm)
+            ppt[key] = (px, py)
+            hov.append((px, py, reason))
+            if trk[k] == "strobe" and cursor - i < 2.5:
+                flash = max(flash, (1 - (cursor - i) / 2.5) * (0.5 if reason.startswith("drop") else 0.22))
+        # eclair : le rectangle de fond s'eclaircit
+        fill = blend("#ffffff", flash, bg) if flash > 0.004 else bg
+        if fill != self._bg_fill:
+            self._bg_fill = fill
+            cv.itemconfigure(self._bgrect, fill=fill)
+        # voile : cinq lignes au plafond, du present vers le passe
+        vtop = min(cur + 1, len(veil) - 1)
+        vcol = None
+        if veil and vtop >= 0:
+            vcol = "#ffffff" if veil[min(cur, len(veil) - 1)][0] == "drop" else PHASE_COLORS["build"]
+        for q, it in enumerate(self._veil):
+            pts: list = []
+            any_on = False
+            if vcol is not None:
+                x = -1.2 + q * 0.6
+                for i in range(vtop, -1, -1):
+                    z = _tun_z(i - cursor)
+                    if z < 0.35:
+                        break
+                    vv = veil[i]
+                    if vv[1] > 0:
+                        any_on = True
+                    pts += pj(x, TUN_YC - vv[1] * 0.9 * (0.55 + 0.45 * math.sin((first + i) * 0.32 + q + now * 2.2)), z)
+            if any_on and len(pts) >= 4:
+                cv.coords(it, *pts)
+                vs = (vcol, bg)
+                if self._veil_sig[q] != vs:
+                    self._veil_sig[q] = vs
+                    cv.itemconfigure(it, fill=blend(vcol, 0.55, bg), state="normal")
+            elif self._veil_sig[q] is not None:                  # None = cachee
+                self._veil_sig[q] = None
+                cv.itemconfigure(it, state="hidden")
+        # causes : de la case qui a frappe (meme pas) au panneau de l'effet, un petit point a l'arrivee
+        nc = 0
+        if causes:
+            for key, (s, _r, cause) in sorted(active.items()):
+                if not cause or cause not in ins or nc >= TUN_MAX_CAUSES:
+                    continue
+                src = cellpt.get((key[0], ins.index(cause)))
+                if src is None:
+                    continue
+                x, y = ppt[key]
+                x, y = min(max(x, 2.5), self.w - 2.5), min(max(y, 2.5), self.h - 2.5)       # le point reste entier dans le canvas
+                col = blend(C[trk[key[1]]], 0.4 + 0.6 * max(0.0, min(1.0, s)), bg)
+                cv.coords(self._cause_lines[nc], src[0], src[1], x, y)
+                cv.coords(self._cause_dots[nc], x - 2, y - 2, x + 2, y + 2)
+                if self._cause_sig[nc] != col:
+                    self._cause_sig[nc] = col
+                    cv.itemconfigure(self._cause_lines[nc], fill=col)
+                    cv.itemconfigure(self._cause_dots[nc], fill=col)
+                cv.itemconfigure(self._cause_lines[nc], state="normal")
+                cv.itemconfigure(self._cause_dots[nc], state="normal")
+                nc += 1
+        for idx in range(nc, self._used["causes"]):
+            cv.itemconfigure(self._cause_lines[idx], state="hidden")
+            cv.itemconfigure(self._cause_dots[idx], state="hidden")
+        self._used["causes"] = nc
+        self._hov = hov
+
+    # ---- survol
+    def hover(self, x: float, y: float) -> str | None:
+        best, dist = None, 10.0
+        for px, py, text in self._hov:
+            d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+            if d < dist:
+                best, dist = text, d
+        return best
+
+
 VIEWS: dict = {name: BlankView for name in VIEW_NAMES}
 VIEWS["iso"] = IsoView
 VIEWS["sismo"] = SismoView
 VIEWS["mandala"] = MandalaView
+VIEWS["tunnel"] = TunnelView
 
 
 # ---------------------------------------------------------------------------------------------------------------------------

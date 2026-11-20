@@ -13460,6 +13460,126 @@ def check_brain_mandala() -> None:
         root.destroy()
 
 
+def check_brain_tunnel() -> None:
+    """Cerveau (#192) : vue tunnel sur un Canvas seul (instantane glissant) : pool constant sur 200 mises a jour qui avancent, aucun point a
+    z <= 0, causes, survol, rien hors du canvas, cout par image (mesure affichee, pas un seuil)."""
+    print("Cerveau : vue tunnel (pool, profondeur, causes, survol)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import time as _time
+    import gui_brain
+    from core import brain as br
+
+    try:
+        check(hasattr(gui_brain, "TunnelView") and gui_brain.VIEWS.get("tunnel") is getattr(gui_brain, "TunnelView", None),
+              "vue tunnel: TunnelView existe et s'inscrit dans VIEWS['tunnel']")
+        if not hasattr(gui_brain, "TunnelView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 80):
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.5)       # meme pas que le kick de t0 + 1,5
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 1.75)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 1.25)
+        snap = br.snapshot(log, t0 + 1.9, rolling=True)
+        check(len(snap["cells"]) == 68 * 3 and len(snap["phase_steps"]) == 68 and len(snap["veil"]) == 68,
+              "vue tunnel: l'instantane glissant a 68 pas", f"{len(snap['cells'])} {len(snap['phase_steps'])} {len(snap['veil'])}")
+
+        w, h = 640, 400
+        cv = tk.Canvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.TunnelView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snap, True, set(), 5.0)
+        shown = [i for i in cv.find_all() if cv.itemcget(i, "state") != "hidden"]
+        check(n_pool > 800 and len(cv.find_all()) == n_pool and len(shown) > 60,
+              "vue tunnel: un instantane montre ses elements sans en creer", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+
+        snaps = [br.snapshot(log, t0 + 1.0 + n * 0.043, rolling=True) for n in range(200)]
+        t_start = _time.perf_counter()
+        for n, s in enumerate(snaps):
+            view.update(s, True, set(), 5.0 + n * 0.043)
+        ms = (_time.perf_counter() - t_start) * 1000.0 / len(snaps)
+        print(f"  info: vue tunnel {ms:.2f} ms par mise a jour (moyenne sur {len(snaps)}, {w}x{h})")
+        check(len(cv.find_all()) == n_pool, "vue tunnel: 200 mises a jour qui avancent ne creent aucun element",
+              f"{n_pool} -> {len(cv.find_all())}")
+        check(0.3 <= view.min_z < 99.0, "vue tunnel: aucun point projete avec z <= 0 (z minimal)", f"{view.min_z}")
+
+        # curseur absurde (instantane vide de sens) : rien ne passe derriere la camera, pas d'element de plus
+        weird = dict(snap)
+        for cur in (0.0, 30.0, 200.0, -5.0):
+            weird["cursor"] = cur
+            view.update(weird, True, set(), 6.0)
+            check(0.3 <= view.min_z < 99.0 and len(cv.find_all()) == n_pool, f"vue tunnel: curseur {cur} -> z > 0, pool constant",
+                  f"{view.min_z} {len(cv.find_all())}")
+
+        # causes : ripple et kick au meme pas -> ligne de cause visible ; causes coupees -> cachees
+        view.update(snap, True, set(), 6.2)
+        lines = [it for it in view._cause_lines if cv.itemcget(it, "state") != "hidden"]
+        dots = [it for it in view._cause_dots if cv.itemcget(it, "state") != "hidden"]
+        check(view._used["causes"] > 0 and lines and len(dots) == len(lines),
+              "vue tunnel: causes actives et frappe reelle au meme pas -> une ligne de cause et son point", f"{view._used['causes']} {len(lines)} {len(dots)}")
+        view.update(snap, False, set(), 6.3)
+        check(all(cv.itemcget(it, "state") == "hidden" for it in view._cause_lines + view._cause_dots),
+              "vue tunnel: causes coupees -> lignes et points de cause caches")
+        view.update(snap, True, set(), 6.4)
+
+        # eclair du strobe : le fond s'eclaircit
+        check(cv.itemcget(view._bgrect, "fill") != gui_brain.tint("groove"), "vue tunnel: un eclair du strobe recent eclaircit le fond",
+              cv.itemcget(view._bgrect, "fill"))
+
+        # survol
+        fx = next(((x, y, t) for x, y, t in view._hov if t == "ripple : kick fort"), None)
+        if fx:
+            check(view.hover(fx[0], fx[1]) == "ripple : kick fort", "vue tunnel: le survol d'un effet rend sa raison", str(view.hover(fx[0], fx[1])))
+        else:
+            check(False, "vue tunnel: un effet est survolable", str(view._hov[:4]))
+        kk = next(((x, y, t) for x, y, t in view._hov if t.startswith("kick ")), None)
+        check(kk is not None and "kick" in (view.hover(kk[0], kk[1]) or ""), "vue tunnel: le survol d'une case rend son detail", str(kk))
+        check(view.hover(-50, -50) is None, "vue tunnel: rien sous le pointeur -> pas de bulle")
+
+        # instrument masque : ses cases disparaissent
+        view.update(snap, True, {"kick"}, 6.5)
+        check(not any(t.startswith("kick ") for _x, _y, t in view._hov), "vue tunnel: instrument masque -> plus de case kick survolable")
+
+        worst = dict(snap)
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(68) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 4, 5, 20, 67) for t in br.TRACKS]
+        worst["veil"] = [("build", 1.0)] * 68
+        worst["cursor"] = 4.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            cv.configure(width=size[0], height=size[1])
+            root.update()
+            view.layout(*size)
+            view.update(worst, True, set(), 7.0)
+            bad = []
+            for i in cv.find_all():
+                if cv.itemcget(i, "state") == "hidden":
+                    continue
+                c = cv.coords(i)
+                for x, y in zip(c[0::2], c[1::2]):
+                    if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                        bad.append((cv.type(i), round(x), round(y)))
+                        break
+            check(not bad, f"vue tunnel: canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+        view.update(snap, True, set(), 7.1)
+        check(len(cv.find_all()) == n_pool, "vue tunnel: pool constant apres les cas extremes", f"{n_pool} {len(cv.find_all())}")
+    finally:
+        root.destroy()
+
+
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
     import math as _m
@@ -14495,7 +14615,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
@@ -14514,7 +14634,7 @@ GROUPES = {
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
-            "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala"),
+            "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel"),
 }
 
 
