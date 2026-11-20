@@ -48,7 +48,7 @@ l'allure : couleurs, formes, disposition ; ses constantes de dessin peuvent etre
 
 ---
 
-### Tache 1 : `core/brain.py`, journal et placement
+### Task 1: `core/brain.py`, journal et placement
 
 **Fichiers :** creer `core/brain.py` ; modifier `tools/check_gl.py` (nouvelle `check_brain_pure`, dans `SUITE` et `PURES`) ;
 `core/CLAUDE.md` (ligne `brain.py` -> fiche `cerveau.md`, creee a la tache 9 : jusque-la pointer vers `docs/fonctions/scenes-vj.md`).
@@ -83,7 +83,7 @@ l'allure : couleurs, formes, disposition ; ses constantes de dessin peuvent etre
 - [ ] **Etape 4 : relancer** -> `Toutes les verifications passent.` ; puis `--pur` (inclut `check_core_purity`).
 - [ ] **Etape 5 : commit** « Cerveau : journal partage et placement sur la grille (Refs #192) ».
 
-### Tache 2 : `core/brain.py`, prediction, statuts, instantane
+### Task 2: `core/brain.py`, prediction, statuts, instantane
 
 **Fichiers :** `core/brain.py`, `tools/check_gl.py` (`check_brain_pure` completee).
 
@@ -124,7 +124,7 @@ l'allure : couleurs, formes, disposition ; ses constantes de dessin peuvent etre
 - [ ] **Etape 4 : relancer** `--seulement brain_pure` puis `--pur` -> tout passe.
 - [ ] **Etape 5 : commit** « Cerveau : prediction, statuts et instantane (Refs #192) ».
 
-### Tache 3 : publications du moteur et de l'interface
+### Task 3: publications du moteur et de l'interface
 
 **Fichiers :** `engine/session.py` (`Session.brain = BrainLog()`), `engine/audio.py`, `engine/render.py`, `engine/projection.py` (donner
 `session.brain` au `Renderer`), `gui/gl_gui.py` (scenes, prochaine scene VJ), `tools/check_gl.py` (`check_brain_engine`, dans `SUITE`,
@@ -162,7 +162,7 @@ groupe par defaut).
 - [ ] **Etape 4 : relancer** `--seulement brain` puis `--seulement render`, `--seulement features`, `--seulement masters` -> tout passe.
 - [ ] **Etape 5 : commit** « Cerveau : publications du son, du rendu et des scenes (Refs #192) ».
 
-### Tache 4 : panneau, bascule, detachement, en-tete, jauges, fil
+### Task 4: panneau, bascule, detachement, en-tete, jauges, fil
 
 **Fichiers :** creer `gui/gui_brain.py` ; modifier `gui/gui_panel.py` (pose de la boite a la place de `master_box()` selon l'etat),
 `gui/gl_gui.py` (installation, tache `ui_every("brain", 50, ...)`), `core/params_schema.py` (reglages de salle : `brain_on` 0/1,
@@ -201,7 +201,7 @@ set[str], now: float)`, `.hover(x, y) -> str | None`.
 - [ ] **Etape 4 : relancer** `--seulement brain_gui` puis `--seulement check_gui` (la mise en page existante ne doit pas bouger).
 - [ ] **Etape 5 : commit** « Cerveau : panneau, bascule VJ, fenetre detachee (Refs #192) ».
 
-### Tache 5 : vue iso
+### Task 5: vue iso
 
 **Fichiers :** `gui/gui_brain.py` (classe `IsoView`), `tools/check_gl.py` (`check_brain_gui` completee).
 
@@ -220,7 +220,7 @@ page ; a chaque `update`, seules les cellules dont le statut a change, la ligne 
 - [ ] **Etape 2 : lancer** -> echec. **Etape 3 : implementer.** **Etape 4 : relancer** -> passe.
 - [ ] **Etape 5 : commit** « Cerveau : vue isometrique (Refs #192) ».
 
-### Tache 6 : vue sismo
+### Task 6: vue sismo
 
 **Fichiers :** `gui/gui_brain.py` (`SismoView`), tests dans `check_brain_gui`.
 
@@ -232,7 +232,7 @@ voile au-dessus de la portee ; une seule polyligne par onde (un element de canva
 - [ ] **Etapes 1 a 5** comme la tache 5 (tests : un element par onde quelle que soit la page, hover sur une note rend sa raison) ; commit
   « Cerveau : vue sismographe (Refs #192) ».
 
-### Tache 7 : vue mandala
+### Task 7: vue mandala
 
 **Fichiers :** `gui/gui_brain.py` (`MandalaView`), tests dans `check_brain_gui`.
 
@@ -244,7 +244,7 @@ fins de 8 / 16 / 32) ; 8 anneaux d'effets (ecart 5) ; disque central : BPM + pha
 - [ ] **Etapes 1 a 5** (tests : la case du pas 0 de la mesure 1 a son milieu a -90 deg a 1 deg pres ; pool constant d'une page a l'autre) ;
   commit « Cerveau : vue mandala (Refs #192) ».
 
-### Tache 8 : vue tunnel
+### Task 8: vue tunnel
 
 **Fichiers :** `gui/gui_brain.py` (`TunnelView`), tests dans `check_brain_gui`.
 
@@ -256,7 +256,7 @@ C'est la vue a risque : pool fixe de quadrilateres (68 pas x 3 voies + murs), `c
 - [ ] **Etapes 1 a 5** (tests : nombre d'elements fixe sur 200 `update` successifs avec un temps qui avance ; aucun point avec `z <= 0`) ;
   commit « Cerveau : vue tunnel (Refs #192) ».
 
-### Tache 9 : mesure du cout, budget, documentation
+### Task 9: mesure du cout, budget, documentation
 
 **Fichiers :** `docs/fonctions/cerveau.md` (nouvelle fiche), `CLAUDE.md` (une ligne dans l'index des fiches), `core/CLAUDE.md`,
 `engine/CLAUDE.md`, `gui/CLAUDE.md` (pointer vers `cerveau.md`), `tools/check_gl.py` (`check_claude_md` doit passer).
