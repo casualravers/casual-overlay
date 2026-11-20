@@ -13410,6 +13410,13 @@ def check_brain_mandala() -> None:
         kick_arcs = [view.cell_item(i, "kick") for i in range(64)]
         check(all(cv.itemcget(a, "state") == "hidden" for a in kick_arcs), "vue mandala: instrument masque -> ses cases cachees")
         view.update(snaps[0], True, set(), 6.2)
+        shown_causes = [it for it in view._cause_lines if cv.itemcget(it, "state") != "hidden"]
+        check(view._used["causes"] > 0 and shown_causes, "vue mandala: causes actives et frappe reelle au meme pas -> une ligne de cause visible",
+              f"{view._used['causes']} utilisees, {len(shown_causes)} visibles")
+        view.update(snaps[0], False, set(), 6.3)
+        check(all(cv.itemcget(it, "state") == "hidden" for it in view._cause_lines + view._cause_dots),
+              "vue mandala: causes coupees -> lignes et points de cause caches")
+        view.update(snaps[0], True, set(), 6.4)
 
         fx_key = next((k for k in view._hov if k[0] == "fx" and k[2] == "ripple"), None)
         kick_key = next((k for k in view._hov if k[0] == "ins" and k[2] == "kick"), None)

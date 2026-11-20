@@ -1129,7 +1129,7 @@ class MandalaView:
                 if not cause or cause not in core_brain.INSTRUMENTS or nc >= MAN_MAX_CAUSES:
                     continue
                 kk = core_brain.INSTRUMENTS.index(cause)
-                if (i, cause) not in peaks:
+                if (i, kk) not in peaks:
                     continue
                 sx, sy = self._mid[(i, kk)]
                 x, y, col = pts[(i, track)]
