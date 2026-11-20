@@ -1909,6 +1909,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 refresh_scene_panel()
             update_vj_button()
             update_master_panel()
+            brain_vj_status()
         except Exception:
             traceback.print_exc()
         finally:
@@ -1957,6 +1958,38 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             if name and name in bar["book"].names():
                 bar["select"](name)
 
+    def brain_scene(name: str) -> None:
+        """Visualizer du cerveau (#192) : la scene posee, et qui l'a posee (le VJ ou la main). Jamais d'exception."""
+        brain = getattr(s, "brain", None)
+        if brain is None:
+            return
+        try:
+            brain.publish("scene", reason=f"scene : {name} ({'VJ' if vj_auto['on'] else 'manuel'})", wall=time.monotonic())
+        except Exception:
+            pass
+
+    def brain_vj_status() -> None:
+        """Visualizer du cerveau (#192) : prochaine scene du VJ et son heure (horloge murale), ou rien si le VJ est arrete."""
+        brain = getattr(s, "brain", None)
+        if brain is None:
+            return
+        try:
+            nxt = at = None
+            if vj["running"]:
+                rows = scene_book.rows()
+                order = scene_book.vj()["order"]
+                if order == "alea":
+                    nxt = "Full Randomizer"
+                elif order == "random":
+                    nxt = "au hasard"                  # tiree au moment du changement : inconnue d'avance
+                else:
+                    k = scenes.next_entry_index(rows, current_index(rows), order)
+                    nxt = rows[k]["name"] if k is not None else None
+                at = vj.get("grid_due") if vj.get("grid_due") is not None else vj.get("t_next")
+            brain.set_status(next_scene=nxt, next_scene_at=at, vj=bool(vj["running"]))
+        except Exception:
+            pass
+
     def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None,
                          bgv: str | None = None) -> None:
         """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire). `bgv` : video de fond propre a l'entree."""
@@ -1990,6 +2023,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         show_scene_presets(scene)
         s.active_scene = scene["name"]
         s.active_entry = index
+        brain_scene(scene["name"])
         try:
             panel_ops.schedule_preview(scene["name"])      # premier passage de la scene sans apercu : capture de la projection
         except NameError:

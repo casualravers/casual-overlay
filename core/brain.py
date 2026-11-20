@@ -140,6 +140,30 @@ class BrainLog:
             return copy.deepcopy(self._status)
 
 
+class FxEdge:
+    """Front montant d'un effet, pour n'en publier qu'un evenement par impulsion (et non un par image).
+
+    `step(t, value)` rend vrai quand `value` franchit `on` alors que le detecteur est arme ; il se rearme quand `value` redescend a
+    `off` ou en dessous (hysteresis : une valeur qui oscille entre les deux seuils ne publie rien). Deux fronts sont separes d'au
+    moins `min_gap_s` (meme horloge que `t`) : une valeur rearmee qui remonte trop tot attend, armee, la fin de l'ecart."""
+
+    def __init__(self, on: float = 0.6, off: float = 0.3, min_gap_s: float = 0.12) -> None:
+        self.on, self.off, self.min_gap_s = float(on), float(off), float(min_gap_s)
+        self._armed = True
+        self._last: float | None = None
+
+    def step(self, t: float, value: float) -> bool:
+        value = float(value)
+        if value <= self.off:
+            self._armed = True
+            return False
+        if self._armed and value >= self.on and (self._last is None or t - self._last >= self.min_gap_s):
+            self._armed = False
+            self._last = float(t)
+            return True
+        return False
+
+
 # ---------------------------------------------------------------------------------------------------------------------------
 # Prediction et statuts
 # ---------------------------------------------------------------------------------------------------------------------------

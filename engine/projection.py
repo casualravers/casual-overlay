@@ -222,6 +222,7 @@ def _gl_main(s: Session) -> None:
         renderer = Renderer(ctx, s.render_size, None, "")
         renderer.logo_requested = None          # force le chargement du logo demande a la 1re image
         renderer.hud = args.hud
+        renderer.brain = getattr(s, "brain", None)          # visualizer du cerveau (#192) : eclairs, effets et sante publies par le rendu
         s.renderer, s.window = renderer, window
         loop(s, window, ctx, renderer)
     finally:
@@ -459,6 +460,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
     bgvideo = s.bgvideo = BgVideoManager(s.render_size, s.status)     # fond "video" : decodage lance / arrete selon les reglages
     query = ctx.query(time=True)      # une image sur 8 (toutes avec --stats) : le garde-fou de charge et les mesures
     guard = PerfGuard(glfw.get_video_mode(window.monitor).refresh_rate or 60)
+    renderer.perf = guard                  # jauge GPU du cerveau (#192), lue par le rendu
     gpu_log = gpulog.GpuLog(guard.budget_ms)
     frame_i = 0
     perf_warned = False

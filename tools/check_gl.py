@@ -12680,6 +12680,140 @@ def check_brain_pure() -> None:
     check(all(0 <= a <= 8 for a, _f, _v in s["free"]) and any(f == "kick" for _a, f, _v in s["free"])
           and any(f == "strobe" for _a, f, _v in s["free"]), "cerveau: frise libre des 8 dernieres secondes", str(s["free"][:4]))
 
+    # ---- front montant d'un effet (FxEdge) : seuils, rearmement, ecart minimal
+    try:
+        e = br.FxEdge(on=0.6, off=0.3, min_gap_s=0.12)
+        seq = [e.step(0.00, 0.0), e.step(0.01, 0.7), e.step(0.02, 0.7), e.step(0.03, 0.7)]
+        ok, detail = seq == [False, True, False, False], str(seq)
+    except Exception as exc:              # noqa: BLE001
+        ok, detail, e = False, repr(exc), None
+    check(ok, "cerveau: FxEdge 0 -> 0,7 = un front, puis rien tant que la valeur reste haute", detail)
+    if e is not None:
+        a = [e.step(0.04, 0.2), e.step(0.06, 0.7)]
+        check(a == [False, False], "cerveau: FxEdge rearme (0,2) mais 0,7 avant 0,12 s -> pas de front", str(a))
+        b = [e.step(0.20, 0.2), e.step(0.25, 0.7)]
+        check(b == [False, True], "cerveau: FxEdge apres l'ecart minimal -> nouveau front", str(b))
+        c = [e.step(0.30, 0.5), e.step(0.50, 0.7)]
+        check(c == [False, False], "cerveau: FxEdge entre les seuils (0,5) ne rearme pas", str(c))
+        check(br.FxEdge().on == 0.6 and br.FxEdge().off == 0.3 and br.FxEdge().min_gap_s == 0.12, "cerveau: FxEdge seuils par defaut")
+
+
+def check_brain_engine() -> None:
+    """Cerveau (#192) : le fil audio publie les frappes datees dans le temps du son et le statut (BPM) ; le rendu publie le strobe, les
+    effets et la sante ; un rendu sans cerveau, ou avec, donne la meme image."""
+    print("Cerveau : publications du son et du rendu")
+    from core import brain as br
+    from engine import audio as au
+
+    # ---- fil audio : kicks dates dans le temps du son, statut avec BPM
+    rate, hop, secs = 48000, 512, 20
+    sig = kick_bursts(rate, secs)
+    ring = au.RingBuffer(1 << 16)
+    an = au.AudioAnalyzer(ring, au.FeatureExtractor(rate))
+    log = br.BrainLog()
+    an.brain = log
+    base = 500.0
+    rng = np.random.default_rng(7)
+    analyze = getattr(an, "_analyze", None)
+    if analyze is None:
+        check(False, "cerveau: AudioAnalyzer._analyze (un pas d'analyse) existe")
+        return
+    for i in range(0, len(sig) - hop, hop):
+        t_end = base + (i + hop) / rate
+        ring.write(sig[i:i + hop], t_end)
+        analyze(ring.total, float(rate), t_end + 0.030 + float(rng.uniform(0.0, 0.010)))      # capture 30 ms + gigue du fil
+    kicks = [e for e in log.events() if e.family == "kick"]
+    offs = [((e.t - base) % 0.5) for e in kicks]
+    check(len(kicks) >= 2 * secs - 3, "cerveau: les kicks du signal synthetique sont publies", f"{len(kicks)} kicks")
+    check(all(o < 0.2 for o in offs), "cerveau: kicks dates dans le temps du son (debut de salve + retard stable, sans la gigue)",
+          str([round(o, 3) for o in offs[:6]]))
+    check(all(0.0 <= e.strength <= 1.0 for e in log.events()), "cerveau: forces bornees 0..1")
+    st = log.status()
+    bpm = st.get("bpm")
+    check(bpm is not None and abs(float(bpm) - 120.0) < 3.0 and "confidence" in st and "phase" in st and "grid" in st,
+          "cerveau: statut publie (bpm ~120, confiance, phase, grille)", str({k: st.get(k) for k in ("bpm", "confidence", "phase", "grid", "origin")}))
+    last = log.events()[-1].t if log.events() else base
+    check(abs(log.to_audio(t_end + 0.035) - (t_end + 0.030)) < 0.012, "cerveau: horloge du son publiee (set_clock)",
+          str(log.to_audio(t_end + 0.035) - t_end))
+    check(last <= t_end + 0.05, "cerveau: aucun evenement date dans le futur", str(last - t_end))
+    bare = au.AudioAnalyzer(au.RingBuffer(1 << 16), au.FeatureExtractor(rate))
+    check(getattr(bare, "brain", "absent") is None, "cerveau: AudioAnalyzer sans cerveau par defaut")
+
+    class Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("cerveau en panne")
+    an.brain = Boom()
+    try:
+        for i in range(0, rate, hop):
+            ring.write(sig[i:i + hop], t_end + (i + hop) / rate)
+            analyze(ring.total, float(rate), t_end + (i + hop) / rate + 0.03)
+        ok = True
+    except Exception as exc:              # noqa: BLE001
+        ok = False
+        print("   ", repr(exc))
+    check(ok, "cerveau: une panne du cerveau n'arrete jamais l'analyse")
+
+    # ---- rendu : strobe, effets, sante ; image identique avec ou sans cerveau
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (160, 90)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    loud = {"bass": 1.0, "mid": 0.6, "high": 0.9, "rms": 0.8, "beat": 1.0, "since_beat": 0.05, "beats": 1, "audio_age_ms": 42.0}
+    p = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", holo_on=0.0, auto_phase=0, strobe_auto=0, fx_on=[1] * 5, fx_int=[1.0] * 5,
+             strobe_hits=1)
+    logo = np.full((16, 32, 4), 255, dtype=np.uint8)
+    r0 = gl.Renderer(ctx, size, logo)
+    check(getattr(r0, "brain", "absent") is None, "cerveau: Renderer sans cerveau par defaut")
+    r0.draw(fbo, size, loud, p, 1.0)
+    img0 = read_target(ctx, fbo, size).astype(int)
+    r1 = gl.Renderer(ctx, size, logo)
+    lg = br.BrainLog()
+    r1.brain = lg
+    r1.draw(fbo, size, loud, p, 1.0)
+    img1 = read_target(ctx, fbo, size).astype(int)
+    diff = int(np.abs(img0 - img1).max())
+    check(diff <= 1, "cerveau: rendu identique avec ou sans cerveau (la publication ne change pas l'image)", f"ecart max {diff}")
+    ev = lg.events()
+    fams = [e.family for e in ev]
+    strobe = [e for e in ev if e.family == "strobe"]
+    check(len(strobe) == 1 and strobe[0].reason == "manuel" and strobe[0].cause is None,
+          "cerveau: un eclair force du strobe est publie (raison, sans cause)", str([(e.family, e.reason, e.cause) for e in ev]))
+    check(any(f in ("wobble", "ripple", "glitch", "chroma") for f in fams) and "logo" in fams,
+          "cerveau: effets du fond et reaction du logo publies sur un kick fort", str(fams))
+    g = lg.status().get("gauges") or {}
+    check(all(k in g for k in ("fps", "gpu", "latency_ms", "rec", "sources", "auto")) and abs(float(g["latency_ms"]) - 42.0) < 1e-6,
+          "cerveau: jauges de sante publiees", str(g))
+    fx_fams = ("wobble", "ripple", "glitch", "chroma", "logo")
+    n = len([e for e in lg.events() if e.family in fx_fams])
+    r1.draw(fbo, size, loud, p, 1.02)
+    n2 = len([e for e in lg.events() if e.family in fx_fams])
+    check(n2 == n, "cerveau: un effet qui reste haut ne publie pas a chaque image", f"{n} puis {n2}")
+    r2 = gl.Renderer(ctx, size, logo)
+    lg2 = br.BrainLog()
+    r2.brain = lg2
+    r2.draw(fbo, size, loud, dict(p, fx_on=[0] * 5), 1.0)
+    check(not any(e.family in ("wobble", "ripple", "glitch", "chroma", "logo") for e in lg2.events()),
+          "cerveau: effets coupes -> aucun effet publie", str([e.family for e in lg2.events()]))
+    r1.brain = Boom()
+    try:
+        r1.draw(fbo, size, loud, dict(p, strobe_hits=2), 2.5)
+        ok = True
+    except Exception as exc:              # noqa: BLE001
+        ok = False
+        print("   ", repr(exc))
+    check(ok, "cerveau: une panne du cerveau n'arrete jamais le rendu")
+    try:
+        import types as _ty
+        ss = gl.Session(_ty.SimpleNamespace(), {}, None, None, (16, 16), (16, 16), None, None, None)
+        ok = isinstance(getattr(ss, "brain", None), br.BrainLog)
+    except Exception as exc:              # noqa: BLE001
+        ok = False
+        print("   ", repr(exc))
+    check(ok, "cerveau: Session.brain est un BrainLog")
+
 
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
@@ -13709,7 +13843,7 @@ PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_engine", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
