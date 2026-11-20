@@ -13243,6 +13243,91 @@ def check_brain_iso() -> None:
         root.destroy()
 
 
+def check_brain_sismo() -> None:
+    """Cerveau (#192) : vue sismographe sur un Canvas seul : un element par onde quelle que soit la page, pool constant, survol,
+    rien hors du canvas."""
+    print("Cerveau : vue sismographe (ondes, pool, survol)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import gui_brain
+    from core import brain as br
+
+    try:
+        check(hasattr(gui_brain, "SismoView") and gui_brain.VIEWS.get("sismo") is getattr(gui_brain, "SismoView", None),
+              "vue sismo: SismoView existe et s'inscrit dans VIEWS['sismo']")
+        if not hasattr(gui_brain, "SismoView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 40):
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.0)
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 2.0)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 3.0)
+        snaps = [br.snapshot(log, t0 + off) for off in (1.9, 9.9, 17.9)]
+
+        w, h = 640, 360
+        cv = tk.Canvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.SismoView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snaps[0], True, set(), 5.0)
+        waves = list(view.wave_items())
+        check(len(waves) == 6 and all(cv.type(i) == "line" for i in waves), "vue sismo: une ligne de canvas par onde (passe + futur)", str(waves))
+        for s in snaps:
+            view.update(s, True, set(), 5.1)
+            check(len(view.wave_items()) == 6, "vue sismo: autant d'elements d'onde quelle que soit la page")
+        check(len(cv.find_all()) == n_pool, "vue sismo: le pool ne grandit pas sur 3 pages", f"{n_pool} -> {len(cv.find_all())}")
+        view.update(snaps[0], True, {"kick"}, 5.2)
+        check(cv.itemcget(view.wave_items()[0], "state") == "hidden", "vue sismo: instrument masque -> onde cachee")
+        view.update(snaps[0], True, set(), 5.3)
+        key = next((k for k in view._hov if k[0] == "fx" and k[2] == "ripple"), None)
+        if key is not None:
+            x, y, _t = view._hov[key]
+            check(view.hover(x, y) == "ripple : kick fort", "vue sismo: le survol d'une note rend sa raison", str(view.hover(x, y)))
+        else:
+            check(False, "vue sismo: un effet de la page est survolable", str(list(view._hov)[:5]))
+        check(view.hover(-50, -50) is None, "vue sismo: rien sous le pointeur -> pas de bulle")
+
+        worst = dict(snaps[0])
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(64) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 31, 62, 63) for t in br.TRACKS]
+        worst["fx"] += [(63, "scene", 0.3, "scene faible", None)]
+        worst["veil"] = [("build", 1.0)] * 64
+        worst["cursor"] = 63.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            cv.configure(width=size[0], height=size[1])
+            root.update()
+            view.layout(*size)
+            view.update(worst, True, set(), 7.0)
+            bad = []
+            for i in cv.find_all():
+                if cv.itemcget(i, "state") == "hidden":
+                    continue
+                c = cv.coords(i)
+                for x, y in zip(c[0::2], c[1::2]):
+                    if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                        bad.append((cv.type(i), round(x), round(y)))
+                        break
+            check(not bad, f"vue sismo: canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+        n = len(cv.find_all())
+        view.update(snaps[1], True, set(), 7.1)
+        check(len(cv.find_all()) == n_pool == n, "vue sismo: pool constant apres les cas extremes", f"{n_pool} {n}")
+    finally:
+        root.destroy()
+
+
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
     import math as _m
@@ -14278,7 +14363,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
@@ -14297,7 +14382,7 @@ GROUPES = {
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
-            "check_manager", "check_gui", "check_brain_gui", "check_brain_iso"),
+            "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo"),
 }
 
 

@@ -501,8 +501,327 @@ class IsoView:
         return best
 
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# Vue sismographe : une onde par instrument (passe en trait plein, futur predit en pointilles), portee de 8 lignes pour les effets
+# ---------------------------------------------------------------------------------------------------------------------------
+
+SIS_H0 = 350.0                                 # hauteur de reference de la maquette
+SIS_BASES = (56.0, 104.0, 152.0)               # ligne de base de chaque onde (kick, snare, hi-hat) a la hauteur de reference
+SIS_AMP = 21.0
+SIS_DECAY = {"kick": 0.9, "snare": 1.2, "hihat": 1.9}
+SIS_STAFF0, SIS_STAFF_GAP = 206.0, 15.0        # premiere ligne de la portee et ecart (reference)
+SIS_LEFT = 66.0
+SIS_RIGHT = 10.0
+SIS_MAX_FX = 160
+SIS_MAX_CAUSES = 96
+SIS_MAX_SCENES = 8
+SIS_Q = 4                                      # points par pas pour l'onde
+
+
+class SismoView:
+    """Sismographe de la page : un element de canvas par onde (le passe, plein) et un par onde pour le futur predit (pointilles),
+    mis a jour par `coords` ; marqueurs (surprise, manque), notes d'effets et pointilles des causes tires de reserves de taille fixe.
+    Pas d'alpha sous Tk : les couleurs sont melangees vers le fond de la phase (`blend`)."""
+
+    def __init__(self, canvas: tk.Canvas) -> None:
+        self.canvas = canvas
+        self.w = self.h = 1
+        self.geo = 0
+        self.sy = 1.0
+        self.left, self.dx = SIS_LEFT, 8.8
+        self._hov: dict = {}
+        self._wave_sig = None
+        self._mark_sig = None
+        self._band_sig = None
+        self._hid_sig = None
+        self._veil_on = False
+        self._veil_sig = None
+        cv = canvas
+        ins, trk = core_brain.INSTRUMENTS, core_brain.TRACKS
+        self._bands = [cv.create_rectangle(0, 0, 0, 0, fill="", outline="") for _ in range(core_brain.PAGE_STEPS)]
+        self._base_lines = [cv.create_line(0, 0, 0, 0, fill="#141826") for _ in ins]
+        self._base_labels = [cv.create_text(6, 0, text=core_brain.label(r), anchor="w", fill=core_brain.COLORS[r], font=FONT_SMALL) for r in ins]
+        self._bar_lines = [cv.create_line(0, 0, 0, 0, fill="#2a3050") for _ in range(4)]
+        self._bar_labels = [cv.create_text(0, 0, text=f"bar {j + 1}", anchor="w", fill=DIM, font=FONT_SMALL) for j in range(4)]
+        self._staff = [cv.create_line(0, 0, 0, 0, fill="#1c2236") for _ in trk]
+        self._staff_labels = {r: cv.create_text(6, 0, text=core_brain.label(r), anchor="w", fill=core_brain.COLORS[r], font=FONT_SMALL) for r in trk}
+        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(4)]
+        # ondes : [passe, futur] par instrument
+        self._past = {r: cv.create_line(0, 0, 0, 0, fill=core_brain.COLORS[r], width=1.4) for r in ins}
+        self._fut = {r: cv.create_line(0, 0, 0, 0, fill=core_brain.COLORS[r], width=1, dash=(2, 3)) for r in ins}
+        n_cells = core_brain.PAGE_STEPS * len(ins)
+        self._rings = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="#ffffff", width=1.2) for _ in range(n_cells)]
+        self._miss = [(cv.create_line(0, 0, 0, 0, state="hidden", width=1.2), cv.create_line(0, 0, 0, 0, state="hidden", width=1.2))
+                      for _ in range(n_cells)]
+        self._fxo = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(SIS_MAX_FX)]
+        self._fxt = [cv.create_line(0, 0, 0, 0, state="hidden", width=1) for _ in range(SIS_MAX_FX)]
+        self._fxr = [cv.create_rectangle(0, 0, 0, 0, state="hidden", outline="") for _ in range(SIS_MAX_FX)]
+        self._scn = [cv.create_text(0, 0, text="", state="hidden", fill=core_brain.COLORS["scene"], font=FONT_SMALL) for _ in range(SIS_MAX_SCENES)]
+        self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3), width=1) for _ in range(SIS_MAX_CAUSES)]
+        self._edge = cv.create_line(0, 0, 0, 0, fill="#e0e0e0", width=1.5)
+        self._used = {"rings": 0, "miss": 0, "fx": 0, "scn": 0, "causes": 0}
+
+    def wave_items(self) -> list:
+        """Les six elements d'onde (passe puis futur de chaque instrument)."""
+        return [self._past[r] for r in core_brain.INSTRUMENTS] + [self._fut[r] for r in core_brain.INSTRUMENTS]
+
+    # ---- geometrie
+    def X(self, i: float) -> float:
+        return self.left + i * self.dx
+
+    def Y(self, v: float) -> float:
+        return v * self.sy
+
+    def layout(self, w: int, h: int) -> None:
+        self.w, self.h = max(1, w), max(1, h)
+        self.sy = max(0.3, self.h / SIS_H0)
+        self.left = SIS_LEFT
+        self.dx = max(2.0, (self.w - SIS_LEFT - SIS_RIGHT) / core_brain.PAGE_STEPS)
+        self.geo += 1
+        cv, X, Y = self.canvas, self.X, self.Y
+        for j, r in enumerate(core_brain.INSTRUMENTS):
+            by = Y(SIS_BASES[j])
+            cv.coords(self._base_lines[j], X(0), by, X(64), by)
+            cv.coords(self._base_labels[j], 6, by)
+        for j in range(4):
+            cv.coords(self._bar_lines[j], X(j * 16), Y(24), X(j * 16), Y(330))
+            cv.coords(self._bar_labels[j], X(j * 16) + 3, Y(20))
+        for k, r in enumerate(core_brain.TRACKS):
+            sy = Y(SIS_STAFF0 + k * SIS_STAFF_GAP)
+            cv.coords(self._staff[k], X(0), sy, X(64), sy)
+            cv.coords(self._staff_labels[r], 6, sy)
+        self._band_sig = self._wave_sig = self._mark_sig = None
+
+    # ---- mise a jour
+    def _vals(self, snap: dict, cur: int, hidden: set):
+        val = {r: [0.0] * 64 for r in core_brain.INSTRUMENTS}
+        sts: dict = {}
+        for i, row, v, p, status in snap.get("cells", ()):
+            if row not in val or not 0 <= i < 64 or status is None or row in hidden:
+                continue
+            if status in ("real", "surprise") and i <= cur:
+                val[row][i] = float(v)
+            elif status == "ghost" and i > cur:
+                val[row][i] = float(p)
+            sts[(i, row)] = (status, float(v), float(p))
+        return val, sts
+
+    def _wave(self, row: str, vals: list, c: float, bg: str) -> None:
+        cv = self.canvas
+        base = self.Y(SIS_BASES[core_brain.INSTRUMENTS.index(row)])
+        amp, dec = SIS_AMP * self.sy, SIS_DECAY[row]
+
+        def y_at(q: float) -> float:
+            x = q / SIS_Q
+            si = min(63, int(x))
+            e = 0.0
+            for k in range(6):
+                i = si - k
+                if i < 0:
+                    break
+                if vals[i] > 0:
+                    e = max(e, vals[i] * math.exp(-(x - i) * dec))
+            return base - amp * e * math.sin(q * 2.3)
+
+        qc = c * SIS_Q
+        past = [(q / SIS_Q, y_at(q)) for q in range(0, int(qc) + 1)]
+        past.append((c, y_at(qc)))
+        fut = [(c, y_at(qc))] + [(q / SIS_Q, y_at(q)) for q in range(int(qc) + 1, 64 * SIS_Q + 1)]
+        for it, pts, alpha in ((self._past[row], past, 0.95), (self._fut[row], fut, 0.3)):
+            if len(pts) < 2:
+                pts = pts * 2
+            flat = []
+            for x, y in pts:
+                flat += [self.X(x), y]
+            cv.coords(it, *flat)
+            cv.itemconfigure(it, fill=blend(core_brain.COLORS[row], alpha, bg))
+
+    def _hide_from(self, key: str, items: list, n: int) -> None:
+        for it in items[n:self._used[key]]:
+            if isinstance(it, tuple):
+                for sub in it:
+                    self.canvas.itemconfigure(sub, state="hidden")
+            else:
+                self.canvas.itemconfigure(it, state="hidden")
+        self._used[key] = n
+
+    def update(self, snap: dict, causes: bool, hidden: set, now: float) -> None:
+        cv = self.canvas
+        header = snap.get("header") or {}
+        bg = tint(header.get("phase"))
+        cursor = max(0.0, min(64.0, float(snap.get("cursor", 0.0))))
+        cur = int(cursor)
+        cq = int(cursor * SIS_Q) / SIS_Q
+        C = core_brain.COLORS
+        ins = core_brain.INSTRUMENTS
+        val, sts = self._vals(snap, cur, hidden)
+        gsig = (bg, self.geo)
+        # pistes masquees : etiquettes et ondes
+        hsig = tuple(sorted(hidden))
+        if hsig != self._hid_sig:
+            self._hid_sig = hsig
+            for r in core_brain.TRACKS:
+                cv.itemconfigure(self._staff_labels[r], fill=DIM if r in hidden else C[r])
+            for r in ins:
+                cv.itemconfigure(self._base_labels[ins.index(r)], fill=DIM if r in hidden else C[r])
+                st = "hidden" if r in hidden else "normal"
+                cv.itemconfigure(self._past[r], state=st)
+                cv.itemconfigure(self._fut[r], state=st)
+        # ondes
+        wsig = (tuple(tuple(round(v, 2) for v in val[r]) for r in ins), cq, gsig, hsig)
+        if wsig != self._wave_sig:
+            self._wave_sig = wsig
+            for r in ins:
+                if r not in hidden:
+                    self._wave(r, val[r], cq, bg)
+        # bande des phases
+        steps = snap.get("phase_steps") or ()
+        bsig = (tuple(steps), cur, gsig)
+        if bsig != self._band_sig:
+            self._band_sig = bsig
+            y0, y1 = self.Y(180), self.Y(185)
+            for i in range(min(core_brain.PAGE_STEPS, len(steps))):
+                cv.coords(self._bands[i], self.X(i), y0, self.X(i + 1), y1)
+                cv.itemconfigure(self._bands[i], fill=blend(PHASE_COLORS.get(steps[i], DIM), 0.85 if i <= cur else 0.18, bg))
+        # effets : un seul par (pas, piste), le plus fort
+        active: dict = {}
+        for i, track, strength, reason, cause in snap.get("fx", ()):
+            if track in hidden or track not in core_brain.TRACKS or not 0 <= i < 64:
+                continue
+            old = active.get((i, track))
+            if old is None or float(strength) > old[0]:
+                active[(i, track)] = (float(strength), reason, cause)
+        fx_items = sorted(active.items())[:SIS_MAX_FX]
+        msig = (tuple(sorted((k, s) for k, s in sts.items())), tuple((k, round(v[0], 2), v[1], v[2]) for k, v in fx_items), causes, gsig, self.w)
+        if msig != self._mark_sig:
+            self._mark_sig = msig
+            self._marks(sts, fx_items, causes, bg)
+        # voile au-dessus de la portee
+        veil = snap.get("veil") or ()
+        lim = min(core_brain.PAGE_STEPS, cur + 1)
+        on = bool(veil) and any(veil[min(i, len(veil) - 1)][1] > 0 for i in range(lim + 1))
+        if on:
+            kind = veil[min(cur, len(veil) - 1)][0]
+            col = "#ffffff" if kind == "drop" else PHASE_COLORS["build"]
+            if self._veil_sig != (col, bg):
+                self._veil_sig = (col, bg)
+                for L, it in enumerate(self._veil):
+                    cv.itemconfigure(it, fill=blend(col, 0.5 - L * 0.08, bg))
+            for L, it in enumerate(self._veil):
+                pts = []
+                for i in range(lim + 1):
+                    v = veil[min(i, len(veil) - 1)][1]
+                    y = SIS_STAFF0 - 6 - L * 4 - v * 44 * (0.55 + 0.45 * math.sin(i * 0.32 + L + now * 2.2))
+                    pts += [self.X(i), self.Y(y)]
+                cv.coords(it, *pts)
+                if not self._veil_on:
+                    cv.itemconfigure(it, state="normal")
+        elif self._veil_on:
+            for it in self._veil:
+                cv.itemconfigure(it, state="hidden")
+        self._veil_on = on
+        # ligne du present
+        cv.coords(self._edge, self.X(cursor), self.Y(24), self.X(cursor), self.Y(330))
+
+    def _marks(self, sts: dict, fx_items: list, causes: bool, bg: str) -> None:
+        """Surprises, manques, notes des effets et causes : reserves reutilisees (largeurs et formes remises a chaque emploi)."""
+        cv, X, Y, C = self.canvas, self.X, self.Y, core_brain.COLORS
+        hov: dict = {}
+        peaks: dict = {}
+        nr = nm = 0
+        for (i, row), (status, v, p) in sorted(sts.items()):
+            j = core_brain.INSTRUMENTS.index(row)
+            by = Y(SIS_BASES[j])
+            name = core_brain.label(row)
+            if status in ("real", "surprise"):
+                px, py = X(i) + 1, by - Y(SIS_AMP) * v
+                peaks[(i, row)] = (px, py)
+                tip = f"{name} {round(v * 100)} % · " + ("surprise" if status == "surprise" else "realise")
+                hov[("ins", i, row)] = (px, py, tip)
+                if status == "surprise" and nr < len(self._rings):
+                    cv.coords(self._rings[nr], px - 3.5, py - 3.5, px + 3.5, py + 3.5)
+                    cv.itemconfigure(self._rings[nr], state="normal")
+                    nr += 1
+            elif status == "miss" and nm < len(self._miss):
+                a, b = self._miss[nm]
+                x0, d = X(i) + 1, 3 * self.sy
+                cv.coords(a, x0, by - d, x0 + 6, by + d)
+                cv.coords(b, x0 + 6, by - d, x0, by + d)
+                col = blend(MISS_FG, 0.8, bg)
+                cv.itemconfigure(a, fill=col, state="normal")
+                cv.itemconfigure(b, fill=col, state="normal")
+                hov[("ins", i, row)] = (x0 + 3, by, f"{name} predit {round(p * 100)} % · manque")
+                nm += 1
+        self._hide_from("rings", self._rings, nr)
+        self._hide_from("miss", self._miss, nm)
+        nf = ns = 0
+        pts: dict = {}
+        for (i, track), (s, reason, cause) in fx_items:
+            k = core_brain.TRACKS.index(track)
+            x, y = X(i) + 4, Y(SIS_STAFF0 + k * SIS_STAFF_GAP)
+            s = max(0.0, min(1.0, s))
+            col = blend(C[track], 0.45 + 0.55 * s, bg)
+            o, t, r_ = self._fxo[nf], self._fxt[nf], self._fxr[nf]
+            nf += 1
+            cv.itemconfigure(t, state="hidden")
+            cv.itemconfigure(o, state="hidden")
+            cv.itemconfigure(r_, state="hidden")
+            if track == "strobe":
+                half = 12 if reason.startswith("drop") else 6
+                cv.coords(r_, x - 1, y - Y(half), x + 1.5, y + Y(half))
+                cv.itemconfigure(r_, fill=col, state="normal")
+            elif track == "scene":
+                rx = min(x - 3, self.w - 2 - 26)
+                cv.coords(r_, rx, y - 4, rx + 26, y + 4)
+                cv.itemconfigure(r_, fill=blend(C[track], 0.85, bg), state="normal")
+                if ns < SIS_MAX_SCENES:
+                    txt = (reason.split(" : ")[-1].split(" (")[0])[:14]
+                    if rx + 29 + 6 * len(txt) > self.w:
+                        cv.coords(self._scn[ns], rx - 3, y)
+                        cv.itemconfigure(self._scn[ns], text=txt, anchor="e", state="normal")
+                    else:
+                        cv.coords(self._scn[ns], rx + 29, y)
+                        cv.itemconfigure(self._scn[ns], text=txt, anchor="w", state="normal")
+                    ns += 1
+                x = rx + 13
+            else:
+                rx_, ry_ = 2 + 2 * s, 1.6 + 1.6 * s
+                cv.coords(o, x - rx_, y - ry_, x + rx_, y + ry_)
+                cv.itemconfigure(o, fill=col, state="normal")
+                cv.coords(t, x + rx_, y, x + rx_, y - 9)
+                cv.itemconfigure(t, fill=col, state="normal")
+            pts[(i, track)] = (x, y, col)
+            hov[("fx", i, track)] = (x, y, reason)
+        self._hide_from("fx", list(zip(self._fxo, self._fxt, self._fxr)), nf)
+        for it in self._scn[ns:self._used["scn"]]:
+            cv.itemconfigure(it, state="hidden")
+        self._used["scn"] = ns
+        nc = 0
+        if causes:
+            for ((i, track), (_s, _r, cause)) in fx_items:
+                src = peaks.get((i, cause)) if cause else None
+                if src is None or nc >= SIS_MAX_CAUSES:
+                    continue
+                x, y, _c = pts[(i, track)]
+                cv.coords(self._cause_lines[nc], src[0], src[1], x, y)
+                cv.itemconfigure(self._cause_lines[nc], fill=blend(C[track], 0.55, bg), state="normal")
+                nc += 1
+        self._hide_from("causes", self._cause_lines, nc)
+        self._hov = hov
+
+    # ---- survol
+    def hover(self, x: float, y: float) -> str | None:
+        best, dist = None, 10.0
+        for px, py, text in self._hov.values():
+            d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+            if d < dist:
+                best, dist = text, d
+        return best
+
+
 VIEWS: dict = {name: BlankView for name in VIEW_NAMES}
 VIEWS["iso"] = IsoView
+VIEWS["sismo"] = SismoView
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
