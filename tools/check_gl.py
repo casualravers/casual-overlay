@@ -12566,7 +12566,7 @@ def check_brain_pure() -> None:
     check(br.predict_page(hits2, 130, "kick", 128) == 0.0, "cerveau: prediction nulle au pas 2", str(br.predict_page(hits2, 130, "kick", 128)))
     check(br.predict_page(hits2, 132, "snare", 128) == 0.0, "cerveau: prediction par instrument")
     hits3 = {(140 - 16 * k, "snare"): 1.0 for k in (1, 2)}
-    p = br.predict_rolling(hits3, 140, "snare")
+    p = br.predict_rolling(hits3, 140, "snare", 139)
     check(abs(p - 0.3) < 1e-9, "cerveau: prediction glissante (2 mesures sur 4)", str(p))
     check(br.GHOST_MIN == 0.2 and br.EXPECT_MIN == 0.5, "cerveau: seuils fantome / attendu")
 
@@ -12637,6 +12637,15 @@ def check_brain_pure() -> None:
     snap = br.snapshot(log, 23.9, rolling=True)
     check(snap["first"] == 191 - 4 and len(snap["cells"]) == 68 * 3 and abs(snap["cursor"] - (23.9 * 8 - 187)) < 1e-9,
           "cerveau: instantane glissant (4 pas de passe, 64 a venir)", str((snap["first"], len(snap["cells"]))))
+    page_snap = br.snapshot(log, 23.9)
+    check(snap["score"] == page_snap["score"], "cerveau: meme score en page et en glissant (pas passes de la page courante)",
+          str((snap["score"], page_snap["score"])))
+    # glissant : la prediction ne lit que des mesures deja entendues (kicks reguliers -> meme fantome pres et loin)
+    snap = br.snapshot(log, 23.55, rolling=True)                       # pas courant 188 (kick entendu)
+    rc = {(c[0], c[1]): c for c in snap["cells"]}
+    near, far = rc[(192 - snap["first"], "kick")], rc[(240 - snap["first"], "kick")]
+    check(abs(near[3] - far[3]) < 1e-9 and abs(near[3] - 1.0) < 1e-9 and near[4] == far[4] == "ghost",
+          "cerveau: glissant, fantome egal a cur + 4 et cur + 52", str((near, far)))
 
     # changement d'ancre en cours de page
     evs = log.events()

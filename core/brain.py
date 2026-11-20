@@ -178,10 +178,13 @@ def predict_page(hits: dict, step: int, row: str, page_first: int) -> float:
     return RECENT_W * recent + PHRASE_W * _hit(hits, step - PHRASE_STEPS, row)
 
 
-def predict_rolling(hits: dict, step: int, row: str) -> float:
-    """Meme ponderation, mais les 4 mesures recentes sont celles qui precedent le pas lui-meme (pas - 16 k, k = 1..4) : tunnel."""
-    recent = sum(_hit(hits, step - STEPS_PER_BAR * k, row) for k in range(1, 5)) / 4
-    return RECENT_W * recent + PHRASE_W * _hit(hits, step - PHRASE_STEPS, row)
+def predict_rolling(hits: dict, step: int, row: str, cur: int) -> float:
+    """Meme ponderation, pour le tunnel : les 4 mesures recentes sont les 4 dernieres mesures DEJA ENTENDUES au meme pas de mesure
+    (pas - 16 k, k choisi pour que pas - 16 k <= cur) ; le pas une phrase plus tot compte 0 s'il n'est pas encore entendu."""
+    m = max(1, -(-(step - cur) // STEPS_PER_BAR))         # plus petit k avec step - 16 k <= cur
+    recent = sum(_hit(hits, step - STEPS_PER_BAR * k, row) for k in range(m, m + 4)) / 4
+    back = step - PHRASE_STEPS
+    return RECENT_W * recent + PHRASE_W * (_hit(hits, back, row) if back <= cur else 0.0)
 
 
 def status_of(v: float, p: float, past: bool) -> str | None:
@@ -302,15 +305,20 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
 
     hits = hits_by_step(events, anchor, period)
     cells = []
-    ok = miss = surprise = 0
     for i in range(n):
         step = first + i
         past = step <= cur
         for row in INSTRUMENTS:
             v = hits.get((step, row), 0.0)
-            p = predict_rolling(hits, step, row) if rolling else predict_page(hits, step, row, first)
-            s = status_of(v, p, past)
-            cells.append((i, row, v, p, s))
+            p = predict_rolling(hits, step, row, cur) if rolling else predict_page(hits, step, row, first)
+            cells.append((i, row, v, p, status_of(v, p, past)))
+
+    # score : toujours les pas deja passes de la page courante (prediction de page), que la vue soit glissante ou non
+    ok = miss = surprise = 0
+    page_first = (cur // PAGE_STEPS) * PAGE_STEPS
+    for step in range(page_first, cur + 1):
+        for row in INSTRUMENTS:
+            s = status_of(hits.get((step, row), 0.0), predict_page(hits, step, row, page_first), True)
             if s == "real":
                 ok += 1
             elif s == "miss":
