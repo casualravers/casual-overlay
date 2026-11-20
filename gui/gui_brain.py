@@ -819,9 +819,346 @@ class SismoView:
         return best
 
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# Vue mandala : la page en cercles, une mesure par anneau, le 1 pile en haut
+# ---------------------------------------------------------------------------------------------------------------------------
+
+MAN_R0, MAN_BWR, MAN_IW = 48.0, 28.0, 9.0      # rayon interieur, epaisseur d'une mesure, d'un instrument (unites de la maquette)
+MAN_RC = MAN_R0 + 4 * MAN_BWR + 6              # rayon de la couronne des 32 temps
+MAN_RE = MAN_RC + 18                           # rayon du premier anneau d'effets
+MAN_GAP = 5.0                                  # ecart des anneaux d'effets
+MAN_RMAX = 240.0                               # rayon le plus grand dessine (strobe de drop compris), pour la mise a l'echelle
+MAN_SP = 2 * math.pi / 16                      # largeur angulaire d'une case (16 pas par mesure)
+MAN_MAX_FX = 160
+MAN_MAX_CAUSES = 96
+
+
+def _man_angle(s: float) -> float:
+    """Angle (radians, sens horaire a l'ecran depuis la droite) du centre de la case `s` : le pas 0 est pile en haut."""
+    return -math.pi / 2 + s * MAN_SP
+
+
+class MandalaView:
+    """Page en cercles : une case = un arc du canvas (`style="arc"`, largeur = epaisseur de l'anneau), cases centrees sur les axes (pas 0 en
+    haut, 4 a droite, 8 en bas, 12 a gauche). Tout est cree a la construction et place par `layout` (la geometrie ne bouge plus) ;
+    `update` ne change que la couleur et l'etat des cases dont la signature change, puis l'aiguille et les ondes du voile a chaque tick.
+    Pas d'alpha sous Tk : les couleurs sont melangees vers le fond de la phase (`blend`)."""
+
+    def __init__(self, canvas: tk.Canvas) -> None:
+        self.canvas = canvas
+        self.w = self.h = 1
+        self.geo = 0
+        self.k, self.cx, self.cy = 1.0, 0.5, 0.5
+        self._hov: dict = {}
+        self._hov_c: dict = {}
+        self._hov_f: dict = {}
+        self._csig: dict = {}
+        self._msig = self._crown_sig = self._bar_sig = self._disc_sig = self._hid_sig = None
+        self._veil_on = False
+        self._used = {"fx": 0, "causes": 0}
+        self._mid: dict = {}
+        cv = canvas
+        ins, trk = core_brain.INSTRUMENTS, core_brain.TRACKS
+        self._rings = [cv.create_oval(0, 0, 0, 0, outline="#151a2a") for _ in range(12)]
+        self._spokes = [cv.create_line(0, 0, 0, 0, fill="#2a3050" if s % 4 == 0 else "#121624") for s in range(16)]
+        self._cells: dict = {}
+        for i in range(core_brain.PAGE_STEPS):
+            for kk in range(len(ins)):
+                poly = cv.create_polygon(*([0, 0] * 12), fill="", outline="", state="hidden")
+                arc = cv.create_arc(0, 0, 1, 1, style="arc", outline="", state="hidden")
+                m1 = cv.create_line(0, 0, 0, 0, state="hidden", width=1.2)
+                m2 = cv.create_line(0, 0, 0, 0, state="hidden", width=1.2)
+                self._cells[(i, kk)] = (arc, poly, m1, m2)
+        self._crown = [cv.create_line(0, 0, 0, 0, fill="#2a3050", width=2 if (q + 1) % 8 == 0 else 1) for q in range(32)]
+        self._crown_label = cv.create_text(0, 0, text="32", fill=DIM, font=FONT_SMALL)
+        self._fx_rings = [cv.create_oval(0, 0, 0, 0, outline="#111522") for _ in trk]
+        self._fxo = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(MAN_MAX_FX)]
+        self._fxl = [cv.create_line(0, 0, 0, 0, state="hidden", width=2) for _ in range(MAN_MAX_FX)]
+        self._fxa = [cv.create_arc(0, 0, 1, 1, style="arc", state="hidden", width=2) for _ in range(MAN_MAX_FX)]
+        self._disc = cv.create_oval(0, 0, 0, 0, outline="")
+        self._veil = [cv.create_oval(0, 0, 0, 0, state="hidden", width=1.5) for _ in range(4)]
+        self._bpm = cv.create_text(0, 0, text="", fill=FG, font=FONT_HEAD)
+        self._phase = cv.create_text(0, 0, text="", fill=DIM, font=FONT_SMALL)
+        self._cur_rings = [cv.create_oval(0, 0, 0, 0, outline="#ffffff") for _ in range(2)]
+        self._ins_labels = [cv.create_text(0, 0, text=core_brain.label(r), anchor="w", fill=core_brain.COLORS[r], font=FONT_SMALL) for r in ins]
+        self._bar_labels = [cv.create_text(0, 0, text=f"bar {j + 1}", anchor="e", fill=DIM, font=FONT_SMALL) for j in range(4)]
+        self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3), width=1) for _ in range(MAN_MAX_CAUSES)]
+        self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(MAN_MAX_CAUSES)]
+        self._needle = cv.create_line(0, 0, 0, 0, fill="#e0e0e0", width=1.5)
+
+    def cell_item(self, i: int, row: str):
+        """L'arc de la case (pas `i` de la page, instrument `row`)."""
+        return self._cells[(i, core_brain.INSTRUMENTS.index(row))][0]
+
+    # ---- geometrie
+    def pol(self, r: float, an: float) -> tuple[float, float]:
+        return self.cx + r * self.k * math.cos(an), self.cy + r * self.k * math.sin(an)
+
+    def _circle(self, item, r: float) -> None:
+        r *= self.k
+        self.canvas.coords(item, self.cx - r, self.cy - r, self.cx + r, self.cy + r)
+
+    def layout(self, w: int, h: int) -> None:
+        self.w, self.h = max(1, w), max(1, h)
+        self.geo += 1
+        self.cx, self.cy = self.w / 2, self.h / 2
+        self.k = max(0.2, min(1.6, (min(self.w, self.h) / 2 - 3) / MAN_RMAX))
+        cv, k = self.canvas, self.k
+        for j in range(4):
+            for kk in range(3):
+                self._circle(self._rings[j * 3 + kk], MAN_R0 + j * MAN_BWR + kk * MAN_IW + MAN_IW - 1)
+        for s, it in enumerate(self._spokes):
+            an = _man_angle(s) - MAN_SP / 2
+            (x0, y0), (x1, y1) = self.pol(MAN_R0, an), self.pol(MAN_R0 + 4 * MAN_BWR, an)
+            cv.coords(it, x0, y0, x1, y1)
+        for (i, kk), (arc, poly, m1, m2) in self._cells.items():
+            j, s = divmod(i, 16)
+            ri = MAN_R0 + j * MAN_BWR + kk * MAN_IW
+            ro = ri + MAN_IW - 2
+            a0, a1 = _man_angle(s) - MAN_SP / 2 + 0.02, _man_angle(s) + MAN_SP / 2 - 0.02
+            self._circle(arc, (ri + ro) / 2)
+            cv.itemconfigure(arc, start=-math.degrees(a1), extent=math.degrees(a1 - a0), width=(ro - ri) * k)
+            pts = []
+            for t in range(5):
+                pts += self.pol(ro, a0 + (a1 - a0) * t / 4)
+            for t in range(5):
+                pts += self.pol(ri, a1 - (a1 - a0) * t / 4)
+            cv.coords(poly, *pts)
+            p, q = self.pol(ri + 1, a0 + 0.05), self.pol(ro - 1, a1 - 0.05)
+            p2, q2 = self.pol(ri + 1, a1 - 0.05), self.pol(ro - 1, a0 + 0.05)
+            cv.coords(m1, *p, *q)
+            cv.coords(m2, *p2, *q2)
+            self._mid[(i, kk)] = self.pol((ri + ro) / 2, _man_angle(s))
+        for q, it in enumerate(self._crown):
+            an = -math.pi / 2 + q / 32 * 2 * math.pi
+            big = (q + 1) % 8 == 0
+            ln = (12 if (q + 1) % 32 == 0 else 9 if (q + 1) % 16 == 0 else 7) if big else 3
+            (x0, y0), (x1, y1) = self.pol(MAN_RC, an), self.pol(MAN_RC + ln, an)
+            cv.coords(it, x0, y0, x1, y1)
+        cv.coords(self._crown_label, *self.pol(MAN_RC + 20, -math.pi / 2 + 31.5 / 32 * 2 * math.pi))
+        for kk, it in enumerate(self._fx_rings):
+            self._circle(it, MAN_RE + kk * MAN_GAP)
+        self._circle(self._disc, MAN_R0 - 4)
+        cv.coords(self._bpm, self.cx, self.cy - 7 * k)
+        cv.coords(self._phase, self.cx, self.cy + 9 * k)
+        for kk, it in enumerate(self._ins_labels):
+            cv.coords(it, self.cx + 4, self.cy - (MAN_R0 + kk * MAN_IW + 4) * k)
+        for j, it in enumerate(self._bar_labels):
+            cv.coords(it, self.cx - 6, self.cy - (MAN_R0 + j * MAN_BWR + MAN_IW * 1.5) * k)
+        self._msig = self._crown_sig = self._bar_sig = None
+
+    # ---- cases
+    def _apply_cell(self, key, sig, bg: str) -> None:
+        cv = self.canvas
+        arc, poly, m1, m2 = self._cells[key]
+        status, v, p, fade = sig[0], sig[1], sig[2], sig[3]
+        col = core_brain.COLORS[core_brain.INSTRUMENTS[key[1]]]
+        if status in ("real", "surprise"):
+            cv.itemconfigure(arc, outline=blend(col, 0.35 + 0.65 * v, bg), state="normal")
+            if status == "surprise":
+                cv.itemconfigure(poly, outline="#ffffff", width=1.2, state="normal")
+            else:
+                cv.itemconfigure(poly, state="hidden")
+            cv.itemconfigure(m1, state="hidden")
+            cv.itemconfigure(m2, state="hidden")
+        elif status == "miss":
+            red = blend(MISS_FG, 0.8, bg)
+            cv.itemconfigure(arc, state="hidden")
+            cv.itemconfigure(poly, state="hidden")
+            cv.itemconfigure(m1, fill=red, state="normal")
+            cv.itemconfigure(m2, fill=red, state="normal")
+        else:                                                     # fantome : contour fin, d'autant plus net que la prediction est forte
+            cv.itemconfigure(arc, state="hidden")
+            cv.itemconfigure(poly, outline=blend(col, (0.2 + 0.6 * p) * fade, bg), width=1, state="normal")
+            cv.itemconfigure(m1, state="hidden")
+            cv.itemconfigure(m2, state="hidden")
+
+    def _hide_cell(self, key) -> None:
+        for it in self._cells[key]:
+            self.canvas.itemconfigure(it, state="hidden")
+
+    def _cell_text(self, row: str, status: str, v: float, p: float) -> str:
+        name = core_brain.label(row)
+        if status in ("real", "surprise"):
+            return f"{name} {round(v * 100)} % · " + ("surprise" if status == "surprise" else "realise")
+        if status == "miss":
+            return f"{name} predit {round(p * 100)} % · manque"
+        return f"{name} attendu a {round(p * 100)} %"
+
+    # ---- mise a jour
+    def update(self, snap: dict, causes: bool, hidden: set, now: float) -> None:
+        cv = self.canvas
+        header = snap.get("header") or {}
+        phase = header.get("phase")
+        bg = tint(phase)
+        bpm = header.get("bpm")
+        cursor = max(0.0, min(64.0, float(snap.get("cursor", 0.0))))
+        cur = int(cursor)
+        first = int(snap.get("first", 0) or 0)
+        C = core_brain.COLORS
+        ins = core_brain.INSTRUMENTS
+        gsig = (bg, self.geo)
+        fade = round(min(1.0, cursor * 15.0 / float(bpm) / 0.35), 1) if bpm else 1.0
+        # etiquettes des instruments masques
+        hsig = tuple(sorted(hidden))
+        if hsig != self._hid_sig:
+            self._hid_sig = hsig
+            for kk, r in enumerate(ins):
+                cv.itemconfigure(self._ins_labels[kk], fill=DIM if r in hidden else C[r])
+        # cases : une signature par case, seules celles qui changent sont retouchees
+        new: dict = {}
+        for i, row, v, p, status in snap.get("cells", ()):
+            if row not in ins or not 0 <= i < core_brain.PAGE_STEPS or status is None or row in hidden:
+                continue
+            new[(i, ins.index(row))] = (status, round(float(v), 2), round(float(p), 2), fade if status == "ghost" else 1.0, gsig)
+        changed = False
+        for key in [k for k in self._csig if k not in new]:
+            self._hide_cell(key)
+            del self._csig[key]
+            changed = True
+        for key, sig in new.items():
+            if self._csig.get(key) != sig:
+                self._csig[key] = sig
+                self._apply_cell(key, sig, bg)
+                changed = True
+        if changed:
+            self._hov_c = {("ins", i, ins[kk]): (*self._mid[(i, kk)], self._cell_text(ins[kk], s[0], s[1], s[2])) for (i, kk), s in new.items()}
+        # effets : un seul par (pas, piste), le plus fort
+        active: dict = {}
+        for i, track, strength, reason, cause in snap.get("fx", ()):
+            if track in hidden or track not in core_brain.TRACKS or not 0 <= i < core_brain.PAGE_STEPS:
+                continue
+            old = active.get((i, track))
+            if old is None or float(strength) > old[0]:
+                active[(i, track)] = (float(strength), reason, cause)
+        fx_items = sorted(active.items())[:MAN_MAX_FX]
+        peaks = tuple(sorted(key for key, s in new.items() if s[0] in ("real", "surprise")))
+        msig = (tuple((k, round(v[0], 2), v[1], v[2]) for k, v in fx_items), causes, gsig, peaks)
+        if msig != self._msig:
+            self._msig = msig
+            self._marks(fx_items, set(peaks), causes, bg)
+            changed = True
+        if changed:
+            self._hov = {**self._hov_c, **self._hov_f}
+        # couronne des 32 temps
+        ab = first + cur
+        beat = (ab // 4) % 32
+        pcol = PHASE_COLORS.get(phase, DIM)
+        crsig = (beat, pcol)
+        if crsig != self._crown_sig:
+            self._crown_sig = crsig
+            for q, it in enumerate(self._crown):
+                cv.itemconfigure(it, fill=pcol if q <= beat else "#2a3050")
+        # anneaux de la mesure presente
+        bar = min(3, cur // 16)
+        if (bar, bg) != self._bar_sig:
+            self._bar_sig = (bar, bg)
+            for j in range(4):
+                for kk in range(3):
+                    cv.itemconfigure(self._rings[j * 3 + kk], outline="#2a3050" if j == bar else "#151a2a")
+            self._circle(self._cur_rings[0], MAN_R0 + bar * MAN_BWR - 1)
+            self._circle(self._cur_rings[1], MAN_R0 + (bar + 1) * MAN_BWR - 2)
+            for it in self._cur_rings:
+                cv.itemconfigure(it, outline=blend("#ffffff", 0.35, bg))
+        # disque central : BPM et phase
+        dsig = (phase, None if bpm is None else round(float(bpm), 1), bg)
+        disc_bg = shade(pcol, 0.14)
+        if dsig != self._disc_sig:
+            self._disc_sig = dsig
+            cv.itemconfigure(self._disc, fill=disc_bg)
+            cv.itemconfigure(self._bpm, text="--" if bpm is None else f"{float(bpm):.1f}")
+            cv.itemconfigure(self._phase, text=phase or "", fill=pcol)
+        # ondes du voile (changent a chaque tick : ces quatre anneaux seulement)
+        veil = snap.get("veil") or ()
+        v = veil[min(cur, len(veil) - 1)] if veil else None
+        on = bool(v) and v[1] > 0
+        if on:
+            col = "#ffffff" if v[0] == "drop" else PHASE_COLORS["build"]
+            rmax = MAN_R0 - 4
+            for q, it in enumerate(self._veil):
+                rr = ((now * 1.4 + q / 4) % 1.0) * rmax
+                self._circle(it, max(0.5, rr))
+                cv.itemconfigure(it, outline=blend(col, v[1] * (1 - rr / rmax) * 0.9, disc_bg), state="normal")
+        elif self._veil_on:
+            for it in self._veil:
+                cv.itemconfigure(it, state="hidden")
+        self._veil_on = on
+        # aiguille du present (bord de la case en cours)
+        an = _man_angle(cursor % 16) - MAN_SP / 2
+        (x0, y0), (x1, y1) = self.pol(MAN_R0, an), self.pol(MAN_RE + 8 * MAN_GAP, an)
+        cv.coords(self._needle, x0, y0, x1, y1)
+
+    def _marks(self, fx_items: list, peaks: set, causes: bool, bg: str) -> None:
+        """Notes des effets sur les anneaux, causes en pointilles : reserves reutilisees (une reserve par forme)."""
+        cv, C = self.canvas, core_brain.COLORS
+        hov: dict = {}
+        pts: dict = {}
+        n = 0
+        for (i, track), (s, reason, cause) in fx_items:
+            kk = core_brain.TRACKS.index(track)
+            an = _man_angle(i % 16)
+            rr = MAN_RE + kk * MAN_GAP
+            s = max(0.0, min(1.0, s))
+            col = blend(C[track], 0.4 + 0.6 * s, bg)
+            o, ln, ar = self._fxo[n], self._fxl[n], self._fxa[n]
+            for it in (o, ln, ar):
+                cv.itemconfigure(it, state="hidden")
+            x, y = self.pol(rr, an)
+            if track == "strobe":
+                (x0, y0), (x1, y1) = self.pol(rr - 3, an), self.pol(rr + (14 if reason.startswith("drop") else 4), an)
+                cv.coords(ln, x0, y0, x1, y1)
+                cv.itemconfigure(ln, fill=col, state="normal")
+            elif track == "scene":
+                self._circle(ar, rr)
+                cv.itemconfigure(ar, start=-math.degrees(an + MAN_SP / 2), extent=math.degrees(MAN_SP), outline=blend(C[track], 0.85, bg),
+                                 state="normal")
+            else:
+                d = (1.2 + 2 * s) * self.k
+                cv.coords(o, x - d, y - d, x + d, y + d)
+                cv.itemconfigure(o, fill=col, state="normal")
+            pts[(i, track)] = (x, y, col)
+            hov[("fx", i, track)] = (x, y, reason)
+            n += 1
+        for idx in range(n, self._used["fx"]):
+            for it in (self._fxo[idx], self._fxl[idx], self._fxa[idx]):
+                cv.itemconfigure(it, state="hidden")
+        self._used["fx"] = n
+        nc = 0
+        if causes:
+            for ((i, track), (_s, _r, cause)) in fx_items:
+                if not cause or cause not in core_brain.INSTRUMENTS or nc >= MAN_MAX_CAUSES:
+                    continue
+                kk = core_brain.INSTRUMENTS.index(cause)
+                if (i, cause) not in peaks:
+                    continue
+                sx, sy = self._mid[(i, kk)]
+                x, y, col = pts[(i, track)]
+                cv.coords(self._cause_lines[nc], sx, sy, x, y)
+                cv.itemconfigure(self._cause_lines[nc], fill=col, state="normal")
+                d = 2.0
+                cv.coords(self._cause_dots[nc], x - d, y - d, x + d, y + d)
+                cv.itemconfigure(self._cause_dots[nc], fill=col, state="normal")
+                nc += 1
+        for idx in range(nc, self._used["causes"]):
+            cv.itemconfigure(self._cause_lines[idx], state="hidden")
+            cv.itemconfigure(self._cause_dots[idx], state="hidden")
+        self._used["causes"] = nc
+        self._hov_f = hov
+
+    # ---- survol
+    def hover(self, x: float, y: float) -> str | None:
+        best, dist = None, 10.0
+        for px, py, text in self._hov.values():
+            d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+            if d < dist:
+                best, dist = text, d
+        return best
+
+
 VIEWS: dict = {name: BlankView for name in VIEW_NAMES}
 VIEWS["iso"] = IsoView
 VIEWS["sismo"] = SismoView
+VIEWS["mandala"] = MandalaView
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
