@@ -13124,6 +13124,125 @@ def check_brain_gui() -> None:
     check(out.get("collapsed") is True, "cerveau GUI: panneau etendu replie -> plus aucun dessin")
 
 
+def check_brain_iso() -> None:
+    """Cerveau (#192) : vue isometrique sur un Canvas seul (sans fenetre de reglages) : pool d'elements reutilise d'une page a l'autre,
+    mise a jour incrementale (appels coords / itemconfigure bornes), survol, angle 18..45 sans rien hors du canvas."""
+    print("Cerveau : vue isometrique (pool, mise a jour incrementale, survol, angle)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import gui_brain
+    from core import brain as br
+
+    class CountCanvas(tk.Canvas):
+        n_coords = 0
+        n_config = 0
+
+        def coords(self, *a, **k):
+            CountCanvas.n_coords += 1
+            return super().coords(*a, **k)
+
+        def itemconfigure(self, *a, **k):
+            CountCanvas.n_config += 1
+            return super().itemconfigure(*a, **k)
+
+    try:
+        check(hasattr(gui_brain, "IsoView") and gui_brain.VIEWS.get("iso") is getattr(gui_brain, "IsoView", None),
+              "vue iso: IsoView existe et s'inscrit dans VIEWS['iso']")
+        if not hasattr(gui_brain, "IsoView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 40):                                  # un kick par temps, une caisse claire un temps sur deux
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.0)
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 2.0)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 3.0)
+        log.publish("build", 1.0, reason="build", t=t0 + 9.0)
+        snaps = [br.snapshot(log, t0 + off) for off in (1.9, 9.9, 17.9)]
+        check(all(s["grid"] for s in snaps) and snaps[0]["first"] == 0 and snaps[2]["first"] == 128, "vue iso: instantanes fabriques sur 3 pages")
+
+        w, h = 640, 360
+        cv = CountCanvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.IsoView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snaps[0], True, set(), 5.0)
+        shown = [i for i in cv.find_all() if cv.type(i) != "window" and cv.itemcget(i, "state") != "hidden"]
+        check(n_pool > 500 and len(cv.find_all()) == n_pool and len(shown) > 100,
+              "vue iso: une page cree ses elements (pool) et en montre", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+        view.update(snaps[1], True, set(), 5.1)
+        view.update(snaps[2], True, set(), 5.2)
+        check(len(cv.find_all()) == n_pool, "vue iso: d'autres pages reutilisent le pool (aucun element de plus)", f"{n_pool} -> {len(cv.find_all())}")
+        view.update(snaps[2], True, set(), 5.3)
+        CountCanvas.n_coords = CountCanvas.n_config = 0
+        view.update(snaps[2], True, set(), 5.4)
+        check(CountCanvas.n_coords <= 20 and CountCanvas.n_config <= 20,
+              "vue iso: sans changement de statut, seuls la ligne du present et le voile sont touches",
+              f"coords {CountCanvas.n_coords}, itemconfigure {CountCanvas.n_config}")
+        view.update(snaps[0], True, set(), 6.0)
+        CountCanvas.n_coords = CountCanvas.n_config = 0
+        view.update(snaps[0], True, {"kick"}, 6.1)               # masquer une piste ne touche que ses cellules
+        check(0 < CountCanvas.n_coords + CountCanvas.n_config < 400, "vue iso: masquer un instrument ne retouche que ses cellules",
+              f"coords {CountCanvas.n_coords}, itemconfigure {CountCanvas.n_config}")
+        view.update(snaps[0], True, set(), 6.2)
+
+        # survol : la raison d'un effet, le detail d'une frappe
+        fx_key = next((k for k in view._hov if k[0] == "fx" and k[2] == "ripple"), None)
+        kick_key = next((k for k in view._hov if k[0] == "ins" and k[2] == "kick"), None)
+        if fx_key is not None:
+            fx, fy, _t = view._hov[fx_key]
+            check(view.hover(fx, fy) == "ripple : kick fort", "vue iso: le survol d'un effet rend sa raison", str(view.hover(fx, fy)))
+        else:
+            check(False, "vue iso: un effet de la page est survolable", str(list(view._hov)[:5]))
+        if kick_key is not None:
+            kx, ky, _t = view._hov[kick_key]
+            check("kick" in (view.hover(kx, ky) or ""), "vue iso: le survol d'une frappe rend son detail", str(view.hover(kx, ky)))
+        else:
+            check(False, "vue iso: une frappe de la page est survolable")
+        check(view.hover(-50, -50) is None, "vue iso: rien sous le pointeur -> pas de bulle")
+
+        # angle : bornes et rien hors du canvas, au pire (tout plein, toutes les pistes, voile plein, pas du bord)
+        view.set_angle(10)
+        a_low = view.angle
+        view.set_angle(99)
+        check((a_low, view.angle) == (18, 45), "vue iso: l'angle est borne a 18..45", f"{a_low}, {view.angle}")
+        worst = dict(snaps[0])
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(64) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 31, 63) for t in br.TRACKS]
+        worst["veil"] = [("build", 1.0)] * 64
+        worst["cursor"] = 63.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            for ang in (18, 30, 45):
+                cv.configure(width=size[0], height=size[1])
+                root.update()
+                view.set_angle(ang)
+                view.layout(*size)
+                view.update(worst, True, set(), 7.0)
+                bad = []
+                for i in cv.find_all():
+                    if cv.type(i) == "window" or cv.itemcget(i, "state") == "hidden":
+                        continue
+                    c = cv.coords(i)
+                    for x, y in zip(c[0::2], c[1::2]):
+                        if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                            bad.append((cv.type(i), round(x), round(y)))
+                            break
+                check(not bad, f"vue iso: angle {ang}, canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+    finally:
+        root.destroy()
+
+
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
     import math as _m
@@ -14159,7 +14278,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
@@ -14178,7 +14297,7 @@ GROUPES = {
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
-            "check_manager", "check_gui", "check_brain_gui"),
+            "check_manager", "check_gui", "check_brain_gui", "check_brain_iso"),
 }
 
 

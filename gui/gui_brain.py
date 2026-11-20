@@ -14,6 +14,7 @@ Cout : `tick` (ordonnanceur, ~20 Hz) ne fait rien quand le panneau n'est pas vis
 """
 from __future__ import annotations
 
+import math
 import re
 import time
 import tkinter as tk
@@ -146,7 +147,362 @@ class FreeView:
         return best
 
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# Vue isometrique : la page (64 pas) en relief, le temps part de devant
+# ---------------------------------------------------------------------------------------------------------------------------
+
+ISO_R = 4.2                                    # largeur d'une rangee d'instrument (pas = 1 unite)
+ISO_A0 = 5.2                                   # echelle de reference de la maquette (z en pixels a cette echelle)
+ISO_X_MIN, ISO_X_MAX = -67.0, 53.5             # etendue horizontale (x - y) en unites, textes compris
+ISO_S_MAX = 114.5                              # etendue verticale maximale (x + y) en unites
+ISO_FADE_S = 0.35                              # fondu des fantomes en debut de page
+ISO_ANGLE = (18, 45)
+ISO_MAX_CAUSES = 96
+ISO_PAGE = core_brain.PAGE_STEPS
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    return int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+
+
+def blend(fg: str, alpha: float, bg: str) -> str:
+    """`fg` a l'opacite `alpha` sur le fond `bg` (le canvas Tk n'a pas d'alpha : on melange vers la couleur du fond)."""
+    a = max(0.0, min(1.0, alpha))
+    f, b = _rgb(fg), _rgb(bg)
+    return "#%02x%02x%02x" % tuple(round(b[i] + (f[i] - b[i]) * a) for i in range(3))
+
+
+def shade(color: str, k: float) -> str:
+    r, g, b = _rgb(color)
+    return "#%02x%02x%02x" % (round(r * k), round(g * k), round(b * k))
+
+
+class _IsoCell:
+    """Elements d'une case : 3 polygones et 3 lignes reutilises selon le mode (pilier, fil de fer, croix)."""
+    __slots__ = ("polys", "lines", "mode", "sig", "pt")
+
+    def __init__(self, polys, lines) -> None:
+        self.polys, self.lines, self.mode, self.sig, self.pt = polys, lines, None, None, None
+
+
+class IsoView:
+    """Page en 3D isometrique. Les elements du canvas sont tous crees a la construction, dans l'ordre de profondeur (du fond vers l'avant),
+    puis reutilises : `update` ne touche que les cases dont le statut a change, la bande des phases, le voile, les pointilles des causes et
+    le plan du present. Pas d'alpha sous Tk : les couleurs sont melangees vers le fond de la phase (`blend`) ; le plan du present utilise un
+    stipple."""
+
+    angle = 30                                 # retenu d'une creation de la vue a l'autre
+
+    def __init__(self, canvas: tk.Canvas) -> None:
+        self.canvas = canvas
+        self.w = self.h = 1
+        self.geo = 0
+        self._compute(1, 1)
+        self._last = None
+        self._hov: dict = {}
+        self._fx_sig: dict = {}
+        self._cause_sig = None
+        self._veil_sig = None
+        self._veil_on = False
+        self._hid_sig = None
+        self._plane_bg = None
+        cv = canvas
+        R = ISO_R
+        # fond : grilles (statiques), bande des phases
+        self._grid = []
+        for lo, hi in ((0, 3), (4, 12)):
+            for j in range(lo, hi + 1):
+                self._grid.append((cv.create_line(0, 0, 0, 0, fill="#1c2236"), (j * R, 0, j * R, 64)))
+            for i in range(65):
+                col = "#3a4170" if i % 16 == 0 else "#222943" if i % 4 == 0 else "#161b2c"
+                self._grid.append((cv.create_line(0, 0, 0, 0, fill=col), (lo * R, 64 - i, hi * R, 64 - i)))
+        self._bands = [cv.create_polygon(0, 0, 0, 0, 0, 0, 0, 0, fill="", outline="") for _ in range(ISO_PAGE)]
+        self._band_sig = [None] * ISO_PAGE
+        self._labels = []
+        for j in range(4):
+            self._labels.append((cv.create_text(0, 0, text=f"bar {j + 1}", fill=DIM, font=FONT_SMALL, anchor="e"), -2.2, 64 - (j * 16 + 8)))
+        for j, r in enumerate(core_brain.INSTRUMENTS):
+            self._labels.append((cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL), j * R + R / 2, 66.2))
+        self._track_labels = {}
+        for k, r in enumerate(core_brain.TRACKS):
+            it = cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL)
+            self._labels.append((it, (4 + k) * R + R / 2, 66.2))
+            self._track_labels[r] = it
+        # cases : instruments (3 x 64) et effets (8 x 64), creees triees par profondeur (x + y croissant : le fond d'abord)
+        order = []
+        for i in range(ISO_PAGE):
+            for j, r in enumerate(core_brain.INSTRUMENTS):
+                order.append((j * R + 63 - i, 0, "ins", i, r))
+            for k, r in enumerate(core_brain.TRACKS):
+                order.append(((4 + k) * R + 63 - i, 1, "fx", i, r))
+        order.sort(key=lambda o: (o[0], o[1]))
+        self._ins: dict = {}
+        self._fxc: dict = {}
+        for _k, _o, kind, i, r in order:
+            polys = [cv.create_polygon(0, 0, 0, 0, 0, 0, 0, 0, state="hidden", fill="", outline="") for _ in range(3)]
+            lines = [] if kind == "fx" else [cv.create_line(0, 0, 0, 0, state="hidden") for _ in range(3)]
+            (self._ins if kind == "ins" else self._fxc)[(i, r)] = _IsoCell(polys, lines)
+        # voile, causes, present
+        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(8)]
+        self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3)) for _ in range(ISO_MAX_CAUSES)]
+        self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(ISO_MAX_CAUSES)]
+        self._plane = cv.create_polygon(0, 0, 0, 0, 0, 0, 0, 0, fill="#ffffff", stipple="gray12", outline="")
+        self._edge = cv.create_line(0, 0, 0, 0, fill="#e0e0e0", width=1.5)
+        # curseur d'angle (fenetre du canvas, en bas a gauche : zone vide de l'isometrique)
+        self._scale = None
+        old = getattr(canvas, "_iso_scale", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+        try:
+            sc = tk.Scale(canvas, from_=ISO_ANGLE[0], to=ISO_ANGLE[1], orient="horizontal", length=96, width=8, sliderlength=12,
+                          showvalue=True, label="angle", font=FONT_SMALL, bg=PANEL_BG, fg=MUTED, troughcolor=BTN_BG, bd=0,
+                          highlightthickness=0, activebackground=BTN_BG)
+            sc.set(type(self).angle)
+            sc.configure(command=lambda v: self.set_angle(int(float(v))))
+            self._scale_win = canvas.create_window(4, 4, window=sc, anchor="sw")
+            canvas._iso_scale = self._scale = sc
+        except tk.TclError:
+            self._scale = None
+
+    # ---- geometrie
+    def _compute(self, w: int, h: int) -> None:
+        t = math.tan(math.radians(self.angle))
+        a = min((w - 40.0) / (ISO_X_MAX - ISO_X_MIN), (h - 18.0) / ((ISO_S_MAX + 1.4) * t + 60.0 / ISO_A0))
+        self.a = a = max(0.5, a)
+        self.b = a * t
+        self.zs = a / ISO_A0
+        self.ox = 20.0 - ISO_X_MIN * a
+        self.oy = 8.0 + 1.4 * self.b + 60.0 * self.zs
+
+    def P(self, x: float, y: float, z: float = 0.0) -> tuple[float, float]:
+        return self.ox + (x - y) * self.a, self.oy + (x + y) * self.b - z * self.zs
+
+    def set_angle(self, angle) -> None:
+        angle = max(ISO_ANGLE[0], min(ISO_ANGLE[1], int(angle)))
+        type(self).angle = angle
+        if self._scale is not None and int(self._scale.get()) != angle:
+            self._scale.set(angle)
+        self._regeo()
+        if self._last is not None:
+            self.update(*self._last)
+
+    def _regeo(self) -> None:
+        self._compute(self.w, self.h)
+        self.geo += 1
+        cv, P = self.canvas, self.P
+        for it, (x1, y1, x2, y2) in self._grid:
+            cv.coords(it, *P(x1, y1), *P(x2, y2))
+        for it, x, y in self._labels:
+            cv.coords(it, *P(x, y))
+        if self._scale is not None:
+            cv.coords(self._scale_win, 4, self.h - 4)
+
+    def layout(self, w: int, h: int) -> None:
+        self.w, self.h = max(1, w), max(1, h)
+        self._regeo()
+
+    # ---- formes
+    def _box(self, polys, x, y, w, d, h, col, alpha, bg, outline=False) -> tuple[float, float]:
+        cv, P = self.canvas, self.P
+        right = [*P(x + w, y), *P(x + w, y + d), *P(x + w, y + d, h), *P(x + w, y, h)]
+        left = [*P(x, y + d), *P(x + w, y + d), *P(x + w, y + d, h), *P(x, y + d, h)]
+        top = [*P(x, y, h), *P(x + w, y, h), *P(x + w, y + d, h), *P(x, y + d, h)]
+        for it, pts, fill in ((polys[0], right, blend(shade(col, 0.55), alpha, bg)), (polys[1], left, blend(shade(col, 0.35), alpha, bg)),
+                              (polys[2], top, blend(col, alpha, bg))):
+            cv.coords(it, *pts)
+            cv.itemconfigure(it, fill=fill, outline="#ffffff" if (outline and it == polys[2]) else "", state="normal")
+        return self.P(x + w / 2, y + d / 2, h)
+
+    def _wire(self, cell: _IsoCell, x, y, w, d, h, col) -> tuple[float, float]:
+        cv, P = self.canvas, self.P
+        cv.coords(cell.polys[2], *P(x, y, h), *P(x + w, y, h), *P(x + w, y + d, h), *P(x, y + d, h))
+        cv.itemconfigure(cell.polys[2], fill="", outline=col, state="normal")
+        for it, (cx, cy) in zip(cell.lines, ((x + w, y), (x + w, y + d), (x, y + d))):
+            cv.coords(it, *P(cx, cy), *P(cx, cy, h))
+            cv.itemconfigure(it, fill=col, state="normal")
+        return P(x + w / 2, y + d / 2, h)
+
+    def _cross(self, cell: _IsoCell, x0, y0, col) -> tuple[float, float]:
+        cv, P = self.canvas, self.P
+        R = ISO_R
+        cv.coords(cell.lines[0], *P(x0 + R * 0.2, y0 + 0.2), *P(x0 + R * 0.8, y0 + 0.8))
+        cv.coords(cell.lines[1], *P(x0 + R * 0.8, y0 + 0.2), *P(x0 + R * 0.2, y0 + 0.8))
+        for it in cell.lines[:2]:
+            cv.itemconfigure(it, fill=col, width=1.2, state="normal")
+        return P(x0 + R * 0.5, y0 + 0.5)
+
+    def _mode(self, cell: _IsoCell, mode) -> None:
+        """Change le mode d'une case : cache d'abord tous ses elements (seulement quand le mode change)."""
+        if cell.mode == mode:
+            return
+        cv = self.canvas
+        for it in cell.polys + cell.lines:
+            cv.itemconfigure(it, state="hidden")
+        cell.mode = mode
+
+    def _clear(self, key, cell: _IsoCell) -> None:
+        self._mode(cell, None)
+        cell.pt = None
+        self._hov.pop(key, None)
+
+    # ---- mise a jour
+    def update(self, snap: dict, causes: bool, hidden: set, now: float) -> None:
+        self._last = (snap, causes, hidden, now)
+        cv = self.canvas
+        header = snap.get("header") or {}
+        bg = tint(header.get("phase"))
+        cursor = float(snap.get("cursor", 0.0))
+        cur = int(cursor)
+        bpm = header.get("bpm")
+        step_s = 60.0 / bpm / core_brain.STEPS_PER_BEAT if bpm else 0.125
+        fade = min(1.0, cursor * step_s / ISO_FADE_S)
+        fadeq = 1.0 if fade >= 1.0 else round(fade, 1)
+        gsig = (bg, self.geo)
+        R, C = ISO_R, core_brain.COLORS
+        rows = core_brain.INSTRUMENTS
+        # instruments : seules les cases dont le statut a change
+        for i, row, v, p, status in snap.get("cells", ()):
+            cell = self._ins.get((i, row))
+            if cell is None:
+                continue
+            if status is None or row in hidden:
+                sig = None
+            elif status == "ghost":
+                sig = (status, round(p, 2), fadeq, gsig)
+            elif status == "miss":
+                sig = (status, round(p, 2), gsig)
+            else:
+                sig = (status, round(v, 2), round(p, 2), gsig)
+            if sig == cell.sig:
+                continue
+            cell.sig = sig
+            key = ("ins", i, row)
+            if sig is None:
+                self._clear(key, cell)
+                continue
+            x0, y0, name = rows.index(row) * R, 63 - i, core_brain.label(row)
+            if status in ("real", "surprise"):
+                self._mode(cell, "box")
+                pt = self._box(cell.polys, x0 + R * 0.12, y0 + 0.12, R * 0.76, 0.76, 5 + 22 * v, C[row], 0.45 + 0.55 * v, bg, status == "surprise")
+                tip = f"{name} {round(v * 100)} % · predit {round(p * 100)} % · " + ("surprise" if status == "surprise" else "realise")
+            elif status == "miss":
+                self._mode(cell, "cross")
+                pt = self._cross(cell, x0, y0, blend(MISS_FG, 0.8, bg))
+                tip = f"{name} predit {round(p * 100)} % · manque"
+            else:
+                self._mode(cell, "wire")
+                pt = self._wire(cell, x0 + R * 0.12, y0 + 0.12, R * 0.76, 0.76, 5 + 22 * p * 0.85, blend(C[row], (0.2 + 0.6 * p) * fade, bg))
+                tip = f"{name} attendu a {round(p * 100)} %"
+            cell.pt = pt if status in ("real", "surprise") else None
+            self._hov[key] = (pt[0], pt[1], tip)
+        # effets
+        active: dict = {}
+        for i, track, strength, reason, cause in snap.get("fx", ()):
+            if track in hidden or (i, track) not in self._fxc:
+                continue
+            active[(i, track)] = (strength, reason, cause)
+        for key in [k for k in self._fx_sig if k not in active or self._fx_sig[k][2] != gsig]:
+            if key not in active:
+                self._clear(("fx",) + key, self._fxc[key])
+                del self._fx_sig[key]
+        fx_pts = {}
+        for (i, track), (strength, reason, cause) in active.items():
+            cell = self._fxc[(i, track)]
+            sig = (round(strength, 2), reason, gsig)
+            if self._fx_sig.get((i, track)) != sig:
+                self._fx_sig[(i, track)] = sig
+                self._mode(cell, "box")
+                x0, y0, col = (4 + core_brain.TRACKS.index(track)) * R, 63 - i, C[track]
+                s = max(0.0, min(1.0, float(strength)))
+                if track == "strobe":
+                    cell.pt = self._box(cell.polys, x0 + R * 0.3, y0 + 0.2, R * 0.4, 0.6, 56 if reason.startswith("drop") else 34 * s, col, 0.9, bg)
+                elif track == "scene":
+                    cell.pt = self._box(cell.polys, x0 + R * 0.1, y0 - 2 + 0.1, R * 0.8, 2.8, 3, col, 0.85, bg)
+                elif track == "foudre":
+                    cell.pt = self._box(cell.polys, x0 + R * 0.3, y0 + 0.25, R * 0.4, 0.5, 38, col, 0.85, bg)
+                else:
+                    cell.pt = self._box(cell.polys, x0 + R * 0.2, y0 + 0.2, R * 0.6, 0.6, 3 + 14 * s, col, 0.5 + 0.5 * s, bg)
+                self._hov[("fx", i, track)] = (cell.pt[0], cell.pt[1], reason)
+            fx_pts[(i, track)] = cell.pt
+        # pastilles de pistes masquees
+        hsig = (tuple(sorted(hidden)),)
+        if hsig != self._hid_sig:
+            self._hid_sig = hsig
+            for r, it in self._track_labels.items():
+                cv.itemconfigure(it, fill=DIM if r in hidden else C[r])
+        # bande des phases (une teinte par pas ; plus vive pour le passe)
+        steps = snap.get("phase_steps") or ()
+        for i in range(min(ISO_PAGE, len(steps))):
+            sig = (steps[i], i <= cur, gsig)
+            if sig == self._band_sig[i]:
+                continue
+            self._band_sig[i] = sig
+            cv.coords(self._bands[i], *self.P(-1.4, 63 - i), *self.P(-0.4, 63 - i), *self.P(-0.4, 64 - i), *self.P(-1.4, 64 - i))
+            cv.itemconfigure(self._bands[i], fill=blend(PHASE_COLORS.get(steps[i], DIM), 0.85 if i <= cur else 0.18, bg))
+        # pointilles des causes : de la frappe a l'effet
+        links = []
+        if causes:
+            for (i, track), (_s, _r, cause) in active.items():
+                src = self._ins.get((i, cause)) if cause else None
+                if src is not None and src.pt is not None and fx_pts.get((i, track)) is not None:
+                    links.append((src.pt, fx_pts[(i, track)], C[track]))
+        csig = (tuple(links[:ISO_MAX_CAUSES]), bg)
+        if csig != self._cause_sig:
+            n_old = 0 if self._cause_sig is None else len(self._cause_sig[0])
+            self._cause_sig = csig
+            for n, (p, q, col) in enumerate(csig[0]):
+                cv.coords(self._cause_lines[n], p[0], p[1], q[0], q[1])
+                cv.itemconfigure(self._cause_lines[n], fill=blend(col, 0.55, bg), state="normal")
+                cv.coords(self._cause_dots[n], q[0] - 1.8, q[1] - 1.8, q[0] + 1.8, q[1] + 1.8)
+                cv.itemconfigure(self._cause_dots[n], fill=col, state="normal")
+            for n in range(len(csig[0]), n_old):
+                cv.itemconfigure(self._cause_lines[n], state="hidden")
+                cv.itemconfigure(self._cause_dots[n], state="hidden")
+        # voile : 8 lignes de relief au-dessus des pistes d'effets
+        veil = snap.get("veil") or ()
+        top = min(cur + 1, ISO_PAGE, len(veil) - 1) if veil else -1
+        on = top >= 1 and any(veil[i][1] > 0 for i in range(top + 1))
+        if on:
+            kind = veil[min(cur, len(veil) - 1)][0]
+            col = "#ffffff" if kind == "drop" else PHASE_COLORS["build"]
+            if self._veil_sig != (col, bg):
+                self._veil_sig = (col, bg)
+                for k, it in enumerate(self._veil):
+                    cv.itemconfigure(it, fill=blend(col, 0.55 - k * 0.04, bg))
+            for k, it in enumerate(self._veil):
+                x0 = (4 + k) * R + R * 0.5
+                pts = []
+                for i in range(top + 1):
+                    z = veil[i][1] * 40 * (0.55 + 0.45 * math.sin(i * 0.32 + k * 0.8 + now * 2.2))
+                    pts.extend(self.P(x0, 64 - i, z))
+                cv.coords(it, *pts)
+                if not self._veil_on:
+                    cv.itemconfigure(it, state="normal")
+        elif self._veil_on:
+            for it in self._veil:
+                cv.itemconfigure(it, state="hidden")
+        self._veil_on = on
+        # plan du present
+        yy = 64 - cursor
+        P = self.P
+        cv.coords(self._plane, *P(-1.4, yy), *P(12 * R, yy), *P(12 * R, yy, 60), *P(-1.4, yy, 60))
+        cv.coords(self._edge, *P(-1.4, yy), *P(12 * R, yy))
+
+    # ---- survol
+    def hover(self, x: float, y: float) -> str | None:
+        best, dist = None, 12.0
+        for px, py, text in self._hov.values():
+            d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+            if d < dist:
+                best, dist = text, d
+        return best
+
+
 VIEWS: dict = {name: BlankView for name in VIEW_NAMES}
+VIEWS["iso"] = IsoView
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
