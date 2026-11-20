@@ -19,6 +19,7 @@ import time
 import tkinter as tk
 
 from core import brain as core_brain
+from core import params as core_params
 from core import sessionlog
 
 PANEL_BG = "#07080c"
@@ -45,6 +46,7 @@ WINDOW_TITLE = "casual-overlay - cerveau"
 FONT = ("Consolas", 9)
 FONT_HEAD = ("Consolas", 10)
 FONT_SMALL = ("Consolas", 8)
+GEOM_SAVE_MS = 500                             # geometrie de la fenetre detachee sauvee 0,5 s apres le dernier deplacement
 GEOM_RE = re.compile(r"^\d+x\d+([+-]-?\d+[+-]-?\d+)?$")
 
 
@@ -350,6 +352,9 @@ class BrainPanel:
         self._docked = None
         self._float = None
         self._wrap = None
+        self._slot = None                                       # emplacement de droite du panneau etendu (largeur reservee)
+        self.slot_w = 0
+        self._geom_job = None                                   # sauvegarde de la geometrie, 0,5 s apres le dernier deplacement
         self.toggle_button = None
         self._errors: set = set()
 
@@ -382,14 +387,8 @@ class BrainPanel:
                 return surf.frame
         except tk.TclError:
             pass
-        width = BOX_W
-        try:
-            width = max(BOX_W, int(self.master_box().winfo_reqwidth()))
-        except Exception:
-            pass
         surf = self._docked = _Surface(self, self.parent, floating=False)
-        surf.frame.configure(width=width)
-        surf.frame.pack_propagate(False)
+        surf.frame.pack_propagate(False)                         # sa largeur est celle de l'emplacement reserve (slot)
         return surf.frame
 
     def _brain_shown(self) -> bool:
@@ -400,6 +399,32 @@ class BrainPanel:
         self._wrap = wrap
         return self._show_in_wrap()
 
+    def _slot_frame(self) -> tk.Frame:
+        """Emplacement de droite (parent persistant), de largeur RESERVEE : la plus grande vue pour l'espace VJ et le cerveau, qui ne fait
+        que grandir (comme `layout["live_w"]`) ; la liste a gauche garde sa largeur quand on bascule (regle « rien ne bouge »)."""
+        slot = self._slot
+        try:
+            if slot is not None and slot.winfo_exists():
+                return slot
+        except tk.TclError:
+            pass
+        slot = self._slot = tk.Frame(self.parent, bg=PANEL_BG, width=self.slot_w)
+        slot.pack_propagate(False)
+        return slot
+
+    def sync_slot(self) -> None:
+        """Agrandit l'emplacement si l'espace VJ demande plus (ses onglets se remplissent a la premiere selection). Jamais plus petit."""
+        slot = self._slot
+        try:
+            if slot is None or not slot.winfo_exists() or not slot.winfo_ismapped():
+                return
+            want = max(self.slot_w, int(self.master_box().winfo_reqwidth()), BOX_W)
+            if want != self.slot_w:
+                self.slot_w = want
+                slot.configure(width=want)
+        except tk.TclError:
+            pass
+
     def _show_in_wrap(self):
         wrap = self._wrap
         if wrap is None:
@@ -407,17 +432,31 @@ class BrainPanel:
         try:
             if not wrap.winfo_exists():
                 return None
-            shown = self.box() if self._brain_shown() else self.master_box()
-            other = self.master_box() if self._brain_shown() else (self._docked.frame if self._docked is not None else None)
+            mbox = self.master_box()
+            self.slot_w = max(self.slot_w, int(mbox.winfo_reqwidth()), BOX_W)
+            slot = self._slot_frame()
+            if int(slot.cget("width")) != self.slot_w:
+                slot.configure(width=self.slot_w)
+            if slot.winfo_manager() != "pack" or str(slot.pack_info().get("in")) != str(wrap):
+                slaves = [w for w in wrap.pack_slaves() if w is not slot]
+                if slaves:
+                    slot.pack(in_=wrap, side="right", fill="y", before=slaves[0])
+                else:
+                    slot.pack(in_=wrap, side="right", fill="y")
+            shown = self.box() if self._brain_shown() else mbox
+            other = mbox if self._brain_shown() else (self._docked.frame if self._docked is not None else None)
             if other is not None and other.winfo_manager():
                 other.pack_forget()
-            slaves = [w for w in wrap.pack_slaves() if w is not shown]
-            if shown.winfo_manager() != "pack" or str(shown.pack_info().get("in")) != str(wrap):
-                if slaves:
-                    shown.pack(in_=wrap, side="right", fill="y", before=slaves[0])
-                else:
-                    shown.pack(in_=wrap, side="right", fill="y")
-            shown.lift()                                        # un esclave place « dans » un autre doit le surplomber
+            if shown.winfo_manager() != "pack" or str(shown.pack_info().get("in")) != str(slot):
+                shown.pack(in_=slot, fill="both", expand=True)
+            # un esclave place « dans » un autre doit le surplomber : l'emplacement, la boite, puis ce qui est pose dans la boite
+            # (l'onglet Affichage, enfant de la barre pose dans un onglet de l'espace VJ, restait cache sinon)
+            slot.lift()
+            shown.lift()
+            inside = str(shown) + "."
+            for w in self.parent.winfo_children():
+                if w not in (slot, shown) and w.winfo_manager() == "pack" and str(w.pack_info().get("in")).startswith(inside):
+                    w.lift()
         except tk.TclError:
             return None
         self._refresh_toggle()
@@ -464,6 +503,7 @@ class BrainPanel:
             return
         self.params["brain_on"] = 0.0 if self._flag("brain_on") else 1.0
         self._show_in_wrap()
+        self._persist()
         self.tick()
 
     def show_vj(self) -> None:
@@ -471,6 +511,7 @@ class BrainPanel:
         if self._brain_shown():
             self.params["brain_on"] = 0.0
             self._show_in_wrap()
+            self._persist()
 
     def detach(self) -> None:
         if self.detached:
@@ -492,7 +533,7 @@ class BrainPanel:
         top.protocol("WM_DELETE_WINDOW", self.dock)
         top.bind("<Configure>", self._on_configure, add="+")
         self.params["brain_detached"] = 1.0
-        self.apply_topmost()
+        self.apply_topmost()                                     # (sauve l'etat)
         self._show_in_wrap()                                     # l'espace VJ reprend sa place
         self.tick()
 
@@ -500,7 +541,20 @@ class BrainPanel:
         top = self.window
         if top is None or event.widget is not top:
             return
+        if self._geom_job is not None:                           # un deplacement emet des dizaines d'evenements : on attend la fin
+            try:
+                self.root.after_cancel(self._geom_job)
+            except tk.TclError:
+                pass
+        try:
+            self._geom_job = self.root.after(GEOM_SAVE_MS, self._geom_settled)
+        except tk.TclError:
+            self._geom_job = None
+
+    def _geom_settled(self) -> None:
+        self._geom_job = None
         self._remember_geom()
+        self._persist()
 
     def _remember_geom(self) -> None:
         try:
@@ -520,12 +574,23 @@ class BrainPanel:
                 self.window.attributes("-topmost", bool(on))
         except tk.TclError:
             pass
+        self._persist()
+
+    def _persist(self) -> None:
+        """Etat du panneau sauve tout seul (brain_ui.json), sans attendre P : retrouve au prochain lancement."""
+        core_params.save_brain_ui(self.params)
 
     def dock(self) -> None:
         """Raccroche le cerveau (fermer la fenetre detachee) ; il reprend sa place dans le panneau etendu."""
         top = self.window
         if top is None:
             return
+        if self._geom_job is not None:
+            try:
+                self.root.after_cancel(self._geom_job)
+            except tk.TclError:
+                pass
+            self._geom_job = None
         self._remember_geom()
         self.window, self._float = None, None
         try:
@@ -535,6 +600,7 @@ class BrainPanel:
         self.params["brain_detached"] = 0.0
         self.params["brain_on"] = 1.0
         self._show_in_wrap()
+        self._persist()
         self.tick()
 
     def set_view(self, name: str) -> None:
@@ -542,6 +608,7 @@ class BrainPanel:
             return
         self.view_name = name
         self.params["brain_view"] = name
+        self._persist()
         for surf in (self._docked, self._float):
             if surf is not None:
                 surf.view_key = None                             # la vue est recreee au prochain dessin
@@ -551,6 +618,7 @@ class BrainPanel:
     def toggle_causes(self) -> None:
         self.causes = not self.causes
         self.params["brain_causes"] = 1.0 if self.causes else 0.0
+        self._persist()
         self._restyle()
         self.tick()
 
@@ -564,6 +632,7 @@ class BrainPanel:
         else:
             self.hidden.add(name)
         self.params["brain_hidden"] = ",".join(n for n in core_brain.TRACKS if n in self.hidden)
+        self._persist()
         self._restyle()
         self.tick()
 
@@ -707,6 +776,7 @@ def install(ns) -> BrainPanel:
     every = getattr(ns, "ui_every", None)
     if every is not None:
         every("brain", TICK_MS, panel.tick)
+        every("brain_slot", 300, panel.sync_slot)
     if panel._flag("brain_detached"):
         try:
             ns.root.after(200, panel.detach)

@@ -12632,6 +12632,36 @@ def check_brain_pure() -> None:
     log2 = kick_log()
     snap2 = br.snapshot(log2, 20.0)
     check(abs(snap2["header"]["build_s"] - 4.0) < 1e-9, "cerveau: duree de la montee en cours", str(snap2["header"]["build_s"]))
+    # etat du panneau (brain_*) : portee « device » (ni presets, ni scenes, ni memoires de masters), sauve tout seul dans brain_ui.json
+    import json
+    import tempfile as _tf
+    from core import params_schema as _ps
+    bkeys = [k for k in gl.DEFAULT_PARAMS if k.startswith("brain_")]
+    cur = dict(json.loads(json.dumps(gl.DEFAULT_PARAMS)), brain_on=1.0, brain_view="sismo")
+    check(len(bkeys) == 7 and not set(bkeys) & set(_ps.MEMORY_KEYS) and set(bkeys) <= set(_ps.OVERLAY_PRESET_EXCLUDED)
+          and not any(k.startswith("brain_") for k in gl.capture_overlay(cur)) and not any(k.startswith("brain_") for k in gl.capture_background(cur)),
+          "cerveau: reglages brain_* hors memoires de masters, presets et scenes", str(bkeys))
+    real_paths = (core_params.PARAMS_PATH, getattr(core_params, "BRAIN_UI_PATH", None))
+    tmpd = Path(_tf.mkdtemp(prefix="casual_overlay_brain_ui_"))
+    try:
+        core_params.PARAMS_PATH, core_params.BRAIN_UI_PATH = tmpd / "gl_params.json", tmpd / "brain_ui.json"
+        core_params.save_brain_ui(dict(cur, brain_detached=1.0, brain_geom="700x500+10+20", master=0.3))
+        written = json.loads((tmpd / "brain_ui.json").read_text(encoding="utf-8"))
+        back = core_params.load_params()                    # relance : pas de gl_params.json (P jamais presse)
+        ok = (set(written) == set(bkeys) and back["brain_detached"] == 1.0 and back["brain_geom"] == "700x500+10+20"
+              and back["brain_view"] == "sismo" and back["master"] == gl.DEFAULT_PARAMS["master"])
+        detail = str((sorted(written), back["brain_geom"]))
+        (tmpd / "brain_ui.json").write_text("{pas du json", encoding="utf-8")
+        broken = core_params.load_params()
+        ok_broken = broken["brain_view"] == gl.DEFAULT_PARAMS["brain_view"]
+    except Exception as exc:              # noqa: BLE001
+        ok, ok_broken, detail = False, False, repr(exc)
+    finally:
+        core_params.PARAMS_PATH = real_paths[0]
+        if real_paths[1] is not None:
+            core_params.BRAIN_UI_PATH = real_paths[1]
+    check(ok, "cerveau: etat du panneau sauve tout seul (brain_ui.json, seulement brain_*) et relu au lancement", detail)
+    check(ok_broken, "cerveau: brain_ui.json illisible -> valeurs par defaut, pas d'erreur")
     # phase_since = 0,0 : le fil audio n'a encore vu aucun changement de phase -> duree inconnue (pas « depuis le debut de l'horloge »)
     lg0 = br.BrainLog()
     lg0.set_status(phase="groove", phase_since=0.0, grid=(0.0, 0.5))
@@ -12931,15 +12961,20 @@ def check_brain_gui() -> None:
         btn = bp.toggle_button
         out["start"] = (mbox.winfo_ismapped(), btn is not None and btn.cget("text"))
         w_vj = btn.winfo_width()
+        body = c["scenes"]["panel_state"]["body"]
+        list_w = [body.winfo_width()]
         bp.toggle()
         pump()
+        list_w.append(body.winfo_width())
         btn = bp.toggle_button
         box = bp.box()
         out["brain_on"] = (box.winfo_ismapped(), mbox.winfo_ismapped(), btn.cget("text"), btn.winfo_width() == w_vj,
-                           float(s.params["brain_on"]), str(box.pack_info().get("in")) == str(bp._wrap))
+                           float(s.params["brain_on"]), str(box.pack_info().get("in")) == str(bp._slot) and str(bp._slot.pack_info().get("in")) == str(bp._wrap))
         w_detach = bp._docked.detach_btn.winfo_width()
         bp.toggle()
         pump()
+        list_w.append(body.winfo_width())
+        out["list_w"] = list_w
         out["vj_back"] = (mbox.winfo_ismapped(), box.winfo_ismapped(), bp.toggle_button.cget("text"), bp.toggle_button.winfo_width() == w_vj)
         Counting.calls = 0
         for _ in range(3):
@@ -12974,8 +13009,15 @@ def check_brain_gui() -> None:
                            float(s.params["brain_detached"]), bp._float.detach_btn.winfo_width() == w_detach, bp.toggle_button.cget("text"))
         top.geometry("700x500+60+60")
         pump(10)
+        t_end = time.monotonic() + 0.8                          # sauvegarde 0,5 s apres le dernier deplacement
+        while time.monotonic() < t_end:
+            pump(1)
+        rl = core_params.load_params()                          # relance simulee, sans avoir presse P
+        out["relaunch_open"] = (float(rl["brain_detached"]), str(rl["brain_geom"]).split("+")[0])
         root.tk.call(top.protocol("WM_DELETE_WINDOW"))         # comme la croix de la fenetre
         pump()
+        rl = core_params.load_params()
+        out["relaunch_closed"] = (float(rl["brain_detached"]), float(rl["brain_on"]), str(rl["brain_geom"]).split("+")[0])
         out["closed"] = (not top.winfo_exists(), bp.window is None, str(s.params["brain_geom"]), float(s.params["brain_detached"]),
                          box.winfo_ismapped(), not mbox.winfo_ismapped())
         bp.detach()
@@ -13039,12 +13081,15 @@ def check_brain_gui() -> None:
     _scenes.SCENES_PATH, _scenes.MASTERS_PATH = _tmp / "scenes.json", _tmp / "masters.json"
     core_autosave.AUTOSAVE_PATH = _tmp / "autosave.json"
     live.preset_store.path = _tmp / "live_presets.json"
+    real_brain_ui = core_params.BRAIN_UI_PATH
+    core_params.BRAIN_UI_PATH = _tmp / "brain_ui.json"
     slog.error, gui_brain.BrainPanel._tick = spy_error, spy_tick
     gui_brain.VIEWS.update(iso=Counting, mandala=Raising)
     try:
         gl_gui.run_gui(s, live, on_ready)
     finally:
         slog.error, gui_brain.BrainPanel._tick = real_error, real_tick
+        core_params.BRAIN_UI_PATH = real_brain_ui
         gui_brain.VIEWS.clear()
         gui_brain.VIEWS.update(saved_views)
         (core_params.OVERLAY_PRESETS_PATH, core_params.BACKGROUND_PRESETS_PATH, _scenes.SCENES_PATH, _scenes.MASTERS_PATH,
@@ -13054,6 +13099,12 @@ def check_brain_gui() -> None:
     b = out.get("brain_on", ())
     check(b[:5] == (True, False, "VJ", True, 1.0) and b[5], "cerveau GUI: la bascule montre le cerveau a la place de l'espace VJ, bouton de meme largeur", str(b))
     check(out.get("vj_back") == (True, False, "brain", True), "cerveau GUI: la bascule inverse remet l'espace VJ", str(out.get("vj_back")))
+    lw = out.get("list_w", [])
+    check(len(lw) == 3 and len(set(lw)) == 1 and lw[0] > 1, "cerveau GUI: la liste du panneau etendu garde sa largeur (VJ -> brain -> VJ)", str(lw))
+    check(out.get("relaunch_open") == (1.0, "700x500"), "cerveau GUI: relance sans P -> fenetre detachee et sa geometrie retrouvees (brain_ui.json)",
+          str(out.get("relaunch_open")))
+    check(out.get("relaunch_closed") == (0.0, 1.0, "700x500"), "cerveau GUI: relance apres fermeture -> raccroche, geometrie gardee",
+          str(out.get("relaunch_closed")))
     check(out.get("hidden_calls") == 0, "cerveau GUI: panneau cache -> la vue n'est jamais dessinee", str(out.get("hidden_calls")))
     check(out.get("shown") == (True, "Counting"), "cerveau GUI: panneau visible -> la vue choisie est dessinee", str(out.get("shown")))
     check(out.get("rec") == (True, True), "cerveau GUI: pendant un REC, plus aucun redessin et la mention « fige pendant le REC »", str(out.get("rec")))
