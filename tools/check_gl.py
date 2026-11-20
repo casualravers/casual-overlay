@@ -12461,6 +12461,101 @@ def check_reaction_pure() -> None:
           "file des germes : bornee a 32, les plus recents gardes")
 
 
+def check_brain_pure() -> None:
+    print("Cerveau : journal partage et placement sur la grille (core/brain.py)")
+    import threading as _th
+    from core import brain as br
+
+    # ---- placement sur la grille (pas de double croche)
+    check(br.step_of(10.0 + 0.5 * 1.75, 10.0, 0.5) == 7, "cerveau: 1,75 temps = 7 pas", str(br.step_of(10.875, 10.0, 0.5)))
+    check(br.step_of(9.9, 10.0, 0.5) == -1, "cerveau: juste avant l'ancre = pas -1", str(br.step_of(9.9, 10.0, 0.5)))
+    check(abs(br.step_time(8, 10.0, 0.5) - 11.0) < 1e-9, "cerveau: pas 8 = 2 temps apres l'ancre", str(br.step_time(8, 10.0, 0.5)))
+    check(br.STEPS_PER_BEAT == 4 and br.STEPS_PER_BAR == 16 and br.PAGE_STEPS == 64 and br.PHRASE_STEPS == 128,
+          "cerveau: constantes de la grille")
+    check(br.INSTRUMENTS == ("kick", "snare", "hihat") and "strobe" in br.TRACKS and "scene" in br.TRACKS and len(br.TRACKS) == 8,
+          "cerveau: instruments et pistes")
+    check(br.LABELS.get("hihat") == "hi-hat" and br.COLORS.get("kick") == "#ff3d7f" and br.COLORS.get("hihat") == "#ffd23f",
+          "cerveau: libelles et couleurs", str(br.COLORS))
+    check(all(name in br.COLORS for name in br.INSTRUMENTS + br.TRACKS), "cerveau: une couleur par instrument et par piste")
+
+    # ---- journal : ordre chronologique, famille inconnue, purges
+    log = br.BrainLog()
+    log.publish("kick", t=2.0)
+    log.publish("snare", t=1.0, reason="caisse claire")
+    log.publish("strobe", t=1.5, cause="kick")
+    log.publish("bidon", t=1.7)
+    ev = log.events()
+    check([e.t for e in ev] == [1.0, 1.5, 2.0], "cerveau: events() trie par date", str([e.t for e in ev]))
+    check(all(e.family != "bidon" for e in ev) and len(ev) == 3, "cerveau: famille inconnue ignoree", str([e.family for e in ev]))
+    check(ev[1].cause == "kick" and ev[0].reason == "caisse claire", "cerveau: cause et raison gardees")
+    check([e.t for e in log.events(since=1.5)] == [1.5, 2.0], "cerveau: events(since) filtre", str([e.t for e in log.events(since=1.5)]))
+    log.publish("phase", t=3.0)
+    log.publish("build", t=3.1)
+    log.publish("drop", t=3.2)
+    check(len(log.events()) == 6, "cerveau: phase / build / drop acceptes", str(len(log.events())))
+
+    log = br.BrainLog()
+    for i in range(br.MAX_EVENTS + 10):
+        log.publish("hihat", t=i * 0.001)
+    check(len(log.events()) == br.MAX_EVENTS, "cerveau: au plus MAX_EVENTS evenements", str(len(log.events())))
+    check(abs(log.events()[0].t - 10 * 0.001) < 1e-9, "cerveau: les plus vieux sont jetes", str(log.events()[0].t))
+
+    log = br.BrainLog()
+    log.publish("kick", t=0.0)
+    log.publish("kick", t=50.0)
+    log.publish("kick", t=br.KEEP_S + 1.0)
+    check([e.t for e in log.events()] == [50.0, br.KEEP_S + 1.0], "cerveau: evenement plus vieux que KEEP_S purge",
+          str([e.t for e in log.events()]))
+
+    # ---- horloge : date murale convertie en temps du son
+    log = br.BrainLog()
+    check(log.to_audio(3.0) == 3.0, "cerveau: sans horloge, to_audio rend la date murale", str(log.to_audio(3.0)))
+    log.set_clock(100.0, 5.0)
+    log.publish("strobe", wall=6.0)
+    check(abs(log.events()[-1].t - 101.0) < 1e-9, "cerveau: wall converti par le decalage", str(log.events()[-1].t))
+
+    # ---- concurrence : 4 fils qui publient, un qui lit
+    log = br.BrainLog()
+    errors: list[str] = []
+    stop = _th.Event()
+
+    def writer(k):
+        try:
+            for i in range(2000):
+                log.publish(br.INSTRUMENTS[k % 3], t=(k * 2000 + i) * 0.001)          # 8 s en tout : seul MAX_EVENTS purge
+        except Exception as exc:          # noqa: BLE001
+            errors.append(repr(exc))
+
+    def reader():
+        try:
+            while not stop.is_set():
+                log.events()
+                log.status()
+        except Exception as exc:          # noqa: BLE001
+            errors.append(repr(exc))
+
+    rd = _th.Thread(target=reader)
+    rd.start()
+    ws = [_th.Thread(target=writer, args=(k,)) for k in range(4)]
+    for w in ws:
+        w.start()
+    for w in ws:
+        w.join()
+    stop.set()
+    rd.join()
+    check(not errors, "cerveau: publications et lectures paralleles sans exception", "; ".join(errors[:3]))
+    check(len(log.events()) == br.MAX_EVENTS, "cerveau: MAX_EVENTS apres 4 x 2000 publications", str(len(log.events())))
+
+    # ---- etat : copie
+    log = br.BrainLog()
+    log.set_status(bpm=128.0, grid=(10.0, 0.5), gauges={"kick": 0.5})
+    st = log.status()
+    st["bpm"] = 1.0
+    st["gauges"]["kick"] = 9.0
+    st2 = log.status()
+    check(st2["bpm"] == 128.0 and st2["gauges"]["kick"] == 0.5 and st2["grid"] == (10.0, 0.5), "cerveau: status() rend une copie", str(st2))
+
+
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
     import math as _m
@@ -13484,12 +13579,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
