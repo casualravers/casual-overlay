@@ -9,8 +9,8 @@ projeter l'instantane (`core.brain.snapshot`) ; interface d'une vue : `View(canv
 now)`, `.hover(x, y) -> str | None` ; registre `VIEWS` (les vraies vues s'y inscrivent, `BlankView` en attendant). Sans grille
 (`snap["grid"] is False`) : `FreeView`, frise en secondes, quelle que soit la vue choisie.
 
-Cout : `tick` (ordonnanceur, ~20 Hz) ne fait rien quand le panneau n'est pas visible ; pendant un REC il dessine une derniere fois
-« fige pendant le REC » puis plus rien. Libelles en anglais, raisons en francais (contraintes du plan). Reglages de salle `brain_*`.
+Cout : `tick` (ordonnanceur, ~20 Hz ; mandala, sismo et tunnel a 10 Hz, `VIEW_TICK_MS`) ne fait rien quand le panneau n'est pas
+visible ; pendant un REC il dessine une derniere fois « fige pendant le REC » puis plus rien. Budget mesure : docs/fonctions/cerveau.md. Libelles en anglais, raisons en francais (contraintes du plan). Reglages de salle `brain_*`.
 """
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ DEFAULT_TINT = (7, 8, 12)
 
 VIEW_NAMES = ("iso", "mandala", "tunnel", "sismo")
 TICK_MS = 50                                   # ~20 Hz
+VIEW_TICK_MS = {"tunnel": 100, "sismo": 100, "mandala": 100}   # cadence propre a une vue (budget mesure, tache 9 : 10 Hz ; iso reste a 20 Hz)
 BOX_W = 640                                    # largeur du panneau raccroche quand l'espace VJ n'en donne pas (pixels)
 TOGGLE_W = 6                                   # largeur fixe (caracteres) des boutons dont le texte change
 DETACH_W = 7
@@ -98,6 +99,8 @@ class FreeView:
         self._lines = {r: canvas.create_line(0, 0, 0, 0, fill="#161a28") for r in self.ROWS}
         self._dots = [canvas.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(self.POOL)]
         self._used = 0
+        self._fill: list = [None] * self.POOL                     # famille dont chaque point porte la couleur
+        self._hid_sig = None
         self._note = canvas.create_text(0, 0, text=NO_TEMPO, fill=MUTED, font=FONT_HEAD, anchor="ne")
         self._points: list = []                                    # (x, y, texte) des points montres, pour le survol
 
@@ -130,12 +133,17 @@ class FreeView:
         for i, (x, y, fam, strength, age) in enumerate(pts):
             r = 2.0 + 3.0 * max(0.0, min(1.0, float(strength)))
             cv.coords(self._dots[i], x - r, y - r, x + r, y + r)
-            cv.itemconfigure(self._dots[i], fill=core_brain.COLORS.get(fam, FG), state="normal")
+            if self._fill[i] != fam or i >= self._used:            # couleur et etat seulement quand ils changent (budget, tache 9)
+                self._fill[i] = fam
+                cv.itemconfigure(self._dots[i], fill=core_brain.COLORS.get(fam, FG), state="normal")
         for i in range(len(pts), self._used):
             cv.itemconfigure(self._dots[i], state="hidden")
         self._used = len(pts)
-        for r in self.ROWS:
-            cv.itemconfigure(self._labels[r], fill=DIM if r in hidden else core_brain.COLORS.get(r, FG))
+        hsig = tuple(sorted(hidden))
+        if hsig != self._hid_sig:
+            self._hid_sig = hsig
+            for r in self.ROWS:
+                cv.itemconfigure(self._labels[r], fill=DIM if r in hidden else core_brain.COLORS.get(r, FG))
         self._points = [(x, y, f"{core_brain.label(fam)} il y a {age:.1f} s") for x, y, fam, _s, age in pts]
 
     def hover(self, x: float, y: float) -> str | None:
@@ -531,6 +539,8 @@ class SismoView:
         self.left, self.dx = SIS_LEFT, 8.8
         self._hov: dict = {}
         self._wave_sig = None
+        self._wave_pts: dict = {}                      # instrument -> ((valeurs, geometrie), points de l'onde)
+        self._wave_bg: dict = {}                       # instrument -> fond des couleurs posees
         self._mark_sig = None
         self._band_sig = None
         self._hid_sig = None
@@ -606,12 +616,17 @@ class SismoView:
             sts[(i, row)] = (status, float(v), float(p))
         return val, sts
 
-    def _wave(self, row: str, vals: list, c: float, bg: str) -> None:
-        cv = self.canvas
+    def _wave_points(self, row: str, vals: tuple) -> list:
+        """Points de l'onde (x, y a plat) aux 64 x SIS_Q + 1 positions de la page : calcules une fois par (valeurs, geometrie), puis
+        seulement coupes au curseur (budget, tache 9 : l'onde etait recalculee a chaque rafraichissement)."""
+        key = (vals, self.geo)
+        hit = self._wave_pts.get(row)
+        if hit is not None and hit[0] == key:
+            return hit[1]
         base = self.Y(SIS_BASES[core_brain.INSTRUMENTS.index(row)])
         amp, dec = SIS_AMP * self.sy, SIS_DECAY[row]
-
-        def y_at(q: float) -> float:
+        flat: list = []
+        for q in range(64 * SIS_Q + 1):
             x = q / SIS_Q
             si = min(63, int(x))
             e = 0.0
@@ -621,20 +636,23 @@ class SismoView:
                     break
                 if vals[i] > 0:
                     e = max(e, vals[i] * math.exp(-(x - i) * dec))
-            return base - amp * e * math.sin(q * 2.3)
+            flat += [self.X(x), base - amp * e * math.sin(q * 2.3)]
+        self._wave_pts[row] = (key, flat)
+        return flat
 
-        qc = c * SIS_Q
-        past = [(q / SIS_Q, y_at(q)) for q in range(0, int(qc) + 1)]
-        past.append((c, y_at(qc)))
-        fut = [(c, y_at(qc))] + [(q / SIS_Q, y_at(q)) for q in range(int(qc) + 1, 64 * SIS_Q + 1)]
-        for it, pts, alpha in ((self._past[row], past, 0.95), (self._fut[row], fut, 0.3)):
-            if len(pts) < 2:
-                pts = pts * 2
-            flat = []
-            for x, y in pts:
-                flat += [self.X(x), y]
-            cv.coords(it, *flat)
-            cv.itemconfigure(it, fill=blend(core_brain.COLORS[row], alpha, bg))
+    def _wave(self, row: str, vals: tuple, c: float, bg: str) -> None:
+        """Passe (plein) jusqu'au curseur `c` (multiple de 1 / SIS_Q), futur predit (pointilles) ensuite."""
+        cv = self.canvas
+        flat = self._wave_points(row, vals)
+        iq = max(0, min(64 * SIS_Q, int(round(c * SIS_Q))))
+        past = flat[:2 * iq + 2]
+        fut = flat[2 * iq:]
+        for it, pts in ((self._past[row], past), (self._fut[row], fut)):
+            cv.coords(it, *(pts if len(pts) >= 4 else pts * 2))
+        if self._wave_bg.get(row) != bg:
+            self._wave_bg[row] = bg
+            cv.itemconfigure(self._past[row], fill=blend(core_brain.COLORS[row], 0.95, bg))
+            cv.itemconfigure(self._fut[row], fill=blend(core_brain.COLORS[row], 0.3, bg))
 
     def _hide_from(self, key: str, items: list, n: int) -> None:
         for it in items[n:self._used[key]]:
@@ -668,12 +686,13 @@ class SismoView:
                 cv.itemconfigure(self._past[r], state=st)
                 cv.itemconfigure(self._fut[r], state=st)
         # ondes
-        wsig = (tuple(tuple(round(v, 2) for v in val[r]) for r in ins), cq, gsig, hsig)
+        rvals = {r: tuple(round(v, 2) for v in val[r]) for r in ins}
+        wsig = (tuple(rvals[r] for r in ins), cq, gsig, hsig)
         if wsig != self._wave_sig:
             self._wave_sig = wsig
             for r in ins:
                 if r not in hidden:
-                    self._wave(r, val[r], cq, bg)
+                    self._wave(r, rvals[r], cq, bg)
         # bande des phases
         steps = snap.get("phase_steps") or ()
         bsig = (tuple(steps), cur, gsig)
@@ -1160,6 +1179,9 @@ class MandalaView:
 # ---------------------------------------------------------------------------------------------------------------------------
 
 TUN_STEPS = core_brain.PAGE_STEPS + 4          # pas de l'instantane glissant (les 4 premiers sont le passe)
+TUN_DEPTH = 32                                 # pas montres devant le present (budget mesure, tache 9 : 64 -> 32, soit 2 mesures)
+TUN_SHOWN = 4 + TUN_DEPTH                      # pas dessines : les 4 du passe + la profondeur
+TUN_VEIL_LINES = 1                             # lignes du voile au plafond (budget mesure, tache 9 : 5 -> 1, voile simplifie)
 TUN_F = 300.0                                  # focale de la maquette (a l'echelle 1 : canvas 640 x 340)
 TUN_W0, TUN_H0 = 640.0, 340.0
 TUN_LANES = (-1.2, -0.4, 0.4, 1.2)             # bords des 3 voies (une par instrument) sur le sol
@@ -1176,7 +1198,8 @@ def _tun_z(d: float) -> float:
 
 class TunnelView:
     """Couloir en perspective : sol a 3 voies (kick, snare, hi-hat), 4 pistes d'effets sur chaque mur, voile au plafond, cadre blanc du
-    present. Tout bouge a chaque image : le pool est cree a la construction (68 pas x 3 voies, 68 x 8 panneaux, nervures, voile, causes),
+    present. Tout bouge a chaque image : le pool est cree a la construction (TUN_SHOWN = 36 pas x 3 voies, 36 x 8 panneaux, nervures,
+    voile, causes ; l'instantane glissant en a 68, seuls les 4 du passe et les TUN_DEPTH = 32 suivants sont dessines, budget tache 9),
     `update` ne fait que des `coords` sur les elements visibles et des `itemconfigure` quand le statut ou la couleur d'une case change.
     Ordre de creation = ordre de dessin (du fond vers l'avant, comme la maquette). Pas d'alpha sous Tk : melange vers le fond (`blend`) ;
     l'eclair du strobe eclaircit un rectangle de fond (pas de voile blanc au-dessus de la scene). Les points sont ramenes dans le canvas."""
@@ -1190,25 +1213,25 @@ class TunnelView:
         self._used = {"causes": 0}
         self._csig: dict = {}
         self._psig: dict = {}
-        self._rib_sig: list = [None] * TUN_STEPS
-        self._strip_sig: list = [None] * TUN_STEPS
-        self._veil_sig: list = [None] * 5
+        self._rib_sig: list = [None] * TUN_SHOWN
+        self._strip_sig: list = [None] * TUN_SHOWN
+        self._veil_sig: list = [None] * TUN_VEIL_LINES
         self._cause_sig: list = [None] * TUN_MAX_CAUSES
         self._bg_fill = None
         self._hid_sig = None
         cv = canvas
         ins, trk = core_brain.INSTRUMENTS, core_brain.TRACKS
         self._bgrect = cv.create_rectangle(0, 0, 1, 1, fill=tint(None), outline="")
-        self._ribs: list = [None] * TUN_STEPS
-        self._strips: list = [None] * TUN_STEPS
-        for i in range(TUN_STEPS - 1, -1, -1):
+        self._ribs: list = [None] * TUN_SHOWN
+        self._strips: list = [None] * TUN_SHOWN
+        for i in range(TUN_SHOWN - 1, -1, -1):
             self._ribs[i] = tuple(cv.create_line(0, 0, 0, 0, fill="#161b2c", state="hidden") for _ in range(4))
             self._strips[i] = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
         self._long = [cv.create_line(0, 0, 0, 0, fill="#1c2236") for _ in range(4)] + \
                      [cv.create_line(0, 0, 0, 0, fill="#222943") for _ in range(4)]
         self._cells: dict = {}
         self._panels: dict = {}
-        for i in range(TUN_STEPS - 1, -1, -1):
+        for i in range(TUN_SHOWN - 1, -1, -1):
             for kk in range(len(ins)):
                 top = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
                 front = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
@@ -1217,7 +1240,7 @@ class TunnelView:
                 self._cells[(i, kk)] = (top, front, m1, m2)
             for k in range(len(trk)):
                 self._panels[(i, k)] = cv.create_polygon(*([0, 0] * 4), fill="", outline="", state="hidden")
-        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden", width=1) for _ in range(5)]
+        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden", width=1) for _ in range(TUN_VEIL_LINES)]
         self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3), width=1) for _ in range(TUN_MAX_CAUSES)]
         self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(TUN_MAX_CAUSES)]
         self._frame = cv.create_line(*([0, 0] * 5), fill="#e6e6e6", width=1.5)
@@ -1243,7 +1266,7 @@ class TunnelView:
         self.min_z = 99.0
         cv, pj = self.canvas, self._pj
         cv.coords(self._bgrect, 0, 0, self.w, self.h)
-        zn, zf = _tun_z(-4), _tun_z(64)
+        zn, zf = _tun_z(-4), _tun_z(TUN_DEPTH)
         for q, x in enumerate(TUN_LANES):
             cv.coords(self._long[q], *pj(x, TUN_YF, zn), *pj(x, TUN_YF, zf))
         for q, (x, y) in enumerate(((-TUN_XW, TUN_YF), (TUN_XW, TUN_YF), (-TUN_XW, TUN_YC), (TUN_XW, TUN_YC))):
@@ -1258,8 +1281,8 @@ class TunnelView:
             side, row = (-TUN_XW if k < 4 else TUN_XW), k % 4
             x, y = pj(side, 0.9 - row * 0.48 - 0.23, zp)
             cv.coords(it, x + (6 if k < 4 else -6), y)
-        self._rib_sig = [None] * TUN_STEPS
-        self._strip_sig = [None] * TUN_STEPS
+        self._rib_sig = [None] * TUN_SHOWN
+        self._strip_sig = [None] * TUN_SHOWN
 
     @staticmethod
     def _cell_text(row: str, status: str, v: float, p: float) -> str:
@@ -1321,10 +1344,10 @@ class TunnelView:
             for k, r in enumerate(trk):
                 cv.itemconfigure(self._trk_labels[k], fill=DIM if r in hidden else C[r])
         # profondeurs par pas : (z du debut, z de la fin, z du milieu de la case) ; None = trop pres de la camera, pas dessine
-        alive = [_tun_z(i - cursor + 0.1) >= TUN_ZMIN and _tun_z(i - cursor) >= TUN_ZMIN for i in range(TUN_STEPS)]
+        alive = [_tun_z(i - cursor + 0.1) >= TUN_ZMIN and _tun_z(i - cursor) >= TUN_ZMIN for i in range(TUN_SHOWN)]
         hov: list = []
         # nervures et bande des phases (le long du mur gauche)
-        for i in range(TUN_STEPS):
+        for i in range(TUN_SHOWN):
             ribs, strip = self._ribs[i], self._strips[i]
             if not alive[i]:
                 if self._rib_sig[i] is not None:
@@ -1356,7 +1379,7 @@ class TunnelView:
         # cases (3 voies)
         new: dict = {}
         for i, row, v, p, status in snap.get("cells", ()):
-            if row not in ins or not 0 <= i < TUN_STEPS or status is None or row in hidden or not alive[i]:
+            if row not in ins or not 0 <= i < TUN_SHOWN or status is None or row in hidden or not alive[i]:
                 continue
             new[(i, ins.index(row))] = (status, round(float(v), 2), round(float(p), 2), bg)
         for key in [k for k in self._csig if k not in new]:
@@ -1380,22 +1403,22 @@ class TunnelView:
                 self._quad(front, pj(x0, TUN_YF, z0), pj(x1, TUN_YF, z0), pj(x1, y1, z0), pj(x0, y1, z0))
                 px, py = pj((x0 + x1) / 2, y1, zm)
                 cellpt[key] = (px, py)
-                hov.append((px, py, self._cell_text(ins[kk], status, v, p)))
+                hov.append((px, py, (ins[kk], status, v, p)))
             elif status == "miss":
                 cv.coords(m1, *pj(x0 + 0.1, TUN_YF, z0), *pj(x1 - 0.1, TUN_YF, z1))
                 cv.coords(m2, *pj(x1 - 0.1, TUN_YF, z0), *pj(x0 + 0.1, TUN_YF, z1))
                 px, py = pj((x0 + x1) / 2, TUN_YF, zm)
-                hov.append((px, py, self._cell_text(ins[kk], status, v, p)))
+                hov.append((px, py, (ins[kk], status, v, p)))
             else:
                 y1 = TUN_YF + 0.15 + 0.45 * p * 0.85
                 self._quad(top, pj(x0, y1, z0), pj(x1, y1, z0), pj(x1, y1, z1), pj(x0, y1, z1))
                 self._quad(front, pj(x0, TUN_YF, z0), pj(x1, TUN_YF, z0), pj(x1, y1, z0), pj(x0, y1, z0))
                 px, py = pj((x0 + x1) / 2, y1, z0)
-                hov.append((px, py, self._cell_text(ins[kk], status, v, p)))
+                hov.append((px, py, (ins[kk], status, v, p)))
         # panneaux d'effets sur les murs : un seul par (pas, piste), le plus fort ; seuls le passe et le present sont poses
         active: dict = {}
         for i, track, strength, reason, cause in snap.get("fx", ()):
-            if track in hidden or track not in trk or not 0 <= i <= cur or i >= TUN_STEPS or not alive[i]:
+            if track in hidden or track not in trk or not 0 <= i <= cur or i >= TUN_SHOWN or not alive[i]:
                 continue
             key = (i, trk.index(track))
             old = active.get(key)
@@ -1428,7 +1451,7 @@ class TunnelView:
         if fill != self._bg_fill:
             self._bg_fill = fill
             cv.itemconfigure(self._bgrect, fill=fill)
-        # voile : cinq lignes au plafond, du present vers le passe
+        # voile : TUN_VEIL_LINES lignes au plafond (une seule depuis la mesure du budget), du present vers le passe
         vtop = min(cur + 1, len(veil) - 1)
         vcol = None
         if veil and vtop >= 0:
@@ -1437,7 +1460,7 @@ class TunnelView:
             pts: list = []
             any_on = False
             if vcol is not None:
-                x = -1.2 + q * 0.6
+                x = 0.0 if TUN_VEIL_LINES == 1 else -1.2 + q * 2.4 / (TUN_VEIL_LINES - 1)
                 for i in range(vtop, -1, -1):
                     z = _tun_z(i - cursor)
                     if z < 0.35:
@@ -1489,6 +1512,8 @@ class TunnelView:
             d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
             if d < dist:
                 best, dist = text, d
+        if isinstance(best, tuple):                              # texte d'une case forme au survol seulement (budget, tache 9)
+            best = self._cell_text(*best)
         return best
 
 
@@ -1707,6 +1732,7 @@ class BrainPanel:
         self._geom_job = None                                   # sauvegarde de la geometrie, 0,5 s apres le dernier deplacement
         self.toggle_button = None
         self._errors: set = set()
+        self._sched_at = -1e9                                   # dernier rafraichissement demande par l'ordonnanceur
 
     @property
     def params(self) -> dict:
@@ -1994,6 +2020,16 @@ class BrainPanel:
             return self._docked
         return None
 
+    def scheduled_tick(self) -> None:
+        """Appel de l'ordonnanceur (toutes les TICK_MS) : la vue choisie peut demander une cadence plus lente (VIEW_TICK_MS). Les
+        actions (bascule, vue, causes...) appellent `tick` directement et redessinent tout de suite."""
+        period = VIEW_TICK_MS.get(self.view_name, TICK_MS) / 1000.0
+        t = time.perf_counter()
+        if t - self._sched_at < period - 0.01:                   # marge : l'ordonnanceur peut arriver un peu en avance
+            return
+        self._sched_at = t
+        self.tick()
+
     def tick(self, now: float | None = None) -> None:
         """Rafraichissement (ordonnanceur de la fenetre, ~20 Hz) : rien si le panneau n'est pas visible, fige pendant un REC."""
         if self.STATS is not None:
@@ -2077,7 +2113,7 @@ class BrainPanel:
         if not snap.get("grid"):
             line1.append(("   " + NO_TEMPO, MUTED))
         elif self.view_name == "tunnel":
-            line1.append(("   4 next bars predicted", FG))
+            line1.append((f"   {TUN_DEPTH // core_brain.STEPS_PER_BAR} next bars predicted", FG))
         elif h.get("page") is not None:
             line1.append((f"   page {h['page']} \u00b7 bar {h['bar']}/4", FG))
         ok, miss, sur = snap.get("score", (0, 0, 0))
@@ -2125,7 +2161,7 @@ def install(ns) -> BrainPanel:
     panel = BrainPanel(ns)
     every = getattr(ns, "ui_every", None)
     if every is not None:
-        every("brain", TICK_MS, panel.tick)
+        every("brain", TICK_MS, panel.scheduled_tick)
         every("brain_slot", 300, panel.sync_slot)
     if panel._flag("brain_detached"):
         try:

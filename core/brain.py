@@ -197,9 +197,11 @@ def _hit(hits: dict, step: int, row: str) -> float:
 def predict_page(hits: dict, step: int, row: str, page_first: int) -> float:
     """Probabilite d'une frappe au pas `step` d'une page : 0,6 x part des 4 mesures de la page precedente ayant frappe au meme pas
     de mesure + 0,4 x frappe au meme pas une phrase (128 pas) plus tot."""
-    s = (step - page_first) % STEPS_PER_BAR
-    recent = sum(_hit(hits, page_first - PAGE_STEPS + STEPS_PER_BAR * k + s, row) for k in range(4)) / 4
-    return RECENT_W * recent + PHRASE_W * _hit(hits, step - PHRASE_STEPS, row)
+    g = hits.get                                           # deroule a la main : appele ~400 fois par rafraichissement du panneau
+    b = page_first - PAGE_STEPS + (step - page_first) % STEPS_PER_BAR
+    recent = ((g((b, row), 0.0) > 0) + (g((b + STEPS_PER_BAR, row), 0.0) > 0) + (g((b + 2 * STEPS_PER_BAR, row), 0.0) > 0)
+              + (g((b + 3 * STEPS_PER_BAR, row), 0.0) > 0)) / 4
+    return RECENT_W * recent + PHRASE_W * (1.0 if g((step - PHRASE_STEPS, row), 0.0) > 0 else 0.0)
 
 
 def predict_rolling(hits: dict, step: int, row: str, cur: int) -> float:
@@ -264,6 +266,10 @@ class _Structure:
         return self
 
 
+def _t_of(e: Event) -> float:
+    return e.t
+
+
 def _clock(t: float, now: float) -> str:
     """Heure locale (hh:mm:ss) d'un evenement date dans l'horloge du son."""
     return time.strftime("%H:%M:%S", time.localtime(time.time() - (now - t)))
@@ -306,7 +312,13 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
         "next_scene_s": None if next_at is None else next_at - now_wall,
         "build_s": None if struct_now.build_t0 is None else now - struct_now.build_t0,
     }
-    feed = [(_clock(e.t, now), e.family, e.reason, e.cause) for e in events if e.family in TRACKS and e.t <= now][-FEED_LINES:]
+    last: list[Event] = []                                 # les FEED_LINES derniers effets passes (l'heure n'est formatee que pour eux)
+    for e in reversed(events):
+        if e.family in TRACKS and e.t <= now:
+            last.append(e)
+            if len(last) >= FEED_LINES:
+                break
+    feed = [(_clock(e.t, now), e.family, e.reason, e.cause) for e in reversed(last)]
     snap = {
         "grid": False, "first": 0, "cursor": 0.0, "cells": [], "fx": [], "phase_steps": [], "veil": [],
         "score": (0, 0, 0), "header": header, "gauges": st.get("gauges", {}), "feed": feed,
@@ -329,14 +341,21 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
         page, bar = first // PAGE_STEPS + 1, min(4, (cur - first) // STEPS_PER_BAR + 1)
     header.update(page=page, bar=bar, cycles=cycle_left(cur // STEPS_PER_BEAT))
 
-    hits = hits_by_step(events, anchor, period)
+    # seules les frappes des pas regardes comptent (jusqu'a une phrase avant la page, marge d'un pas pour l'arrondi) : le journal
+    # garde 2 minutes, la prediction n'en lit que ~1 (budget du panneau, tache 9)
+    t_lo = step_time(first - PAGE_STEPS - PHRASE_STEPS - 1, anchor, period)
+    hits = hits_by_step(events[bisect.bisect_left(events, t_lo, key=_t_of):], anchor, period)
     cells = []
+    page_p: dict[tuple[int, str], float] = {}              # prediction de page deja calculee (reprise par le score)
     for i in range(n):
         step = first + i
         past = step <= cur
         for row in INSTRUMENTS:
             v = hits.get((step, row), 0.0)
-            p = predict_rolling(hits, step, row, cur) if rolling else predict_page(hits, step, row, first)
+            if rolling:
+                p = predict_rolling(hits, step, row, cur)
+            else:
+                p = page_p[(step, row)] = predict_page(hits, step, row, first)
             cells.append((i, row, v, p, status_of(v, p, past)))
 
     # score : toujours les pas deja passes de la page courante (prediction de page), que la vue soit glissante ou non
@@ -344,7 +363,10 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
     page_first = (cur // PAGE_STEPS) * PAGE_STEPS
     for step in range(page_first, cur + 1):
         for row in INSTRUMENTS:
-            s = status_of(hits.get((step, row), 0.0), predict_page(hits, step, row, page_first), True)
+            p = page_p.get((step, row))
+            if p is None:
+                p = predict_page(hits, step, row, page_first)
+            s = status_of(hits.get((step, row), 0.0), p, True)
             if s == "real":
                 ok += 1
             elif s == "miss":
@@ -353,7 +375,7 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
                 surprise += 1
 
     fx = []
-    for e in events:
+    for e in events[bisect.bisect_left(events, step_time(first - 1, anchor, period), key=_t_of):]:
         if e.family in TRACKS:
             i = step_of(e.t, anchor, period) - first
             if 0 <= i < n:

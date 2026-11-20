@@ -1156,6 +1156,8 @@ def check_gui() -> None:
     _scenes.MASTERS_PATH = _tmp_presets / "masters.json"
     real_autosave_path = core_autosave.AUTOSAVE_PATH
     core_autosave.AUTOSAVE_PATH = _tmp_presets / "autosave.json"
+    real_brain_ui_path = core_params.BRAIN_UI_PATH
+    core_params.BRAIN_UI_PATH = _tmp_presets / "brain_ui.json"                     # le panneau du cerveau sauve son etat tout seul
     live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
         import gui_splash
@@ -1163,6 +1165,7 @@ def check_gui() -> None:
         gl_gui.run_gui(s, live, on_ready, boot=boot)
     finally:
         core_autosave.AUTOSAVE_PATH = real_autosave_path
+        core_params.BRAIN_UI_PATH = real_brain_ui_path
         core_params.OVERLAY_PRESETS_PATH = real_presets_path
         core_params.BACKGROUND_PRESETS_PATH = real_bg_presets_path
         _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
@@ -4723,7 +4726,7 @@ def check_bugreport_cli() -> None:
           "Explorateur: chemin entre guillemets apres /select, (Bureau OneDrive avec espaces)", cmd)
 
 
-CLAUDE_FICHES = ("fond", "logo", "audio", "synchro", "strobe-foudre", "scenes-vj", "gui", "projection", "exploitation", "medias-externes", "outillage")
+CLAUDE_FICHES = ("fond", "logo", "audio", "synchro", "strobe-foudre", "scenes-vj", "gui", "projection", "exploitation", "medias-externes", "outillage", "cerveau")
 CLAUDE_MAX_ROOT_LINES = 300
 
 
@@ -4739,7 +4742,7 @@ def check_claude_md() -> None:
     fiches_dir = base / "docs" / "fonctions"
     present = sorted(p_.stem for p_ in fiches_dir.glob("*.md")) if fiches_dir.is_dir() else []
     missing = [f for f in CLAUDE_FICHES if f not in present]
-    check(not missing, "fiches: les 11 fiches par theme existent dans docs/fonctions/", str(missing))
+    check(not missing, "fiches: les 12 fiches par theme existent dans docs/fonctions/", str(missing))
     m_ = re.search(r"^## Fonctionnalites : index des fiches\n(.*?)(?=^## )", text, re.S | re.M)
     index_txt = m_.group(1) if m_ else ""                  # seule la section de l'index compte (une fiche citee ailleurs ne remplace pas sa ligne d'index)
     check(bool(index_txt), "index: la racine a une section « Fonctionnalites : index des fiches »")
@@ -9918,8 +9921,9 @@ def check_curve_modes() -> None:
 
 def check_params() -> None:
     print("Reglages (touche P)")
-    original = core_params.PARAMS_PATH
+    original = core_params.PARAMS_PATH, core_params.BRAIN_UI_PATH
     core_params.PARAMS_PATH = Path(tempfile.mkdtemp()) / "sous" / "gl_params.json"
+    core_params.BRAIN_UI_PATH = core_params.PARAMS_PATH.parent / "brain_ui.json"     # jamais l'etat du cerveau de l'utilisateur
     try:
         check(gl.load_params() == gl.DEFAULT_PARAMS, "sans fichier: valeurs par defaut")
         params = gl.load_params()
@@ -9931,7 +9935,7 @@ def check_params() -> None:
         core_params.PARAMS_PATH.write_text("{ pas du json", encoding="utf-8")
         check(gl.load_params() == gl.DEFAULT_PARAMS, "fichier corrompu: retour aux valeurs par defaut")
     finally:
-        core_params.PARAMS_PATH = original
+        core_params.PARAMS_PATH, core_params.BRAIN_UI_PATH = original
 
 
 def _plain_vj(vj: dict) -> dict:
@@ -13052,6 +13056,21 @@ def check_brain_gui() -> None:
         pump()
         out["free_back"] = type(bp.current).__name__
         out["timed"] = gl_gui.STATS.ops.get("brain.tick", [0])[0] > 0
+        # cadence par vue (budget, tache 9) : le tunnel a 10 Hz, les autres a 20 Hz
+        sched_calls: list = []
+        bp.tick = lambda now=None: sched_calls.append(bp.view_name)
+        saved_view = bp.view_name
+        try:
+            for name in ("tunnel", "iso"):
+                bp.view_name, bp._sched_at = name, -1e9
+                bp.scheduled_tick()
+                bp.scheduled_tick()                             # aussitot : trop tot pour les deux
+                time.sleep(0.06)
+                bp.scheduled_tick()                             # 60 ms plus tard : assez pour 20 Hz, pas pour 10 Hz
+        finally:
+            del bp.tick
+            bp.view_name = saved_view
+        out["cadence"] = (sched_calls.count("tunnel"), sched_calls.count("iso"))
         # panneau etendu replie : plus aucun dessin
         c["scenes"]["expand"](False)
         pump()
@@ -13121,6 +13140,7 @@ def check_brain_gui() -> None:
     check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille, frise libre « tempo non detecte »", str(out.get("free")))
     check(out.get("free_back") == "Counting", "cerveau GUI: la grille revient -> la vue choisie reprend", str(out.get("free_back")))
     check(out.get("timed") is True, "cerveau GUI: chaque tick est chronometre (brain.tick)")
+    check(out.get("cadence") == (1, 2), "cerveau GUI: cadence par vue (tunnel 10 Hz, iso 20 Hz)", str(out.get("cadence")))
     check(out.get("collapsed") is True, "cerveau GUI: panneau etendu replie -> plus aucun dessin")
 
 
@@ -13546,13 +13566,13 @@ def check_brain_tunnel() -> None:
             check(view.hover(fx[0], fx[1]) == "ripple : kick fort", "vue tunnel: le survol d'un effet rend sa raison", str(view.hover(fx[0], fx[1])))
         else:
             check(False, "vue tunnel: un effet est survolable", str(view._hov[:4]))
-        kk = next(((x, y, t) for x, y, t in view._hov if t.startswith("kick ")), None)
+        kk = next(((x, y, t) for x, y, t in view._hov if isinstance(t, tuple) and t[0] == "kick"), None)          # case : (rangee, statut, v, p), texte forme au survol
         check(kk is not None and "kick" in (view.hover(kk[0], kk[1]) or ""), "vue tunnel: le survol d'une case rend son detail", str(kk))
         check(view.hover(-50, -50) is None, "vue tunnel: rien sous le pointeur -> pas de bulle")
 
         # instrument masque : ses cases disparaissent
         view.update(snap, True, {"kick"}, 6.5)
-        check(not any(t.startswith("kick ") for _x, _y, t in view._hov), "vue tunnel: instrument masque -> plus de case kick survolable")
+        check(not any(isinstance(t, tuple) and t[0] == "kick" for _x, _y, t in view._hov), "vue tunnel: instrument masque -> plus de case kick survolable")
 
         worst = dict(snap)
         worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(68) for r in br.INSTRUMENTS]

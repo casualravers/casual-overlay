@@ -207,6 +207,7 @@ Le detail de chaque fonctionnalite (decisions, pieges, mesures, verifications) e
 - **Exploitation** ([docs/fonctions/exploitation.md](docs/fonctions/exploitation.md)) : panique, master des effets, tap tempo, journal de session, auto-sauvegarde, palette Ctrl+K, mode scene, aide et console.
 - **Medias externes** ([docs/fonctions/medias-externes.md](docs/fonctions/medias-externes.md)) : doodles du site, QR code, enregistrement video + audio (`core/recording.py`, `engine/recorder.py`), telecommande telephone.
 - **Outillage** ([docs/fonctions/outillage.md](docs/fonctions/outillage.md)) : diagnostic de demarrage, version portable, detail des verifications et de la CI, mesures du poste de dev, lanceur `start.bat`, hors POC.
+- **Cerveau** ([docs/fonctions/cerveau.md](docs/fonctions/cerveau.md)) : visualizer de ce que l'appli entend, predit et decide (issue #192) : journal `core/brain.py`, publications du moteur et de la GUI, panneau `gui/gui_brain.py` (vues iso / mandala / tunnel / sismo), prediction, budget mesure (`tools/mesure_cerveau.py`).
 
 **Regle de maintenance** : une nouvelle fonctionnalite ou un nouveau piege va dans la fiche de son theme ; ici, seulement une ligne dans l'index (ou un
 piege s'il touche plusieurs themes). Un nouveau theme = une nouvelle fiche + sa ligne. `check_gl.py` (`check_claude_md`, CI) : ce fichier fait au plus
