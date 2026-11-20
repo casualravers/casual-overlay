@@ -61,6 +61,7 @@ import gui_random
 import gui_drop
 import gui_sets
 import gui_vj
+import gui_brain
 import gui_colors
 import gui_gates
 from core import controls as core_controls
@@ -1166,6 +1167,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             set_expanded(False)
             return
         set_expanded(True)
+        brain_panel.show_vj()                               # l'onglet Affichage est dans l'espace VJ : il reprend la place du cerveau
         master_box()
         tabs = vj_ui.get("tabs")
         if tabs is None:
@@ -2231,7 +2233,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         current_index=current_index,
         dnd=dnd,
         duplicate_last_scene=duplicate_last_scene,
-        master_box=Late(lambda: master_box),
+        brain_panel=Late(lambda: brain_panel),
         media_clear=media_clear,
         move_entry_now=move_entry_now,
         move_entry_to=move_entry_to,
@@ -2335,6 +2337,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     detected_bpm = gui_vj_ctl.detected_bpm
     help_window = gui_vj_ctl.help_window
     master_box = gui_vj_ctl.master_box
+    # visualizer du cerveau (#192) : a la place de l'espace de controle global (bouton « brain / VJ »), ou dans une fenetre a part
+    brain_panel = gui_brain.install(types.SimpleNamespace(
+        Tooltip=Tooltip, STATS=STATS, master_box=master_box, root=root, s=s, scene_top=scene_top, ui_every=ui_every))
     record_history = gui_vj_ctl.record_history
     start_build = gui_vj_ctl.start_build
     rhythm_step = gui_vj_ctl.rhythm_step
@@ -2655,7 +2660,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
             "palette": palette_ctl, "stage": stage_ctl, "remote": remote_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
-            "image_box": image_box, "text_box": text_box, "font_var": font_var})
+            "image_box": image_box, "text_box": text_box, "font_var": font_var, "brain": brain_panel})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))
 

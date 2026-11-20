@@ -289,6 +289,8 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
     confidence = st.get("confidence")
     phase = st.get("phase") or struct_now.phase or None
     phase_since = st.get("phase_since")
+    if not phase_since:                                    # None, ou 0,0 publie par le fil audio avant le premier changement : inconnue
+        phase_since = None
     if phase_since is None:
         phase_since = struct_now.phase_t
     next_at = st.get("next_scene_at")                      # publie par le fil Tk : horloge murale

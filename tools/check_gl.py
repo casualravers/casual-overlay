@@ -12632,6 +12632,11 @@ def check_brain_pure() -> None:
     log2 = kick_log()
     snap2 = br.snapshot(log2, 20.0)
     check(abs(snap2["header"]["build_s"] - 4.0) < 1e-9, "cerveau: duree de la montee en cours", str(snap2["header"]["build_s"]))
+    # phase_since = 0,0 : le fil audio n'a encore vu aucun changement de phase -> duree inconnue (pas « depuis le debut de l'horloge »)
+    lg0 = br.BrainLog()
+    lg0.set_status(phase="groove", phase_since=0.0, grid=(0.0, 0.5))
+    h0 = br.snapshot(lg0, 300.0)["header"]
+    check(h0["phase"] == "groove" and h0["phase_s"] is None, "cerveau: phase_since 0,0 = duree de phase inconnue", str(h0["phase_s"]))
 
     # rolling (tunnel)
     snap = br.snapshot(log, 23.9, rolling=True)
@@ -12813,6 +12818,259 @@ def check_brain_engine() -> None:
         ok = False
         print("   ", repr(exc))
     check(ok, "cerveau: Session.brain est un BrainLog")
+
+
+def check_brain_gui() -> None:
+    """Cerveau (#192) : panneau Tk dans une vraie fenetre de reglages (comme check_gui) : bascule VJ / brain a la meme place, boutons a
+    largeur fixe, fenetre detachee (fermer = raccrocher, geometrie retenue), fige pendant le REC, rien quand il est cache, vue qui leve,
+    frise libre sans grille puis retour a la vue choisie."""
+    print("Cerveau : panneau (bascule VJ, fenetre detachee, REC, vues)")
+    try:
+        import tkinter as tk
+        probe = tk.Tk()
+        probe.destroy()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import copy
+    import queue
+    import tempfile as _tf
+    import threading
+    import traceback
+    from types import SimpleNamespace as NS
+
+    import gl_gui
+    import gui_brain
+    from core import brain as br
+    from core import scenes as _scenes
+    from core import sessionlog as slog
+
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    args = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
+    manager = NS(producer=None, restarts=0, status={}, args=copy.copy(args), suspended=False, resumed=[], reader=object())
+    manager.request_restart = lambda new_args: setattr(manager, "args", new_args)
+    manager.suspend = lambda: None
+    manager.resume = lambda new_args: None
+    audio = NS(synthetic=True, name="synthetique", analyzer=NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0}))
+    params = gl.load_params()
+    params.update(brain_on=0.0, brain_detached=0.0, brain_view="iso", brain_geom="", brain_hidden="", brain_causes=1.0)
+
+    class Proj:
+        def running(self):
+            return False
+
+        def start(self):
+            return "Projection ouverte en fenetre"
+
+        def stop(self, wait=0.0):
+            pass
+
+    log = br.BrainLog()
+    t0 = time.monotonic()
+    log.set_clock(t0, t0)                                    # horloge du son = horloge murale
+    log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=0.0)
+    for k in range(-8, 0):
+        log.publish("kick", 0.9, t=t0 + 0.5 * k)
+    log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 - 0.5)
+    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio, projection=Proj(),
+           commands=queue.SimpleQueue(), status={}, stop_event=threading.Event(), finished_event=threading.Event(), mode="live",
+           pysrc=None, mode_args={}, reader=manager.reader, brain=log, recording=NS(active=False))
+
+    class Counting:
+        calls = 0
+
+        def __init__(self, canvas):
+            self.canvas = canvas
+
+        def layout(self, w, h):
+            pass
+
+        def update(self, snap, causes, hidden, now):
+            Counting.calls += 1
+
+        def hover(self, x, y):
+            return "raison de test"
+
+    class Raising(Counting):
+        def update(self, snap, causes, hidden, now):
+            raise ValueError("vue cassee (test)")
+
+    out: dict = {"builds": 0}
+    logged: list = []
+    tick_errors: list = []
+    cb_errors: list = []
+    real_error, real_tick, saved_views = slog.error, gui_brain.BrainPanel._tick, dict(gui_brain.VIEWS)
+
+    def spy_error(message, exc=None):
+        logged.append((message, exc))
+        real_error(message, exc)
+
+    def spy_tick(self, now):
+        try:
+            return real_tick(self, now)
+        except Exception as exc:
+            tick_errors.append(repr(exc))
+            raise
+
+    def canvas_texts(cv):
+        return [cv.itemcget(i, "text") for i in cv.find_all() if cv.type(i) == "text"]
+
+    def steps(c) -> None:
+        root, bp = c["root"], c["brain"]
+
+        def pump(n=6):
+            for _ in range(n):
+                root.update()
+                time.sleep(0.02)
+        real_report = root.report_callback_exception
+        root.report_callback_exception = lambda *a: (cb_errors.append(repr(a[1])), real_report(*a))
+        root.geometry("1500x900")
+        c["scenes"]["expand"](True)
+        pump(12)
+        mbox = c["vj"]["master_box"]()
+        btn = bp.toggle_button
+        out["start"] = (mbox.winfo_ismapped(), btn is not None and btn.cget("text"))
+        w_vj = btn.winfo_width()
+        bp.toggle()
+        pump()
+        btn = bp.toggle_button
+        box = bp.box()
+        out["brain_on"] = (box.winfo_ismapped(), mbox.winfo_ismapped(), btn.cget("text"), btn.winfo_width() == w_vj,
+                           float(s.params["brain_on"]), str(box.pack_info().get("in")) == str(bp._wrap))
+        w_detach = bp._docked.detach_btn.winfo_width()
+        bp.toggle()
+        pump()
+        out["vj_back"] = (mbox.winfo_ismapped(), box.winfo_ismapped(), bp.toggle_button.cget("text"), bp.toggle_button.winfo_width() == w_vj)
+        Counting.calls = 0
+        for _ in range(3):
+            bp.tick()
+            pump(2)
+        out["hidden_calls"] = Counting.calls
+        bp.toggle()
+        pump()
+        bp.set_view("iso")
+        pump()
+        bp.tick()
+        out["shown"] = (Counting.calls > 0, type(bp.current).__name__)
+        # REC : une derniere image « fige pendant le REC », puis plus aucun appel de la vue
+        s.recording.active = True
+        bp.tick()
+        pump()
+        n0 = Counting.calls
+        for _ in range(4):
+            bp.tick()
+            pump(2)
+        cv = bp._docked.canvas
+        out["rec"] = (Counting.calls == n0, gui_brain.FROZEN_TEXT in canvas_texts(cv))
+        s.recording.active = False
+        bp.tick()
+        pump()
+        out["rec_end"] = (Counting.calls > n0, gui_brain.FROZEN_TEXT not in canvas_texts(cv))
+        # fenetre detachee : fermer = raccrocher, geometrie retenue
+        bp.detach()
+        pump()
+        top = bp.window
+        out["detached"] = (isinstance(top, tk.Toplevel) and bool(top.winfo_exists()), mbox.winfo_ismapped(), not box.winfo_ismapped(),
+                           float(s.params["brain_detached"]), bp._float.detach_btn.winfo_width() == w_detach, bp.toggle_button.cget("text"))
+        top.geometry("700x500+60+60")
+        pump(10)
+        root.tk.call(top.protocol("WM_DELETE_WINDOW"))         # comme la croix de la fenetre
+        pump()
+        out["closed"] = (not top.winfo_exists(), bp.window is None, str(s.params["brain_geom"]), float(s.params["brain_detached"]),
+                         box.winfo_ismapped(), not mbox.winfo_ismapped())
+        bp.detach()
+        pump()
+        out["geom_back"] = bp.window.geometry().split("+")[0]
+        top2 = bp.window
+        s.recording.active = True
+        bp.tick()
+        pump()
+        root.tk.call(top2.protocol("WM_DELETE_WINDOW"))        # fermee pendant un REC
+        pump()
+        bp.tick()
+        pump()
+        s.recording.active = False
+        out["rec_close"] = (not top2.winfo_exists(), bp.window is None, box.winfo_ismapped())
+        # vue qui leve : le panneau continue, une seule erreur journalisee
+        logged.clear()
+        bp.set_view("mandala")
+        for _ in range(5):
+            bp.tick()
+            pump(2)
+        out["raise"] = (len([m for m, _e in logged if "Cerveau" in m]), box.winfo_ismapped(), not tick_errors)
+        bp.set_view("iso")
+        pump()
+        # sans grille : frise libre « tempo non detecte », puis retour a la vue choisie
+        log.set_status(grid=None)
+        bp.tick()
+        pump()
+        out["free"] = (type(bp.current).__name__, gui_brain.NO_TEMPO in canvas_texts(cv))
+        log.set_status(grid=(t0, 0.5))
+        bp.tick()
+        pump()
+        out["free_back"] = type(bp.current).__name__
+        out["timed"] = gl_gui.STATS.ops.get("brain.tick", [0])[0] > 0
+        # panneau etendu replie : plus aucun dessin
+        c["scenes"]["expand"](False)
+        pump()
+        n1 = Counting.calls
+        for _ in range(3):
+            bp.tick()
+            pump(2)
+        out["collapsed"] = Counting.calls == n1
+
+    def on_ready(c):
+        out["builds"] += 1
+        if out["builds"] > 1:
+            return
+        try:
+            steps(c)
+        except Exception:
+            out["error"] = traceback.format_exc()
+        finally:
+            c["close"]()
+            s.finished_event.set()
+
+    _tmp = Path(_tf.mkdtemp(prefix="casual_overlay_brain_"))
+    saved_paths = (core_params.OVERLAY_PRESETS_PATH, core_params.BACKGROUND_PRESETS_PATH, _scenes.SCENES_PATH, _scenes.MASTERS_PATH,
+                   core_autosave.AUTOSAVE_PATH, live.preset_store.path)
+    core_params.OVERLAY_PRESETS_PATH = _tmp / "overlay_presets.json"
+    core_params.BACKGROUND_PRESETS_PATH = _tmp / "background_presets.json"
+    _scenes.SCENES_PATH, _scenes.MASTERS_PATH = _tmp / "scenes.json", _tmp / "masters.json"
+    core_autosave.AUTOSAVE_PATH = _tmp / "autosave.json"
+    live.preset_store.path = _tmp / "live_presets.json"
+    slog.error, gui_brain.BrainPanel._tick = spy_error, spy_tick
+    gui_brain.VIEWS.update(iso=Counting, mandala=Raising)
+    try:
+        gl_gui.run_gui(s, live, on_ready)
+    finally:
+        slog.error, gui_brain.BrainPanel._tick = real_error, real_tick
+        gui_brain.VIEWS.clear()
+        gui_brain.VIEWS.update(saved_views)
+        (core_params.OVERLAY_PRESETS_PATH, core_params.BACKGROUND_PRESETS_PATH, _scenes.SCENES_PATH, _scenes.MASTERS_PATH,
+         core_autosave.AUTOSAVE_PATH, live.preset_store.path) = saved_paths
+    check("error" not in out, "cerveau GUI: le scenario se deroule sans exception", out.get("error", ""))
+    check(out.get("start") == (True, "brain"), "cerveau GUI: au depart, l'espace VJ est a sa place et le bouton dit « brain »", str(out.get("start")))
+    b = out.get("brain_on", ())
+    check(b[:5] == (True, False, "VJ", True, 1.0) and b[5], "cerveau GUI: la bascule montre le cerveau a la place de l'espace VJ, bouton de meme largeur", str(b))
+    check(out.get("vj_back") == (True, False, "brain", True), "cerveau GUI: la bascule inverse remet l'espace VJ", str(out.get("vj_back")))
+    check(out.get("hidden_calls") == 0, "cerveau GUI: panneau cache -> la vue n'est jamais dessinee", str(out.get("hidden_calls")))
+    check(out.get("shown") == (True, "Counting"), "cerveau GUI: panneau visible -> la vue choisie est dessinee", str(out.get("shown")))
+    check(out.get("rec") == (True, True), "cerveau GUI: pendant un REC, plus aucun redessin et la mention « fige pendant le REC »", str(out.get("rec")))
+    check(out.get("rec_end") == (True, True), "cerveau GUI: fin du REC, le dessin reprend", str(out.get("rec_end")))
+    d = out.get("detached", ())
+    check(d == (True, True, True, 1.0, True, "brain"), "cerveau GUI: detacher ouvre une fenetre a part, l'espace VJ reprend sa place, bouton de meme largeur", str(d))
+    cl = out.get("closed", ())
+    check(len(cl) == 6 and cl[0] and cl[1] and cl[2].startswith("700x500") and cl[3] == 0.0 and cl[4] and cl[5],
+          "cerveau GUI: fermer la fenetre la raccroche et retient sa geometrie (brain_geom)", str(cl))
+    check(out.get("geom_back") == "700x500", "cerveau GUI: la fenetre rouverte reprend la geometrie retenue", str(out.get("geom_back")))
+    check(out.get("rec_close") == (True, True, True), "cerveau GUI: fermer la fenetre pendant un REC la raccroche", str(out.get("rec_close")))
+    check(not tick_errors and not cb_errors, "cerveau GUI: aucune erreur Tk (TclError) dans le journal", str(tick_errors[:2] + cb_errors[:2]))
+    check(out.get("raise") == (1, True, True), "cerveau GUI: une vue qui leve ne fait pas tomber le panneau (erreur journalisee une fois)", str(out.get("raise")))
+    check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille, frise libre « tempo non detecte »", str(out.get("free")))
+    check(out.get("free_back") == "Counting", "cerveau GUI: la grille revient -> la vue choisie reprend", str(out.get("free_back")))
+    check(out.get("timed") is True, "cerveau GUI: chaque tick est chronometre (brain.tick)")
+    check(out.get("collapsed") is True, "cerveau GUI: panneau etendu replie -> plus aucun dessin")
 
 
 def check_foudre_pure() -> None:
@@ -13850,7 +14108,7 @@ SUITE = (
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
@@ -13869,7 +14127,7 @@ GROUPES = {
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
-            "check_manager", "check_gui"),
+            "check_manager", "check_gui", "check_brain_gui"),
 }
 
 
