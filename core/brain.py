@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import bisect
 import copy
+import math
 import threading
+import time
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -136,3 +138,201 @@ class BrainLog:
         """Copie du dernier etat publie."""
         with self._lock:
             return copy.deepcopy(self._status)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Prediction et statuts
+# ---------------------------------------------------------------------------------------------------------------------------
+
+GHOST_MIN = 0.2                                            # fantome affiche au-dessus
+EXPECT_MIN = 0.5                                           # frappe « attendue » a partir de
+RECENT_W = 0.6                                             # poids des 4 mesures recentes
+PHRASE_W = 0.4                                             # poids du meme pas une phrase plus tot
+STABLE_MIN = 0.6                                           # confiance a partir de laquelle le tempo est « stable »
+BUILD_RAMP_S = 16.0                                        # duree de la montee du voile (carre)
+DROP_FADE_S = 4.0                                          # relachement du voile apres un drop
+FREE_S = 8.0                                               # frise libre (sans grille) : secondes montrees
+FEED_LINES = 4
+
+
+def hits_by_step(events: list[Event], anchor: float, period: float) -> dict[tuple[int, str], float]:
+    """Frappes placees sur la grille : cle (pas, instrument), valeur = force max des frappes tombees sur ce pas."""
+    hits: dict[tuple[int, str], float] = {}
+    for ev in events:
+        if ev.family in INSTRUMENTS:
+            key = (step_of(ev.t, anchor, period), ev.family)
+            if ev.strength > hits.get(key, 0.0):
+                hits[key] = ev.strength
+    return hits
+
+
+def _hit(hits: dict, step: int, row: str) -> float:
+    return 1.0 if hits.get((step, row), 0.0) > 0 else 0.0
+
+
+def predict_page(hits: dict, step: int, row: str, page_first: int) -> float:
+    """Probabilite d'une frappe au pas `step` d'une page : 0,6 x part des 4 mesures de la page precedente ayant frappe au meme pas
+    de mesure + 0,4 x frappe au meme pas une phrase (128 pas) plus tot."""
+    s = (step - page_first) % STEPS_PER_BAR
+    recent = sum(_hit(hits, page_first - PAGE_STEPS + STEPS_PER_BAR * k + s, row) for k in range(4)) / 4
+    return RECENT_W * recent + PHRASE_W * _hit(hits, step - PHRASE_STEPS, row)
+
+
+def predict_rolling(hits: dict, step: int, row: str) -> float:
+    """Meme ponderation, mais les 4 mesures recentes sont celles qui precedent le pas lui-meme (pas - 16 k, k = 1..4) : tunnel."""
+    recent = sum(_hit(hits, step - STEPS_PER_BAR * k, row) for k in range(1, 5)) / 4
+    return RECENT_W * recent + PHRASE_W * _hit(hits, step - PHRASE_STEPS, row)
+
+
+def status_of(v: float, p: float, past: bool) -> str | None:
+    """Statut d'une case : passe -> real / surprise (frappe venue) ou miss (attendue, absente) ; futur -> ghost (prediction)."""
+    if past:
+        if v > 0:
+            return "surprise" if p < EXPECT_MIN else "real"
+        return "miss" if p >= EXPECT_MIN else None
+    return "ghost" if p > GHOST_MIN else None
+
+
+def cycle_left(beat_index: int) -> dict[int, int]:
+    """Temps restants avant la fin des cycles de 8, 16 et 32 temps (0 = dernier temps du cycle)."""
+    return {n: n - 1 - beat_index % n for n in (8, 16, 32)}
+
+
+def veil_at(t: float, build_t0: float | None, drop_t: float | None) -> tuple[str | None, float]:
+    """Voile a la date `t` : montee ouverte a `build_t0` (intensite au carre sur 16 s), ou relachement 4 s apres un drop."""
+    if build_t0 is not None and t >= build_t0:
+        return ("build", min(1.0, ((t - build_t0) / BUILD_RAMP_S) ** 2))
+    if drop_t is not None and t >= drop_t:
+        k = max(0.0, 1.0 - (t - drop_t) / DROP_FADE_S)
+        if k > 0:
+            return ("drop", k)
+    return (None, 0.0)
+
+
+class _Structure:
+    """Balayage chronologique des evenements de structure : phase courante, montee ouverte, dernier drop (a une date donnee)."""
+
+    def __init__(self, events: list[Event], phase0: str) -> None:
+        self._evs = [e for e in events if e.family in STRUCTURE]
+        self._i = 0
+        # avant le premier changement de phase garde, la phase est inconnue ; sans aucun, c'est celle du statut
+        self.phase = "" if any(e.family == "phase" for e in self._evs) else phase0
+        self.phase_t: float | None = None
+        self.build_t0: float | None = None
+        self.drop_t: float | None = None
+
+    def advance(self, t: float) -> "_Structure":
+        """Applique les evenements de date <= t (appels a dates croissantes)."""
+        while self._i < len(self._evs) and self._evs[self._i].t <= t:
+            ev = self._evs[self._i]
+            self._i += 1
+            if ev.family == "build":
+                self.build_t0, self.drop_t = ev.t, None
+            elif ev.family == "drop":
+                self.build_t0, self.drop_t = None, ev.t
+            else:                                          # phase : son nom est dans la raison
+                self.phase, self.phase_t = ev.reason, ev.t
+                if ev.reason != "build":
+                    self.build_t0 = None
+        return self
+
+
+def _clock(t: float, now: float) -> str:
+    """Heure locale (hh:mm:ss) d'un evenement date dans l'horloge du son."""
+    return time.strftime("%H:%M:%S", time.localtime(time.time() - (now - t)))
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Instantane : tout ce que les vues dessinent, deja calcule
+# ---------------------------------------------------------------------------------------------------------------------------
+
+def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
+    """Instantane du journal a la date murale `now_wall` (sans etat garde d'un appel a l'autre).
+
+    Page (iso, mandala, sismo) : 64 pas depuis le debut de la page courante (multiple de 64 depuis l'ancre). `rolling` (tunnel) :
+    68 pas depuis le pas courant - 4 (les 4 premiers sont le passe). Le journal est copie une seule fois : il est borne (KEEP_S,
+    MAX_EVENTS), et la prediction comme la phase ou la montee en cours peuvent remonter plus loin que 2 pages.
+    """
+    st = log.status()
+    now = log.to_audio(now_wall)
+    events = log.events()
+    grid = st.get("grid")
+    struct_now = _Structure(events, st.get("phase") or "").advance(now)
+
+    confidence = st.get("confidence")
+    phase = st.get("phase") or struct_now.phase or None
+    phase_since = st.get("phase_since")
+    if phase_since is None:
+        phase_since = struct_now.phase_t
+    next_at = st.get("next_scene_at")                      # publie par le fil Tk : horloge murale
+    header = {
+        "bpm": st.get("bpm"),
+        "confidence": confidence,
+        "stable": confidence is not None and confidence >= STABLE_MIN,
+        "origin": st.get("origin"),
+        "phase": phase,
+        "phase_s": None if phase_since is None else max(0.0, now - phase_since),
+        "page": None, "bar": None, "cycles": None,
+        "next_scene": st.get("next_scene"),
+        "next_scene_s": None if next_at is None else next_at - now_wall,
+        "build_s": None if struct_now.build_t0 is None else now - struct_now.build_t0,
+    }
+    feed = [(_clock(e.t, now), e.family, e.reason, e.cause) for e in events if e.family in TRACKS and e.t <= now][-FEED_LINES:]
+    snap = {
+        "grid": False, "first": 0, "cursor": 0.0, "cells": [], "fx": [], "phase_steps": [], "veil": [],
+        "score": (0, 0, 0), "header": header, "gauges": st.get("gauges", {}), "feed": feed,
+    }
+
+    period = grid[1] if grid else 0.0
+    if not grid or not period or period <= 0:
+        snap["free"] = [(now - e.t, e.family, e.strength) for e in events
+                        if (e.family in INSTRUMENTS or e.family in TRACKS) and 0.0 <= now - e.t <= FREE_S]
+        return snap
+
+    anchor = float(grid[0])
+    pos = (now - anchor) / period * STEPS_PER_BEAT         # pas courant + fraction
+    cur = math.floor(pos)
+    if rolling:
+        first, n = cur - 4, PAGE_STEPS + 4
+        page, bar = cur // PAGE_STEPS + 1, (cur % PAGE_STEPS) // STEPS_PER_BAR + 1
+    else:
+        first, n = (cur // PAGE_STEPS) * PAGE_STEPS, PAGE_STEPS
+        page, bar = first // PAGE_STEPS + 1, min(4, (cur - first) // STEPS_PER_BAR + 1)
+    header.update(page=page, bar=bar, cycles=cycle_left(cur // STEPS_PER_BEAT))
+
+    hits = hits_by_step(events, anchor, period)
+    cells = []
+    ok = miss = surprise = 0
+    for i in range(n):
+        step = first + i
+        past = step <= cur
+        for row in INSTRUMENTS:
+            v = hits.get((step, row), 0.0)
+            p = predict_rolling(hits, step, row) if rolling else predict_page(hits, step, row, first)
+            s = status_of(v, p, past)
+            cells.append((i, row, v, p, s))
+            if s == "real":
+                ok += 1
+            elif s == "miss":
+                miss += 1
+            elif s == "surprise":
+                surprise += 1
+
+    fx = []
+    for e in events:
+        if e.family in TRACKS:
+            i = step_of(e.t, anchor, period) - first
+            if 0 <= i < n:
+                fx.append((i, e.family, e.strength, e.reason, e.cause))
+
+    struct = _Structure(events, st.get("phase") or "")
+    phase_steps, veil = [], []
+    for i in range(n):
+        ts = step_time(first + i, anchor, period)
+        struct.advance(min(ts, now))                       # apres le present : l'etat connu se prolonge
+        phase_steps.append(struct.phase)
+        veil.append(veil_at(ts, struct.build_t0, struct.drop_t))
+
+    snap.update(grid=True, first=first, cursor=pos - first, cells=cells, fx=fx, phase_steps=phase_steps, veil=veil,
+                score=(ok, miss, surprise))
+    return snap

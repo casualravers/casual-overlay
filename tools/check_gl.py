@@ -12555,6 +12555,122 @@ def check_brain_pure() -> None:
     st2 = log.status()
     check(st2["bpm"] == 128.0 and st2["gauges"]["kick"] == 0.5 and st2["grid"] == (10.0, 0.5), "cerveau: status() rend une copie", str(st2))
 
+    # ---- prediction : 0,6 x page precedente + 0,4 x une phrase plus tot
+    hits = {(64 + 16 * k + s, "kick"): 1.0 for k in range(4) for s in (0, 4, 8, 12)}
+    p = br.predict_page(hits, 132, "kick", 128)
+    check(abs(p - 0.6) < 1e-9, "cerveau: prediction = 0,6 si les 4 mesures precedentes ont frappe", str(p))
+    hits2 = dict(hits)
+    hits2[(132 - 128, "kick")] = 0.7
+    p = br.predict_page(hits2, 132, "kick", 128)
+    check(abs(p - 1.0) < 1e-9, "cerveau: prediction = 1 avec la frappe une phrase plus tot", str(p))
+    check(br.predict_page(hits2, 130, "kick", 128) == 0.0, "cerveau: prediction nulle au pas 2", str(br.predict_page(hits2, 130, "kick", 128)))
+    check(br.predict_page(hits2, 132, "snare", 128) == 0.0, "cerveau: prediction par instrument")
+    hits3 = {(140 - 16 * k, "snare"): 1.0 for k in (1, 2)}
+    p = br.predict_rolling(hits3, 140, "snare")
+    check(abs(p - 0.3) < 1e-9, "cerveau: prediction glissante (2 mesures sur 4)", str(p))
+    check(br.GHOST_MIN == 0.2 and br.EXPECT_MIN == 0.5, "cerveau: seuils fantome / attendu")
+
+    # ---- statuts
+    check(br.status_of(0.8, 0.6, True) == "real", "cerveau: attendu et venu = real")
+    check(br.status_of(0.8, 0.3, True) == "surprise", "cerveau: venu sans etre attendu = surprise")
+    check(br.status_of(0, 0.6, True) == "miss", "cerveau: attendu et absent = miss")
+    check(br.status_of(0, 0.3, True) is None, "cerveau: ni attendu ni venu = rien")
+    check(br.status_of(0, 0.25, False) == "ghost", "cerveau: futur au-dessus de 0,2 = ghost")
+    check(br.status_of(0, 0.1, False) is None, "cerveau: futur peu probable = rien")
+
+    # ---- fins de cycles, voile
+    check(br.cycle_left(7) == {8: 0, 16: 8, 32: 24}, "cerveau: fins de cycles 8 / 16 / 32", str(br.cycle_left(7)))
+    check(br.veil_at(18.0, 10.0, None) == ("build", 0.25), "cerveau: voile 8 s apres le debut de la montee", str(br.veil_at(18.0, 10.0, None)))
+    check(br.veil_at(12.0, None, 10.0) == ("drop", 0.5), "cerveau: voile 2 s apres le drop", str(br.veil_at(12.0, None, 10.0)))
+    check(br.veil_at(30.0, None, 10.0) == (None, 0.0) and br.veil_at(5.0, None, None) == (None, 0.0), "cerveau: pas de voile hors montee / drop")
+    check(br.veil_at(60.0, 10.0, None) == ("build", 1.0), "cerveau: voile de montee plafonne a 1")
+
+    # ---- instantane avec grille : kicks sur chaque temps pendant 3 pages (anchor 0, periode 0,5)
+    def kick_log():
+        lg = br.BrainLog()
+        for k in range(48):
+            lg.publish("kick", 0.9, t=0.5 * k)
+        lg.publish("phase", reason="groove", t=0.0)
+        lg.publish("phase", reason="build", t=16.0)
+        lg.publish("build", t=16.0)
+        lg.publish("drop", t=22.0)
+        lg.publish("phase", reason="peak", t=22.0)
+        lg.publish("strobe", 1.0, reason="strobe auto : kick fort", cause="kick", t=20.0)
+        for j, fam in enumerate(("ripple", "chroma", "glitch", "scene", "wobble")):
+            lg.publish(fam, 0.8, reason=f"raison numero {j}", t=21.0 + 0.1 * j)
+        lg.set_status(bpm=120.0, confidence=0.8, origin="kick", grid=(0.0, 0.5), phase="peak", phase_since=22.0, gauges={"fps": 60})
+        return lg
+
+    log = kick_log()
+    snap = br.snapshot(log, 23.9)
+    check(snap["grid"] is True and snap["first"] % 64 == 0 and snap["first"] == 128, "cerveau: instantane, debut de page", str(snap["first"]))
+    check(abs(snap["cursor"] - (23.9 * 8 - 128)) < 1e-9, "cerveau: instantane, curseur depuis le debut de page", str(snap["cursor"]))
+    check(len(snap["cells"]) == 64 * 3 and {c[0] for c in snap["cells"]} == set(range(64)), "cerveau: 64 pas x 3 instruments",
+          str(len(snap["cells"])))
+    check(snap["score"][0] > 0 and snap["score"][1] == 0, "cerveau: score, predictions realisees", str(snap["score"]))
+    check(1 <= snap["header"]["bar"] <= 4 and snap["header"]["bar"] == 4 and snap["header"]["page"] == 3, "cerveau: mesure et page",
+          str(snap["header"]))
+    cell = {(c[0], c[1]): c for c in snap["cells"]}
+    check(cell[(0, "kick")][4] == "real" and cell[(1, "kick")][4] is None, "cerveau: statut des cellules", str(cell[(0, "kick")]))
+    check(any(f[1] == "strobe" and f[4] == "kick" and f[0] == 32 for f in snap["fx"]), "cerveau: fx porte la cause kick", str(snap["fx"]))
+    check(len(snap["phase_steps"]) == 64 and snap["phase_steps"][0] == "build" and snap["phase_steps"][60] == "peak",
+          "cerveau: phase par pas", str(snap["phase_steps"][::8]))
+    v = snap["veil"]
+    check(len(v) == 64 and v[32][0] == "build" and abs(v[32][1] - 0.0625) < 1e-9 and v[56][0] == "drop" and abs(v[56][1] - 0.75) < 1e-9,
+          "cerveau: voile par pas (montee puis drop)", str(v[32]) + " " + str(v[56]))
+    h = snap["header"]
+    check(h["bpm"] == 120.0 and h["stable"] is True and h["origin"] == "kick" and h["phase"] == "peak" and abs(h["phase_s"] - 1.9) < 1e-9,
+          "cerveau: en-tete (bpm, stable, origine, phase)", str(h))
+    check(h["build_s"] is None and h["cycles"] == br.cycle_left(191 // 4), "cerveau: en-tete (montee fermee par le drop, cycles)", str(h))
+    check(snap["gauges"] == {"fps": 60}, "cerveau: jauges recopiees", str(snap["gauges"]))
+    check(len(snap["feed"]) == 4 and [f[2] for f in snap["feed"]] == [f"raison numero {j}" for j in range(1, 5)]
+          and all(len(f[0]) == 8 and f[0][2] == ":" for f in snap["feed"]), "cerveau: fil, 4 dernieres lignes en francais", str(snap["feed"]))
+    check("free" not in snap, "cerveau: pas de frise libre avec une grille")
+    check(snap["header"]["next_scene"] is None and snap["header"]["next_scene_s"] is None, "cerveau: pas de prochaine scene connue")
+
+    # montee ouverte : duree
+    log2 = kick_log()
+    snap2 = br.snapshot(log2, 20.0)
+    check(abs(snap2["header"]["build_s"] - 4.0) < 1e-9, "cerveau: duree de la montee en cours", str(snap2["header"]["build_s"]))
+
+    # rolling (tunnel)
+    snap = br.snapshot(log, 23.9, rolling=True)
+    check(snap["first"] == 191 - 4 and len(snap["cells"]) == 68 * 3 and abs(snap["cursor"] - (23.9 * 8 - 187)) < 1e-9,
+          "cerveau: instantane glissant (4 pas de passe, 64 a venir)", str((snap["first"], len(snap["cells"]))))
+
+    # changement d'ancre en cours de page
+    evs = log.events()
+    hb = br.hits_by_step(evs, 0.05, 0.5)
+    check(len(hb) == 48 and all(r == "kick" for (_s, r) in hb), "cerveau: ancre decalee de 0,05 s, une cle par frappe", str(len(hb)))
+    try:
+        log.set_status(grid=(0.05, 0.5))
+        s1 = br.snapshot(log, 23.9)
+        log.set_status(grid=(0.5, 0.5))
+        s2 = br.snapshot(log, 16.2)
+        ok = s1["first"] == 128 and s2["first"] == 64 and len(s2["cells"]) == 192
+        detail = str((s1["first"], s2["first"]))
+    except Exception as exc:              # noqa: BLE001
+        ok, detail = False, repr(exc)
+    check(ok, "cerveau: ancre decalee d'un temps, page recalculee sans exception", detail)
+
+    # sans grille, journal vide
+    for name, lg in (("sans grille", kick_log()), ("journal vide", br.BrainLog())):
+        try:
+            lg.set_status(grid=None)
+            s = br.snapshot(lg, 23.9)
+            ok = s["grid"] is False and "free" in s and s["cells"] == [] and "header" in s and "feed" in s
+            detail = str(s.get("free", "")[:3])
+        except Exception as exc:          # noqa: BLE001
+            ok, detail = False, repr(exc)
+        check(ok, f"cerveau: instantane {name} (frise libre)", detail)
+    s = br.snapshot(br.BrainLog(), 5.0)
+    check(s["grid"] is False and s["free"] == [] and s["feed"] == [], "cerveau: journal vide, frise et fil vides")
+    lg = kick_log()
+    lg.set_status(grid=None)
+    s = br.snapshot(lg, 23.9)
+    check(all(0 <= a <= 8 for a, _f, _v in s["free"]) and any(f == "kick" for _a, f, _v in s["free"])
+          and any(f == "strobe" for _a, f, _v in s["free"]), "cerveau: frise libre des 8 dernieres secondes", str(s["free"][:4]))
+
 
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
