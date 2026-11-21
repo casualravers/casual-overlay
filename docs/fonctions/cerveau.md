@@ -24,7 +24,8 @@ panneau Tk (gui_brain.py) : tick (ordonnanceur ui_every) -> core.brain.snapshot(
 ```
 
 - **`core/brain.py`** (Python pur) : `BrainLog` = journal trie par date, borne (`KEEP_S` = 120 s par rapport a l'evenement le plus recent,
-  `MAX_EVENTS` = 4000), un seul verrou ; publier = une insertion triee, aucun calcul. `Event(t, family, strength, reason, cause)` ; familles :
+  `MAX_EVENTS` = 4000), un seul verrou ; publier = une insertion triee (et le pas de la grille d'alors, voir « Pas fige »). `Event(t, family, strength, reason, cause, step,
+  anchor, epoch)` ; familles :
   `INSTRUMENTS` (kick, snare, hihat), `TRACKS` (strobe, foudre, glitch, ripple, chroma, wobble, logo, scene), `STRUCTURE` (phase, build, drop).
   Une famille inconnue est ignoree, une cause qui n'est pas un instrument devient None.
 - **Horloges** : toutes les dates du journal sont dans l'horloge du son (`t_audio` du fil audio). Le fil audio publie le decalage
@@ -35,7 +36,9 @@ panneau Tk (gui_brain.py) : tick (ordonnanceur ui_every) -> core.brain.snapshot(
   statut au plus tous les `BRAIN_STATUS_S` = 50 ms (bpm, confiance, origine de la grille, `grid=(ancre, periode)` ou None, phase,
   `phase_since`) ; fil GL : eclair du strobe (raison de `StrobeBrain` ou du limiteur, cause kick en pic / groove), effets du fond / logo
   (raison de `core.explain.fx_text`, cause `brain_cause(source)` : basses / kick -> kick, caisse -> snare, aigus / frappes -> hihat), sante
-  au plus une fois par `BRAIN_HEALTH_S` = 1 s (`gauges` : fps, gpu, latency_ms, rec, sources, auto) ; fil Tk : scene posee (VJ ou manuel),
+  au plus une fois par `BRAIN_HEALTH_S` = 1 s (`gauges` : fps, gpu, latency_ms, rec, sources, auto avec `foudre`), niveaux par couche
+  au plus tous les `BRAIN_BANDS_S` = 0,1 s (`bands` : `{"bg": (basses, aigus, kick), "logo": ...}`, 0..1, ce que la couche voit avec sa
+  source, son retard et son lissage) ; fil Tk : scene posee (VJ ou manuel),
   prochaine scene et son heure. **Une panne du journal n'arrete jamais l'analyse ni le rendu** (try / except autour de chaque publication).
 
 ## Instantane (`snapshot(log, now_wall, rolling)`)
@@ -43,7 +46,17 @@ panneau Tk (gui_brain.py) : tick (ordonnanceur ui_every) -> core.brain.snapshot(
 Sans etat garde d'un appel a l'autre ; le journal est copie une fois. Cles : `grid` (bool), `first` (premier pas absolu), `cursor`
 (pas courant + fraction, relatif a `first`), `cells` [(i, rangee, force, probabilite, statut)], `fx` [(i, piste, force, raison, cause)],
 `phase_steps` et `veil` (un par pas), `score` (realise, manque, surprise), `header` (bpm, confidence, stable, origin, phase, phase_s, page,
-bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers effets : heure, famille, raison, cause), `free` (sans grille).
+bar, cycles, next_scene, next_scene_s, build_s, strobe_in_s, strobe_hz), `gauges`, `bands`, `feed` (4 derniers effets : heure, famille,
+raison, cause), `free` (sans grille).
+
+- **Pas fige** (`placed_step`) : une frappe ou une marque d'effet recoit son pas a la **publication**, avec la grille d'alors (`step`,
+  `anchor`, `epoch`). Avant, chaque instantane replacait tout le passe avec la grille courante ; or `BeatGrid.nudge` reajuste la periode a
+  chaque kick (de moitie vers l'estimation du BPM) : une frappe vieille de N pas glissait de N x (variation relative de la periode) pas,
+  toutes ensemble et d'autant plus qu'elles etaient anciennes (« la grille change d'echelle », retour utilisateur). Seuls les sauts d'ancre
+  de phrases entieres la deplacent encore (`PHRASE_STEPS` x arrondi de l'ecart d'ancre en phrases). Grille perdue puis retrouvee (`epoch`
+  +1 quand `set_status(grid=...)` passe d'absente a presente) ou frappe publiee sans grille : placee par sa date, comme avant.
+- **Strobe a venir** : pendant une montee (`build_s`), si le strobe auto est actif et pas en mode Foudre (`gauges.auto`), `strobe_in_s` =
+  `BUILD_CONFIRM_S` - duree (borne a 0) et `strobe_hz` = `auto_build_hz(duree)` (None pendant les 4 premieres secondes) ; sinon None.
 
 - **Page** (iso, mandala, sismo) : 64 pas depuis le debut de la page (multiple de 64 depuis l'ancre). **Glissant** (`rolling=True`, tunnel) :
   68 pas depuis le pas courant - 4 (les 4 premiers sont le passe) ; `phase_steps` et `veil` ont alors 68 entrees. `depth` borne les pas a
@@ -75,7 +88,11 @@ bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers ef
   boutons ne bougent pas ») : la liste de gauche garde sa largeur quand on bascule. Bouton « detach » : fenetre a part (Toplevel), option
   « toujours au-dessus » ; **fermer la fenetre = la raccrocher** (`dock`), meme pendant un REC.
 - Contenu : barre (vues, causes, pause, detach), en-tete 2 lignes, la vue (un Canvas), legende et pastilles pour masquer des pistes, fil des
-  4 derniers evenements (`<- kick` quand les causes sont actives), jauges sources / auto / sante (sources = noms des sources par couche en v1).
+  4 derniers evenements (`<- kick` quand les causes sont actives), jauges sources / auto / sante. **Sources** (`sources_text`) : par
+  couche, la source puis 3 barres texte `B` (basses), `H` (aigus), `K` (kick) de `BAND_CELLS` = 4 cases ; texte a chasse fixe (Consolas)
+  de longueur constante, donc largeur fixe. Ce sont les trois composantes que la couche voit (le vecteur audio d'une couche n'a pas de
+  mediums : « mediums » y passe par basses et aigus). **En-tete** : `build 6 s  strobe 0.6 Hz` / `build 2 s  strobe in 2.5 s`
+  (`build_text`, largeur `BUILD_W`).
 - **Interface d'une vue** : `View(canvas)`, `.layout(w, h)`, `.update(snap, causes, hidden, now)`, `.hover(x, y) -> str | None` ; registre
   `VIEWS`. Une vue qui leve ne fait pas tomber le panneau (erreur journalisee une fois par vue et par type).
 - **Pools** : chaque vue cree ses elements une fois puis les deplace / recolore (nombre d'elements constant d'une page a l'autre, teste) ;
@@ -84,7 +101,8 @@ bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers ef
 - **iso** : grille isometrique, le temps part de devant ; plateau des instruments (piliers), plateau des effets, voile en lignes de relief,
   plan du present ; angle 18..45 degres. **mandala** : un anneau par mesure, le 1 pile en haut ; couronne de la phrase de 32 temps ; anneaux
   des effets ; aiguille. **tunnel** : couloir en perspective, voies au sol, effets sur les murs, voile au plafond, cadre blanc du present ;
-  `TUN_DEPTH` = 32 pas devant (2 mesures, voir Budget). **sismo** : une onde par instrument (passe plein, futur en pointilles), portee des
+  `TUN_DEPTH` = 32 pas devant (2 mesures, voir Budget) ; eclair du strobe : le fond s'eclaircit et un voile blanc trame (`stipple`
+  gray75 / 50 / 25 selon l'age de l'eclair, Tk n'a pas d'alpha) couvre la scene, sous le cadre du present et les libelles. **sismo** : une onde par instrument (passe plein, futur en pointilles), portee des
   effets, voile au-dessus.
 - **Rafraichissement** : `scheduled_tick` (ordonnanceur `ui_every`, toutes les `TICK_MS` = 50 ms) laisse passer selon `VIEW_TICK_MS`
   (les quatre vues : 100 ms, voir Budget) ; les actions (bascule, vue, causes...) appellent `tick` directement. Rien quand le panneau n'est pas
@@ -167,19 +185,17 @@ etaient 2 a 3 fois plus basses. Baisser la cadence ou la profondeur reduit le co
 canvas** (fait par Tk a l'inactivite, hors de `brain.tick` mais dans la charge du fil Tk) coute en plus, hors application : iso ~10 ms par
 image (le plan du present et le voile couvrent toute la grille), tunnel ~10 ms, sismo ~5 ms, mandala ~3 ms.
 
-**Decision ouverte, a prendre par l'utilisateur** (rien n'est code) :
-
-- soit le **dernier recours** du plan : dessiner les vues hors du fil Tk (image calculee a part, posee dans le canvas). A noter : une image
-  calculee en Python partagerait toujours le verrou avec le rendu ; le gain n'est pas assure sans le mesurer ;
-- soit **changer le seuil du plan** : remplacer « moyenne < 4 ms et pire < 20 ms par tick » par un budget par seconde (par exemple 80 ms/s,
-  soit 4 ms x 20 Hz, que toutes les vues tiennent : 29 a 80 ms/s, le tunnel tout juste) et le constat « aucun gel en regime, images/s
-  inchangees ». C'est une **modification du seuil du plan, qui demande l'accord de l'utilisateur** ;
-- les vues construites sont desormais gardees (plus de gel au retour vers iso, voir plus haut).
+**Decision de l'utilisateur (2026-11-21) : budget par seconde.** Le seuil du plan « moyenne < 4 ms et pire < 20 ms par tick » est remplace
+par **80 ms/s** de `brain.tick` (4 ms x 20 Hz), avec « aucun gel en regime, images/s du rendu a 5 % pres ». Toutes les vues le tiennent
+(29 a 80 ms/s, le tunnel tout juste). Le dessin hors du fil Tk n'est pas fait (une image calculee en Python partagerait toujours le
+verrou avec le rendu). Les vues construites sont gardees (plus de gel au retour vers iso, voir plus haut).
 
 ## Pieges
 
 - **Jamais d'evenement date dans le futur** : le journal purge par rapport a l'evenement le plus recent ; un `t` futur viderait tout. Le drop
   est date `min(drop_kick, t_audio)`.
+- **Ne jamais replacer le passe avec la grille courante** : la periode bouge a chaque kick, les frappes anciennes glissaient (voir « Pas
+  fige »). Un nouvel usage des pas passe par `placed_step`, pas par `step_of(e.t, ...)`.
 - Deux horloges : `next_scene_at` en temps mur (fil Tk), le reste en temps du son ; `phase_since` 0,0 = inconnu.
 - Un evenement d'effet par front montant (`FxEdge`), sinon un evenement par image et le journal deborde (`MAX_EVENTS`).
 - Les reglages `brain_*` en portee « salle » passaient dans les memoires de masters et l'auto-sauvegarde : portee `device` + `brain_ui.json`.
