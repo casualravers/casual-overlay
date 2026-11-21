@@ -346,7 +346,7 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
     feed = [(_clock(e.t, now), e.family, e.reason, e.cause) for e in reversed(last)]
     snap = {
         "grid": False, "first": 0, "cursor": 0.0, "cells": [], "fx": [], "phase_steps": [], "veil": [],
-        "score": (0, 0, 0), "header": header, "gauges": st.get("gauges", {}), "feed": feed,
+        "score": (0, 0, 0), "header": header, "gauges": st.get("gauges", {}), "bands": st.get("bands") or {}, "feed": feed,
     }
 
     period = grid[1] if grid else 0.0

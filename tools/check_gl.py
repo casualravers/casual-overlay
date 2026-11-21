@@ -12537,6 +12537,10 @@ def check_brain_pure() -> None:
     lg.set_status(grid=(0.0, 0.495))
     sn = br.snapshot(lg, 10.5)
     check([sn["first"] + f[0] for f in sn["fx"]] == [80], "cerveau: marque d'effet figee elle aussi", str(sn["fx"]))
+    check(sn.get("bands") == {}, "cerveau: sans niveaux publies, bands vide", str(sn.get("bands")))
+    lg.set_status(bands={"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)})
+    check(br.snapshot(lg, 10.5).get("bands") == {"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)}, "cerveau: niveaux par couche recopies",
+          str(br.snapshot(lg, 10.5).get("bands")))
 
     log = br.BrainLog()
     log.publish("kick", t=0.0)
@@ -12896,6 +12900,15 @@ def check_brain_engine() -> None:
     g = lg.status().get("gauges") or {}
     check(all(k in g for k in ("fps", "gpu", "latency_ms", "rec", "sources", "auto")) and abs(float(g["latency_ms"]) - 42.0) < 1e-6,
           "cerveau: jauges de sante publiees", str(g))
+    bands = lg.status().get("bands") or {}
+    check(set(bands) == {"bg", "logo"} and all(len(v) == 3 and all(0.0 <= x <= 1.0 for x in v) for v in bands.values())
+          and max(bands["bg"]) > 0.0, "cerveau: niveaux par couche publies (basses, aigus, kick ; 0..1)", str(bands))
+    r3 = gl.Renderer(ctx, size, logo)
+    lg3 = br.BrainLog()
+    r3.brain = lg3
+    r3.draw(fbo, size, loud, dict(p, fx_link=0.0, src_logo="rien"), 1.0)
+    b3 = lg3.status().get("bands") or {}
+    check(tuple(b3.get("logo", (9,))) == (0.0, 0.0, 0.0), "cerveau: couche sur « rien » -> niveaux nuls", str(b3))
     fx_fams = ("wobble", "ripple", "glitch", "chroma", "logo")
     n = len([e for e in lg.events() if e.family in fx_fams])
     r1.draw(fbo, size, loud, p, 1.02)
@@ -12949,6 +12962,17 @@ def check_brain_gui() -> None:
     from core import brain as br
     from core import scenes as _scenes
     from core import sessionlog as slog
+
+    # ---- jauge sources en barres (texte a chasse fixe : meme largeur quels que soient les niveaux et la source)
+    st_a = gui_brain.sources_text({"bg": "tout", "logo": "frappes"}, {"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)})
+    st_b = gui_brain.sources_text({"bg": "kick", "logo": "rien"}, {"bg": (1.0, 1.0, 1.0), "logo": (1.0, 1.0, 1.0)})
+    st_c = gui_brain.sources_text({}, {})
+    la, lb, lc = st_a.split("\n"), st_b.split("\n"), st_c.split("\n")
+    check(len(la) == len(lb) == len(lc) == 3 and [len(x) for x in la] == [len(x) for x in lb] == [len(x) for x in lc],
+          "cerveau: jauge sources de largeur fixe (niveaux, source, absence)", repr((st_a, st_b, st_c)))
+    full, empty = gui_brain.BAND_ON * gui_brain.BAND_CELLS, gui_brain.BAND_OFF * gui_brain.BAND_CELLS
+    check(("B " + full) in la[1] and ("K " + empty) in la[1] and ("B " + empty) in la[2], "cerveau: barres B / H / K selon les niveaux",
+          repr(st_a))
 
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
     args = gl.build_live_args(live, "Micro", (1280, 720), 30, None)

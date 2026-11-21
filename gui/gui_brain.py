@@ -53,6 +53,33 @@ GEOM_SAVE_MS = 500                             # geometrie de la fenetre detache
 GEOM_RE = re.compile(r"^\d+x\d+([+-]-?\d+[+-]-?\d+)?$")
 
 
+BAND_CELLS = 4                                 # jauge sources : 4 cases par bande (texte a chasse fixe : largeur constante)
+BAND_ON, BAND_OFF = "█", "·"
+SOURCE_W = 7                                   # nom de source le plus long (« mediums », « frappes »)
+
+
+def band_bar(v) -> str:
+    """Barre texte d'un niveau 0..1 sur BAND_CELLS cases."""
+    try:
+        n = max(0, min(BAND_CELLS, round(float(v) * BAND_CELLS)))
+    except (TypeError, ValueError):
+        n = 0
+    return BAND_ON * n + BAND_OFF * (BAND_CELLS - n)
+
+
+def sources_text(src: dict, bands: dict) -> str:
+    """Jauge « sources » : par couche, la source puis ce que la couche voit (B basses, H aigus, K kick). Toujours 3 lignes de meme
+    longueur (les boutons ne bougent pas)."""
+    lines = ["sources"]
+    for lay, name in (("bg", "fond"), ("logo", "logo")):
+        vec = tuple(bands.get(lay) or (0.0, 0.0, 0.0))[:3]
+        vec = vec + (0.0,) * (3 - len(vec))
+        s = str(src.get(lay) or "-")[:SOURCE_W].ljust(SOURCE_W)
+        lines.append(f"{name} <- {s} " + " ".join(f"{k} {band_bar(v)}" for k, v in zip("BHK", vec)))
+    width = max(len(x) for x in lines)
+    return "\n".join(x.ljust(width) for x in lines)
+
+
 def tint(phase: str | None) -> str:
     """Couleur de fond du canvas selon la phase (teintes des contraintes du plan)."""
     return "#%02x%02x%02x" % PHASE_TINT.get(phase or "", DEFAULT_TINT)
@@ -1595,7 +1622,7 @@ class _Surface:
         self.gauges = {}
         for key in ("sources", "auto", "sante"):
             # 3 lignes des la creation : la vue ne retrecit pas au premier dessin
-            lab = tk.Label(gauges, text=key + "\n-\n-", bg=PANEL_BG, fg=MUTED, font=FONT, justify="left", anchor="nw")
+            lab = tk.Label(gauges, text=sources_text({}, {}) if key == "sources" else key + "\n-\n-", bg=PANEL_BG, fg=MUTED, font=FONT, justify="left", anchor="nw")
             lab.pack(side="left", fill="both", expand=True)
             self.gauges[key] = lab
         self.feed = _rich(frame, core_brain.FEED_LINES)
@@ -2175,8 +2202,7 @@ class BrainPanel:
             feed.append(line)
         surf.write(surf.feed, "feed", feed)
         g = snap.get("gauges") or {}
-        src = g.get("sources") or {}
-        surf.set_label("sources", "sources\n" + f"fond <- {src.get('bg', '-')}\n" + f"logo <- {src.get('logo', '-')}")
+        surf.set_label("sources", sources_text(g.get("sources") or {}, snap.get("bands") or {}))
         auto = g.get("auto") or {}
 
         def dot(flag) -> str:

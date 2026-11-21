@@ -33,6 +33,7 @@ from engine.video import LogoVideo
 
 SHADER_DIR = Path(__file__).resolve().parent.parent / "gl_shaders"
 BRAIN_HEALTH_S = 1.0       # visualizer du cerveau (#192) : jauges de sante publiees au plus une fois par seconde
+BRAIN_BANDS_S = 0.1        # niveaux par couche (jauge sources du cerveau) : au plus 10 fois par seconde
 
 
 def brain_cause(source: str | None) -> str | None:
@@ -318,7 +319,8 @@ class Renderer:
         self.brain = None                                                             # journal du visualizer du cerveau (core.brain.BrainLog, #192) ; None = rien n'est publie
         self.perf = None                                                              # PerfGuard de la boucle (jauge GPU du cerveau), pose par la projection
         self._brain_fx = {name: FxEdge() for name in EFFECTS + ("logo",)}            # un front montant par effet : un evenement par impulsion, pas par image
-        self._brain_health_at: float | None = None                                    # derniere publication de la sante (au plus une par BRAIN_HEALTH_S)
+        self._brain_bands_at: float | None = None                                     # derniere publication des niveaux par couche (BRAIN_BANDS_S)
+        self._brain_health_at: float | None = None                                   # derniere publication de la sante (au plus une par BRAIN_HEALTH_S)
         self._brain_frames = 0                                                        # images dessinees depuis
         self.cycle_boost = 1.0                                                        # renfort de fin de cycle de l'image en cours (#164)
         self._downbeat = DownbeatGate()                                            # onde de choc sur le 1er temps de la mesure (`ripple_beat`)
@@ -603,7 +605,7 @@ class Renderer:
         return max(0.0, 1.0 - (now - self._strobe_last) / self._strobe_len)
 
     def _brain_publish(self, p: dict, state: dict, fx_bg, fx_logo, au_bg_fx, au_logo_fx, logo_on: float, logo_au: tuple,
-                       src_bg: str, src_logo: str) -> None:
+                       src_bg: str, src_logo: str, bands: tuple = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))) -> None:
         """Visualizer du cerveau (#192) : un evenement par front montant d'effet (fond et logo confondus), et la sante au plus une fois par
         BRAIN_HEALTH_S. Seulement des valeurs deja calculees pour l'image : rien n'est ecrit dans le rendu. Une panne du journal n'arrete
         jamais le rendu."""
@@ -631,6 +633,11 @@ class Renderer:
             if self._brain_fx["logo"].step(now, lv):
                 brain.publish("logo", min(lv, 1.0), reason=f"logo : reaction <- {src_logo}", cause=brain_cause(src_logo), wall=now)
             self._brain_frames += 1
+            if self._brain_bands_at is None or now - self._brain_bands_at >= BRAIN_BANDS_S:
+                # ce que chaque couche voit (basses, aigus, kick), deja calcule pour l'image
+                brain.set_status(bands={lay: tuple(min(1.0, max(0.0, float(x))) for x in tuple(vec)[:3])
+                                        for lay, vec in zip(("bg", "logo"), bands)})
+                self._brain_bands_at = now
             if self._brain_health_at is None or now - self._brain_health_at >= BRAIN_HEALTH_S:
                 span = 0.0 if self._brain_health_at is None else now - self._brain_health_at
                 perf = self.perf
@@ -1201,7 +1208,8 @@ class Renderer:
             fx_logo = [max(v, f) * mult for v, f in zip(fx_logo, dv.force)]
             au_bg_fx, au_logo_fx = self._drop_audio(au_bg_fx, dv), self._drop_audio(au_logo_fx, dv)
         if self.brain is not None:                                     # visualizer du cerveau (#192) : lit les valeurs deja calculees, ne change rien a l'image
-            self._brain_publish(p, state, fx_bg, fx_logo, au_bg_fx, au_logo_fx, logo_fx, (beat_l, high_l, bass_l), src_bg, src_logo)
+            self._brain_publish(p, state, fx_bg, fx_logo, au_bg_fx, au_logo_fx, logo_fx, (beat_l, high_l, bass_l), src_bg, src_logo,
+                                (bg_au, lg_au))
         # Decorreles, les ondes du logo partent de son centre (origine GL = bas gauche) et son glitch
         # tire d'autres bandes; lies, tout est identique au fond (comme un seul post-traitement).
         center = (0.5, 0.5) if linked else (rect[0], 1.0 - rect[1])
