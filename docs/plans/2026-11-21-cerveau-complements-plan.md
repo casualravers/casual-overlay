@@ -50,7 +50,7 @@ loin : c'est exactement « la grille qui change d'echelle ». Remede : le pas d'
   `hits_by_step(events, anchor, period, epoch)` meme retour qu'avant.
 
 - [ ] **Step 1 : test qui echoue** (dans `check_brain_pure`) :
-  - grille (0.0, 0.5) ; kick publie a t = 10.0 (pas 80) ; `set_status(grid=(0.0, 0.495))` ; `snapshot` a t = 34.0 :
+  - grille (0.0, 0.5) ; kick publie a t = 10.0 (pas 80) ; `set_status(grid=(0.0, 0.495))` ; `snapshot` a t = 10.5 (tous les cas : la page affichee contient la frappe) :
     la frappe est au pas 80 de la page (aujourd'hui : 81, `round(10/0.495*4)` = 81).
   - saut d'ancre : grille (0.0, 0.5), kick a t = 10.0, puis grille (16.0, 0.5) (une phrase = 32 temps x 0.5 s) : le kick est au pas 80 - 128 = -48.
   - grille perdue (`grid=None`) puis (3.1, 0.5) : le kick est place par sa date, `step_of(10.0, 3.1, 0.5)`.
