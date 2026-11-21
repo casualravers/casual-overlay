@@ -21,8 +21,8 @@ touches (reglages, scenes, auto-sauvegarde, brain_ui.json dans un dossier tempor
     python tools/mesure_cerveau.py --sans-rendu        # sans la fenetre de projection (cout Tk seul)
     python tools/mesure_cerveau.py --json sortie.json  # resultats en JSON
 
-Seuils (plan, tache 9) : brain.tick moyen < 4 ms et pire < 20 ms, aucun gel > 150 ms imputable au panneau, images/s du rendu a 5 % pres
-de la reference. Fiche : docs/fonctions/cerveau.md (section Budget).
+Verdict : budget retenu par l'utilisateur (2026-11-21) : au plus 80 ms/s de brain.tick, aucun gel > 150 ms imputable au panneau,
+images/s du rendu a 5 % pres de la reference (les seuils par tick du plan, 4 ms / 20 ms, restent affiches pour l'historique). Fiche : docs/fonctions/cerveau.md (section Budget).
 """
 from __future__ import annotations
 
@@ -54,7 +54,8 @@ PERIOD = 60.0 / BPM
 # plan des phases, en mesures (boucle) : groove 16, build 8, peak 8 (drop au debut), break 4
 PLAN = (("groove", 16), ("build", 8), ("peak", 8), ("break", 4))
 SEGMENTS = ("sans", "iso", "mandala", "tunnel", "sismo", "free")
-TICK_MEAN_MS, TICK_WORST_MS, STALL_MS, FPS_TOL = 4.0, 20.0, 150.0, 0.05
+TICK_MEAN_MS, TICK_WORST_MS, STALL_MS, FPS_TOL = 4.0, 20.0, 150.0, 0.05     # seuils par tick du plan (historique, plus le verdict)
+BUDGET_MS_S = 80.0          # budget retenu par l'utilisateur (2026-11-21) : temps mur de brain.tick par seconde (4 ms x 20 Hz)
 
 
 def phase_of_bar(bar: int) -> tuple[str, int]:
@@ -315,7 +316,7 @@ def main() -> None:
     base = (results.get("sans") or {}).get("fps")
     print("\nmoy / pire / bascule : temps mur de brain.tick (STATS) ; CPU : temps CPU du fil Tk par tick ; Tk % : charge totale du fil Tk")
     print("(redessins du canvas compris) sur le segment ; ms/s : temps mur de brain.tick par seconde (budget : 4 ms x 20 Hz = 80 ms/s).")
-    print("Verdict : seuils du plan pris a la lettre (moyenne et pire par tick, gels, images/s).")
+    print(f"Verdict : budget retenu par l'utilisateur ({BUDGET_MS_S:.0f} ms/s de brain.tick), aucun gel, images/s a 5 % pres.")
     print("Segment   appels  moy ms  pire ms  pire regime  bascule  ms/s  CPU ms   Tk %  gels>150ms  img/s   verdict")
     for name in SEGMENTS:
         r = results.get(name)
@@ -325,7 +326,7 @@ def main() -> None:
         fps = r["fps"]
         ok = True
         if name != "sans":
-            ok = r["moy_regime_ms"] < TICK_MEAN_MS and r["pire_regime_ms"] < TICK_WORST_MS and not r["gels"]
+            ok = r["ms_par_s"] <= BUDGET_MS_S and not r["gels"]
             if base and fps:
                 ok = ok and fps >= base * (1.0 - FPS_TOL)
         print(f"{name:<9} {r['appels']:>6}  {r['moy_ms']:6.2f}  {r['pire_ms']:7.1f}  {r['pire_regime_ms']:11.1f}  "

@@ -149,6 +149,10 @@ Historique des moyennes par tick (mur, ms) :
 | 4 : + tunnel sur 32 pas dessines | 4,0 | 4,7 | 10,4 | 5,8 | 3,0 |
 | 5 : + mandala, sismo a 10 Hz, voile du tunnel en 1 ligne | 3,9 | 5,0 | 10,6 | 8,1 | 3,6 |
 | 6 : + iso a 10 Hz, voile en 1 ligne partout, tunnel calcule sur 32 pas | 5,2 | 5,3 | 9,9 | 8,5 | 3,5 |
+| 7 : + complements (pas fige, barres des sources, strobe a venir, voile de l'eclair du tunnel) | 5,1 | 5,2 | 10,0 | 9,5 | 3,4 |
+
+Mesure 7 (2026-11-21), en ms/s : iso 41, mandala 42, tunnel 81, sismo 76, frise libre 27 ; aucun gel, 60,1 a 60,2 images/s partout.
+Le tunnel est a la limite du budget (81 pour 80 : l'ecart d'une mesure a l'autre est de l'ordre de 1 ms par tick, soit ~8 ms/s).
 
 Mesure 1 : pires 30 a 45 ms, un gel de 302 ms pendant mandala (`ui_pump`, non reproduit ensuite) ; images/s 60,2 partout.
 
