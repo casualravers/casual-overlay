@@ -279,11 +279,12 @@ def _clock(t: float, now: float) -> str:
 # Instantane : tout ce que les vues dessinent, deja calcule
 # ---------------------------------------------------------------------------------------------------------------------------
 
-def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
+def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int | None = None) -> dict:
     """Instantane du journal a la date murale `now_wall` (sans etat garde d'un appel a l'autre).
 
     Page (iso, mandala, sismo) : 64 pas depuis le debut de la page courante (multiple de 64 depuis l'ancre). `rolling` (tunnel) :
-    68 pas depuis le pas courant - 4 (les 4 premiers sont le passe). Le journal est copie une seule fois : il est borne (KEEP_S,
+    68 pas depuis le pas courant - 4 (les 4 premiers sont le passe) ; `depth` borne les pas a venir (4 + depth pas : le tunnel n'en
+    dessine que 32, on ne calcule pas les autres ; ignore hors `rolling`). Le journal est copie une seule fois : il est borne (KEEP_S,
     MAX_EVENTS), et la prediction comme la phase ou la montee en cours peuvent remonter plus loin que 2 pages.
     """
     st = log.status()
@@ -334,7 +335,7 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False) -> dict:
     pos = (now - anchor) / period * STEPS_PER_BEAT         # pas courant + fraction
     cur = math.floor(pos)
     if rolling:
-        first, n = cur - 4, PAGE_STEPS + 4
+        first, n = cur - 4, 4 + (PAGE_STEPS if depth is None else max(0, min(PAGE_STEPS, int(depth))))
         page, bar = cur // PAGE_STEPS + 1, (cur % PAGE_STEPS) // STEPS_PER_BAR + 1
     else:
         first, n = (cur // PAGE_STEPS) * PAGE_STEPS, PAGE_STEPS

@@ -12685,6 +12685,18 @@ def check_brain_pure() -> None:
     near, far = rc[(192 - snap["first"], "kick")], rc[(240 - snap["first"], "kick")]
     check(abs(near[3] - far[3]) < 1e-9 and abs(near[3] - 1.0) < 1e-9 and near[4] == far[4] == "ghost",
           "cerveau: glissant, fantome egal a cur + 4 et cur + 52", str((near, far)))
+    # glissant borne (tunnel sur 32 pas, budget tache 9) : les 4 du passe + `depth` pas, identiques au debut de l'instantane complet
+    full = br.snapshot(log, 23.55, rolling=True)
+    try:
+        short = br.snapshot(log, 23.55, rolling=True, depth=32)
+    except TypeError as exc:
+        short = {"error": repr(exc)}
+    ok_depth = ("cells" in short and len(short["cells"]) == 36 * 3 and short["cells"] == full["cells"][:36 * 3]
+                and len(short["phase_steps"]) == 36 and len(short["veil"]) == 36 and short["veil"] == full["veil"][:36]
+                and short["first"] == full["first"] and short["cursor"] == full["cursor"] and short["score"] == full["score"]
+                and short["fx"] == [f for f in full["fx"] if f[0] < 36] and short["header"] == full["header"])
+    check(ok_depth, "cerveau: glissant borne a depth=32 -> 36 pas, identiques au debut de l'instantane de 68 pas",
+          str(short.get("error") or (len(short["cells"]), len(short["veil"]))))
 
     # changement d'ancre en cours de page
     evs = log.events()
@@ -13056,10 +13068,13 @@ def check_brain_gui() -> None:
         pump()
         out["free_back"] = type(bp.current).__name__
         out["timed"] = gl_gui.STATS.ops.get("brain.tick", [0])[0] > 0
-        # cadence par vue (budget, tache 9) : le tunnel a 10 Hz, les autres a 20 Hz
+        # cadence par vue (budget, tache 9) : mecanisme essaye avec une table ou seul le tunnel est a 10 Hz (les autres a TICK_MS)
+        out["cadence_table"] = dict(gui_brain.VIEW_TICK_MS)
         sched_calls: list = []
         bp.tick = lambda now=None: sched_calls.append(bp.view_name)
-        saved_view = bp.view_name
+        saved_view, saved_table = bp.view_name, dict(gui_brain.VIEW_TICK_MS)
+        gui_brain.VIEW_TICK_MS.clear()
+        gui_brain.VIEW_TICK_MS["tunnel"] = 100
         try:
             for name in ("tunnel", "iso"):
                 bp.view_name, bp._sched_at = name, -1e9
@@ -13070,6 +13085,8 @@ def check_brain_gui() -> None:
         finally:
             del bp.tick
             bp.view_name = saved_view
+            gui_brain.VIEW_TICK_MS.clear()
+            gui_brain.VIEW_TICK_MS.update(saved_table)
         out["cadence"] = (sched_calls.count("tunnel"), sched_calls.count("iso"))
         # panneau etendu replie : plus aucun dessin
         c["scenes"]["expand"](False)
@@ -13140,7 +13157,12 @@ def check_brain_gui() -> None:
     check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille, frise libre « tempo non detecte »", str(out.get("free")))
     check(out.get("free_back") == "Counting", "cerveau GUI: la grille revient -> la vue choisie reprend", str(out.get("free_back")))
     check(out.get("timed") is True, "cerveau GUI: chaque tick est chronometre (brain.tick)")
-    check(out.get("cadence") == (1, 2), "cerveau GUI: cadence par vue (tunnel 10 Hz, iso 20 Hz)", str(out.get("cadence")))
+    check(out.get("cadence") == (1, 2), "cerveau GUI: cadence par vue (une vue a 100 ms saute un tick de 50 ms, une vue sans entree non)",
+          str(out.get("cadence")))
+    check(out.get("cadence_table") == {v: 100 for v in gui_brain.VIEW_NAMES}, "cerveau GUI: les quatre vues a 10 Hz (budget mesure)",
+          str(out.get("cadence_table")))
+    veils = (gui_brain.ISO_VEIL_LINES, gui_brain.MAN_VEIL_RINGS, gui_brain.SIS_VEIL_LINES, gui_brain.TUN_VEIL_LINES, gui_brain.TUN_DEPTH)
+    check(veils == (1, 1, 1, 1, 32), "cerveau GUI: budget, voile d'une ligne dans les quatre vues et tunnel sur 32 pas", str(veils))
     check(out.get("collapsed") is True, "cerveau GUI: panneau etendu replie -> plus aucun dessin")
 
 

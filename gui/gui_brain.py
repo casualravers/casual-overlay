@@ -9,7 +9,7 @@ projeter l'instantane (`core.brain.snapshot`) ; interface d'une vue : `View(canv
 now)`, `.hover(x, y) -> str | None` ; registre `VIEWS` (les vraies vues s'y inscrivent, `BlankView` en attendant). Sans grille
 (`snap["grid"] is False`) : `FreeView`, frise en secondes, quelle que soit la vue choisie.
 
-Cout : `tick` (ordonnanceur, ~20 Hz ; mandala, sismo et tunnel a 10 Hz, `VIEW_TICK_MS`) ne fait rien quand le panneau n'est pas
+Cout : `tick` (ordonnanceur toutes les 50 ms ; les quatre vues a 10 Hz, `VIEW_TICK_MS`) ne fait rien quand le panneau n'est pas
 visible ; pendant un REC il dessine une derniere fois « fige pendant le REC » puis plus rien. Budget mesure : docs/fonctions/cerveau.md. Libelles en anglais, raisons en francais (contraintes du plan). Reglages de salle `brain_*`.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ DEFAULT_TINT = (7, 8, 12)
 
 VIEW_NAMES = ("iso", "mandala", "tunnel", "sismo")
 TICK_MS = 50                                   # ~20 Hz
-VIEW_TICK_MS = {"tunnel": 100, "sismo": 100, "mandala": 100}   # cadence propre a une vue (budget mesure, tache 9 : 10 Hz ; iso reste a 20 Hz)
+VIEW_TICK_MS = {"iso": 100, "mandala": 100, "tunnel": 100, "sismo": 100}   # cadence propre a une vue (budget mesure, tache 9 : toutes a 10 Hz)
 BOX_W = 640                                    # largeur du panneau raccroche quand l'espace VJ n'en donne pas (pixels)
 TOGGLE_W = 6                                   # largeur fixe (caracteres) des boutons dont le texte change
 DETACH_W = 7
@@ -166,6 +166,7 @@ ISO_S_MAX = 114.5                              # etendue verticale maximale (x +
 ISO_FADE_S = 0.35                              # fondu des fantomes en debut de page
 ISO_ANGLE = (18, 45)
 ISO_MAX_CAUSES = 96
+ISO_VEIL_LINES = 1                             # lignes de relief du voile (budget mesure, tache 9 : 8 -> 1, voile simplifie)
 ISO_PAGE = core_brain.PAGE_STEPS
 
 
@@ -251,7 +252,7 @@ class IsoView:
             lines = [] if kind == "fx" else [cv.create_line(0, 0, 0, 0, state="hidden") for _ in range(3)]
             (self._ins if kind == "ins" else self._fxc)[(i, r)] = _IsoCell(polys, lines)
         # voile, causes, present
-        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(8)]
+        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(ISO_VEIL_LINES)]
         self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3)) for _ in range(ISO_MAX_CAUSES)]
         self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(ISO_MAX_CAUSES)]
         self._plane = cv.create_polygon(0, 0, 0, 0, 0, 0, 0, 0, fill="#ffffff", stipple="gray12", outline="")
@@ -469,7 +470,7 @@ class IsoView:
             for n in range(len(csig[0]), n_old):
                 cv.itemconfigure(self._cause_lines[n], state="hidden")
                 cv.itemconfigure(self._cause_dots[n], state="hidden")
-        # voile : 8 lignes de relief au-dessus des pistes d'effets
+        # voile : ISO_VEIL_LINES lignes de relief au-dessus des pistes d'effets (une seule, au milieu, depuis la mesure du budget)
         veil = snap.get("veil") or ()
         top = min(cur + 1, ISO_PAGE, len(veil) - 1) if veil else -1
         on = top >= 1 and any(veil[i][1] > 0 for i in range(top + 1))
@@ -481,10 +482,11 @@ class IsoView:
                 for k, it in enumerate(self._veil):
                     cv.itemconfigure(it, fill=blend(col, 0.55 - k * 0.04, bg))
             for k, it in enumerate(self._veil):
-                x0 = (4 + k) * R + R * 0.5
+                kp = 3.5 if ISO_VEIL_LINES == 1 else k * 7.0 / (ISO_VEIL_LINES - 1)       # piste (0..7) sous la ligne
+                x0 = (4 + kp) * R + R * 0.5
                 pts = []
                 for i in range(top + 1):
-                    z = veil[i][1] * 40 * (0.55 + 0.45 * math.sin(i * 0.32 + k * 0.8 + now * 2.2))
+                    z = veil[i][1] * 40 * (0.55 + 0.45 * math.sin(i * 0.32 + kp * 0.8 + now * 2.2))
                     pts.extend(self.P(x0, 64 - i, z))
                 cv.coords(it, *pts)
                 if not self._veil_on:
@@ -523,6 +525,7 @@ SIS_RIGHT = 10.0
 SIS_MAX_FX = 160
 SIS_MAX_CAUSES = 96
 SIS_MAX_SCENES = 8
+SIS_VEIL_LINES = 1                             # lignes du voile au-dessus de la portee (budget mesure, tache 9 : 4 -> 1)
 SIS_Q = 4                                      # points par pas pour l'onde
 
 
@@ -555,7 +558,7 @@ class SismoView:
         self._bar_labels = [cv.create_text(0, 0, text=f"bar {j + 1}", anchor="w", fill=DIM, font=FONT_SMALL) for j in range(4)]
         self._staff = [cv.create_line(0, 0, 0, 0, fill="#1c2236") for _ in trk]
         self._staff_labels = {r: cv.create_text(6, 0, text=core_brain.label(r), anchor="w", fill=core_brain.COLORS[r], font=FONT_SMALL) for r in trk}
-        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(4)]
+        self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(SIS_VEIL_LINES)]
         # ondes : [passe, futur] par instrument
         self._past = {r: cv.create_line(0, 0, 0, 0, fill=core_brain.COLORS[r], width=1.4) for r in ins}
         self._fut = {r: cv.create_line(0, 0, 0, 0, fill=core_brain.COLORS[r], width=1, dash=(2, 3)) for r in ins}
@@ -850,6 +853,7 @@ MAN_RMAX = 240.0                               # rayon le plus grand dessine (st
 MAN_SP = 2 * math.pi / 16                      # largeur angulaire d'une case (16 pas par mesure)
 MAN_MAX_FX = 160
 MAN_MAX_CAUSES = 96
+MAN_VEIL_RINGS = 1                             # ondes du voile au centre (budget mesure, tache 9 : 4 -> 1)
 
 
 def _man_angle(s: float) -> float:
@@ -895,7 +899,7 @@ class MandalaView:
         self._fxl = [cv.create_line(0, 0, 0, 0, state="hidden", width=2) for _ in range(MAN_MAX_FX)]
         self._fxa = [cv.create_arc(0, 0, 1, 1, style="arc", state="hidden", width=2) for _ in range(MAN_MAX_FX)]
         self._disc = cv.create_oval(0, 0, 0, 0, outline="")
-        self._veil = [cv.create_oval(0, 0, 0, 0, state="hidden", width=1.5) for _ in range(4)]
+        self._veil = [cv.create_oval(0, 0, 0, 0, state="hidden", width=1.5) for _ in range(MAN_VEIL_RINGS)]
         self._bpm = cv.create_text(0, 0, text="", fill=FG, font=FONT_HEAD)
         self._phase = cv.create_text(0, 0, text="", fill=DIM, font=FONT_SMALL)
         self._cur_rings = [cv.create_oval(0, 0, 0, 0, outline="#ffffff") for _ in range(2)]
@@ -1087,7 +1091,7 @@ class MandalaView:
             cv.itemconfigure(self._disc, fill=disc_bg)
             cv.itemconfigure(self._bpm, text="--" if bpm is None else f"{float(bpm):.1f}")
             cv.itemconfigure(self._phase, text=phase or "", fill=pcol)
-        # ondes du voile (changent a chaque tick : ces quatre anneaux seulement)
+        # ondes du voile (changent a chaque tick : ces MAN_VEIL_RINGS anneaux seulement)
         veil = snap.get("veil") or ()
         v = veil[min(cur, len(veil) - 1)] if veil else None
         on = bool(v) and v[1] > 0
@@ -1095,7 +1099,7 @@ class MandalaView:
             col = "#ffffff" if v[0] == "drop" else PHASE_COLORS["build"]
             rmax = MAN_R0 - 4
             for q, it in enumerate(self._veil):
-                rr = ((now * 1.4 + q / 4) % 1.0) * rmax
+                rr = ((now * 1.4 + q / MAN_VEIL_RINGS) % 1.0) * rmax
                 self._circle(it, max(0.5, rr))
                 cv.itemconfigure(it, outline=blend(col, v[1] * (1 - rr / rmax) * 0.9, disc_bg), state="normal")
         elif self._veil_on:
@@ -2058,7 +2062,8 @@ class BrainPanel:
         if log is None:
             return
         now = time.monotonic() if now is None else float(now)
-        snap = core_brain.snapshot(log, now, rolling=(self.view_name == "tunnel"))
+        tunnel = self.view_name == "tunnel"
+        snap = core_brain.snapshot(log, now, rolling=tunnel, depth=TUN_DEPTH if tunnel else None)     # le tunnel ne calcule que ce qu'il dessine
         self._draw(surf, snap, now)
 
     def _draw(self, surf: _Surface, snap: dict, now: float) -> None:

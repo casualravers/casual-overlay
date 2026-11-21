@@ -46,7 +46,8 @@ Sans etat garde d'un appel a l'autre ; le journal est copie une fois. Cles : `gr
 bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers effets : heure, famille, raison, cause), `free` (sans grille).
 
 - **Page** (iso, mandala, sismo) : 64 pas depuis le debut de la page (multiple de 64 depuis l'ancre). **Glissant** (`rolling=True`, tunnel) :
-  68 pas depuis le pas courant - 4 (les 4 premiers sont le passe) ; `phase_steps` et `veil` ont alors 68 entrees.
+  68 pas depuis le pas courant - 4 (les 4 premiers sont le passe) ; `phase_steps` et `veil` ont alors 68 entrees. `depth` borne les pas a
+  venir (`depth=32` : 36 pas, identiques au debut de l'instantane complet) : le tunnel ne calcule que ce qu'il dessine.
 - **Sans grille** (`grid` None ou periode <= 0) : `free` = (age, famille, force) des `FREE_S` = 8 dernieres secondes ; la vue devient la
   frise libre (`FreeView`, « tempo non detecte ») quelle que soit la vue choisie, et revient des que la grille est calee.
 - `phase_since` = 0,0 publie avant le premier changement de phase = duree inconnue (pas affichee).
@@ -84,7 +85,7 @@ bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers ef
   `TUN_DEPTH` = 32 pas devant (2 mesures, voir Budget). **sismo** : une onde par instrument (passe plein, futur en pointilles), portee des
   effets, voile au-dessus.
 - **Rafraichissement** : `scheduled_tick` (ordonnanceur `ui_every`, toutes les `TICK_MS` = 50 ms) laisse passer selon `VIEW_TICK_MS`
-  (mandala, sismo, tunnel : 100 ms) ; les actions (bascule, vue, causes...) appellent `tick` directement. Rien quand le panneau n'est pas
+  (les quatre vues : 100 ms, voir Budget) ; les actions (bascule, vue, causes...) appellent `tick` directement. Rien quand le panneau n'est pas
   visible (espace VJ affiche, panneau replie, fenetre reduite) ; **fige pendant un REC** (une derniere image « fige pendant le REC »).
   Chaque tick est chronometre `brain.tick` (`STATS`, rapport du menu « reglages VJ »).
 - **Persistance** : reglages `brain_on`, `brain_view`, `brain_detached`, `brain_geom`, `brain_topmost`, `brain_causes`, `brain_hidden`, en
@@ -100,47 +101,74 @@ surprises, phases groove 16 -> build 8 -> peak 8 avec drop -> break 4 mesures, e
 Segments de 60 s : sans le cerveau (reference), iso, mandala, tunnel, sismo, frise libre. Fichiers de l'utilisateur non touches.
 
 Poste de dev (AMD Radeon integre, moniteur 59 Hz, projection 1280 x 720 en fenetre, panneau raccroche dans une fenetre 1500 x 900),
-mesure finale (apres les decisions) :
+mesure finale (mesure 6, tous les remedes appliques sauf le dernier recours) :
 
-| Vue | Cadence | tick moyen (mur) | pire en regime | bascule de vue | CPU / tick | charge du fil Tk | gels > 150 ms | images/s |
-|---|---|---|---|---|---|---|---|---|
-| sans cerveau | - | 0,01 ms | 0,1 ms | - | 0 | 15,7 % | 0 | 60,2 |
-| iso | 20 Hz | 3,9 ms | 27 ms | 87 ms | 2,9 ms | 44,2 % | 0 | 60,2 |
-| mandala | 10 Hz | 5,0 ms | 22 ms | 17 ms | 2,4 ms | 23,4 % | 0 | 60,2 |
-| tunnel | 10 Hz, 32 pas, voile 1 ligne | 10,6 ms | 28 ms | 17 ms | 6,5 ms | 28,2 % | 0 | 60,2 |
-| sismo | 10 Hz | 8,1 ms | 25 ms | 17 ms | 4,4 ms | 24,4 % | 0 | 60,2 |
-| frise libre | (celle de la vue choisie) | 3,6 ms | 20 ms | 25 ms | 2,2 ms | 21,6 % | 0 | 60,2 |
+| Vue | Remedes | tick moyen (mur) | pire en regime | bascule de vue | ms / s | CPU / tick | charge du fil Tk | gels > 150 ms | images/s |
+|---|---|---|---|---|---|---|---|---|---|
+| sans cerveau | - | 0,01 ms | 0,0 ms | - | 0 | 0 | 18,1 % | 0 | 60,0 |
+| iso | 10 Hz, voile 1 ligne | 5,2 ms | 28 ms | 73 ms | 42 | 4,0 ms | 33,5 % | 0 | 60,2 |
+| mandala | 10 Hz, voile 1 anneau | 5,3 ms | 50 ms | 9 ms | 43 | 3,0 ms | 24,6 % | 0 | 59,8 |
+| tunnel | 10 Hz, 32 pas (dessines et calcules), voile 1 ligne | 9,9 ms | 28 ms | 16 ms | 80 | 6,2 ms | 28,9 % | 0 | 60,2 |
+| sismo | 10 Hz, voile 1 ligne | 8,5 ms | 31 ms | 22 ms | 69 | 5,2 ms | 28,1 % | 0 | 60,1 |
+| frise libre | (cadence de la vue choisie, ici 10 Hz) | 3,5 ms | 23 ms | 17 ms | 29 | 2,3 ms | 24,4 % | 0 | 60,2 |
 
-Premiere mesure (avant toute decision, tout a 20 Hz) : iso 6,3 ms, mandala 6,9, tunnel 14,8, sismo 11,5, frise libre 6,8 ms de moyenne ;
-pires 30 a 45 ms ; un gel de 302 ms pendant mandala (`ui_pump`, non reproduit ensuite) ; images/s 60,2 partout.
+`ms / s` = temps mur de `brain.tick` par seconde (l'ordonnanceur donne ~8 ticks/s a 10 Hz, ~16 a 20 Hz). Les ecarts d'une mesure a l'autre
+sont de l'ordre de 1 ms sur la moyenne et de 5 a 20 ms sur le pire (le pire de mandala, 50 ms ici, etait 22 ms a la mesure 5).
 
-- **Images/s du rendu** : inchangees (60,2 avec et sans le panneau, toutes vues) : seuil tenu.
-- **Gels** : aucun en regime dans la mesure finale. **A la bascule vers iso** (creation de ~3100 elements), le tick monte a 70-215 ms et
-  deux mesures ont vu un gel de 173-183 ms a ce moment (`ui_pump` ; l'une sous profileur) : imputable au panneau, mais seulement quand on choisit iso ou quand la
-  grille revient apres une frise libre (la vue est recreee).
-- **Le temps mur de `brain.tick` est gonfle par le verrou Python** : chaque appel Tk rend le verrou, que le fil GL (et l'analyse) reprend ;
-  le tick attend alors son tour. CPU / tick (`time.thread_time`) = la moitie environ du temps mur. Le pire par tick (20-28 ms) depasse 20 ms
-  dans toutes les vues, **frise libre comprise** (quelques points seulement) : c'est un plancher de partage du verrou avec le rendu, que
-  baisser la cadence ou la profondeur ne change pas. Sans la projection (`--sans-rendu`, premiere mesure courte) les moyennes etaient
-  2 a 3 fois plus basses.
-- **Redessin du canvas** : fait par Tk a l'inactivite, hors de `brain.tick` mais dans la charge du fil Tk. Hors application (canvas seul,
-  `update_idletasks`) : iso ~10 ms par image (le plan du present et le voile couvrent toute la grille de ~3100 elements), tunnel ~10 ms,
-  sismo ~5 ms, mandala ~3 ms. C'est pourquoi iso, a 3,9 ms de tick, est la vue qui charge le plus le fil Tk (+28 points).
+Historique des moyennes par tick (mur, ms) :
+
+| Mesure | iso | mandala | tunnel | sismo | frise libre |
+|---|---|---|---|---|---|
+| 1 : avant toute decision, tout a 20 Hz | 6,3 | 6,9 | 14,8 | 11,5 | 6,8 |
+| 2 : optimisations sans effet visible | 4,2 | 4,3 | 12,1 | 5,9 | 4,6 |
+| 3 : + tunnel a 10 Hz | 3,9 | 4,0 | 16,4 | 5,7 | 4,8 |
+| 4 : + tunnel sur 32 pas dessines | 4,0 | 4,7 | 10,4 | 5,8 | 3,0 |
+| 5 : + mandala, sismo a 10 Hz, voile du tunnel en 1 ligne | 3,9 | 5,0 | 10,6 | 8,1 | 3,6 |
+| 6 : + iso a 10 Hz, voile en 1 ligne partout, tunnel calcule sur 32 pas | 5,2 | 5,3 | 9,9 | 8,5 | 3,5 |
+
+Mesure 1 : pires 30 a 45 ms, un gel de 302 ms pendant mandala (`ui_pump`, non reproduit ensuite) ; images/s 60,2 partout.
 
 **Decisions** (ordre du plan : cadence 20 -> 10 Hz, profondeur du tunnel 64 -> 32, voile simplifie, dessin hors du fil Tk en dernier
-recours avec l'accord de l'utilisateur) :
+recours avec l'accord de l'utilisateur), toutes appliquees sauf la derniere :
 
 1. Optimisations sans effet visible, d'abord (toutes les vues) : `snapshot` ne formate l'heure que des 4 lignes du fil, reprend la
    prediction de page des cases pour le score, ne place sur la grille que les frappes des pas regardes (une phrase avant la page) ; 2,4 ->
    0,7 ms hors application. Sismo : points de l'onde calcules une fois par (valeurs, geometrie) puis coupes au curseur (2,0 -> 0,9 ms).
    Tunnel : texte de survol des cases forme au survol seulement. Frise libre : couleurs et libelles reecrits seulement s'ils changent.
-2. **mandala et sismo a 10 Hz** (moyenne au-dessus de 4 ms dans les mesures 2 a 4 : mandala 4,0-4,7, sismo 5,7-5,9). Le cout par tick ne
-   baisse pas (il monte un peu : plus de changements par tick), le cout par seconde baisse (sismo 94 -> 66 ms/s, l'ordonnanceur tournant a ~16 Hz
-   et non 20).
-3. **tunnel** : 10 Hz, puis 32 pas de profondeur (tick 16,4 -> 10,4 ms), puis voile d'une seule ligne : encore au-dessus (10,6 ms par tick,
-   ~86 ms/s). **Reste le dernier recours (dessin hors du fil Tk), non code** : a decider par l'utilisateur. A noter : une image calculee
-   hors du fil Tk resterait du Python, donc partagerait toujours le verrou avec le rendu.
-4. iso reste a 20 Hz (tick sous 4 ms) ; si l'interface rame en soiree avec iso, la passer a 10 Hz (`VIEW_TICK_MS`) est la premiere piste.
+2. **Les quatre vues a 10 Hz** (`VIEW_TICK_MS`). Le cout par tick ne baisse pas (il monte : plus de changements par tick), le cout par
+   seconde baisse (sismo 94 -> 69 ms/s, iso ~63 -> 42 ms/s ; charge du fil Tk avec iso 44 -> 34 %).
+3. **Tunnel sur 32 pas** : 36 pas dessines (4 de passe + `TUN_DEPTH`) et seulement ceux-la calcules (`snapshot(..., rolling=True,
+   depth=32)`) ; tick 16,4 -> 10,4 ms, puis 9,9 ms.
+4. **Voile simplifie** dans les quatre vues : une ligne (iso, sismo, tunnel) ou un anneau (mandala) au lieu de 8 / 4 / 5 / 4. Le voile n'est
+   dessine que pendant une montee ou juste apres un drop : gain faible a la mesure.
+5. **Dernier recours (dessin hors du fil Tk) : non code.**
+
+**Conclusion, apres tous les remedes : seuils du plan pris a la lettre NON tenus.**
+
+- Moyenne par tick < 4 ms : **depassee par les quatre vues** : iso 5,2, mandala 5,3, tunnel 9,9, sismo 8,5 ms. Seule la frise libre (3,5 ms)
+  passe.
+- Pire par tick < 20 ms : **depasse partout, frise libre comprise** : iso 28, mandala 50, tunnel 28, sismo 31, frise libre 23 ms (19,6 ms a la
+  mesure 5 : la frise libre est a la limite, elle passe ou non selon la mesure).
+- Gels > 150 ms imputables au panneau : aucun en regime ; **a la bascule vers iso** (creation de ~3100 elements, tick de 70 a 215 ms),
+  deux mesures sur six ont vu un gel de 173-183 ms (`ui_pump` ; l'une sous profileur). Cela arrive quand on choisit iso et quand la grille
+  revient apres une frise libre (la vue est recreee), donc aussi en soiree si le tempo se perd puis revient.
+- Images/s du rendu a 5 % pres : **tenu** (60,2 sans et avec le panneau, 59,8 au pire).
+
+Pourquoi les remedes ne suffisent pas : le temps mur de `brain.tick` est gonfle par le **verrou Python**. Chaque appel Tk rend le verrou,
+que le fil GL (et l'analyse) reprend ; le tick attend son tour. Le CPU par tick (`time.thread_time`) n'est que 50 a 75 % du temps mur, et le
+pire depasse 20 ms meme pour la frise libre (quelques points). Sans la projection (`--sans-rendu`, premiere mesure courte) les moyennes
+etaient 2 a 3 fois plus basses. Baisser la cadence ou la profondeur reduit le cout par seconde, pas ce plancher par tick. Le **redessin du
+canvas** (fait par Tk a l'inactivite, hors de `brain.tick` mais dans la charge du fil Tk) coute en plus, hors application : iso ~10 ms par
+image (le plan du present et le voile couvrent toute la grille), tunnel ~10 ms, sismo ~5 ms, mandala ~3 ms.
+
+**Decision ouverte, a prendre par l'utilisateur** (rien n'est code) :
+
+- soit le **dernier recours** du plan : dessiner les vues hors du fil Tk (image calculee a part, posee dans le canvas). A noter : une image
+  calculee en Python partagerait toujours le verrou avec le rendu ; le gain n'est pas assure sans le mesurer ;
+- soit **changer le seuil du plan** : remplacer « moyenne < 4 ms et pire < 20 ms par tick » par un budget par seconde (par exemple 80 ms/s,
+  soit 4 ms x 20 Hz, que toutes les vues tiennent : 29 a 80 ms/s, le tunnel tout juste) et le constat « aucun gel en regime, images/s
+  inchangees ». C'est une **modification du seuil du plan, qui demande l'accord de l'utilisateur** ;
+- dans les deux cas, garder les vues construites (au lieu de les recreer) eviterait le gel a la bascule vers iso.
 
 ## Pieges
 
