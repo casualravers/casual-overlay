@@ -10,4 +10,5 @@ Avant de modifier un module, lis sa fiche :
 - `preview.py` : [docs/fonctions/scenes-vj.md](../docs/fonctions/scenes-vj.md)
 - `doodle_feed.py`, `recorder.py`, `remote.py` : [docs/fonctions/medias-externes.md](../docs/fonctions/medias-externes.md)
 - `diagnostics.py`, `deps.py` (dependances facultatives, `MISSING`) : [docs/fonctions/outillage.md](../docs/fonctions/outillage.md)
+- `audio.py` (`_publish_brain`), `render.py` (`_brain_publish`, `brain_cause`), `session.py` (`Session.brain`) : publications du visualizer du cerveau (#192) : [docs/fonctions/cerveau.md](../docs/fonctions/cerveau.md)
 - `session.py` (etat partage GL / GUI / fils : la regle des threads est dans la racine, section Architecture) : [docs/fonctions/projection.md](../docs/fonctions/projection.md)

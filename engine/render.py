@@ -25,11 +25,28 @@ from core.params import DEFAULT_PARAMS
 from core import reaction
 from core.recording import cover_uv as fit_cover, fit_rect
 from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
+from core.brain import FxEdge
+from core import explain as core_explain
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.reaction import ReactionDiffusion
 from engine.video import LogoVideo
 
 SHADER_DIR = Path(__file__).resolve().parent.parent / "gl_shaders"
+BRAIN_HEALTH_S = 1.0       # visualizer du cerveau (#192) : jauges de sante publiees au plus une fois par seconde
+BRAIN_BANDS_S = 0.1        # niveaux par couche (jauge sources du cerveau) : au plus 10 fois par seconde
+
+
+def brain_cause(source: str | None) -> str | None:
+    """Instrument qui declenche un effet, d'apres le nom de sa source (`core.audio_layers`) : kick / basses -> kick, snare / caisse ->
+    snare, aigus / frappes -> hihat, sinon None."""
+    src = str(source or "")
+    if "kick" in src or "basses" in src:
+        return "kick"
+    if "snare" in src or "caisse" in src:
+        return "snare"
+    if "aigus" in src or "frappes" in src:
+        return "hihat"
+    return None
 
 
 def _hash01(i: int, seed: int) -> float:
@@ -299,6 +316,12 @@ class Renderer:
         self._src_mix = (SourceMixer(), SourceMixer())                                 # fondu entre sources quand « auto » en change
         self.sources_now = ("tout", "tout", False, False)                              # (fond, logo, fond en auto, logo en auto) : affiche dans l'interface
         self.strobe_info: tuple[str, float] | None = None                            # (raison, instant) du dernier eclair : affiche dans l'interface
+        self.brain = None                                                             # journal du visualizer du cerveau (core.brain.BrainLog, #192) ; None = rien n'est publie
+        self.perf = None                                                              # PerfGuard de la boucle (jauge GPU du cerveau), pose par la projection
+        self._brain_fx = {name: FxEdge() for name in EFFECTS + ("logo",)}            # un front montant par effet : un evenement par impulsion, pas par image
+        self._brain_bands_at: float | None = None                                     # derniere publication des niveaux par couche (BRAIN_BANDS_S)
+        self._brain_health_at: float | None = None                                   # derniere publication de la sante (au plus une par BRAIN_HEALTH_S)
+        self._brain_frames = 0                                                        # images dessinees depuis
         self.cycle_boost = 1.0                                                        # renfort de fin de cycle de l'image en cours (#164)
         self._downbeat = DownbeatGate()                                            # onde de choc sur le 1er temps de la mesure (`ripple_beat`)
         self._fx_bank = EffectBank()                                                   # reactivite par effet (mode auto) : un vecteur audio par effet et par couche
@@ -560,6 +583,13 @@ class Renderer:
             if kind:
                 self.auto_counts[kind] = self.auto_counts.get(kind, 0) + 1
             self.strobe_info = (self.strobe_brain.reason if self._strobe_auto_now else ("montee (eclairs de plus en plus rapides)" if (build > 0.0 and not manual_fire) else (str(p.get("strobe_why") or "") or "manuel")), now)
+            if self.brain is not None:                                # visualizer du cerveau (#192) : l'eclair, sa raison et sa cause
+                try:
+                    on_kick = self._strobe_auto_now and kicked and self.strobe_brain.kind in ("pic", "groove")
+                    self.brain.publish("foudre" if p.get("strobe_kind") == "foudre" else "strobe", 1.0, reason=self.strobe_info[0],
+                                       cause="kick" if on_kick else None, wall=now)
+                except Exception:                                     # le cerveau est un affichage : jamais d'arret du rendu pour lui
+                    pass
         elif fire and self.strobe_limiter.blocked(now) and self.strobe_limiter.trips != getattr(self, "_trips_logged", 0):
             self._trips_logged = self.strobe_limiter.trips
             sessionlog.event(f"Strobe limite : rafale de plus de {float(p['strobe_max_s']):.0f} s, pause de {STROBE_COOLDOWN_S:.0f} s")
@@ -573,6 +603,58 @@ class Renderer:
         if p.get("strobe_kind") == "foudre":                          # mode Foudre : les eclairs acceptes deviennent des decharges (lues par `draw`), jamais de blanc
             return 0.0
         return max(0.0, 1.0 - (now - self._strobe_last) / self._strobe_len)
+
+    def _brain_publish(self, p: dict, state: dict, fx_bg, fx_logo, au_bg_fx, au_logo_fx, logo_on: float, logo_au: tuple,
+                       src_bg: str, src_logo: str, bands: tuple = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))) -> None:
+        """Visualizer du cerveau (#192) : un evenement par front montant d'effet (fond et logo confondus), et la sante au plus une fois par
+        BRAIN_HEALTH_S. Seulement des valeurs deja calculees pour l'image : rien n'est ecrit dans le rendu. Une panne du journal n'arrete
+        jamais le rendu."""
+        try:
+            brain = self.brain
+            now = time.monotonic()
+            fx_now = self.fx_now or {}
+            for i, name in enumerate(EFFECTS):
+                best, layer = 0.0, None
+                for lay, on, vecs in (("bg", fx_bg, au_bg_fx), ("logo", fx_logo, au_logo_fx)):
+                    if float(on[i]) <= 0.0:
+                        continue                                        # effet coupe sur cette couche : il ne reagit a rien
+                    v = max(float(x) for x in tuple(vecs[i])[:3])       # (basses, aigus, kick) ; la 4e composante est une duree
+                    if v > best:
+                        best, layer = v, lay
+                if self._brain_fx[name].step(now, best) and layer is not None:
+                    active = fx_now.get(layer)
+                    entry = [a for a in active if a[0] == name] if active is not None else None
+                    source = entry[0][1] if entry else (src_bg if layer == "bg" else src_logo)
+                    reason = core_explain.fx_text("fond" if layer == "bg" else "logo", entry) if entry else ""
+                    if not reason:
+                        reason = f"{'fond' if layer == 'bg' else 'logo'} : {core_explain.FX_NAMES.get(name, name)} <- {source}"
+                    brain.publish(name, min(best, 1.0), reason=reason, cause=brain_cause(source), wall=now)
+            lv = max(float(x) for x in logo_au) if float(logo_on) > 0.0 and self.has_logo else 0.0
+            if self._brain_fx["logo"].step(now, lv):
+                brain.publish("logo", min(lv, 1.0), reason=f"logo : reaction <- {src_logo}", cause=brain_cause(src_logo), wall=now)
+            self._brain_frames += 1
+            if self._brain_bands_at is None or now - self._brain_bands_at >= BRAIN_BANDS_S:
+                # ce que chaque couche voit (basses, aigus, kick), deja calcule pour l'image
+                brain.set_status(bands={lay: tuple(min(1.0, max(0.0, float(x))) for x in tuple(vec)[:3])
+                                        for lay, vec in zip(("bg", "logo"), bands)})
+                self._brain_bands_at = now
+            if self._brain_health_at is None or now - self._brain_health_at >= BRAIN_HEALTH_S:
+                span = 0.0 if self._brain_health_at is None else now - self._brain_health_at
+                perf = self.perf
+                gauges = {
+                    "fps": self._brain_frames / span if span > 0.0 else 0.0,
+                    "gpu": None if perf is None else {"ms": float(perf.avg), "budget_ms": float(perf.budget_ms), "over": bool(perf.active)},
+                    "latency_ms": float(state.get("audio_age_ms", 0.0) or 0.0),
+                    "rec": bool(self.video_cover),
+                    "sources": {"bg": src_bg, "logo": src_logo},
+                    "auto": {"fx_master": float(p.get("fx_master", 1.0)), "phases": float(p.get("auto_phase", 0.0)) >= 0.5,
+                             "strobe": float(p.get("strobe_auto", 0.0)) >= 0.5, "foudre": p.get("strobe_kind") == "foudre", "tempo": float(p.get("bpm_auto", 0.0)) >= 0.5,
+                             "vj": bool(brain.status().get("vj", False))},
+                }
+                brain.set_status(gauges=gauges)
+                self._brain_health_at, self._brain_frames = now, 0
+        except Exception:                                               # le cerveau est un affichage : jamais d'arret du rendu pour lui
+            pass
 
     def _dark_threshold(self, p: dict) -> float:
         """Seuil de luminosite du strobe : il ne blanchit que les parties plus sombres que ce seuil (1 = toute l'image). Le reglage « Sombre » de
@@ -1125,6 +1207,9 @@ class Renderer:
             fx_bg = [max(v, f) * mult for v, f in zip(fx_bg, dv.force)]
             fx_logo = [max(v, f) * mult for v, f in zip(fx_logo, dv.force)]
             au_bg_fx, au_logo_fx = self._drop_audio(au_bg_fx, dv), self._drop_audio(au_logo_fx, dv)
+        if self.brain is not None:                                     # visualizer du cerveau (#192) : lit les valeurs deja calculees, ne change rien a l'image
+            self._brain_publish(p, state, fx_bg, fx_logo, au_bg_fx, au_logo_fx, logo_fx, (beat_l, high_l, bass_l), src_bg, src_logo,
+                                (bg_au, lg_au))
         # Decorreles, les ondes du logo partent de son centre (origine GL = bas gauche) et son glitch
         # tire d'autres bandes; lies, tout est identique au fond (comme un seul post-traitement).
         center = (0.5, 0.5) if linked else (rect[0], 1.0 - rect[1])

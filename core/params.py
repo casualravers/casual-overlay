@@ -27,6 +27,8 @@ def default_logo(script_dir: Path) -> Path:
 DEFAULT_LOGO = default_logo(ROOT_DIR)
 
 PARAMS_PATH = Path.home() / ".audio2wave" / "gl_params.json"
+# etat du panneau du cerveau (#192 : vue, fenetre detachee, geometrie...) : sauve tout seul a chaque changement, sans attendre P
+BRAIN_UI_PATH = Path.home() / ".audio2wave" / "brain_ui.json"
 
 FX_NAMES = ["wobble", "ripple", "chroma", "glitch", "logo"]
 # Les reglages sont decrits UNE fois, dans params_schema.py (defaut, plage, enum, portee, doc) ; tout le reste en est derive.
@@ -318,7 +320,28 @@ def load_params() -> dict:
         pass
     except (OSError, ValueError) as exc:
         print(f"Reglages ignores ({PARAMS_PATH}): {exc}", file=sys.stderr)
+    try:                                                       # etat du panneau du cerveau, plus recent que gl_params.json (sauve a chaque changement)
+        ui = json.loads(BRAIN_UI_PATH.read_text(encoding="utf-8"))
+        if isinstance(ui, dict):
+            clean = coerce_params({k: v for k, v in ui.items() if k in BRAIN_UI_KEYS})
+            params.update({k: clean[k] for k in BRAIN_UI_KEYS if k in ui and k in clean})
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as exc:
+        print(f"Etat du cerveau ignore ({BRAIN_UI_PATH}): {exc}", file=sys.stderr)
     return params
+
+
+BRAIN_UI_KEYS = tuple(k for k in DEFAULT_PARAMS if k.startswith("brain_"))
+
+
+def save_brain_ui(params: dict) -> None:
+    """Ecrit l'etat du panneau du cerveau (cles brain_* seulement) ; une erreur d'ecriture est ignoree (simple confort)."""
+    try:
+        BRAIN_UI_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BRAIN_UI_PATH.write_text(json.dumps({k: params[k] for k in BRAIN_UI_KEYS if k in params}, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def save_params(params: dict) -> None:

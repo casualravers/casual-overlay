@@ -34,7 +34,7 @@ def install(c):
     current_index = c.current_index
     dnd = c.dnd
     duplicate_last_scene = c.duplicate_last_scene
-    master_box = c.master_box
+    brain_panel = c.brain_panel                                     # place a droite l'espace de controle global ou le cerveau
     media_clear = c.media_clear
     panel_state = c.panel_state
     random_bank = c.random_bank
@@ -1079,6 +1079,7 @@ def install(c):
         summary = tk.StringVar(value=panel_summary(rows, settings))
         panel_state["summary"] = summary
         tk.Label(head, textvariable=summary, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_MUTED_FG).pack(side="left", padx=10)
+        brain_panel.head_button(head)                               # « brain / VJ » (largeur fixe), tout a droite
         tk.Label(head, text="glisser-deposer d'un fichier sur une zone (overlay / audio2wave) = lier ce media"
                  if dnd["ok"] else "glisser-deposer indisponible (pip install tkinterdnd2)", bg=a2w.GUI_PANEL_BG,
                  fg=a2w.GUI_MUTED_FG).pack(side="right", padx=10)
@@ -1089,9 +1090,7 @@ def install(c):
         wrap.pack(fill="x")
         wrap.pack_propagate(False)
         with STATS.timed("panel.master_box"):
-            mbox = master_box()
-        mbox.pack(in_=wrap, side="right", fill="y")
-        mbox.lift()                                                 # un esclave place « dans » un autre doit le surplomber
+            brain_panel.place(wrap)                                 # espace de controle global (master_box) ou cerveau, a droite (gui_brain)
         aff_outer = getattr(tab_aff, "_scroll_outer", tab_aff)
         if aff_outer.winfo_manager() == "pack":
             aff_outer.lift()                                          # l'onglet Affichage est un enfant de la barre, pose dans l'onglet : remonte par-dessus la boite, sinon il reste cache (onglet vide)

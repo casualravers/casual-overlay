@@ -236,6 +236,15 @@ TABLE: tuple[Param, ...] = (
     _p("bg_rd_branches", 4, 2, 8, scope="bg", doc="Palette labyrinthe : nombre de branches de la symetrie en rotation."),
     _p("bg_rd_free", 0.5, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : liberte de la symetrie (0 = la plus stricte possible, 1 = presque aucune)."),
     _p("auto_master", 1.0, 0.0, 1.0, keep=True, doc="Interrupteur general des automations (1 = actives)."),
+    # visualizer du cerveau (#192, gui/gui_brain.py) : etat du panneau, portee device (ni presets, ni scenes, ni memoires de masters),
+    # sauve tout seul dans brain_ui.json (core/params.py : save_brain_ui) et relu au lancement
+    _p("brain_on", 0, 0, 1, scope="device", keep=True, doc="Cerveau : 1 = le panneau du cerveau occupe la place de l'espace de controle global du Mode VJ."),
+    _p("brain_view", "iso", choices=("iso", "mandala", "tunnel", "sismo"), scope="device", keep=True, doc="Cerveau : vue choisie."),
+    _p("brain_detached", 0, 0, 1, scope="device", keep=True, doc="Cerveau : 1 = panneau dans une fenetre a part (fermer la fenetre le raccroche)."),
+    _p("brain_geom", "", scope="device", keep=True, doc="Cerveau : position et taille de la fenetre detachee (geometrie Tk, `LxH+X+Y`)."),
+    _p("brain_topmost", 0, 0, 1, scope="device", keep=True, doc="Cerveau : 1 = fenetre detachee toujours au-dessus."),
+    _p("brain_causes", 1, 0, 1, scope="device", keep=True, doc="Cerveau : 1 = lignes de cause (frappe -> effet) et « <- kick » dans le fil."),
+    _p("brain_hidden", "", scope="device", keep=True, doc="Cerveau : pistes d'effets masquees, separees par des virgules (strobe,glitch...)."),
 )
 
 assert len({p.key for p in TABLE}) == len(TABLE), "cle en double dans la table des reglages"

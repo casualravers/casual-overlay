@@ -11,6 +11,7 @@ import time
 from typing import TYPE_CHECKING
 
 from core import sessionlog
+from core.brain import BrainLog
 from engine.audio import AudioAnalyzer, FeatureExtractor, RingBuffer, SoundDeviceInput, SyntheticAudio, capture_block
 from engine.deps import sd
 from engine.video import FrameReader, ProducerManager, spawn_producer
@@ -196,6 +197,10 @@ class Session:
         self.preview_requests: queue.SimpleQueue = queue.SimpleQueue()  # chemins de fichiers d'apercu a ecrire (GUI -> fil GL, voir engine.preview)
         self.remote_requests: queue.SimpleQueue = queue.SimpleQueue()   # commandes validees de la telecommande telephone (fil HTTP -> fil Tk, voir gui_remote)
         self.recording = None              # RecordingControl de la boucle GL (engine.recorder) tant que la projection est ouverte
+        self.brain = BrainLog()            # visualizer du cerveau (#192) : journal unique, publie par le fil audio, le rendu et la GUI
+        analyzer = getattr(audio, "analyzer", None)
+        if analyzer is not None:
+            analyzer.brain = self.brain
 
 
 class NoDeviceManager(ProducerManager):

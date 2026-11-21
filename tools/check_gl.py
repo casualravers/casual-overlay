@@ -1156,6 +1156,8 @@ def check_gui() -> None:
     _scenes.MASTERS_PATH = _tmp_presets / "masters.json"
     real_autosave_path = core_autosave.AUTOSAVE_PATH
     core_autosave.AUTOSAVE_PATH = _tmp_presets / "autosave.json"
+    real_brain_ui_path = core_params.BRAIN_UI_PATH
+    core_params.BRAIN_UI_PATH = _tmp_presets / "brain_ui.json"                     # le panneau du cerveau sauve son etat tout seul
     live.preset_store.path = _tmp_presets / "live_presets.json"          # le bouton Sauvegarder d'audio2wave ecrit ici
     try:
         import gui_splash
@@ -1163,6 +1165,7 @@ def check_gui() -> None:
         gl_gui.run_gui(s, live, on_ready, boot=boot)
     finally:
         core_autosave.AUTOSAVE_PATH = real_autosave_path
+        core_params.BRAIN_UI_PATH = real_brain_ui_path
         core_params.OVERLAY_PRESETS_PATH = real_presets_path
         core_params.BACKGROUND_PRESETS_PATH = real_bg_presets_path
         _scenes.SCENES_PATH, live.preset_store.path = real_scenes_path, real_live_store_path
@@ -4723,7 +4726,7 @@ def check_bugreport_cli() -> None:
           "Explorateur: chemin entre guillemets apres /select, (Bureau OneDrive avec espaces)", cmd)
 
 
-CLAUDE_FICHES = ("fond", "logo", "audio", "synchro", "strobe-foudre", "scenes-vj", "gui", "projection", "exploitation", "medias-externes", "outillage")
+CLAUDE_FICHES = ("fond", "logo", "audio", "synchro", "strobe-foudre", "scenes-vj", "gui", "projection", "exploitation", "medias-externes", "outillage", "cerveau")
 CLAUDE_MAX_ROOT_LINES = 300
 
 
@@ -4739,7 +4742,7 @@ def check_claude_md() -> None:
     fiches_dir = base / "docs" / "fonctions"
     present = sorted(p_.stem for p_ in fiches_dir.glob("*.md")) if fiches_dir.is_dir() else []
     missing = [f for f in CLAUDE_FICHES if f not in present]
-    check(not missing, "fiches: les 11 fiches par theme existent dans docs/fonctions/", str(missing))
+    check(not missing, "fiches: les 12 fiches par theme existent dans docs/fonctions/", str(missing))
     m_ = re.search(r"^## Fonctionnalites : index des fiches\n(.*?)(?=^## )", text, re.S | re.M)
     index_txt = m_.group(1) if m_ else ""                  # seule la section de l'index compte (une fiche citee ailleurs ne remplace pas sa ligne d'index)
     check(bool(index_txt), "index: la racine a une section « Fonctionnalites : index des fiches »")
@@ -9918,8 +9921,9 @@ def check_curve_modes() -> None:
 
 def check_params() -> None:
     print("Reglages (touche P)")
-    original = core_params.PARAMS_PATH
+    original = core_params.PARAMS_PATH, core_params.BRAIN_UI_PATH
     core_params.PARAMS_PATH = Path(tempfile.mkdtemp()) / "sous" / "gl_params.json"
+    core_params.BRAIN_UI_PATH = core_params.PARAMS_PATH.parent / "brain_ui.json"     # jamais l'etat du cerveau de l'utilisateur
     try:
         check(gl.load_params() == gl.DEFAULT_PARAMS, "sans fichier: valeurs par defaut")
         params = gl.load_params()
@@ -9931,7 +9935,7 @@ def check_params() -> None:
         core_params.PARAMS_PATH.write_text("{ pas du json", encoding="utf-8")
         check(gl.load_params() == gl.DEFAULT_PARAMS, "fichier corrompu: retour aux valeurs par defaut")
     finally:
-        core_params.PARAMS_PATH = original
+        core_params.PARAMS_PATH, core_params.BRAIN_UI_PATH = original
 
 
 def _plain_vj(vj: dict) -> dict:
@@ -12461,6 +12465,1342 @@ def check_reaction_pure() -> None:
           "file des germes : bornee a 32, les plus recents gardes")
 
 
+def check_brain_pure() -> None:
+    print("Cerveau : journal partage et placement sur la grille (core/brain.py)")
+    import threading as _th
+    from core import brain as br
+
+    # ---- placement sur la grille (pas de double croche)
+    check(br.step_of(10.0 + 0.5 * 1.75, 10.0, 0.5) == 7, "cerveau: 1,75 temps = 7 pas", str(br.step_of(10.875, 10.0, 0.5)))
+    check(br.step_of(9.9, 10.0, 0.5) == -1, "cerveau: juste avant l'ancre = pas -1", str(br.step_of(9.9, 10.0, 0.5)))
+    check(abs(br.step_time(8, 10.0, 0.5) - 11.0) < 1e-9, "cerveau: pas 8 = 2 temps apres l'ancre", str(br.step_time(8, 10.0, 0.5)))
+    check(br.STEPS_PER_BEAT == 4 and br.STEPS_PER_BAR == 16 and br.PAGE_STEPS == 64 and br.PHRASE_STEPS == 128,
+          "cerveau: constantes de la grille")
+    check(br.INSTRUMENTS == ("kick", "snare", "hihat") and "strobe" in br.TRACKS and "scene" in br.TRACKS and len(br.TRACKS) == 8,
+          "cerveau: instruments et pistes")
+    check(br.LABELS.get("hihat") == "hi-hat" and br.COLORS.get("kick") == "#ff3d7f" and br.COLORS.get("hihat") == "#ffd23f",
+          "cerveau: libelles et couleurs", str(br.COLORS))
+    check(all(name in br.COLORS for name in br.INSTRUMENTS + br.TRACKS), "cerveau: une couleur par instrument et par piste")
+
+    # ---- journal : ordre chronologique, famille inconnue, purges
+    log = br.BrainLog()
+    log.publish("kick", t=2.0)
+    log.publish("snare", t=1.0, reason="caisse claire")
+    log.publish("strobe", t=1.5, cause="kick")
+    log.publish("bidon", t=1.7)
+    ev = log.events()
+    check([e.t for e in ev] == [1.0, 1.5, 2.0], "cerveau: events() trie par date", str([e.t for e in ev]))
+    check(all(e.family != "bidon" for e in ev) and len(ev) == 3, "cerveau: famille inconnue ignoree", str([e.family for e in ev]))
+    check(ev[1].cause == "kick" and ev[0].reason == "caisse claire", "cerveau: cause et raison gardees")
+    check([e.t for e in log.events(since=1.5)] == [1.5, 2.0], "cerveau: events(since) filtre", str([e.t for e in log.events(since=1.5)]))
+    log.publish("phase", t=3.0)
+    log.publish("build", t=3.1)
+    log.publish("drop", t=3.2)
+    check(len(log.events()) == 6, "cerveau: phase / build / drop acceptes", str(len(log.events())))
+
+    log = br.BrainLog()
+    for i in range(br.MAX_EVENTS + 10):
+        log.publish("hihat", t=i * 0.001)
+    check(len(log.events()) == br.MAX_EVENTS, "cerveau: au plus MAX_EVENTS evenements", str(len(log.events())))
+    check(abs(log.events()[0].t - 10 * 0.001) < 1e-9, "cerveau: les plus vieux sont jetes", str(log.events()[0].t))
+
+    # ---- glissement : le pas d'une frappe est fige a sa publication (la grille courante ne la deplace plus)
+    def _kick_steps(lg: "br.BrainLog", now: float) -> list:
+        sn = br.snapshot(lg, now)
+        return [sn["first"] + c[0] for c in sn["cells"] if c[1] == "kick" and c[2] > 0]
+
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)                                   # pas 80
+    lg.set_status(grid=(0.0, 0.495))                             # la periode se reajuste au kick suivant
+    check(_kick_steps(lg, 10.5) == [80], "cerveau: periode reajustee, la frappe garde son pas", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(16.0, 0.5))                              # l'ancre saute d'une phrase (32 temps x 0,5 s)
+    check(_kick_steps(lg, 10.5) == [80 - br.PHRASE_STEPS], "cerveau: saut d'une phrase, la frappe suit", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=None)
+    lg.set_status(grid=(3.1, 0.5))                               # grille perdue puis retrouvee : replacee par sa date
+    want = br.step_of(10.0, 3.1, 0.5)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: grille retrouvee, frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(0.75, 0.5))                              # re-ancrage du 1 (drop, appui) : 1,5 temps, pas une phrase
+    want = br.step_of(10.0, 0.75, 0.5)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: 1 re-ancre (drop, appui) -> frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(0.0, 0.25))                              # tempo double d'un coup : la periode n'est plus comparable
+    want = br.step_of(10.0, 0.0, 0.25)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: periode changee d'un coup -> frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(0.02, 0.5))                              # correction de phase d'un kick (< 0,045 temps) : rien ne bouge
+    check(_kick_steps(lg, 10.5) == [80], "cerveau: petite correction de phase, la frappe garde son pas", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.publish("kick", t=10.0)                                   # sans grille connue
+    lg.set_status(grid=(0.0, 0.495))
+    want = br.step_of(10.0, 0.0, 0.495)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: frappe sans grille placee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("strobe", t=10.0, cause="kick")
+    lg.set_status(grid=(0.0, 0.495))
+    sn = br.snapshot(lg, 10.5)
+    check([sn["first"] + f[0] for f in sn["fx"]] == [80], "cerveau: marque d'effet figee elle aussi", str(sn["fx"]))
+    check(sn.get("bands") == {}, "cerveau: sans niveaux publies, bands vide", str(sn.get("bands")))
+    lg.set_status(bands={"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)})
+    check(br.snapshot(lg, 10.5).get("bands") == {"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)}, "cerveau: niveaux par couche recopies",
+          str(br.snapshot(lg, 10.5).get("bands")))
+
+    # ---- montee en cours : strobe a venir (strobe auto actif, pas en mode Foudre)
+    from core import strobe_auto as _sa
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5), gauges={"auto": {"strobe": True, "foudre": False}})
+    lg.publish("build", t=20.0)
+    h = br.snapshot(lg, 21.5)["header"]
+    check(abs((h.get("strobe_in_s") or -1) - 2.5) < 1e-6 and h.get("strobe_hz") is None, "cerveau: montee depuis 1,5 s -> strobe dans 2,5 s",
+          str({k: h.get(k) for k in ("build_s", "strobe_in_s", "strobe_hz")}))
+    h = br.snapshot(lg, 26.0)["header"]
+    check(h.get("strobe_in_s") == 0.0 and abs((h.get("strobe_hz") or 0) - _sa.auto_build_hz(6.0)) < 1e-9,
+          "cerveau: montee depuis 6 s -> cadence du strobe", str({k: h.get(k) for k in ("build_s", "strobe_in_s", "strobe_hz")}))
+    for gauges, why in (({"auto": {"strobe": False}}, "strobe auto coupe"), ({"auto": {"strobe": True, "foudre": True}}, "mode Foudre")):
+        lg.set_status(gauges=gauges)
+        h = br.snapshot(lg, 26.0)["header"]
+        check(h.get("strobe_in_s") is None and h.get("strobe_hz") is None, f"cerveau: {why} -> aucun strobe annonce", str(h))
+    h = br.snapshot(br.BrainLog(), 26.0)["header"]
+    check(h.get("strobe_in_s") is None and h.get("strobe_hz") is None, "cerveau: sans montee -> aucun strobe annonce", str(h))
+
+    log = br.BrainLog()
+    log.publish("kick", t=0.0)
+    log.publish("kick", t=50.0)
+    log.publish("kick", t=br.KEEP_S + 1.0)
+    check([e.t for e in log.events()] == [50.0, br.KEEP_S + 1.0], "cerveau: evenement plus vieux que KEEP_S purge",
+          str([e.t for e in log.events()]))
+
+    # ---- horloge : date murale convertie en temps du son
+    log = br.BrainLog()
+    check(log.to_audio(3.0) == 3.0, "cerveau: sans horloge, to_audio rend la date murale", str(log.to_audio(3.0)))
+    log.set_clock(100.0, 5.0)
+    log.publish("strobe", wall=6.0)
+    check(abs(log.events()[-1].t - 101.0) < 1e-9, "cerveau: wall converti par le decalage", str(log.events()[-1].t))
+
+    # ---- concurrence : 4 fils qui publient, un qui lit
+    log = br.BrainLog()
+    errors: list[str] = []
+    stop = _th.Event()
+
+    def writer(k):
+        try:
+            for i in range(2000):
+                log.publish(br.INSTRUMENTS[k % 3], t=(k * 2000 + i) * 0.001)          # 8 s en tout : seul MAX_EVENTS purge
+        except Exception as exc:          # noqa: BLE001
+            errors.append(repr(exc))
+
+    def reader():
+        try:
+            while not stop.is_set():
+                log.events()
+                log.status()
+        except Exception as exc:          # noqa: BLE001
+            errors.append(repr(exc))
+
+    rd = _th.Thread(target=reader)
+    rd.start()
+    ws = [_th.Thread(target=writer, args=(k,)) for k in range(4)]
+    for w in ws:
+        w.start()
+    for w in ws:
+        w.join()
+    stop.set()
+    rd.join()
+    check(not errors, "cerveau: publications et lectures paralleles sans exception", "; ".join(errors[:3]))
+    check(len(log.events()) == br.MAX_EVENTS, "cerveau: MAX_EVENTS apres 4 x 2000 publications", str(len(log.events())))
+
+    # ---- etat : copie
+    log = br.BrainLog()
+    log.set_status(bpm=128.0, grid=(10.0, 0.5), gauges={"kick": 0.5})
+    st = log.status()
+    st["bpm"] = 1.0
+    st["gauges"]["kick"] = 9.0
+    st2 = log.status()
+    check(st2["bpm"] == 128.0 and st2["gauges"]["kick"] == 0.5 and st2["grid"] == (10.0, 0.5), "cerveau: status() rend une copie", str(st2))
+
+    # ---- prediction : 0,6 x page precedente + 0,4 x une phrase plus tot
+    hits = {(64 + 16 * k + s, "kick"): 1.0 for k in range(4) for s in (0, 4, 8, 12)}
+    p = br.predict_page(hits, 132, "kick", 128)
+    check(abs(p - 0.6) < 1e-9, "cerveau: prediction = 0,6 si les 4 mesures precedentes ont frappe", str(p))
+    hits2 = dict(hits)
+    hits2[(132 - 128, "kick")] = 0.7
+    p = br.predict_page(hits2, 132, "kick", 128)
+    check(abs(p - 1.0) < 1e-9, "cerveau: prediction = 1 avec la frappe une phrase plus tot", str(p))
+    check(br.predict_page(hits2, 130, "kick", 128) == 0.0, "cerveau: prediction nulle au pas 2", str(br.predict_page(hits2, 130, "kick", 128)))
+    check(br.predict_page(hits2, 132, "snare", 128) == 0.0, "cerveau: prediction par instrument")
+    hits3 = {(140 - 16 * k, "snare"): 1.0 for k in (1, 2)}
+    p = br.predict_rolling(hits3, 140, "snare", 139)
+    check(abs(p - 0.3) < 1e-9, "cerveau: prediction glissante (2 mesures sur 4)", str(p))
+    check(br.GHOST_MIN == 0.2 and br.EXPECT_MIN == 0.5, "cerveau: seuils fantome / attendu")
+
+    # ---- statuts
+    check(br.status_of(0.8, 0.6, True) == "real", "cerveau: attendu et venu = real")
+    check(br.status_of(0.8, 0.3, True) == "surprise", "cerveau: venu sans etre attendu = surprise")
+    check(br.status_of(0, 0.6, True) == "miss", "cerveau: attendu et absent = miss")
+    check(br.status_of(0, 0.3, True) is None, "cerveau: ni attendu ni venu = rien")
+    check(br.status_of(0, 0.25, False) == "ghost", "cerveau: futur au-dessus de 0,2 = ghost")
+    check(br.status_of(0, 0.1, False) is None, "cerveau: futur peu probable = rien")
+
+    # ---- fins de cycles, voile
+    check(br.cycle_left(7) == {8: 0, 16: 8, 32: 24}, "cerveau: fins de cycles 8 / 16 / 32", str(br.cycle_left(7)))
+    check(br.veil_at(18.0, 10.0, None) == ("build", 0.25), "cerveau: voile 8 s apres le debut de la montee", str(br.veil_at(18.0, 10.0, None)))
+    check(br.veil_at(12.0, None, 10.0) == ("drop", 0.5), "cerveau: voile 2 s apres le drop", str(br.veil_at(12.0, None, 10.0)))
+    check(br.veil_at(30.0, None, 10.0) == (None, 0.0) and br.veil_at(5.0, None, None) == (None, 0.0), "cerveau: pas de voile hors montee / drop")
+    check(br.veil_at(60.0, 10.0, None) == ("build", 1.0), "cerveau: voile de montee plafonne a 1")
+
+    # ---- instantane avec grille : kicks sur chaque temps pendant 3 pages (anchor 0, periode 0,5)
+    def kick_log():
+        lg = br.BrainLog()
+        for k in range(48):
+            lg.publish("kick", 0.9, t=0.5 * k)
+        lg.publish("phase", reason="groove", t=0.0)
+        lg.publish("phase", reason="build", t=16.0)
+        lg.publish("build", t=16.0)
+        lg.publish("drop", t=22.0)
+        lg.publish("phase", reason="peak", t=22.0)
+        lg.publish("strobe", 1.0, reason="strobe auto : kick fort", cause="kick", t=20.0)
+        for j, fam in enumerate(("ripple", "chroma", "glitch", "scene", "wobble")):
+            lg.publish(fam, 0.8, reason=f"raison numero {j}", t=21.0 + 0.1 * j)
+        lg.set_status(bpm=120.0, confidence=0.8, origin="kick", grid=(0.0, 0.5), phase="peak", phase_since=22.0, gauges={"fps": 60})
+        return lg
+
+    log = kick_log()
+    snap = br.snapshot(log, 23.9)
+    check(snap["grid"] is True and snap["first"] % 64 == 0 and snap["first"] == 128, "cerveau: instantane, debut de page", str(snap["first"]))
+    check(abs(snap["cursor"] - (23.9 * 8 - 128)) < 1e-9, "cerveau: instantane, curseur depuis le debut de page", str(snap["cursor"]))
+    check(len(snap["cells"]) == 64 * 3 and {c[0] for c in snap["cells"]} == set(range(64)), "cerveau: 64 pas x 3 instruments",
+          str(len(snap["cells"])))
+    check(snap["score"][0] > 0 and snap["score"][1] == 0, "cerveau: score, predictions realisees", str(snap["score"]))
+    check(1 <= snap["header"]["bar"] <= 4 and snap["header"]["bar"] == 4 and snap["header"]["page"] == 3, "cerveau: mesure et page",
+          str(snap["header"]))
+    cell = {(c[0], c[1]): c for c in snap["cells"]}
+    check(cell[(0, "kick")][4] == "real" and cell[(1, "kick")][4] is None, "cerveau: statut des cellules", str(cell[(0, "kick")]))
+    check(any(f[1] == "strobe" and f[4] == "kick" and f[0] == 32 for f in snap["fx"]), "cerveau: fx porte la cause kick", str(snap["fx"]))
+    check(len(snap["phase_steps"]) == 64 and snap["phase_steps"][0] == "build" and snap["phase_steps"][60] == "peak",
+          "cerveau: phase par pas", str(snap["phase_steps"][::8]))
+    v = snap["veil"]
+    check(len(v) == 64 and v[32][0] == "build" and abs(v[32][1] - 0.0625) < 1e-9 and v[56][0] == "drop" and abs(v[56][1] - 0.75) < 1e-9,
+          "cerveau: voile par pas (montee puis drop)", str(v[32]) + " " + str(v[56]))
+    h = snap["header"]
+    check(h["bpm"] == 120.0 and h["stable"] is True and h["origin"] == "kick" and h["phase"] == "peak" and abs(h["phase_s"] - 1.9) < 1e-9,
+          "cerveau: en-tete (bpm, stable, origine, phase)", str(h))
+    check(h["build_s"] is None and h["cycles"] == br.cycle_left(191 // 4), "cerveau: en-tete (montee fermee par le drop, cycles)", str(h))
+    check(snap["gauges"] == {"fps": 60}, "cerveau: jauges recopiees", str(snap["gauges"]))
+    check(len(snap["feed"]) == 4 and [f[2] for f in snap["feed"]] == [f"raison numero {j}" for j in range(1, 5)]
+          and all(len(f[0]) == 8 and f[0][2] == ":" for f in snap["feed"]), "cerveau: fil, 4 dernieres lignes en francais", str(snap["feed"]))
+    check("free" not in snap, "cerveau: pas de frise libre avec une grille")
+    check(snap["header"]["next_scene"] is None and snap["header"]["next_scene_s"] is None, "cerveau: pas de prochaine scene connue")
+
+    # montee ouverte : duree
+    log2 = kick_log()
+    snap2 = br.snapshot(log2, 20.0)
+    check(abs(snap2["header"]["build_s"] - 4.0) < 1e-9, "cerveau: duree de la montee en cours", str(snap2["header"]["build_s"]))
+    # etat du panneau (brain_*) : portee « device » (ni presets, ni scenes, ni memoires de masters), sauve tout seul dans brain_ui.json
+    import json
+    import tempfile as _tf
+    from core import params_schema as _ps
+    bkeys = [k for k in gl.DEFAULT_PARAMS if k.startswith("brain_")]
+    cur = dict(json.loads(json.dumps(gl.DEFAULT_PARAMS)), brain_on=1.0, brain_view="sismo")
+    check(len(bkeys) == 7 and not set(bkeys) & set(_ps.MEMORY_KEYS) and set(bkeys) <= set(_ps.OVERLAY_PRESET_EXCLUDED)
+          and not any(k.startswith("brain_") for k in gl.capture_overlay(cur)) and not any(k.startswith("brain_") for k in gl.capture_background(cur)),
+          "cerveau: reglages brain_* hors memoires de masters, presets et scenes", str(bkeys))
+    real_paths = (core_params.PARAMS_PATH, getattr(core_params, "BRAIN_UI_PATH", None))
+    tmpd = Path(_tf.mkdtemp(prefix="casual_overlay_brain_ui_"))
+    try:
+        core_params.PARAMS_PATH, core_params.BRAIN_UI_PATH = tmpd / "gl_params.json", tmpd / "brain_ui.json"
+        core_params.save_brain_ui(dict(cur, brain_detached=1.0, brain_geom="700x500+10+20", master=0.3))
+        written = json.loads((tmpd / "brain_ui.json").read_text(encoding="utf-8"))
+        back = core_params.load_params()                    # relance : pas de gl_params.json (P jamais presse)
+        ok = (set(written) == set(bkeys) and back["brain_detached"] == 1.0 and back["brain_geom"] == "700x500+10+20"
+              and back["brain_view"] == "sismo" and back["master"] == gl.DEFAULT_PARAMS["master"])
+        detail = str((sorted(written), back["brain_geom"]))
+        (tmpd / "brain_ui.json").write_text("{pas du json", encoding="utf-8")
+        broken = core_params.load_params()
+        ok_broken = broken["brain_view"] == gl.DEFAULT_PARAMS["brain_view"]
+    except Exception as exc:              # noqa: BLE001
+        ok, ok_broken, detail = False, False, repr(exc)
+    finally:
+        core_params.PARAMS_PATH = real_paths[0]
+        if real_paths[1] is not None:
+            core_params.BRAIN_UI_PATH = real_paths[1]
+    check(ok, "cerveau: etat du panneau sauve tout seul (brain_ui.json, seulement brain_*) et relu au lancement", detail)
+    check(ok_broken, "cerveau: brain_ui.json illisible -> valeurs par defaut, pas d'erreur")
+    # reprise apres arret brutal : l'instantane (jusqu'a 60 s d'age) ne remplace pas l'etat du panneau relu de brain_ui.json
+    from core import autosave as _asv
+    snapd = Path(_tf.mkdtemp(prefix="casual_overlay_brain_asv_"))
+    snapf = snapd / "autosave.json"
+    snapf.write_text(json.dumps({"saved_at": 0, "params": dict(brain_view="mandala", brain_on=0, brain_geom="10x10+0+0", master=1.5)}),
+                     encoding="utf-8")
+    base = dict(json.loads(json.dumps(gl.DEFAULT_PARAMS)), brain_view="sismo", brain_on=1.0, brain_geom="700x500+10+20")
+    rec, _m = _asv.recover_autosave(base, snapf)
+    check(rec["brain_view"] == "sismo" and rec["brain_on"] == 1.0 and rec["brain_geom"] == "700x500+10+20" and rec["master"] == 1.5,
+          "cerveau: reprise apres arret brutal, brain_* gardes de brain_ui.json (le reste vient de l'instantane)",
+          str((rec["brain_view"], rec["brain_on"], rec["brain_geom"], rec["master"])))
+    # frappe attendue au pas courant, pas encore venue : fantome, pas « miss », hors du score ; une fois venue : real
+    lgc = br.BrainLog()
+    for k in range(40):                                    # kicks sur chaque temps jusqu'au pas 156
+        lgc.publish("kick", 0.9, t=0.5 * k)
+    lgc.set_status(grid=(0.0, 0.5))
+    sc = br.snapshot(lgc, 20.01)                           # pas courant 160 (index 32 de la page 128), kick attendu
+    cc = {(c[0], c[1]): c for c in sc["cells"]}
+    check(cc[(32, "kick")][4] == "ghost" and sc["score"][1] == 0, "cerveau: kick attendu au pas courant sans frappe = ghost, pas de miss",
+          str((cc[(32, "kick")], sc["score"])))
+    lgc.publish("kick", 0.9, t=20.0)
+    sc2 = br.snapshot(lgc, 20.01)
+    cc2 = {(c[0], c[1]): c for c in sc2["cells"]}
+    check(cc2[(32, "kick")][4] == "real" and sc2["score"] == sc["score"],
+          "cerveau: frappe venue au pas courant = real (le score ne compte que les pas finis)", str((cc2[(32, "kick")], sc2["score"])))
+    # phase_since = 0,0 : le fil audio n'a encore vu aucun changement de phase -> duree inconnue (pas « depuis le debut de l'horloge »)
+    lg0 = br.BrainLog()
+    lg0.set_status(phase="groove", phase_since=0.0, grid=(0.0, 0.5))
+    h0 = br.snapshot(lg0, 300.0)["header"]
+    check(h0["phase"] == "groove" and h0["phase_s"] is None, "cerveau: phase_since 0,0 = duree de phase inconnue", str(h0["phase_s"]))
+
+    # rolling (tunnel)
+    snap = br.snapshot(log, 23.9, rolling=True)
+    check(snap["first"] == 191 - 4 and len(snap["cells"]) == 68 * 3 and abs(snap["cursor"] - (23.9 * 8 - 187)) < 1e-9,
+          "cerveau: instantane glissant (4 pas de passe, 64 a venir)", str((snap["first"], len(snap["cells"]))))
+    page_snap = br.snapshot(log, 23.9)
+    check(snap["score"] == page_snap["score"], "cerveau: meme score en page et en glissant (pas passes de la page courante)",
+          str((snap["score"], page_snap["score"])))
+    # glissant : la prediction ne lit que des mesures deja entendues (kicks reguliers -> meme fantome pres et loin)
+    snap = br.snapshot(log, 23.55, rolling=True)                       # pas courant 188 (kick entendu)
+    rc = {(c[0], c[1]): c for c in snap["cells"]}
+    near, far = rc[(192 - snap["first"], "kick")], rc[(240 - snap["first"], "kick")]
+    check(abs(near[3] - far[3]) < 1e-9 and abs(near[3] - 1.0) < 1e-9 and near[4] == far[4] == "ghost",
+          "cerveau: glissant, fantome egal a cur + 4 et cur + 52", str((near, far)))
+    # glissant borne (tunnel sur 32 pas, budget tache 9) : les 4 du passe + `depth` pas, identiques au debut de l'instantane complet
+    full = br.snapshot(log, 23.55, rolling=True)
+    try:
+        short = br.snapshot(log, 23.55, rolling=True, depth=32)
+    except TypeError as exc:
+        short = {"error": repr(exc)}
+    ok_depth = ("cells" in short and len(short["cells"]) == 36 * 3 and short["cells"] == full["cells"][:36 * 3]
+                and len(short["phase_steps"]) == 36 and len(short["veil"]) == 36 and short["veil"] == full["veil"][:36]
+                and short["first"] == full["first"] and short["cursor"] == full["cursor"] and short["score"] == full["score"]
+                and short["fx"] == [f for f in full["fx"] if f[0] < 36] and short["header"] == full["header"])
+    check(ok_depth, "cerveau: glissant borne a depth=32 -> 36 pas, identiques au debut de l'instantane de 68 pas",
+          str(short.get("error") or (len(short["cells"]), len(short["veil"]))))
+
+    # changement d'ancre en cours de page
+    evs = log.events()
+    hb = br.hits_by_step(evs, 0.05, 0.5)
+    check(len(hb) == 48 and all(r == "kick" for (_s, r) in hb), "cerveau: ancre decalee de 0,05 s, une cle par frappe", str(len(hb)))
+    try:
+        log.set_status(grid=(0.05, 0.5))
+        s1 = br.snapshot(log, 23.9)
+        log.set_status(grid=(0.5, 0.5))
+        s2 = br.snapshot(log, 16.2)
+        ok = s1["first"] == 128 and s2["first"] == 64 and len(s2["cells"]) == 192
+        detail = str((s1["first"], s2["first"]))
+    except Exception as exc:              # noqa: BLE001
+        ok, detail = False, repr(exc)
+    check(ok, "cerveau: ancre decalee d'un temps, page recalculee sans exception", detail)
+
+    # sans grille, journal vide
+    for name, lg in (("sans grille", kick_log()), ("journal vide", br.BrainLog())):
+        try:
+            lg.set_status(grid=None)
+            s = br.snapshot(lg, 23.9)
+            ok = s["grid"] is False and "free" in s and s["cells"] == [] and "header" in s and "feed" in s
+            detail = str(s.get("free", "")[:3])
+        except Exception as exc:          # noqa: BLE001
+            ok, detail = False, repr(exc)
+        check(ok, f"cerveau: instantane {name} (frise libre)", detail)
+    s = br.snapshot(br.BrainLog(), 5.0)
+    check(s["grid"] is False and s["free"] == [] and s["feed"] == [], "cerveau: journal vide, frise et fil vides")
+    lg = kick_log()
+    lg.set_status(grid=None)
+    s = br.snapshot(lg, 23.9)
+    check(all(0 <= a <= 8 for a, _f, _v in s["free"]) and any(f == "kick" for _a, f, _v in s["free"])
+          and any(f == "strobe" for _a, f, _v in s["free"]), "cerveau: frise libre des 8 dernieres secondes", str(s["free"][:4]))
+
+    # ---- front montant d'un effet (FxEdge) : seuils, rearmement, ecart minimal
+    try:
+        e = br.FxEdge(on=0.6, off=0.3, min_gap_s=0.12)
+        seq = [e.step(0.00, 0.0), e.step(0.01, 0.7), e.step(0.02, 0.7), e.step(0.03, 0.7)]
+        ok, detail = seq == [False, True, False, False], str(seq)
+    except Exception as exc:              # noqa: BLE001
+        ok, detail, e = False, repr(exc), None
+    check(ok, "cerveau: FxEdge 0 -> 0,7 = un front, puis rien tant que la valeur reste haute", detail)
+    if e is not None:
+        a = [e.step(0.04, 0.2), e.step(0.06, 0.7)]
+        check(a == [False, False], "cerveau: FxEdge rearme (0,2) mais 0,7 avant 0,12 s -> pas de front", str(a))
+        b = [e.step(0.20, 0.2), e.step(0.25, 0.7)]
+        check(b == [False, True], "cerveau: FxEdge apres l'ecart minimal -> nouveau front", str(b))
+        c = [e.step(0.30, 0.5), e.step(0.50, 0.7)]
+        check(c == [False, False], "cerveau: FxEdge entre les seuils (0,5) ne rearme pas", str(c))
+        check(br.FxEdge().on == 0.6 and br.FxEdge().off == 0.3 and br.FxEdge().min_gap_s == 0.12, "cerveau: FxEdge seuils par defaut")
+
+
+def check_brain_engine() -> None:
+    """Cerveau (#192) : le fil audio publie les frappes datees dans le temps du son et le statut (BPM) ; le rendu publie le strobe, les
+    effets et la sante ; un rendu sans cerveau, ou avec, donne la meme image."""
+    print("Cerveau : publications du son et du rendu")
+    from core import brain as br
+    from engine import audio as au
+
+    # ---- fil audio : kicks dates dans le temps du son, statut avec BPM
+    rate, hop, secs = 48000, 512, 20
+    sig = kick_bursts(rate, secs)
+    ring = au.RingBuffer(1 << 16)
+    an = au.AudioAnalyzer(ring, au.FeatureExtractor(rate))
+    log = br.BrainLog()
+    an.brain = log
+    base = 500.0
+    rng = np.random.default_rng(7)
+    analyze = getattr(an, "_analyze", None)
+    if analyze is None:
+        check(False, "cerveau: AudioAnalyzer._analyze (un pas d'analyse) existe")
+        return
+    for i in range(0, len(sig) - hop, hop):
+        t_end = base + (i + hop) / rate
+        ring.write(sig[i:i + hop], t_end)
+        analyze(ring.total, float(rate), t_end + 0.030 + float(rng.uniform(0.0, 0.010)))      # capture 30 ms + gigue du fil
+    kicks = [e for e in log.events() if e.family == "kick"]
+    offs = [((e.t - base) % 0.5) for e in kicks]
+    check(len(kicks) >= 2 * secs - 3, "cerveau: les kicks du signal synthetique sont publies", f"{len(kicks)} kicks")
+    check(all(o < 0.2 for o in offs), "cerveau: kicks dates dans le temps du son (debut de salve + retard stable, sans la gigue)",
+          str([round(o, 3) for o in offs[:6]]))
+    check(all(0.0 <= e.strength <= 1.0 for e in log.events()), "cerveau: forces bornees 0..1")
+    st = log.status()
+    bpm = st.get("bpm")
+    check(bpm is not None and abs(float(bpm) - 120.0) < 3.0 and "confidence" in st and "phase" in st and "grid" in st,
+          "cerveau: statut publie (bpm ~120, confiance, phase, grille)", str({k: st.get(k) for k in ("bpm", "confidence", "phase", "grid", "origin")}))
+    last = log.events()[-1].t if log.events() else base
+    check(abs(log.to_audio(t_end + 0.035) - (t_end + 0.030)) < 0.012, "cerveau: horloge du son publiee (set_clock)",
+          str(log.to_audio(t_end + 0.035) - t_end))
+    check(last <= t_end + 0.05, "cerveau: aucun evenement date dans le futur", str(last - t_end))
+    bare = au.AudioAnalyzer(au.RingBuffer(1 << 16), au.FeatureExtractor(rate))
+    check(getattr(bare, "brain", "absent") is None, "cerveau: AudioAnalyzer sans cerveau par defaut")
+
+    class Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("cerveau en panne")
+    an.brain = Boom()
+    try:
+        for i in range(0, rate, hop):
+            ring.write(sig[i:i + hop], t_end + (i + hop) / rate)
+            analyze(ring.total, float(rate), t_end + (i + hop) / rate + 0.03)
+        ok = True
+    except Exception as exc:              # noqa: BLE001
+        ok = False
+        print("   ", repr(exc))
+    check(ok, "cerveau: une panne du cerveau n'arrete jamais l'analyse")
+
+    # ---- rendu : strobe, effets, sante ; image identique avec ou sans cerveau
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (160, 90)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    loud = {"bass": 1.0, "mid": 0.6, "high": 0.9, "rms": 0.8, "beat": 1.0, "since_beat": 0.05, "beats": 1, "audio_age_ms": 42.0}
+    p = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", holo_on=0.0, auto_phase=0, strobe_auto=0, fx_on=[1] * 5, fx_int=[1.0] * 5,
+             strobe_hits=1)
+    logo = np.full((16, 32, 4), 255, dtype=np.uint8)
+    r0 = gl.Renderer(ctx, size, logo)
+    check(getattr(r0, "brain", "absent") is None, "cerveau: Renderer sans cerveau par defaut")
+    r0.draw(fbo, size, loud, p, 1.0)
+    img0 = read_target(ctx, fbo, size).astype(int)
+    r1 = gl.Renderer(ctx, size, logo)
+    lg = br.BrainLog()
+    r1.brain = lg
+    r1.draw(fbo, size, loud, p, 1.0)
+    img1 = read_target(ctx, fbo, size).astype(int)
+    diff = int(np.abs(img0 - img1).max())
+    check(diff <= 1, "cerveau: rendu identique avec ou sans cerveau (la publication ne change pas l'image)", f"ecart max {diff}")
+    ev = lg.events()
+    fams = [e.family for e in ev]
+    strobe = [e for e in ev if e.family == "strobe"]
+    check(len(strobe) == 1 and strobe[0].reason == "manuel" and strobe[0].cause is None,
+          "cerveau: un eclair force du strobe est publie (raison, sans cause)", str([(e.family, e.reason, e.cause) for e in ev]))
+    check(any(f in ("wobble", "ripple", "glitch", "chroma") for f in fams) and "logo" in fams,
+          "cerveau: effets du fond et reaction du logo publies sur un kick fort", str(fams))
+    g = lg.status().get("gauges") or {}
+    check(all(k in g for k in ("fps", "gpu", "latency_ms", "rec", "sources", "auto")) and abs(float(g["latency_ms"]) - 42.0) < 1e-6,
+          "cerveau: jauges de sante publiees", str(g))
+    bands = lg.status().get("bands") or {}
+    check(set(bands) == {"bg", "logo"} and all(len(v) == 3 and all(0.0 <= x <= 1.0 for x in v) for v in bands.values())
+          and max(bands["bg"]) > 0.0, "cerveau: niveaux par couche publies (basses, aigus, kick ; 0..1)", str(bands))
+    r3 = gl.Renderer(ctx, size, logo)
+    lg3 = br.BrainLog()
+    r3.brain = lg3
+    r3.draw(fbo, size, loud, dict(p, fx_link=0.0, src_logo="rien"), 1.0)
+    b3 = lg3.status().get("bands") or {}
+    check(tuple(b3.get("logo", (9,))) == (0.0, 0.0, 0.0), "cerveau: couche sur « rien » -> niveaux nuls", str(b3))
+    fx_fams = ("wobble", "ripple", "glitch", "chroma", "logo")
+    n = len([e for e in lg.events() if e.family in fx_fams])
+    r1.draw(fbo, size, loud, p, 1.02)
+    n2 = len([e for e in lg.events() if e.family in fx_fams])
+    check(n2 == n, "cerveau: un effet qui reste haut ne publie pas a chaque image", f"{n} puis {n2}")
+    r2 = gl.Renderer(ctx, size, logo)
+    lg2 = br.BrainLog()
+    r2.brain = lg2
+    r2.draw(fbo, size, loud, dict(p, fx_on=[0] * 5), 1.0)
+    check(not any(e.family in ("wobble", "ripple", "glitch", "chroma", "logo") for e in lg2.events()),
+          "cerveau: effets coupes -> aucun effet publie", str([e.family for e in lg2.events()]))
+    r1.brain = Boom()
+    try:
+        r1.draw(fbo, size, loud, dict(p, strobe_hits=2), 2.5)
+        ok = True
+    except Exception as exc:              # noqa: BLE001
+        ok = False
+        print("   ", repr(exc))
+    check(ok, "cerveau: une panne du cerveau n'arrete jamais le rendu")
+    try:
+        import types as _ty
+        ss = gl.Session(_ty.SimpleNamespace(), {}, None, None, (16, 16), (16, 16), None, None, None)
+        ok = isinstance(getattr(ss, "brain", None), br.BrainLog)
+    except Exception as exc:              # noqa: BLE001
+        ok = False
+        print("   ", repr(exc))
+    check(ok, "cerveau: Session.brain est un BrainLog")
+
+
+def check_brain_gui() -> None:
+    """Cerveau (#192) : panneau Tk dans une vraie fenetre de reglages (comme check_gui) : bascule VJ / brain a la meme place, boutons a
+    largeur fixe, fenetre detachee (fermer = raccrocher, geometrie retenue), fige pendant le REC, rien quand il est cache, vue qui leve,
+    frise libre sans grille puis retour a la vue choisie."""
+    print("Cerveau : panneau (bascule VJ, fenetre detachee, REC, vues)")
+    try:
+        import tkinter as tk
+        probe = tk.Tk()
+        probe.destroy()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import copy
+    import queue
+    import tempfile as _tf
+    import threading
+    import traceback
+    from types import SimpleNamespace as NS
+
+    import gl_gui
+    import gui_brain
+    from core import brain as br
+    from core import scenes as _scenes
+    from core import sessionlog as slog
+
+    # ---- jauge sources en barres (texte a chasse fixe : meme largeur quels que soient les niveaux et la source)
+    st_a = gui_brain.sources_text({"bg": "tout", "logo": "frappes"}, {"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)})
+    st_b = gui_brain.sources_text({"bg": "kick", "logo": "rien"}, {"bg": (1.0, 1.0, 1.0), "logo": (1.0, 1.0, 1.0)})
+    st_c = gui_brain.sources_text({}, {})
+    la, lb, lc = st_a.split("\n"), st_b.split("\n"), st_c.split("\n")
+    check(len(la) == len(lb) == len(lc) == 3 and [len(x) for x in la] == [len(x) for x in lb] == [len(x) for x in lc],
+          "cerveau: jauge sources de largeur fixe (niveaux, source, absence)", repr((st_a, st_b, st_c)))
+    full, empty = gui_brain.BAND_ON * gui_brain.BAND_CELLS, gui_brain.BAND_OFF * gui_brain.BAND_CELLS
+    check(("B " + full) in la[1] and ("K " + empty) in la[1] and ("B " + empty) in la[2], "cerveau: barres B / H / K selon les niveaux",
+          repr(st_a))
+    bt = [gui_brain.build_text(dict(build_s=1.5, strobe_in_s=2.5, strobe_hz=None)),
+          gui_brain.build_text(dict(build_s=6.0, strobe_in_s=0.0, strobe_hz=0.5546875)),
+          gui_brain.build_text(dict(build_s=125.0, strobe_in_s=None, strobe_hz=None))]
+    check("build 2 s" in bt[0] and "strobe in 2.5 s" in bt[0] and "build 6 s" in bt[1] and "strobe 0.6 Hz" in bt[1]
+          and "strobe" not in bt[2] and len(set(len(x) for x in bt)) == 1 and gui_brain.build_text({}) == "",
+          "cerveau: en-tete de montee (strobe a venir, cadence) de largeur fixe", repr(bt))
+
+    live = gl.load_live(gl.DEFAULT_A2W_DIR)
+    args = gl.build_live_args(live, "Micro", (1280, 720), 30, None)
+    manager = NS(producer=None, restarts=0, status={}, args=copy.copy(args), suspended=False, resumed=[], reader=object())
+    manager.request_restart = lambda new_args: setattr(manager, "args", new_args)
+    manager.suspend = lambda: None
+    manager.resume = lambda new_args: None
+    audio = NS(synthetic=True, name="synthetique", analyzer=NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0}))
+    params = gl.load_params()
+    params.update(brain_on=0.0, brain_detached=0.0, brain_view="iso", brain_geom="", brain_hidden="", brain_causes=1.0)
+
+    class Proj:
+        def running(self):
+            return False
+
+        def start(self):
+            return "Projection ouverte en fenetre"
+
+        def stop(self, wait=0.0):
+            pass
+
+    log = br.BrainLog()
+    t0 = time.monotonic()
+    log.set_clock(t0, t0)                                    # horloge du son = horloge murale
+    log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=0.0)
+    for k in range(-8, 0):
+        log.publish("kick", 0.9, t=t0 + 0.5 * k)
+    log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 - 0.5)
+    s = NS(params=params, manager=manager, live_args=args, render_size=(1280, 720), audio=audio, projection=Proj(),
+           commands=queue.SimpleQueue(), status={}, stop_event=threading.Event(), finished_event=threading.Event(), mode="live",
+           pysrc=None, mode_args={}, reader=manager.reader, brain=log, recording=NS(active=False))
+
+    class Counting:
+        calls = 0
+
+        def __init__(self, canvas):
+            self.canvas = canvas
+
+        def layout(self, w, h):
+            pass
+
+        def update(self, snap, causes, hidden, now):
+            Counting.calls += 1
+
+        def hover(self, x, y):
+            return "raison de test"
+
+    class Raising(Counting):
+        def update(self, snap, causes, hidden, now):
+            raise ValueError("vue cassee (test)")
+
+    out: dict = {"builds": 0}
+    logged: list = []
+    tick_errors: list = []
+    cb_errors: list = []
+    real_error, real_tick, saved_views = slog.error, gui_brain.BrainPanel._tick, dict(gui_brain.VIEWS)
+
+    def spy_error(message, exc=None):
+        logged.append((message, exc))
+        real_error(message, exc)
+
+    def spy_tick(self, now):
+        try:
+            return real_tick(self, now)
+        except Exception as exc:
+            tick_errors.append(repr(exc))
+            raise
+
+    def canvas_texts(cv):
+        return [cv.itemcget(i, "text") for i in cv.find_all() if cv.type(i) == "text"]
+
+    def steps(c) -> None:
+        root, bp = c["root"], c["brain"]
+
+        def pump(n=6):
+            for _ in range(n):
+                root.update()
+                time.sleep(0.02)
+        real_report = root.report_callback_exception
+        root.report_callback_exception = lambda *a: (cb_errors.append(repr(a[1])), real_report(*a))
+        root.geometry("1500x900")
+        c["scenes"]["expand"](True)
+        pump(12)
+        mbox = c["vj"]["master_box"]()
+        btn = bp.toggle_button
+        out["start"] = (mbox.winfo_ismapped(), btn is not None and btn.cget("text"))
+        w_vj = btn.winfo_width()
+        body = c["scenes"]["panel_state"]["body"]
+        list_w = [body.winfo_width()]
+        bp.toggle()
+        pump()
+        list_w.append(body.winfo_width())
+        btn = bp.toggle_button
+        box = bp.box()
+        out["brain_on"] = (box.winfo_ismapped(), mbox.winfo_ismapped(), btn.cget("text"), btn.winfo_width() == w_vj,
+                           float(s.params["brain_on"]), str(box.pack_info().get("in")) == str(bp._slot) and str(bp._slot.pack_info().get("in")) == str(bp._wrap))
+        w_detach = bp._docked.detach_btn.winfo_width()
+        bp.toggle()
+        pump()
+        list_w.append(body.winfo_width())
+        out["list_w"] = list_w
+        out["vj_back"] = (mbox.winfo_ismapped(), box.winfo_ismapped(), bp.toggle_button.cget("text"), bp.toggle_button.winfo_width() == w_vj)
+        Counting.calls = 0
+        for _ in range(3):
+            bp.tick()
+            pump(2)
+        out["hidden_calls"] = Counting.calls
+        bp.toggle()
+        pump()
+        bp.set_view("iso")
+        pump()
+        bp.tick()
+        out["shown"] = (Counting.calls > 0, type(bp.current).__name__)
+        # REC : une derniere image « fige pendant le REC », puis plus aucun appel de la vue
+        s.recording.active = True
+        bp.tick()
+        pump()
+        n0 = Counting.calls
+        for _ in range(4):
+            bp.tick()
+            pump(2)
+        cv = bp._docked.canvas
+        out["rec"] = (Counting.calls == n0, gui_brain.FROZEN_TEXT in canvas_texts(cv))
+        s.recording.active = False
+        bp.tick()
+        pump()
+        out["rec_end"] = (Counting.calls > n0, gui_brain.FROZEN_TEXT not in canvas_texts(cv))
+        # fenetre detachee : fermer = raccrocher, geometrie retenue
+        bp.detach()
+        pump()
+        top = bp.window
+        out["detached"] = (isinstance(top, tk.Toplevel) and bool(top.winfo_exists()), mbox.winfo_ismapped(), not box.winfo_ismapped(),
+                           float(s.params["brain_detached"]), bp._float.detach_btn.winfo_width() == w_detach, bp.toggle_button.cget("text"))
+        top.geometry("700x500+60+60")
+        pump(10)
+        t_end = time.monotonic() + 0.8                          # sauvegarde 0,5 s apres le dernier deplacement
+        while time.monotonic() < t_end:
+            pump(1)
+        rl = core_params.load_params()                          # relance simulee, sans avoir presse P
+        out["relaunch_open"] = (float(rl["brain_detached"]), str(rl["brain_geom"]).split("+")[0])
+        root.tk.call(top.protocol("WM_DELETE_WINDOW"))         # comme la croix de la fenetre
+        pump()
+        rl = core_params.load_params()
+        out["relaunch_closed"] = (float(rl["brain_detached"]), float(rl["brain_on"]), str(rl["brain_geom"]).split("+")[0])
+        out["closed"] = (not top.winfo_exists(), bp.window is None, str(s.params["brain_geom"]), float(s.params["brain_detached"]),
+                         box.winfo_ismapped(), not mbox.winfo_ismapped())
+        bp.detach()
+        pump()
+        out["geom_back"] = bp.window.geometry().split("+")[0]
+        top2 = bp.window
+        s.recording.active = True
+        bp.tick()
+        pump()
+        root.tk.call(top2.protocol("WM_DELETE_WINDOW"))        # fermee pendant un REC
+        pump()
+        bp.tick()
+        pump()
+        s.recording.active = False
+        out["rec_close"] = (not top2.winfo_exists(), bp.window is None, box.winfo_ismapped())
+        # vue qui leve : le panneau continue, une seule erreur journalisee
+        logged.clear()
+        bp.set_view("mandala")
+        for _ in range(5):
+            bp.tick()
+            pump(2)
+        out["raise"] = (len([m for m, _e in logged if "Cerveau" in m]), box.winfo_ismapped(), not tick_errors)
+        bp.set_view("iso")
+        pump()
+        # sans grille : frise libre « tempo non detecte », puis retour a la vue choisie
+        log.set_status(grid=None)
+        bp.tick()
+        pump()
+        out["free"] = (type(bp.current).__name__, gui_brain.NO_TEMPO in canvas_texts(bp._docked.canvas))
+        log.set_status(grid=(t0, 0.5))
+        bp.tick()
+        pump()
+        out["free_back"] = type(bp.current).__name__
+        # vues gardees : iso (la vraie, ~3100 elements) -> free -> iso, puis iso -> sismo -> iso : aucun element recree, aucune
+        # reconstruction (la grille revient au drop : pas de gel de 70-215 ms)
+        surf = bp._docked
+        gui_brain.VIEWS["iso"] = saved_views["iso"]
+
+        def n_items():
+            return sum(len(e[0].find_all()) for e in surf._views.values())
+        bp.set_view("iso")
+        pump()
+        bp.tick()
+        iso_view = bp.current
+        for grid_ in (None, (t0, 0.5)):                          # premiere construction de free, retour a iso
+            log.set_status(grid=grid_)
+            bp.tick()
+            pump()
+        bp.set_view("sismo")
+        pump()
+        bp.set_view("iso")
+        pump()
+        n_first = n_items()
+        times, same = [], True
+        for _ in range(2):
+            for grid_ in (None, (t0, 0.5)):
+                log.set_status(grid=grid_)
+                t_ = time.perf_counter()
+                bp.tick()
+                times.append(time.perf_counter() - t_)
+                pump()
+            bp.set_view("sismo")
+            pump()
+            bp.set_view("iso")
+            pump()
+            same = same and bp.current is iso_view
+        out["kept"] = (type(iso_view).__name__, same, n_first, n_items(), max(times) * 1000.0)
+        gui_brain.VIEWS["iso"] = Counting
+        bp.set_view("iso")
+        pump()
+        out["timed"] = gl_gui.STATS.ops.get("brain.tick", [0])[0] > 0
+        # cadence par vue (budget, tache 9) : mecanisme essaye avec une table ou seul le tunnel est a 10 Hz (les autres a TICK_MS)
+        out["cadence_table"] = dict(gui_brain.VIEW_TICK_MS)
+        sched_calls: list = []
+        bp.tick = lambda now=None: sched_calls.append(bp.view_name)
+        saved_view, saved_table = bp.view_name, dict(gui_brain.VIEW_TICK_MS)
+        gui_brain.VIEW_TICK_MS.clear()
+        gui_brain.VIEW_TICK_MS["tunnel"] = 100
+        try:
+            for name in ("tunnel", "iso"):
+                bp.view_name, bp._sched_at = name, -1e9
+                bp.scheduled_tick()
+                bp.scheduled_tick()                             # aussitot : trop tot pour les deux
+                time.sleep(0.06)
+                bp.scheduled_tick()                             # 60 ms plus tard : assez pour 20 Hz, pas pour 10 Hz
+        finally:
+            del bp.tick
+            bp.view_name = saved_view
+            gui_brain.VIEW_TICK_MS.clear()
+            gui_brain.VIEW_TICK_MS.update(saved_table)
+        out["cadence"] = (sched_calls.count("tunnel"), sched_calls.count("iso"))
+        # panneau etendu replie : plus aucun dessin
+        c["scenes"]["expand"](False)
+        pump()
+        n1 = Counting.calls
+        for _ in range(3):
+            bp.tick()
+            pump(2)
+        out["collapsed"] = Counting.calls == n1
+
+    def on_ready(c):
+        out["builds"] += 1
+        if out["builds"] > 1:
+            return
+        try:
+            steps(c)
+        except Exception:
+            out["error"] = traceback.format_exc()
+        finally:
+            c["close"]()
+            s.finished_event.set()
+
+    _tmp = Path(_tf.mkdtemp(prefix="casual_overlay_brain_"))
+    saved_paths = (core_params.OVERLAY_PRESETS_PATH, core_params.BACKGROUND_PRESETS_PATH, _scenes.SCENES_PATH, _scenes.MASTERS_PATH,
+                   core_autosave.AUTOSAVE_PATH, live.preset_store.path)
+    core_params.OVERLAY_PRESETS_PATH = _tmp / "overlay_presets.json"
+    core_params.BACKGROUND_PRESETS_PATH = _tmp / "background_presets.json"
+    _scenes.SCENES_PATH, _scenes.MASTERS_PATH = _tmp / "scenes.json", _tmp / "masters.json"
+    core_autosave.AUTOSAVE_PATH = _tmp / "autosave.json"
+    live.preset_store.path = _tmp / "live_presets.json"
+    real_brain_ui = core_params.BRAIN_UI_PATH
+    core_params.BRAIN_UI_PATH = _tmp / "brain_ui.json"
+    slog.error, gui_brain.BrainPanel._tick = spy_error, spy_tick
+    gui_brain.VIEWS.update(iso=Counting, mandala=Raising)
+    try:
+        gl_gui.run_gui(s, live, on_ready)
+    finally:
+        slog.error, gui_brain.BrainPanel._tick = real_error, real_tick
+        core_params.BRAIN_UI_PATH = real_brain_ui
+        gui_brain.VIEWS.clear()
+        gui_brain.VIEWS.update(saved_views)
+        (core_params.OVERLAY_PRESETS_PATH, core_params.BACKGROUND_PRESETS_PATH, _scenes.SCENES_PATH, _scenes.MASTERS_PATH,
+         core_autosave.AUTOSAVE_PATH, live.preset_store.path) = saved_paths
+    check("error" not in out, "cerveau GUI: le scenario se deroule sans exception", out.get("error", ""))
+    check(out.get("start") == (True, "brain"), "cerveau GUI: au depart, l'espace VJ est a sa place et le bouton dit « brain »", str(out.get("start")))
+    b = out.get("brain_on", ())
+    check(b[:5] == (True, False, "VJ", True, 1.0) and b[5], "cerveau GUI: la bascule montre le cerveau a la place de l'espace VJ, bouton de meme largeur", str(b))
+    check(out.get("vj_back") == (True, False, "brain", True), "cerveau GUI: la bascule inverse remet l'espace VJ", str(out.get("vj_back")))
+    lw = out.get("list_w", [])
+    check(len(lw) == 3 and len(set(lw)) == 1 and lw[0] > 1, "cerveau GUI: la liste du panneau etendu garde sa largeur (VJ -> brain -> VJ)", str(lw))
+    check(out.get("relaunch_open") == (1.0, "700x500"), "cerveau GUI: relance sans P -> fenetre detachee et sa geometrie retrouvees (brain_ui.json)",
+          str(out.get("relaunch_open")))
+    check(out.get("relaunch_closed") == (0.0, 1.0, "700x500"), "cerveau GUI: relance apres fermeture -> raccroche, geometrie gardee",
+          str(out.get("relaunch_closed")))
+    check(out.get("hidden_calls") == 0, "cerveau GUI: panneau cache -> la vue n'est jamais dessinee", str(out.get("hidden_calls")))
+    check(out.get("shown") == (True, "Counting"), "cerveau GUI: panneau visible -> la vue choisie est dessinee", str(out.get("shown")))
+    check(out.get("rec") == (True, True), "cerveau GUI: pendant un REC, plus aucun redessin et la mention « fige pendant le REC »", str(out.get("rec")))
+    check(out.get("rec_end") == (True, True), "cerveau GUI: fin du REC, le dessin reprend", str(out.get("rec_end")))
+    d = out.get("detached", ())
+    check(d == (True, True, True, 1.0, True, "brain"), "cerveau GUI: detacher ouvre une fenetre a part, l'espace VJ reprend sa place, bouton de meme largeur", str(d))
+    cl = out.get("closed", ())
+    check(len(cl) == 6 and cl[0] and cl[1] and cl[2].startswith("700x500") and cl[3] == 0.0 and cl[4] and cl[5],
+          "cerveau GUI: fermer la fenetre la raccroche et retient sa geometrie (brain_geom)", str(cl))
+    check(out.get("geom_back") == "700x500", "cerveau GUI: la fenetre rouverte reprend la geometrie retenue", str(out.get("geom_back")))
+    check(out.get("rec_close") == (True, True, True), "cerveau GUI: fermer la fenetre pendant un REC la raccroche", str(out.get("rec_close")))
+    check(not tick_errors and not cb_errors, "cerveau GUI: aucune erreur Tk (TclError) dans le journal", str(tick_errors[:2] + cb_errors[:2]))
+    check(out.get("raise") == (1, True, True), "cerveau GUI: une vue qui leve ne fait pas tomber le panneau (erreur journalisee une fois)", str(out.get("raise")))
+    check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille, frise libre « tempo non detecte »", str(out.get("free")))
+    check(out.get("free_back") == "Counting", "cerveau GUI: la grille revient -> la vue choisie reprend", str(out.get("free_back")))
+    kp = out.get("kept", ("?", False, 0, -1, 0.0))
+    check(kp[0] == "IsoView" and kp[1] and kp[2] > 500 and kp[2] == kp[3],
+          "cerveau GUI: iso -> free -> iso et iso -> sismo -> iso : la vue est gardee, aucun element recree", str(kp[:4]))
+    print(f"  (info) retour a la vue iso gardee : pire tick {kp[4]:.1f} ms (mesure, pas un seuil)")
+    check(out.get("timed") is True, "cerveau GUI: chaque tick est chronometre (brain.tick)")
+    check(out.get("cadence") == (1, 2), "cerveau GUI: cadence par vue (une vue a 100 ms saute un tick de 50 ms, une vue sans entree non)",
+          str(out.get("cadence")))
+    check(out.get("cadence_table") == {v: 100 for v in gui_brain.VIEW_NAMES}, "cerveau GUI: les quatre vues a 10 Hz (budget mesure)",
+          str(out.get("cadence_table")))
+    veils = (gui_brain.ISO_VEIL_LINES, gui_brain.MAN_VEIL_RINGS, gui_brain.SIS_VEIL_LINES, gui_brain.TUN_VEIL_LINES, gui_brain.TUN_DEPTH)
+    check(veils == (1, 1, 1, 1, 32), "cerveau GUI: budget, voile d'une ligne dans les quatre vues et tunnel sur 32 pas", str(veils))
+    check(out.get("collapsed") is True, "cerveau GUI: panneau etendu replie -> plus aucun dessin")
+
+
+def check_brain_iso() -> None:
+    """Cerveau (#192) : vue isometrique sur un Canvas seul (sans fenetre de reglages) : pool d'elements reutilise d'une page a l'autre,
+    mise a jour incrementale (appels coords / itemconfigure bornes), survol, angle 18..45 sans rien hors du canvas."""
+    print("Cerveau : vue isometrique (pool, mise a jour incrementale, survol, angle)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import gui_brain
+    from core import brain as br
+
+    class CountCanvas(tk.Canvas):
+        n_coords = 0
+        n_config = 0
+
+        def coords(self, *a, **k):
+            CountCanvas.n_coords += 1
+            return super().coords(*a, **k)
+
+        def itemconfigure(self, *a, **k):
+            CountCanvas.n_config += 1
+            return super().itemconfigure(*a, **k)
+
+    try:
+        check(hasattr(gui_brain, "IsoView") and gui_brain.VIEWS.get("iso") is getattr(gui_brain, "IsoView", None),
+              "vue iso: IsoView existe et s'inscrit dans VIEWS['iso']")
+        if not hasattr(gui_brain, "IsoView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 40):                                  # un kick par temps, une caisse claire un temps sur deux
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.0)
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 2.0)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 3.0)
+        log.publish("build", 1.0, reason="build", t=t0 + 9.0)
+        snaps = [br.snapshot(log, t0 + off) for off in (1.9, 9.9, 17.9)]
+        check(all(s["grid"] for s in snaps) and snaps[0]["first"] == 0 and snaps[2]["first"] == 128, "vue iso: instantanes fabriques sur 3 pages")
+
+        w, h = 640, 360
+        cv = CountCanvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.IsoView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snaps[0], True, set(), 5.0)
+        shown = [i for i in cv.find_all() if cv.type(i) != "window" and cv.itemcget(i, "state") != "hidden"]
+        check(n_pool > 500 and len(cv.find_all()) == n_pool and len(shown) > 100,
+              "vue iso: une page cree ses elements (pool) et en montre", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+        view.update(snaps[1], True, set(), 5.1)
+        view.update(snaps[2], True, set(), 5.2)
+        check(len(cv.find_all()) == n_pool, "vue iso: d'autres pages reutilisent le pool (aucun element de plus)", f"{n_pool} -> {len(cv.find_all())}")
+        view.update(snaps[2], True, set(), 5.3)
+        CountCanvas.n_coords = CountCanvas.n_config = 0
+        view.update(snaps[2], True, set(), 5.4)
+        check(CountCanvas.n_coords <= 20 and CountCanvas.n_config <= 20,
+              "vue iso: sans changement de statut, seuls la ligne du present et le voile sont touches",
+              f"coords {CountCanvas.n_coords}, itemconfigure {CountCanvas.n_config}")
+        view.update(snaps[0], True, set(), 6.0)
+        CountCanvas.n_coords = CountCanvas.n_config = 0
+        view.update(snaps[0], True, {"kick"}, 6.1)               # masquer une piste ne touche que ses cellules
+        check(0 < CountCanvas.n_coords + CountCanvas.n_config < 400, "vue iso: masquer un instrument ne retouche que ses cellules",
+              f"coords {CountCanvas.n_coords}, itemconfigure {CountCanvas.n_config}")
+        view.update(snaps[0], True, set(), 6.2)
+
+        # survol : la raison d'un effet, le detail d'une frappe
+        fx_key = next((k for k in view._hov if k[0] == "fx" and k[2] == "ripple"), None)
+        kick_key = next((k for k in view._hov if k[0] == "ins" and k[2] == "kick"), None)
+        if fx_key is not None:
+            fx, fy, _t = view._hov[fx_key]
+            check(view.hover(fx, fy) == "ripple : kick fort", "vue iso: le survol d'un effet rend sa raison", str(view.hover(fx, fy)))
+        else:
+            check(False, "vue iso: un effet de la page est survolable", str(list(view._hov)[:5]))
+        if kick_key is not None:
+            kx, ky, _t = view._hov[kick_key]
+            check("kick" in (view.hover(kx, ky) or ""), "vue iso: le survol d'une frappe rend son detail", str(view.hover(kx, ky)))
+        else:
+            check(False, "vue iso: une frappe de la page est survolable")
+        check(view.hover(-50, -50) is None, "vue iso: rien sous le pointeur -> pas de bulle")
+
+        # angle : bornes et rien hors du canvas, au pire (tout plein, toutes les pistes, voile plein, pas du bord)
+        view.set_angle(10)
+        a_low = view.angle
+        view.set_angle(99)
+        check((a_low, view.angle) == (18, 45), "vue iso: l'angle est borne a 18..45", f"{a_low}, {view.angle}")
+        worst = dict(snaps[0])
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(64) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 31, 63) for t in br.TRACKS]
+        worst["veil"] = [("build", 1.0)] * 64
+        worst["cursor"] = 63.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            for ang in (18, 30, 45):
+                cv.configure(width=size[0], height=size[1])
+                root.update()
+                view.set_angle(ang)
+                view.layout(*size)
+                view.update(worst, True, set(), 7.0)
+                bad = []
+                for i in cv.find_all():
+                    if cv.type(i) == "window" or cv.itemcget(i, "state") == "hidden":
+                        continue
+                    c = cv.coords(i)
+                    for x, y in zip(c[0::2], c[1::2]):
+                        if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                            bad.append((cv.type(i), round(x), round(y)))
+                            break
+                check(not bad, f"vue iso: angle {ang}, canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+    finally:
+        root.destroy()
+
+
+def check_brain_sismo() -> None:
+    """Cerveau (#192) : vue sismographe sur un Canvas seul : un element par onde quelle que soit la page, pool constant, survol,
+    rien hors du canvas."""
+    print("Cerveau : vue sismographe (ondes, pool, survol)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import gui_brain
+    from core import brain as br
+
+    try:
+        check(hasattr(gui_brain, "SismoView") and gui_brain.VIEWS.get("sismo") is getattr(gui_brain, "SismoView", None),
+              "vue sismo: SismoView existe et s'inscrit dans VIEWS['sismo']")
+        if not hasattr(gui_brain, "SismoView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 40):
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.0)
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 2.0)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 3.0)
+        snaps = [br.snapshot(log, t0 + off) for off in (1.9, 9.9, 17.9)]
+
+        w, h = 640, 360
+        cv = tk.Canvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.SismoView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snaps[0], True, set(), 5.0)
+        waves = list(view.wave_items())
+        check(len(waves) == 6 and all(cv.type(i) == "line" for i in waves), "vue sismo: une ligne de canvas par onde (passe + futur)", str(waves))
+        for s in snaps:
+            view.update(s, True, set(), 5.1)
+            check(len(view.wave_items()) == 6, "vue sismo: autant d'elements d'onde quelle que soit la page")
+        check(len(cv.find_all()) == n_pool, "vue sismo: le pool ne grandit pas sur 3 pages", f"{n_pool} -> {len(cv.find_all())}")
+        view.update(snaps[0], True, {"kick"}, 5.2)
+        check(cv.itemcget(view.wave_items()[0], "state") == "hidden", "vue sismo: instrument masque -> onde cachee")
+        view.update(snaps[0], True, set(), 5.3)
+        key = next((k for k in view._hov if k[0] == "fx" and k[2] == "ripple"), None)
+        if key is not None:
+            x, y, _t = view._hov[key]
+            check(view.hover(x, y) == "ripple : kick fort", "vue sismo: le survol d'une note rend sa raison", str(view.hover(x, y)))
+        else:
+            check(False, "vue sismo: un effet de la page est survolable", str(list(view._hov)[:5]))
+        check(view.hover(-50, -50) is None, "vue sismo: rien sous le pointeur -> pas de bulle")
+
+        worst = dict(snaps[0])
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(64) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 31, 62, 63) for t in br.TRACKS]
+        worst["fx"] += [(63, "scene", 0.3, "scene faible", None)]
+        worst["veil"] = [("build", 1.0)] * 64
+        worst["cursor"] = 63.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            cv.configure(width=size[0], height=size[1])
+            root.update()
+            view.layout(*size)
+            view.update(worst, True, set(), 7.0)
+            bad = []
+            for i in cv.find_all():
+                if cv.itemcget(i, "state") == "hidden":
+                    continue
+                c = cv.coords(i)
+                for x, y in zip(c[0::2], c[1::2]):
+                    if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                        bad.append((cv.type(i), round(x), round(y)))
+                        break
+            check(not bad, f"vue sismo: canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+        n = len(cv.find_all())
+        view.update(snaps[1], True, set(), 7.1)
+        check(len(cv.find_all()) == n_pool == n, "vue sismo: pool constant apres les cas extremes", f"{n_pool} {n}")
+    finally:
+        root.destroy()
+
+
+def check_brain_mandala() -> None:
+    """Cerveau (#192) : vue mandala sur un Canvas seul : cases centrees sur les axes (le 1 pile en haut), pool constant d'une page a
+    l'autre, survol, mise a jour incrementale, rien hors du canvas."""
+    print("Cerveau : vue mandala (axes, pool, survol)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import gui_brain
+    from core import brain as br
+
+    class CountCanvas(tk.Canvas):
+        n_coords = 0
+        n_config = 0
+
+        def coords(self, *a, **k):
+            CountCanvas.n_coords += 1
+            return super().coords(*a, **k)
+
+        def itemconfigure(self, *a, **k):
+            CountCanvas.n_config += 1
+            return super().itemconfigure(*a, **k)
+
+    try:
+        check(hasattr(gui_brain, "MandalaView") and gui_brain.VIEWS.get("mandala") is getattr(gui_brain, "MandalaView", None),
+              "vue mandala: MandalaView existe et s'inscrit dans VIEWS['mandala']")
+        if not hasattr(gui_brain, "MandalaView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 40):
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.0)
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 2.0)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 3.0)
+        snaps = [br.snapshot(log, t0 + off) for off in (1.9, 9.9, 17.9)]
+
+        w, h = 640, 360
+        cv = CountCanvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.MandalaView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snaps[0], True, set(), 5.0)
+
+        # le milieu de la case du pas 0 (mesure 1) est pile en haut ; 1 / 2 / 3 / 4 a droite, en bas, a gauche
+        import math as _m
+        for step, want in ((0, -90.0), (4, 0.0), (8, 90.0), (12, 180.0)):
+            it = view.cell_item(step, "kick")
+            mid = -(float(cv.itemcget(it, "start")) + float(cv.itemcget(it, "extent")) / 2)
+            diff = abs((mid - want + 180) % 360 - 180)
+            check(diff <= 1.0, f"vue mandala: la case du pas {step} est centree a {want:.0f} deg", f"milieu {mid:.2f} deg")
+        it0, it16 = view.cell_item(0, "kick"), view.cell_item(16, "kick")
+        check(cv.itemcget(it0, "start") == cv.itemcget(it16, "start") and cv.coords(it0) != cv.coords(it16),
+              "vue mandala: la mesure suivante est un anneau plus loin, a la meme position angulaire")
+
+        view.update(snaps[0], True, set(), 5.0)
+        shown = [i for i in cv.find_all() if cv.itemcget(i, "state") != "hidden"]
+        check(n_pool > 400 and len(cv.find_all()) == n_pool and len(shown) > 60,
+              "vue mandala: une page montre ses elements sans en creer", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+        view.update(snaps[1], True, set(), 5.1)
+        view.update(snaps[2], True, set(), 5.2)
+        check(len(cv.find_all()) == n_pool, "vue mandala: d'autres pages reutilisent le pool", f"{n_pool} -> {len(cv.find_all())}")
+        view.update(snaps[2], True, set(), 5.3)
+        CountCanvas.n_coords = CountCanvas.n_config = 0
+        view.update(snaps[2], True, set(), 5.4)
+        check(CountCanvas.n_coords <= 20 and CountCanvas.n_config <= 20,
+              "vue mandala: sans changement seuls l'aiguille et le voile sont touches",
+              f"coords {CountCanvas.n_coords}, itemconfigure {CountCanvas.n_config}")
+        view.update(snaps[0], True, set(), 6.0)
+        view.update(snaps[0], True, {"kick"}, 6.1)
+        kick_arcs = [view.cell_item(i, "kick") for i in range(64)]
+        check(all(cv.itemcget(a, "state") == "hidden" for a in kick_arcs), "vue mandala: instrument masque -> ses cases cachees")
+        view.update(snaps[0], True, set(), 6.2)
+        shown_causes = [it for it in view._cause_lines if cv.itemcget(it, "state") != "hidden"]
+        check(view._used["causes"] > 0 and shown_causes, "vue mandala: causes actives et frappe reelle au meme pas -> une ligne de cause visible",
+              f"{view._used['causes']} utilisees, {len(shown_causes)} visibles")
+        view.update(snaps[0], False, set(), 6.3)
+        check(all(cv.itemcget(it, "state") == "hidden" for it in view._cause_lines + view._cause_dots),
+              "vue mandala: causes coupees -> lignes et points de cause caches")
+        view.update(snaps[0], True, set(), 6.4)
+
+        fx_key = next((k for k in view._hov if k[0] == "fx" and k[2] == "ripple"), None)
+        kick_key = next((k for k in view._hov if k[0] == "ins" and k[2] == "kick"), None)
+        if fx_key is not None:
+            fx, fy, _t = view._hov[fx_key]
+            check(view.hover(fx, fy) == "ripple : kick fort", "vue mandala: le survol d'un effet rend sa raison", str(view.hover(fx, fy)))
+        else:
+            check(False, "vue mandala: un effet de la page est survolable", str(list(view._hov)[:5]))
+        if kick_key is not None:
+            kx, ky, text = view._hov[kick_key]
+            check("kick" in (view.hover(kx, ky) or "") and view.hover(kx, ky) == text, "vue mandala: le survol d'une case rend son detail",
+                  str(view.hover(kx, ky)))
+        else:
+            check(False, "vue mandala: une case de la page est survolable")
+        check(view.hover(-50, -50) is None, "vue mandala: rien sous le pointeur -> pas de bulle")
+
+        worst = dict(snaps[0])
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(64) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 15, 31, 63) for t in br.TRACKS]
+        worst["veil"] = [("build", 1.0)] * 64
+        worst["cursor"] = 63.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            cv.configure(width=size[0], height=size[1])
+            root.update()
+            view.layout(*size)
+            view.update(worst, True, set(), 7.0)
+            bad = []
+            for i in cv.find_all():
+                if cv.itemcget(i, "state") == "hidden":
+                    continue
+                c = cv.coords(i)
+                for x, y in zip(c[0::2], c[1::2]):
+                    if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                        bad.append((cv.type(i), round(x), round(y)))
+                        break
+            check(not bad, f"vue mandala: canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+        n = len(cv.find_all())
+        view.update(snaps[1], True, set(), 7.1)
+        check(len(cv.find_all()) == n_pool == n, "vue mandala: pool constant apres les cas extremes", f"{n_pool} {n}")
+    finally:
+        root.destroy()
+
+
+def check_brain_tunnel() -> None:
+    """Cerveau (#192) : vue tunnel sur un Canvas seul (instantane glissant) : pool constant sur 200 mises a jour qui avancent, aucun point a
+    z <= 0, causes, survol, rien hors du canvas, cout par image (mesure affichee, pas un seuil)."""
+    print("Cerveau : vue tunnel (pool, profondeur, causes, survol)")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import time as _time
+    import gui_brain
+    from core import brain as br
+
+    try:
+        check(hasattr(gui_brain, "TunnelView") and gui_brain.VIEWS.get("tunnel") is getattr(gui_brain, "TunnelView", None),
+              "vue tunnel: TunnelView existe et s'inscrit dans VIEWS['tunnel']")
+        if not hasattr(gui_brain, "TunnelView"):
+            return
+        log = br.BrainLog()
+        t0 = 1000.0
+        log.set_clock(t0, t0)
+        log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0, 0.5), phase="groove", phase_since=t0 - 100)
+        for k in range(-16, 80):
+            log.publish("kick", 0.9, t=t0 + 0.5 * k)
+            if k % 2:
+                log.publish("snare", 0.8, t=t0 + 0.5 * k)
+            log.publish("hihat", 0.6, t=t0 + 0.5 * k + 0.25)
+        log.publish("ripple", 0.8, reason="ripple : kick fort", cause="kick", t=t0 + 1.5)       # meme pas que le kick de t0 + 1,5
+        log.publish("strobe", 1.0, reason="drop (passage en pic)", cause="kick", t=t0 + 1.75)
+        log.publish("scene", 1.0, reason="scene suivante", t=t0 + 1.25)
+        snap = br.snapshot(log, t0 + 1.9, rolling=True)
+        check(len(snap["cells"]) == 68 * 3 and len(snap["phase_steps"]) == 68 and len(snap["veil"]) == 68,
+              "vue tunnel: l'instantane glissant a 68 pas", f"{len(snap['cells'])} {len(snap['phase_steps'])} {len(snap['veil'])}")
+
+        w, h = 640, 400
+        cv = tk.Canvas(root, width=w, height=h, bg=gui_brain.tint("groove"), highlightthickness=0)
+        cv.pack()
+        root.update()
+        view = gui_brain.TunnelView(cv)
+        view.layout(w, h)
+        n_pool = len(cv.find_all())
+        view.update(snap, True, set(), 5.0)
+        shown = [i for i in cv.find_all() if cv.itemcget(i, "state") != "hidden"]
+        check(n_pool > 800 and len(cv.find_all()) == n_pool and len(shown) > 60,
+              "vue tunnel: un instantane montre ses elements sans en creer", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+        # eclair du strobe : voile blanc trame plein cadre, au-dessus des cases, sous le cadre du present et les libelles
+        fl = getattr(view, "_flash", None)
+        order = list(cv.find_all())
+        cells = [it for tup in view._cells.values() for it in tup]
+        ok_order = fl in order and max(order.index(c) for c in cells) < order.index(fl) < min(
+            order.index(x) for x in [view._frame] + view._ins_labels + view._trk_labels)
+        check(fl is not None and cv.itemcget(fl, "state") != "hidden" and cv.itemcget(fl, "fill") == "#ffffff"
+              and cv.itemcget(fl, "stipple") != "" and [round(v) for v in cv.coords(fl)] == [0, 0, w, h] and ok_order,
+              "vue tunnel: eclair du strobe = voile blanc trame plein cadre (au-dessus des cases, sous les libelles)",
+              "" if fl is None else f"{cv.itemcget(fl, 'state')} {cv.itemcget(fl, 'stipple')} {cv.coords(fl)} ordre {ok_order}")
+        view.update(br.snapshot(log, t0 + 3.0, rolling=True), True, set(), 5.5)
+        check(fl is not None and cv.itemcget(fl, "state") == "hidden", "vue tunnel: le voile de l'eclair s'eteint apres l'eclair",
+              "" if fl is None else cv.itemcget(fl, "state"))
+        view.update(snap, True, set(), 5.0)
+
+        snaps = [br.snapshot(log, t0 + 1.0 + n * 0.043, rolling=True) for n in range(200)]
+        t_start = _time.perf_counter()
+        for n, s in enumerate(snaps):
+            view.update(s, True, set(), 5.0 + n * 0.043)
+        ms = (_time.perf_counter() - t_start) * 1000.0 / len(snaps)
+        print(f"  info: vue tunnel {ms:.2f} ms par mise a jour (moyenne sur {len(snaps)}, {w}x{h})")
+        check(len(cv.find_all()) == n_pool, "vue tunnel: 200 mises a jour qui avancent ne creent aucun element",
+              f"{n_pool} -> {len(cv.find_all())}")
+        check(0.3 <= view.min_z < 99.0, "vue tunnel: aucun point projete avec z <= 0 (z minimal)", f"{view.min_z}")
+
+        # curseur absurde (instantane vide de sens) : rien ne passe derriere la camera, pas d'element de plus
+        weird = dict(snap)
+        for cur in (0.0, 30.0, 200.0, -5.0):
+            weird["cursor"] = cur
+            view.update(weird, True, set(), 6.0)
+            check(0.3 <= view.min_z < 99.0 and len(cv.find_all()) == n_pool, f"vue tunnel: curseur {cur} -> z > 0, pool constant",
+                  f"{view.min_z} {len(cv.find_all())}")
+
+        # causes : ripple et kick au meme pas -> ligne de cause visible ; causes coupees -> cachees
+        view.update(snap, True, set(), 6.2)
+        lines = [it for it in view._cause_lines if cv.itemcget(it, "state") != "hidden"]
+        dots = [it for it in view._cause_dots if cv.itemcget(it, "state") != "hidden"]
+        check(view._used["causes"] > 0 and lines and len(dots) == len(lines),
+              "vue tunnel: causes actives et frappe reelle au meme pas -> une ligne de cause et son point", f"{view._used['causes']} {len(lines)} {len(dots)}")
+        view.update(snap, False, set(), 6.3)
+        check(all(cv.itemcget(it, "state") == "hidden" for it in view._cause_lines + view._cause_dots),
+              "vue tunnel: causes coupees -> lignes et points de cause caches")
+        view.update(snap, True, set(), 6.4)
+
+        # eclair du strobe : le fond s'eclaircit
+        check(cv.itemcget(view._bgrect, "fill") != gui_brain.tint("groove"), "vue tunnel: un eclair du strobe recent eclaircit le fond",
+              cv.itemcget(view._bgrect, "fill"))
+
+        # survol
+        fx = next(((x, y, t) for x, y, t in view._hov if t == "ripple : kick fort"), None)
+        if fx:
+            check(view.hover(fx[0], fx[1]) == "ripple : kick fort", "vue tunnel: le survol d'un effet rend sa raison", str(view.hover(fx[0], fx[1])))
+        else:
+            check(False, "vue tunnel: un effet est survolable", str(view._hov[:4]))
+        kk = next(((x, y, t) for x, y, t in view._hov if isinstance(t, tuple) and t[0] == "kick"), None)          # case : (rangee, statut, v, p), texte forme au survol
+        check(kk is not None and "kick" in (view.hover(kk[0], kk[1]) or ""), "vue tunnel: le survol d'une case rend son detail", str(kk))
+        check(view.hover(-50, -50) is None, "vue tunnel: rien sous le pointeur -> pas de bulle")
+
+        # instrument masque : ses cases disparaissent
+        view.update(snap, True, {"kick"}, 6.5)
+        check(not any(isinstance(t, tuple) and t[0] == "kick" for _x, _y, t in view._hov), "vue tunnel: instrument masque -> plus de case kick survolable")
+
+        worst = dict(snap)
+        worst["cells"] = [(i, r, 1.0, 1.0 if i % 3 else 0.0, ("real", "surprise", "ghost", "miss")[i % 4]) for i in range(68) for r in br.INSTRUMENTS]
+        worst["fx"] = [(i, t, 1.0, "drop (test)" if t == "strobe" else "test", "kick") for i in (0, 4, 5, 20, 67) for t in br.TRACKS]
+        worst["veil"] = [("build", 1.0)] * 68
+        worst["cursor"] = 4.9
+        for size in ((640, 360), (500, 300), (900, 400)):
+            cv.configure(width=size[0], height=size[1])
+            root.update()
+            view.layout(*size)
+            view.update(worst, True, set(), 7.0)
+            bad = []
+            for i in cv.find_all():
+                if cv.itemcget(i, "state") == "hidden":
+                    continue
+                c = cv.coords(i)
+                for x, y in zip(c[0::2], c[1::2]):
+                    if x < -1 or y < -1 or x > size[0] + 1 or y > size[1] + 1:
+                        bad.append((cv.type(i), round(x), round(y)))
+                        break
+            check(not bad, f"vue tunnel: canvas {size[0]}x{size[1]} : rien hors du canvas", f"{len(bad)} dehors, ex. {bad[:3]}")
+        view.update(snap, True, set(), 7.1)
+        check(len(cv.find_all()) == n_pool, "vue tunnel: pool constant apres les cas extremes", f"{n_pool} {len(cv.find_all())}")
+    finally:
+        root.destroy()
+
+
 def check_foudre_pure() -> None:
     print("Foudre : reseau vivant (core/foudre.py)")
     import math as _m
@@ -13484,19 +14824,19 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_engine", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
-    "check_native_modes", "check_sphere_mode", "check_gui", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
+    "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
@@ -13515,7 +14855,7 @@ GROUPES = {
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
-            "check_manager", "check_gui"),
+            "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel"),
 }
 
 

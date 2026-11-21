@@ -107,6 +107,7 @@ BANDS8_GATE = 0.0005              # sous cette amplitude de bin : silence (comme
 RISE_MAX = 10.0                   # derivee publiee (unites d'enveloppe par seconde), plafonnee
 PULSE_USABLE = 0.30               # confiance minimale de l'horloge pour que les grilles de pulsation emettent des evenements
 EDGES = ("hit", "bg", "logo", "snare")     # attaques suivies : frappes aigues, kick de la couche fond, kick de la couche logo, caisse claire (#164)
+BRAIN_STATUS_S = 0.05             # visualizer du cerveau (#192) : statut du rythme publie au plus tous les 50 ms
 STAMP_KEEP = 2048                 # blocs dont l'horodatage de capture est garde (~11 s a 48 kHz en blocs de 256, ~22 s en blocs de 512)
 AGE_FLOOR_S = 3.0                 # fenetre du plancher du retard de capture (le retard stable, sans la gigue du fil d'analyse)
 AGE_SMOOTH_TAU_S = 0.5            # lissage du retard de capture publie
@@ -114,6 +115,11 @@ AGE_SMOOTH_TAU_S = 0.5            # lissage du retard de capture publie
 
 def _coef(dt: float, tau: float) -> float:
     return 1.0 - math.exp(-dt / tau)
+
+
+def _unit01(v) -> float:
+    """Force d'une frappe publiee au cerveau : bornee a 0..1."""
+    return min(max(float(v), 0.0), 1.0)
 
 
 class FeatureExtractor:
@@ -605,6 +611,9 @@ class AudioAnalyzer:
         self._ages: deque = deque()             # (instant du traitement, retard de capture) sur AGE_FLOOR_S : leur plus petit = le retard stable
         self.audio_age_ms = 0.0                 # age du dernier echantillon analyse quand l'analyse en parle (capture + attente du fil), lisse
         self.audio_age_floor_ms = 0.0           # idem sans la gigue d'ordonnancement : le retard de capture Â« de croisiere Â»
+        self.brain = None                       # journal du visualizer du cerveau (core.brain.BrainLog, #192), pose par la session ; None = rien n'est publie
+        self._brain_phase: str | None = None    # derniere phase publiee
+        self._brain_status_at = -1e9            # dernier statut publie (au plus un tous les BRAIN_STATUS_S)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -639,40 +648,78 @@ class AudioAnalyzer:
             rate = self.extractor.rate    # relu: l'entree audio peut changer en cours de route
             self.ring.event.clear()
             total = self.ring.total
-            new = total - self._last_total
-            if new <= 0:
-                continue
-            self._last_total = total
-            dt = min(new / rate, 0.1)
-            window = self.ring.latest(self.extractor.win_size)
-            now = time.monotonic()
-            levels, beat = self.extractor.process(window, dt, now)
-            edges = {name: bool(levels.pop("edge_" + name, False)) for name in EDGES}
-            fire = beat                                                  # l'effet Â« sur kick Â» part : a la detection, ou en avance (voir core/pulse.py)
-            try:
-                t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
-                self.rhythm.update(t_audio, levels, beat)
-                self.phase.update(t_audio, levels, beat, self.rhythm.state, self.rhythm.bpm)
-                if self.phase.drops != self._seen_drops:          # le kick revient apres un vide : ce kick est le « 1 » d'une phrase (Temps 1 auto)
-                    self._seen_drops = self.phase.drops
-                    self.rhythm.on_drop(self.phase.drop_kick if self.phase.drop_kick is not None else t_audio)
-                fire = self._lead_step(t_audio, beat)
-            except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
-                fire = beat
-            if fire != beat:                                             # les kicks des couches a sensibilite 1 sont ce meme kick : ils suivent
-                for name in ("bg", "logo"):
-                    if abs(self.extractor.layer_sens.get(name, 1.0) - 1.0) < 1e-6:
-                        edges[name] = fire
-            with self.lock:
-                self.levels = levels
-                for name, hit in edges.items():
-                    if hit:
-                        self.t_edge[name] = now
-                        if name == "hit":
-                            self.hits += 1
-                if fire:
-                    self.t_beat = now
-                    self.beats += 1
+            self._analyze(total, rate, time.monotonic())
+
+    def _analyze(self, total: int, rate: float, now: float) -> None:
+        """Un pas d'analyse : la fenetre qui finit a l'echantillon `total` du tampon, traitee a l'instant `now` (time.monotonic du fil ;
+        injecte par les tests)."""
+        new = total - self._last_total
+        if new <= 0:
+            return
+        self._last_total = total
+        dt = min(new / rate, 0.1)
+        window = self.ring.latest(self.extractor.win_size)
+        levels, beat = self.extractor.process(window, dt, now)
+        edges = {name: bool(levels.pop("edge_" + name, False)) for name in EDGES}
+        fire = beat                                                  # l'effet Â« sur kick Â» part : a la detection, ou en avance (voir core/pulse.py)
+        try:
+            t_audio = self._audio_time(total, rate, now, dt)         # BPM, grille et phases : kicks dates dans le son, sans la gigue du fil
+            self.rhythm.update(t_audio, levels, beat)
+            drops0 = self.phase.drops
+            self.phase.update(t_audio, levels, beat, self.rhythm.state, self.rhythm.bpm)
+            if self.phase.drops != self._seen_drops:          # le kick revient apres un vide : ce kick est le « 1 » d'une phrase (Temps 1 auto)
+                self._seen_drops = self.phase.drops
+                self.rhythm.on_drop(self.phase.drop_kick if self.phase.drop_kick is not None else t_audio)
+            fire = self._lead_step(t_audio, beat)
+        except Exception:               # le rythme et les phases sont un confort : jamais d'arret de l'analyse pour eux
+            fire = beat
+        else:
+            if self.brain is not None:
+                self._publish_brain(t_audio, now, levels, beat, edges, drops0)
+        if fire != beat:                                             # les kicks des couches a sensibilite 1 sont ce meme kick : ils suivent
+            for name in ("bg", "logo"):
+                if abs(self.extractor.layer_sens.get(name, 1.0) - 1.0) < 1e-6:
+                    edges[name] = fire
+        with self.lock:
+            self.levels = levels
+            for name, hit in edges.items():
+                if hit:
+                    self.t_edge[name] = now
+                    if name == "hit":
+                        self.hits += 1
+            if fire:
+                self.t_beat = now
+                self.beats += 1
+
+    def _publish_brain(self, t_audio: float, now: float, levels: dict, beat: bool, edges: dict, drops0: int) -> None:
+        """Visualizer du cerveau (#192) : publie ce que l'analyse vient d'entendre, tel quel (aucun calcul nouveau). Les frappes, la phase et
+        le drop sont dates dans le temps du son (`t_audio`) ; le statut part au plus tous les BRAIN_STATUS_S. Une panne du journal n'arrete
+        jamais l'analyse."""
+        try:
+            brain = self.brain
+            brain.set_clock(t_audio, now)
+            if beat:
+                brain.publish("kick", _unit01(levels.get("bass", 0.0)), t=t_audio)
+            if edges.get("snare"):
+                brain.publish("snare", _unit01(levels.get("mid", 0.0)), t=t_audio)
+            if edges.get("hit"):
+                brain.publish("hihat", _unit01(levels.get("high", 0.0)), t=t_audio)
+            phase = self.phase
+            if phase.phase != self._brain_phase:
+                self._brain_phase = phase.phase
+                brain.publish("phase", reason=phase.phase, t=t_audio)
+                if phase.phase == "build":
+                    brain.publish("build", t=t_audio)
+            if phase.drops != drops0:
+                drop_t = phase.drop_kick if phase.drop_kick is not None else t_audio
+                brain.publish("drop", t=min(drop_t, t_audio))                     # jamais dans le futur (le journal purge par rapport au plus recent)
+            if now - self._brain_status_at >= BRAIN_STATUS_S:
+                self._brain_status_at = now
+                rhythm, grid = self.rhythm, self.rhythm.grid
+                brain.set_status(bpm=rhythm.bpm, confidence=rhythm.confidence, origin=grid.origin,
+                                 grid=(grid.anchor, grid.period) if grid.active else None, phase=phase.phase, phase_since=phase.since)
+        except Exception:                   # le cerveau est un affichage : jamais d'arret de l'analyse pour lui
+            pass
 
     def _pulse_events(self, t_audio: float, lead: float) -> None:
         """Evenements de la grille de pulsation (temps, croches, doubles, mesure, phrases : `core.audio_layers.PULSE_GRIDS`), eux aussi en avance de `lead`.

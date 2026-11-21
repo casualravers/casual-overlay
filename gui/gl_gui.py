@@ -61,6 +61,7 @@ import gui_random
 import gui_drop
 import gui_sets
 import gui_vj
+import gui_brain
 import gui_colors
 import gui_gates
 from core import controls as core_controls
@@ -1166,6 +1167,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             set_expanded(False)
             return
         set_expanded(True)
+        brain_panel.show_vj()                               # l'onglet Affichage est dans l'espace VJ : il reprend la place du cerveau
         master_box()
         tabs = vj_ui.get("tabs")
         if tabs is None:
@@ -1909,6 +1911,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 refresh_scene_panel()
             update_vj_button()
             update_master_panel()
+            brain_vj_status()
         except Exception:
             traceback.print_exc()
         finally:
@@ -1957,6 +1960,42 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             if name and name in bar["book"].names():
                 bar["select"](name)
 
+    def brain_scene(name: str) -> None:
+        """Visualizer du cerveau (#192) : la scene posee, et qui l'a posee (le VJ ou la main). Jamais d'exception."""
+        brain = getattr(s, "brain", None)
+        if brain is None:
+            return
+        try:
+            brain.publish("scene", reason=f"scene : {name} ({'VJ' if vj_auto['on'] else 'manuel'})", wall=time.monotonic())
+        except Exception:
+            pass
+
+    def brain_vj_status() -> None:
+        """Visualizer du cerveau (#192) : prochaine scene du VJ et son heure (horloge murale), ou rien si le VJ est arrete."""
+        brain = getattr(s, "brain", None)
+        if brain is None:
+            return
+        try:
+            nxt = at = None
+            if vj["running"]:
+                rows = scene_book.rows()
+                order = scene_book.vj()["order"]
+                if order == "alea":
+                    nxt = "Full Randomizer"
+                elif order == "random":
+                    nxt = "au hasard"                  # tiree au moment du changement : inconnue d'avance
+                else:
+                    k = scenes.next_entry_index(rows, current_index(rows), order)
+                    nxt = rows[k]["name"] if k is not None else None
+                if vj.get("grid_due") is not None:
+                    at = vj["grid_due"]
+                elif vj.get("bar") is None:
+                    at = vj.get("t_next")
+                # en rythme sans grille : t_next n'est que le garde-fou (double de la duree attendue) -> pas de delai affiche
+            brain.set_status(next_scene=nxt, next_scene_at=at, vj=bool(vj["running"]))
+        except Exception:
+            pass
+
     def apply_scene_dict(scene: dict, media: dict | None = None, index: int | None = None, a2w: dict | None = None,
                          bgv: str | None = None) -> None:
         """Applique une scene (de la bibliotheque, ou temporaire : tirage du VJ aleatoire). `bgv` : video de fond propre a l'entree."""
@@ -1990,6 +2029,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         show_scene_presets(scene)
         s.active_scene = scene["name"]
         s.active_entry = index
+        brain_scene(scene["name"])
         try:
             panel_ops.schedule_preview(scene["name"])      # premier passage de la scene sans apercu : capture de la projection
         except NameError:
@@ -2197,7 +2237,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         current_index=current_index,
         dnd=dnd,
         duplicate_last_scene=duplicate_last_scene,
-        master_box=Late(lambda: master_box),
+        brain_panel=Late(lambda: brain_panel),
         media_clear=media_clear,
         move_entry_now=move_entry_now,
         move_entry_to=move_entry_to,
@@ -2301,6 +2341,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     detected_bpm = gui_vj_ctl.detected_bpm
     help_window = gui_vj_ctl.help_window
     master_box = gui_vj_ctl.master_box
+    # visualizer du cerveau (#192) : a la place de l'espace de controle global (bouton « brain / VJ »), ou dans une fenetre a part
+    brain_panel = gui_brain.install(types.SimpleNamespace(
+        Tooltip=Tooltip, STATS=STATS, master_box=master_box, root=root, s=s, scene_top=scene_top, ui_every=ui_every, after=after))
     record_history = gui_vj_ctl.record_history
     start_build = gui_vj_ctl.start_build
     rhythm_step = gui_vj_ctl.rhythm_step
@@ -2621,7 +2664,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
             "palette": palette_ctl, "stage": stage_ctl, "remote": remote_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
-            "image_box": image_box, "text_box": text_box, "font_var": font_var})
+            "image_box": image_box, "text_box": text_box, "font_var": font_var, "brain": brain_panel})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))
 
