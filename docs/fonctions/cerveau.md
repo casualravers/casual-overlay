@@ -52,9 +52,13 @@ raison, cause), `free` (sans grille).
 - **Pas fige** (`placed_step`) : une frappe ou une marque d'effet recoit son pas a la **publication**, avec la grille d'alors (`step`,
   `anchor`, `epoch`). Avant, chaque instantane replacait tout le passe avec la grille courante ; or `BeatGrid.nudge` reajuste la periode a
   chaque kick (de moitie vers l'estimation du BPM) : une frappe vieille de N pas glissait de N x (variation relative de la periode) pas,
-  toutes ensemble et d'autant plus qu'elles etaient anciennes (« la grille change d'echelle », retour utilisateur). Seuls les sauts d'ancre
-  de phrases entieres la deplacent encore (`PHRASE_STEPS` x arrondi de l'ecart d'ancre en phrases). Grille perdue puis retrouvee (`epoch`
-  +1 quand `set_status(grid=...)` passe d'absente a presente) ou frappe publiee sans grille : placee par sa date, comme avant.
+  toutes ensemble et d'autant plus qu'elles etaient anciennes (« la grille change d'echelle », retour utilisateur). Dans une meme epoque,
+  seuls les sauts d'ancre de phrases entieres la deplacent (`PHRASE_STEPS` x arrondi de l'ecart d'ancre en phrases). **Epoque** +1
+  (`_new_grid`) quand la grille revient apres une absence, quand le 1 est re-ancre d'autre chose que des phrases entieres (ecart >
+  `REANCHOR_BEATS` = 0,5 temps : `BeatGrid.anchor_at` au drop ou a la reprise, `set_one` a l'appui) ou quand la periode change de plus de
+  `PERIOD_JUMP` = 12 % d'un coup (tempo double) ; les frappes des epoques passees, et celles publiees sans grille, sont placees par leur
+  date, comme avant. Le kick du drop, publie juste avant le statut re-ancre, est de l'ancienne epoque : place par sa date, il tombe sur le 1.
+  Limite : une grille effacee puis retrouvee en moins de `BRAIN_STATUS_S` (50 ms) sans re-ancrage n'est pas vue comme nouvelle.
 - **Strobe a venir** : pendant une montee (`build_s`), si le strobe auto est actif et pas en mode Foudre (`gauges.auto`), `strobe_in_s` =
   `BUILD_CONFIRM_S` - duree (borne a 0) et `strobe_hz` = `auto_build_hz(duree)` (None pendant les 4 premieres secondes) ; sinon None.
 

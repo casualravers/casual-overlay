@@ -12527,6 +12527,23 @@ def check_brain_pure() -> None:
     want = br.step_of(10.0, 3.1, 0.5)
     check(_kick_steps(lg, 10.5) == [want], "cerveau: grille retrouvee, frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
     lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(0.75, 0.5))                              # re-ancrage du 1 (drop, appui) : 1,5 temps, pas une phrase
+    want = br.step_of(10.0, 0.75, 0.5)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: 1 re-ancre (drop, appui) -> frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(0.0, 0.25))                              # tempo double d'un coup : la periode n'est plus comparable
+    want = br.step_of(10.0, 0.0, 0.25)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: periode changee d'un coup -> frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(0.02, 0.5))                              # correction de phase d'un kick (< 0,045 temps) : rien ne bouge
+    check(_kick_steps(lg, 10.5) == [80], "cerveau: petite correction de phase, la frappe garde son pas", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
     lg.publish("kick", t=10.0)                                   # sans grille connue
     lg.set_status(grid=(0.0, 0.495))
     want = br.step_of(10.0, 0.0, 0.495)

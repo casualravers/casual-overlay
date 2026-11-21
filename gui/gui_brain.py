@@ -1296,7 +1296,7 @@ class TunnelView:
         # eclair du strobe : voile blanc trame au-dessus de la scene, sous le cadre du present et les libelles (pas d'alpha sous Tk)
         self._flash = cv.create_rectangle(0, 0, 1, 1, fill="#ffffff", outline="", stipple="gray25", state="hidden")
         self._flash_sig = None
-        self._frame =cv.create_line(*([0, 0] * 5), fill="#e6e6e6", width=1.5)
+        self._frame = cv.create_line(*([0, 0] * 5), fill="#e6e6e6", width=1.5)
         self._ins_labels = [cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL) for r in ins]
         self._trk_labels = [cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL,
                                            anchor="w" if k < 4 else "e") for k, r in enumerate(trk)]

@@ -84,6 +84,26 @@ class Event:
     epoch: int = 0
 
 
+REANCHOR_BEATS = 0.5        # ecart d'ancre (hors phrases entieres) au-dela duquel le 1 a ete re-ancre (drop, reprise, appui)
+PERIOD_JUMP = 0.12          # variation relative de la periode au-dela de laquelle la grille n'est plus comparable (tempo double...)
+
+
+def _new_grid(old, new) -> bool:
+    """Vrai si `new` n'est pas la suite de `old` : grille absente avant, 1 re-ancre d'autre chose que des phrases entieres
+    (`BeatGrid.anchor_at` / `set_one`), ou periode changee d'un coup. Les petites corrections de `BeatGrid.nudge` (phase < 0,05 temps,
+    periode lissee, sauts de phrases entieres) ne changent pas d'epoque : c'est ce qui garde les frappes figees."""
+    try:
+        oa, op = float(old[0]), float(old[1])
+        na, np_ = float(new[0]), float(new[1])
+    except (TypeError, ValueError, IndexError):
+        return True
+    if op <= 0 or np_ <= 0 or abs(np_ / op - 1.0) > PERIOD_JUMP:
+        return True
+    beats = (na - oa) / np_
+    phrase = PHRASE_STEPS / STEPS_PER_BEAT
+    return abs(beats - phrase * round(beats / phrase)) > REANCHOR_BEATS
+
+
 class BrainLog:
     """Journal partage entre les fils : evenements (purges a KEEP_S et MAX_EVENTS) et dernier etat publie."""
 
@@ -145,7 +165,7 @@ class BrainLog:
     def set_status(self, **fields) -> None:
         """Met a jour le dernier etat publie (bpm, confidence, origin, grid, phase, phase_since, next_scene, next_scene_at, gauges)."""
         with self._lock:
-            if "grid" in fields and fields["grid"] and not self._status.get("grid"):
+            if "grid" in fields and fields["grid"] and _new_grid(self._status.get("grid"), fields["grid"]):
                 self._epoch += 1                           # nouvelle grille (ancre quelconque) : les pas figes d'avant ne valent plus
             self._status.update(copy.deepcopy(fields))
 
@@ -409,7 +429,7 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
                 surprise += 1
 
     fx = []
-    for e in events[bisect.bisect_left(events, step_time(first - 2, anchor, period), key=_t_of):]:
+    for e in events[bisect.bisect_left(events, step_time(first - 8, anchor, period), key=_t_of):]:
         if e.family in TRACKS:
             i = placed_step(e, anchor, period, epoch) - first
             if 0 <= i < n:
