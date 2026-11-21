@@ -12504,6 +12504,40 @@ def check_brain_pure() -> None:
     check(len(log.events()) == br.MAX_EVENTS, "cerveau: au plus MAX_EVENTS evenements", str(len(log.events())))
     check(abs(log.events()[0].t - 10 * 0.001) < 1e-9, "cerveau: les plus vieux sont jetes", str(log.events()[0].t))
 
+    # ---- glissement : le pas d'une frappe est fige a sa publication (la grille courante ne la deplace plus)
+    def _kick_steps(lg: "br.BrainLog", now: float) -> list:
+        sn = br.snapshot(lg, now)
+        return [sn["first"] + c[0] for c in sn["cells"] if c[1] == "kick" and c[2] > 0]
+
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)                                   # pas 80
+    lg.set_status(grid=(0.0, 0.495))                             # la periode se reajuste au kick suivant
+    check(_kick_steps(lg, 10.5) == [80], "cerveau: periode reajustee, la frappe garde son pas", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=(16.0, 0.5))                              # l'ancre saute d'une phrase (32 temps x 0,5 s)
+    check(_kick_steps(lg, 10.5) == [80 - br.PHRASE_STEPS], "cerveau: saut d'une phrase, la frappe suit", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("kick", t=10.0)
+    lg.set_status(grid=None)
+    lg.set_status(grid=(3.1, 0.5))                               # grille perdue puis retrouvee : replacee par sa date
+    want = br.step_of(10.0, 3.1, 0.5)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: grille retrouvee, frappe replacee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.publish("kick", t=10.0)                                   # sans grille connue
+    lg.set_status(grid=(0.0, 0.495))
+    want = br.step_of(10.0, 0.0, 0.495)
+    check(_kick_steps(lg, 10.5) == [want], "cerveau: frappe sans grille placee par sa date", str(_kick_steps(lg, 10.5)))
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5))
+    lg.publish("strobe", t=10.0, cause="kick")
+    lg.set_status(grid=(0.0, 0.495))
+    sn = br.snapshot(lg, 10.5)
+    check([sn["first"] + f[0] for f in sn["fx"]] == [80], "cerveau: marque d'effet figee elle aussi", str(sn["fx"]))
+
     log = br.BrainLog()
     log.publish("kick", t=0.0)
     log.publish("kick", t=50.0)

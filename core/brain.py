@@ -70,12 +70,16 @@ def step_time(step: int, anchor: float, period: float) -> float:
 
 @dataclass(frozen=True)
 class Event:
-    """Un evenement date dans l'horloge du son. `cause` : instrument qui l'a declenche (ou None)."""
+    """Un evenement date dans l'horloge du son. `cause` : instrument qui l'a declenche (ou None).
+    `step` / `anchor` / `epoch` : pas fige a la publication avec la grille d'alors (None sans grille), voir `placed_step`."""
     t: float
     family: str
     strength: float = 1.0
     reason: str = ""
     cause: str | None = None
+    step: int | None = None
+    anchor: float | None = None
+    epoch: int = 0
 
 
 class BrainLog:
@@ -87,6 +91,7 @@ class BrainLog:
         self._times: list[float] = []                      # dates de `_events`, pour l'insertion triee
         self._offset: float | None = None                  # t_audio - wall ; None tant que le fil audio ne l'a pas publie
         self._status: dict = {}
+        self._epoch = 0                                    # +1 a chaque grille retrouvee (absente -> presente)
 
     # ---- horloge
     def set_clock(self, t_audio: float, wall: float) -> None:
@@ -110,8 +115,14 @@ class BrainLog:
             if wall is None:
                 return
             t = self.to_audio(wall)
-        ev = Event(float(t), family, float(strength), str(reason), cause if cause in INSTRUMENTS else None)
+        t = float(t)
         with self._lock:
+            step = anchor = None
+            grid = self._status.get("grid")
+            if (family in INSTRUMENTS or family in TRACKS) and grid and grid[1] and grid[1] > 0:
+                anchor = float(grid[0])                    # pas decide une fois : la grille courante ne deplace plus la frappe ensuite
+                step = step_of(t, anchor, float(grid[1]))
+            ev = Event(t, family, float(strength), str(reason), cause if cause in INSTRUMENTS else None, step, anchor, self._epoch)
             i = bisect.bisect_right(self._times, ev.t)
             self._times.insert(i, ev.t)
             self._events.insert(i, ev)
@@ -132,12 +143,16 @@ class BrainLog:
     def set_status(self, **fields) -> None:
         """Met a jour le dernier etat publie (bpm, confidence, origin, grid, phase, phase_since, next_scene, next_scene_at, gauges)."""
         with self._lock:
+            if "grid" in fields and fields["grid"] and not self._status.get("grid"):
+                self._epoch += 1                           # nouvelle grille (ancre quelconque) : les pas figes d'avant ne valent plus
             self._status.update(copy.deepcopy(fields))
 
     def status(self) -> dict:
-        """Copie du dernier etat publie."""
+        """Copie du dernier etat publie (avec `epoch`, l'epoque de la grille courante)."""
         with self._lock:
-            return copy.deepcopy(self._status)
+            st = copy.deepcopy(self._status)
+            st["epoch"] = self._epoch
+            return st
 
 
 class FxEdge:
@@ -179,12 +194,21 @@ FREE_S = 8.0                                               # frise libre (sans g
 FEED_LINES = 4
 
 
-def hits_by_step(events: list[Event], anchor: float, period: float) -> dict[tuple[int, str], float]:
+def placed_step(ev: Event, anchor: float, period: float, epoch: int | None = None) -> int:
+    """Pas d'un evenement sur la grille courante. Fige a la publication (meme epoque) : seuls les sauts d'ancre de phrases entieres
+    (`BeatGrid.nudge`) le deplacent, jamais le reajustement de la periode (sinon les frappes anciennes glissaient toutes ensemble).
+    Sans pas fige, ou grille perdue puis retrouvee depuis : place par sa date."""
+    if ev.step is None or ev.anchor is None or epoch is None or ev.epoch != epoch:
+        return step_of(ev.t, anchor, period)
+    return ev.step + PHRASE_STEPS * round((ev.anchor - anchor) * STEPS_PER_BEAT / (PHRASE_STEPS * period))
+
+
+def hits_by_step(events: list[Event], anchor: float, period: float, epoch: int | None = None) -> dict[tuple[int, str], float]:
     """Frappes placees sur la grille : cle (pas, instrument), valeur = force max des frappes tombees sur ce pas."""
     hits: dict[tuple[int, str], float] = {}
     for ev in events:
         if ev.family in INSTRUMENTS:
-            key = (step_of(ev.t, anchor, period), ev.family)
+            key = (placed_step(ev, anchor, period, epoch), ev.family)
             if ev.strength > hits.get(key, 0.0):
                 hits[key] = ev.strength
     return hits
@@ -345,7 +369,8 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
     # seules les frappes des pas regardes comptent (jusqu'a une phrase avant la page, marge d'un pas pour l'arrondi) : le journal
     # garde 2 minutes, la prediction n'en lit que ~1 (budget du panneau, tache 9)
     t_lo = step_time(first - PAGE_STEPS - PHRASE_STEPS - 1, anchor, period)
-    hits = hits_by_step(events[bisect.bisect_left(events, t_lo, key=_t_of):], anchor, period)
+    epoch = st.get("epoch")
+    hits = hits_by_step(events[bisect.bisect_left(events, t_lo, key=_t_of):], anchor, period, epoch)
     cells = []
     page_p: dict[tuple[int, str], float] = {}              # prediction de page deja calculee (reprise par le score)
     for i in range(n):
@@ -376,9 +401,9 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
                 surprise += 1
 
     fx = []
-    for e in events[bisect.bisect_left(events, step_time(first - 1, anchor, period), key=_t_of):]:
+    for e in events[bisect.bisect_left(events, step_time(first - 2, anchor, period), key=_t_of):]:
         if e.family in TRACKS:
-            i = step_of(e.t, anchor, period) - first
+            i = placed_step(e, anchor, period, epoch) - first
             if 0 <= i < n:
                 fx.append((i, e.family, e.strength, e.reason, e.cause))
 
