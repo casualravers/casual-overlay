@@ -12542,6 +12542,24 @@ def check_brain_pure() -> None:
     check(br.snapshot(lg, 10.5).get("bands") == {"bg": (1.0, 0.5, 0.0), "logo": (0.0, 0.0, 0.0)}, "cerveau: niveaux par couche recopies",
           str(br.snapshot(lg, 10.5).get("bands")))
 
+    # ---- montee en cours : strobe a venir (strobe auto actif, pas en mode Foudre)
+    from core import strobe_auto as _sa
+    lg = br.BrainLog()
+    lg.set_status(grid=(0.0, 0.5), gauges={"auto": {"strobe": True, "foudre": False}})
+    lg.publish("build", t=20.0)
+    h = br.snapshot(lg, 21.5)["header"]
+    check(abs((h.get("strobe_in_s") or -1) - 2.5) < 1e-6 and h.get("strobe_hz") is None, "cerveau: montee depuis 1,5 s -> strobe dans 2,5 s",
+          str({k: h.get(k) for k in ("build_s", "strobe_in_s", "strobe_hz")}))
+    h = br.snapshot(lg, 26.0)["header"]
+    check(h.get("strobe_in_s") == 0.0 and abs((h.get("strobe_hz") or 0) - _sa.auto_build_hz(6.0)) < 1e-9,
+          "cerveau: montee depuis 6 s -> cadence du strobe", str({k: h.get(k) for k in ("build_s", "strobe_in_s", "strobe_hz")}))
+    for gauges, why in (({"auto": {"strobe": False}}, "strobe auto coupe"), ({"auto": {"strobe": True, "foudre": True}}, "mode Foudre")):
+        lg.set_status(gauges=gauges)
+        h = br.snapshot(lg, 26.0)["header"]
+        check(h.get("strobe_in_s") is None and h.get("strobe_hz") is None, f"cerveau: {why} -> aucun strobe annonce", str(h))
+    h = br.snapshot(br.BrainLog(), 26.0)["header"]
+    check(h.get("strobe_in_s") is None and h.get("strobe_hz") is None, "cerveau: sans montee -> aucun strobe annonce", str(h))
+
     log = br.BrainLog()
     log.publish("kick", t=0.0)
     log.publish("kick", t=50.0)
@@ -12973,6 +12991,12 @@ def check_brain_gui() -> None:
     full, empty = gui_brain.BAND_ON * gui_brain.BAND_CELLS, gui_brain.BAND_OFF * gui_brain.BAND_CELLS
     check(("B " + full) in la[1] and ("K " + empty) in la[1] and ("B " + empty) in la[2], "cerveau: barres B / H / K selon les niveaux",
           repr(st_a))
+    bt = [gui_brain.build_text(dict(build_s=1.5, strobe_in_s=2.5, strobe_hz=None)),
+          gui_brain.build_text(dict(build_s=6.0, strobe_in_s=0.0, strobe_hz=0.5546875)),
+          gui_brain.build_text(dict(build_s=125.0, strobe_in_s=None, strobe_hz=None))]
+    check("build 2 s" in bt[0] and "strobe in 2.5 s" in bt[0] and "build 6 s" in bt[1] and "strobe 0.6 Hz" in bt[1]
+          and "strobe" not in bt[2] and len(set(len(x) for x in bt)) == 1 and gui_brain.build_text({}) == "",
+          "cerveau: en-tete de montee (strobe a venir, cadence) de largeur fixe", repr(bt))
 
     live = gl.load_live(gl.DEFAULT_A2W_DIR)
     args = gl.build_live_args(live, "Micro", (1280, 720), 30, None)

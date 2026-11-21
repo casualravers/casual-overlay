@@ -80,6 +80,23 @@ def sources_text(src: dict, bands: dict) -> str:
     return "\n".join(x.ljust(width) for x in lines)
 
 
+BUILD_W = 32                                   # « build 125 s  strobe in 2.5 s » et ses variantes tiennent dans cette largeur
+
+
+def build_text(h: dict) -> str:
+    """Montee en cours de l'en-tete : duree, puis strobe a venir (delai ou cadence) quand le strobe auto l'annoncera. Largeur fixe
+    (BUILD_W) : les elements a droite ne bougent pas quand le texte change ; vide sans montee."""
+    b = h.get("build_s")
+    if b is None:
+        return ""
+    txt = f"   build {b:.0f} s"
+    if h.get("strobe_hz") is not None:
+        txt += f"  strobe {h['strobe_hz']:.1f} Hz"
+    elif h.get("strobe_in_s") is not None:
+        txt += f"  strobe in {h['strobe_in_s']:.1f} s"
+    return txt.ljust(BUILD_W)
+
+
 def tint(phase: str | None) -> str:
     """Couleur de fond du canvas selon la phase (teintes des contraintes du plan)."""
     return "#%02x%02x%02x" % PHASE_TINT.get(phase or "", DEFAULT_TINT)
@@ -2186,7 +2203,7 @@ class BrainPanel:
         if cycles:                                                 # temps restants avant la fin des cycles de 8, 16 et 32 temps
             line2.append(("   end " + " ".join(f"{n}\u00b7{cycles[n]}" for n in sorted(cycles)), MUTED))
         if h.get("build_s") is not None:
-            line2.append((f"   build {h['build_s']:.0f} s", PHASE_COLORS["build"]))
+            line2.append((build_text(h), PHASE_COLORS["build"]))
         if h.get("next_scene"):
             left = h.get("next_scene_s")
             line2.append((f"   next \u00b7 {h['next_scene']}" + (f" ({max(0.0, left):.0f} s)" if left is not None else ""), MUTED))

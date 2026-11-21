@@ -648,7 +648,7 @@ class Renderer:
                     "rec": bool(self.video_cover),
                     "sources": {"bg": src_bg, "logo": src_logo},
                     "auto": {"fx_master": float(p.get("fx_master", 1.0)), "phases": float(p.get("auto_phase", 0.0)) >= 0.5,
-                             "strobe": float(p.get("strobe_auto", 0.0)) >= 0.5, "tempo": float(p.get("bpm_auto", 0.0)) >= 0.5,
+                             "strobe": float(p.get("strobe_auto", 0.0)) >= 0.5, "foudre": p.get("strobe_kind") == "foudre", "tempo": float(p.get("bpm_auto", 0.0)) >= 0.5,
                              "vj": bool(brain.status().get("vj", False))},
                 }
                 brain.set_status(gauges=gauges)

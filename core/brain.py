@@ -19,6 +19,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+from core.strobe_auto import BUILD_CONFIRM_S, auto_build_hz
+
 # ---------------------------------------------------------------------------------------------------------------------------
 # Constantes : familles, grille, retention, libelles et couleurs
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -336,7 +338,13 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
         "next_scene": st.get("next_scene"),
         "next_scene_s": None if next_at is None else next_at - now_wall,
         "build_s": None if struct_now.build_t0 is None else now - struct_now.build_t0,
+        "strobe_in_s": None, "strobe_hz": None,
     }
+    auto = (st.get("gauges") or {}).get("auto") or {}
+    if header["build_s"] is not None and auto.get("strobe") and not auto.get("foudre"):
+        # montee automatique du strobe (core/strobe_auto) : rien pendant BUILD_CONFIRM_S, puis des eclairs de plus en plus rapides
+        header["strobe_in_s"] = max(0.0, BUILD_CONFIRM_S - header["build_s"])
+        header["strobe_hz"] = auto_build_hz(header["build_s"])
     last: list[Event] = []                                 # les FEED_LINES derniers effets passes (l'heure n'est formatee que pour eux)
     for e in reversed(events):
         if e.family in TRACKS and e.t <= now:
