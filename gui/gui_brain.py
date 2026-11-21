@@ -10,7 +10,8 @@ now)`, `.hover(x, y) -> str | None` ; registre `VIEWS` (les vraies vues s'y insc
 (`snap["grid"] is False`) : `FreeView`, frise en secondes, quelle que soit la vue choisie.
 
 Cout : `tick` (ordonnanceur toutes les 50 ms ; les quatre vues a 10 Hz, `VIEW_TICK_MS`) ne fait rien quand le panneau n'est pas
-visible ; pendant un REC il dessine une derniere fois « fige pendant le REC » puis plus rien. Budget mesure : docs/fonctions/cerveau.md. Libelles en anglais, raisons en francais (contraintes du plan). Reglages de salle `brain_*`.
+visible ; pendant un REC il dessine une derniere fois « fige pendant le REC » puis plus rien. Budget mesure : docs/fonctions/cerveau.md. Libelles en anglais, raisons en francais (contraintes du plan). Reglages `brain_*` : portee « device » (ni presets, ni scenes,
+ni memoires de masters), sauves tout seuls dans brain_ui.json.
 """
 from __future__ import annotations
 
@@ -1552,9 +1553,8 @@ class _Surface:
         self.panel, self.floating = panel, floating
         self.view = None
         self.view_key = None
-        self.size = (0, 0)
+        self.last_size = (0, 0)
         self.frozen = False
-        self.bg = None
         self.last = {}                                             # dernier contenu ecrit de chaque zone de texte
         frame = self.frame = tk.Frame(parent, bg=PANEL_BG)
         bar = tk.Frame(frame, bg=PANEL_BG)
@@ -1610,11 +1610,45 @@ class _Surface:
             pill.pack(side="left", padx=(0, 3))
             pill.bind("<Button-1>", lambda _e, n=name: panel.toggle_track(n))
             self.pills[name] = pill
-        self.canvas = tk.Canvas(frame, bg=tint(None), highlightthickness=0, bd=0, width=200, height=80)
+        # un canvas par vue (cle : nom de la vue ou « free »), construit une fois puis montre / cache : revenir a une vue deja vue
+        # (grille perdue puis retrouvee au drop, bascule de vue) ne recree aucun element (iso : ~3100 elements, 70-215 ms)
+        self._views: dict = {}                                     # cle -> [canvas, vue, taille, fond]
+        self.canvas = self._new_canvas()
         self.canvas.pack(side="top", fill="both", expand=True, padx=4)
-        self.canvas.bind("<Motion>", self.on_motion)
-        self.canvas.bind("<Leave>", lambda _e: self.hide_tip())
+        self._spare = self.canvas                                  # canvas du depart, pris par la premiere vue
         self.restyle()
+
+    def _new_canvas(self) -> tk.Canvas:
+        cv = tk.Canvas(self.frame, bg=tint(None), highlightthickness=0, bd=0, width=200, height=80)
+        cv.bind("<Motion>", self.on_motion)
+        cv.bind("<Leave>", lambda _e: self.hide_tip())
+        return cv
+
+    def show_view(self, key: str, cls, on_fail) -> list:
+        """Rend l'entree [canvas, vue, taille, fond] de la vue `key` et la montre (cache la precedente). La vue n'est construite qu'a
+        sa premiere apparition (ou si sa classe a change, ou si sa construction avait leve)."""
+        entry = self._views.get(key)
+        if entry is None:
+            cv = self._spare if self._spare is not None else self._new_canvas()
+            self._spare = None
+            entry = self._views[key] = [cv, None, (0, 0), None]
+        cv = entry[0]
+        if entry[1] is None or type(entry[1]) is not cls:
+            cv.delete("all")
+            entry[1], entry[2] = None, (0, 0)
+            try:
+                entry[1] = cls(cv)
+            except Exception as exc:
+                on_fail(key, exc)
+        if cv is not self.canvas:
+            old = self.canvas
+            self.hide_tip()
+            self.last_size = (old.winfo_width(), old.winfo_height())   # taille du canvas qui arrive tant que Tk ne l'a pas place
+            old.pack_forget()
+            cv.pack(side="top", fill="both", expand=True, padx=4)  # meme place : le canvas est toujours le dernier empaquete
+            self.canvas = cv
+        self.view, self.view_key = entry[1], key
+        return entry
 
     # ---- etat des boutons et des pastilles
     def restyle(self) -> None:
@@ -1694,6 +1728,8 @@ class _Surface:
         self.frozen = True
 
     def hide_frozen(self) -> None:
+        for e in self._views.values():
+            e[0].delete("frozen")
         self.canvas.delete("frozen")
         self.frozen = False
 
@@ -1991,7 +2027,7 @@ class BrainPanel:
         self._persist()
         for surf in (self._docked, self._float):
             if surf is not None:
-                surf.view_key = None                             # la vue est recreee au prochain dessin
+                surf.view_key = None                             # la vue (construite une fois, gardee) est montree au prochain dessin
         self._restyle()
         self.tick()
 
@@ -2068,27 +2104,22 @@ class BrainPanel:
 
     def _draw(self, surf: _Surface, snap: dict, now: float) -> None:
         self._draw_text(surf, snap)
-        cv = surf.canvas
         key = self.view_name if snap.get("grid") else "free"
         cls = FreeView if key == "free" else VIEWS.get(key, BlankView)
+        entry = surf.show_view(key, cls, self._fail)             # vue deja construite : seulement montree (aucun element recree)
+        cv, view = entry[0], entry[1]
         size = (cv.winfo_width(), cv.winfo_height())
-        if surf.view_key != key or type(surf.view) is not cls:
-            cv.delete("all")
-            surf.view, surf.view_key, surf.size = None, key, (0, 0)
-            try:
-                surf.view = cls(cv)
-            except Exception as exc:
-                self._fail(key, exc)
-        view = surf.view
+        if (size[0] <= 1 or size[1] <= 1) and surf.last_size[0] > 1:
+            size = surf.last_size                                # canvas tout juste montre, pas encore place par Tk
         header = snap.get("header", {})
         bg = tint(header.get("phase"))
-        if surf.bg != bg:
-            surf.bg = bg
+        if entry[3] != bg:
+            entry[3] = bg
             cv.configure(bg=bg)
         if view is not None:
             try:
-                if surf.size != size:
-                    surf.size = size
+                if entry[2] != size:
+                    entry[2] = size
                     view.layout(*size)
                 view.update(snap, self.causes, set(self.hidden), now)
             except Exception as exc:
@@ -2161,16 +2192,21 @@ class BrainPanel:
 
 
 def install(ns) -> BrainPanel:
-    """Panneau du cerveau d'une construction de la fenetre ; `ns` : root, s, scene_top, master_box, Tooltip, STATS, ui_every.
-    Rouvre la fenetre detachee si elle l'etait (reglage de salle `brain_detached`)."""
+    """Panneau du cerveau d'une construction de la fenetre ; `ns` : root, s, scene_top, master_box, Tooltip, STATS, ui_every, after.
+    Rouvre la fenetre detachee si elle l'etait (`brain_detached`, portee « device », relu de brain_ui.json). `after` (celui de la
+    construction, coupe quand la fenetre est reconstruite) : une reconstruction dans les 200 ms n'ouvre pas deux fenetres."""
     panel = BrainPanel(ns)
     every = getattr(ns, "ui_every", None)
     if every is not None:
         every("brain", TICK_MS, panel.scheduled_tick)
         every("brain_slot", 300, panel.sync_slot)
     if panel._flag("brain_detached"):
+        later = getattr(ns, "after", None)
         try:
-            ns.root.after(200, panel.detach)
+            if later is not None:
+                later(200, panel.detach)
+            else:
+                ns.root.after(200, panel.detach)
         except tk.TclError:
             pass
     return panel

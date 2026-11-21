@@ -1987,7 +1987,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 else:
                     k = scenes.next_entry_index(rows, current_index(rows), order)
                     nxt = rows[k]["name"] if k is not None else None
-                at = vj.get("grid_due") if vj.get("grid_due") is not None else vj.get("t_next")
+                if vj.get("grid_due") is not None:
+                    at = vj["grid_due"]
+                elif vj.get("bar") is None:
+                    at = vj.get("t_next")
+                # en rythme sans grille : t_next n'est que le garde-fou (double de la duree attendue) -> pas de delai affiche
             brain.set_status(next_scene=nxt, next_scene_at=at, vj=bool(vj["running"]))
         except Exception:
             pass
@@ -2339,7 +2343,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     master_box = gui_vj_ctl.master_box
     # visualizer du cerveau (#192) : a la place de l'espace de controle global (bouton « brain / VJ »), ou dans une fenetre a part
     brain_panel = gui_brain.install(types.SimpleNamespace(
-        Tooltip=Tooltip, STATS=STATS, master_box=master_box, root=root, s=s, scene_top=scene_top, ui_every=ui_every))
+        Tooltip=Tooltip, STATS=STATS, master_box=master_box, root=root, s=s, scene_top=scene_top, ui_every=ui_every, after=after))
     record_history = gui_vj_ctl.record_history
     start_build = gui_vj_ctl.start_build
     rhythm_step = gui_vj_ctl.rhythm_step

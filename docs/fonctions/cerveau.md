@@ -61,8 +61,9 @@ bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers ef
   entendu. Le plan disait « pas - 16 k » sans condition : cela lisait des mesures futures (journal vide a cet endroit), la spec dit « mesures
   qui ont frappe ».
 - **Statuts** (`status_of`) : passe et frappe venue -> `real` (attendue) ou `surprise` (non attendue, contour blanc) ; passe, attendue et
-  absente -> `miss` (croix rouge) ; futur -> `ghost` si > 0,2.
-- **Score de l'en-tete** : toujours les pas deja passes de la page courante avec la **prediction de page**, meme dans le tunnel. Les cases
+  absente -> `miss` (croix rouge) ; futur -> `ghost` si > 0,2. **Pas courant** : passe seulement si sa frappe est deja venue (`real` /
+  `surprise`), sinon encore `ghost` (une frappe attendue ne clignote pas en `miss` au debut de son pas).
+- **Score de l'en-tete** : toujours les pas finis de la page courante (pas courant exclu) avec la **prediction de page**, meme dans le tunnel. Les cases
   passees du tunnel (prediction glissante) peuvent donc differer du score : assume (le score compte une page, le tunnel n'en a pas).
 - Voile (`veil_at`) : montee ouverte par `build` (intensite au carre sur `BUILD_RAMP_S` = 16 s), relachement sur `DROP_FADE_S` = 4 s apres un
   drop. Fins de cycles : `cycle_left(temps)` = temps restants avant la fin des cycles de 8, 16, 32 temps.
@@ -78,7 +79,8 @@ bar, cycles, next_scene, next_scene_s, build_s), `gauges`, `feed` (4 derniers ef
 - **Interface d'une vue** : `View(canvas)`, `.layout(w, h)`, `.update(snap, causes, hidden, now)`, `.hover(x, y) -> str | None` ; registre
   `VIEWS`. Une vue qui leve ne fait pas tomber le panneau (erreur journalisee une fois par vue et par type).
 - **Pools** : chaque vue cree ses elements une fois puis les deplace / recolore (nombre d'elements constant d'une page a l'autre, teste) ;
-  pas d'alpha sous Tk : les couleurs sont melangees vers la teinte de la phase (`blend`). Changer de vue recree la vue (`cv.delete("all")`).
+  pas d'alpha sous Tk : les couleurs sont melangees vers la teinte de la phase (`blend`). Un canvas par vue (et par surface), construit a la premiere
+  apparition puis montre / cache (`_Surface.show_view`) : changer de vue ou perdre puis retrouver la grille ne recree rien.
 - **iso** : grille isometrique, le temps part de devant ; plateau des instruments (piliers), plateau des effets, voile en lignes de relief,
   plan du present ; angle 18..45 degres. **mandala** : un anneau par mesure, le 1 pile en haut ; couronne de la phrase de 32 temps ; anneaux
   des effets ; aiguille. **tunnel** : couloir en perspective, voies au sol, effets sur les murs, voile au plafond, cadre blanc du present ;
@@ -136,7 +138,9 @@ recours avec l'accord de l'utilisateur), toutes appliquees sauf la derniere :
    0,7 ms hors application. Sismo : points de l'onde calcules une fois par (valeurs, geometrie) puis coupes au curseur (2,0 -> 0,9 ms).
    Tunnel : texte de survol des cases forme au survol seulement. Frise libre : couleurs et libelles reecrits seulement s'ils changent.
 2. **Les quatre vues a 10 Hz** (`VIEW_TICK_MS`). Le cout par tick ne baisse pas (il monte : plus de changements par tick), le cout par
-   seconde baisse (sismo 94 -> 69 ms/s, iso ~63 -> 42 ms/s ; charge du fil Tk avec iso 44 -> 34 %).
+   seconde baisse (sismo 94 -> 69 ms/s, iso ~63 (estimation : 3,9 ms x ~16 ticks/s, non mesure) -> 42 ms/s ; charge du fil Tk avec iso
+   44 -> 34 %). **Iso a 20 Hz tenait le seuil de la moyenne par tick** (3,9 ms < 4 ms, mesure 5) : le passer a 10 Hz a echange ce seuil
+   contre environ 10 points de charge du fil Tk en moins (moyenne par tick 5,2 ms a la mesure 6, au-dessus du seuil).
 3. **Tunnel sur 32 pas** : 36 pas dessines (4 de passe + `TUN_DEPTH`) et seulement ceux-la calcules (`snapshot(..., rolling=True,
    depth=32)`) ; tick 16,4 -> 10,4 ms, puis 9,9 ms.
 4. **Voile simplifie** dans les quatre vues : une ligne (iso, sismo, tunnel) ou un anneau (mandala) au lieu de 8 / 4 / 5 / 4. Le voile n'est
@@ -146,12 +150,14 @@ recours avec l'accord de l'utilisateur), toutes appliquees sauf la derniere :
 **Conclusion, apres tous les remedes : seuils du plan pris a la lettre NON tenus.**
 
 - Moyenne par tick < 4 ms : **depassee par les quatre vues** : iso 5,2, mandala 5,3, tunnel 9,9, sismo 8,5 ms. Seule la frise libre (3,5 ms)
-  passe.
+  passe. Iso le tenait a 20 Hz (3,9 ms) : le passage a 10 Hz l'a echange contre ~10 points de charge du fil Tk (voir decision 2).
 - Pire par tick < 20 ms : **depasse partout, frise libre comprise** : iso 28, mandala 50, tunnel 28, sismo 31, frise libre 23 ms (19,6 ms a la
   mesure 5 : la frise libre est a la limite, elle passe ou non selon la mesure).
 - Gels > 150 ms imputables au panneau : aucun en regime ; **a la bascule vers iso** (creation de ~3100 elements, tick de 70 a 215 ms),
-  deux mesures sur six ont vu un gel de 173-183 ms (`ui_pump` ; l'une sous profileur). Cela arrive quand on choisit iso et quand la grille
-  revient apres une frise libre (la vue est recreee), donc aussi en soiree si le tempo se perd puis revient.
+  deux mesures sur six ont vu un gel de 173-183 ms (`ui_pump` ; l'une sous profileur). Cela arrivait quand on choisit iso et quand la grille
+  revient apres une frise libre (la vue etait recreee), donc aussi en soiree si le tempo se perd puis revient (au drop). **Corrige depuis** :
+  un canvas par vue, construit a sa premiere apparition puis montre / cache (`_Surface.show_view`) ; seule la toute premiere apparition
+  d'iso coute encore la creation (test : iso -> free -> iso et iso -> sismo -> iso, aucun element recree, retour ~4 ms).
 - Images/s du rendu a 5 % pres : **tenu** (60,2 sans et avec le panneau, 59,8 au pire).
 
 Pourquoi les remedes ne suffisent pas : le temps mur de `brain.tick` est gonfle par le **verrou Python**. Chaque appel Tk rend le verrou,
@@ -168,7 +174,7 @@ image (le plan du present et le voile couvrent toute la grille), tunnel ~10 ms, 
 - soit **changer le seuil du plan** : remplacer « moyenne < 4 ms et pire < 20 ms par tick » par un budget par seconde (par exemple 80 ms/s,
   soit 4 ms x 20 Hz, que toutes les vues tiennent : 29 a 80 ms/s, le tunnel tout juste) et le constat « aucun gel en regime, images/s
   inchangees ». C'est une **modification du seuil du plan, qui demande l'accord de l'utilisateur** ;
-- dans les deux cas, garder les vues construites (au lieu de les recreer) eviterait le gel a la bascule vers iso.
+- les vues construites sont desormais gardees (plus de gel au retour vers iso, voir plus haut).
 
 ## Pieges
 
@@ -179,6 +185,10 @@ image (le plan du present et le voile couvrent toute la grille), tunnel ~10 ms, 
 - Les reglages `brain_*` en portee « salle » passaient dans les memoires de masters et l'auto-sauvegarde : portee `device` + `brain_ui.json`.
 - Tk n'a pas d'alpha : melange vers la teinte de la phase ; quand la phase change, les couleurs posees sont reecrites (signature `bg`).
 - Le cout reel n'est pas `brain.tick` seul : le redessin du canvas (hors tick) et l'attente du verrou Python comptent (voir Budget).
+- Reprise apres arret brutal (`recover_autosave`) : l'instantane a jusqu'a 60 s d'age ; ses `brain_*` sont ignores, ceux de `brain_ui.json`
+  (relus par `load_params`) sont gardes.
+- VJ en rythme sans grille : `t_next` n'est que le garde-fou de `BarTimer` (double de la duree attendue) ; aucun delai n'est publie
+  (`next_scene_at` None), seulement la prochaine scene.
 - `brain_ui.json` est ecrit sans fichier temporaire (non atomique) : un arret pendant l'ecriture perd l'etat du panneau (simple confort).
 
 ## Verifications

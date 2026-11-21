@@ -12666,6 +12666,31 @@ def check_brain_pure() -> None:
             core_params.BRAIN_UI_PATH = real_paths[1]
     check(ok, "cerveau: etat du panneau sauve tout seul (brain_ui.json, seulement brain_*) et relu au lancement", detail)
     check(ok_broken, "cerveau: brain_ui.json illisible -> valeurs par defaut, pas d'erreur")
+    # reprise apres arret brutal : l'instantane (jusqu'a 60 s d'age) ne remplace pas l'etat du panneau relu de brain_ui.json
+    from core import autosave as _asv
+    snapd = Path(_tf.mkdtemp(prefix="casual_overlay_brain_asv_"))
+    snapf = snapd / "autosave.json"
+    snapf.write_text(json.dumps({"saved_at": 0, "params": dict(brain_view="mandala", brain_on=0, brain_geom="10x10+0+0", master=1.5)}),
+                     encoding="utf-8")
+    base = dict(json.loads(json.dumps(gl.DEFAULT_PARAMS)), brain_view="sismo", brain_on=1.0, brain_geom="700x500+10+20")
+    rec, _m = _asv.recover_autosave(base, snapf)
+    check(rec["brain_view"] == "sismo" and rec["brain_on"] == 1.0 and rec["brain_geom"] == "700x500+10+20" and rec["master"] == 1.5,
+          "cerveau: reprise apres arret brutal, brain_* gardes de brain_ui.json (le reste vient de l'instantane)",
+          str((rec["brain_view"], rec["brain_on"], rec["brain_geom"], rec["master"])))
+    # frappe attendue au pas courant, pas encore venue : fantome, pas « miss », hors du score ; une fois venue : real
+    lgc = br.BrainLog()
+    for k in range(40):                                    # kicks sur chaque temps jusqu'au pas 156
+        lgc.publish("kick", 0.9, t=0.5 * k)
+    lgc.set_status(grid=(0.0, 0.5))
+    sc = br.snapshot(lgc, 20.01)                           # pas courant 160 (index 32 de la page 128), kick attendu
+    cc = {(c[0], c[1]): c for c in sc["cells"]}
+    check(cc[(32, "kick")][4] == "ghost" and sc["score"][1] == 0, "cerveau: kick attendu au pas courant sans frappe = ghost, pas de miss",
+          str((cc[(32, "kick")], sc["score"])))
+    lgc.publish("kick", 0.9, t=20.0)
+    sc2 = br.snapshot(lgc, 20.01)
+    cc2 = {(c[0], c[1]): c for c in sc2["cells"]}
+    check(cc2[(32, "kick")][4] == "real" and sc2["score"] == sc["score"],
+          "cerveau: frappe venue au pas courant = real (le score ne compte que les pas finis)", str((cc2[(32, "kick")], sc2["score"])))
     # phase_since = 0,0 : le fil audio n'a encore vu aucun changement de phase -> duree inconnue (pas « depuis le debut de l'horloge »)
     lg0 = br.BrainLog()
     lg0.set_status(phase="groove", phase_since=0.0, grid=(0.0, 0.5))
@@ -13062,11 +13087,48 @@ def check_brain_gui() -> None:
         log.set_status(grid=None)
         bp.tick()
         pump()
-        out["free"] = (type(bp.current).__name__, gui_brain.NO_TEMPO in canvas_texts(cv))
+        out["free"] = (type(bp.current).__name__, gui_brain.NO_TEMPO in canvas_texts(bp._docked.canvas))
         log.set_status(grid=(t0, 0.5))
         bp.tick()
         pump()
         out["free_back"] = type(bp.current).__name__
+        # vues gardees : iso (la vraie, ~3100 elements) -> free -> iso, puis iso -> sismo -> iso : aucun element recree, aucune
+        # reconstruction (la grille revient au drop : pas de gel de 70-215 ms)
+        surf = bp._docked
+        gui_brain.VIEWS["iso"] = saved_views["iso"]
+
+        def n_items():
+            return sum(len(e[0].find_all()) for e in surf._views.values())
+        bp.set_view("iso")
+        pump()
+        bp.tick()
+        iso_view = bp.current
+        for grid_ in (None, (t0, 0.5)):                          # premiere construction de free, retour a iso
+            log.set_status(grid=grid_)
+            bp.tick()
+            pump()
+        bp.set_view("sismo")
+        pump()
+        bp.set_view("iso")
+        pump()
+        n_first = n_items()
+        times, same = [], True
+        for _ in range(2):
+            for grid_ in (None, (t0, 0.5)):
+                log.set_status(grid=grid_)
+                t_ = time.perf_counter()
+                bp.tick()
+                times.append(time.perf_counter() - t_)
+                pump()
+            bp.set_view("sismo")
+            pump()
+            bp.set_view("iso")
+            pump()
+            same = same and bp.current is iso_view
+        out["kept"] = (type(iso_view).__name__, same, n_first, n_items(), max(times) * 1000.0)
+        gui_brain.VIEWS["iso"] = Counting
+        bp.set_view("iso")
+        pump()
         out["timed"] = gl_gui.STATS.ops.get("brain.tick", [0])[0] > 0
         # cadence par vue (budget, tache 9) : mecanisme essaye avec une table ou seul le tunnel est a 10 Hz (les autres a TICK_MS)
         out["cadence_table"] = dict(gui_brain.VIEW_TICK_MS)
@@ -13156,6 +13218,10 @@ def check_brain_gui() -> None:
     check(out.get("raise") == (1, True, True), "cerveau GUI: une vue qui leve ne fait pas tomber le panneau (erreur journalisee une fois)", str(out.get("raise")))
     check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille, frise libre « tempo non detecte »", str(out.get("free")))
     check(out.get("free_back") == "Counting", "cerveau GUI: la grille revient -> la vue choisie reprend", str(out.get("free_back")))
+    kp = out.get("kept", ("?", False, 0, -1, 0.0))
+    check(kp[0] == "IsoView" and kp[1] and kp[2] > 500 and kp[2] == kp[3],
+          "cerveau GUI: iso -> free -> iso et iso -> sismo -> iso : la vue est gardee, aucun element recree", str(kp[:4]))
+    print(f"  (info) retour a la vue iso gardee : pire tick {kp[4]:.1f} ms (mesure, pas un seuil)")
     check(out.get("timed") is True, "cerveau GUI: chaque tick est chronometre (brain.tick)")
     check(out.get("cadence") == (1, 2), "cerveau GUI: cadence par vue (une vue a 100 ms saute un tick de 50 ms, une vue sans entree non)",
           str(out.get("cadence")))

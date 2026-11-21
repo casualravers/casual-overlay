@@ -9,7 +9,7 @@ import os
 import time
 from pathlib import Path
 
-from core.params import LAUNCH_DEFAULT_KEYS, TRANSIENT_KEYS, coerce_params
+from core.params import BRAIN_UI_KEYS, LAUNCH_DEFAULT_KEYS, TRANSIENT_KEYS, coerce_params
 from core import sessionlog
 
 AUTOSAVE_PATH = Path.home() / ".audio2wave" / "autosave.json"
@@ -59,7 +59,11 @@ def recover_autosave(params: dict, path: Path | None = None) -> tuple[dict, str]
     except OSError:
         pass
     try:
-        recovered = coerce_params({k: v for k, v in snap["params"].items() if k not in TRANSIENT_KEYS and k not in LAUNCH_DEFAULT_KEYS})
+        recovered = coerce_params({k: v for k, v in snap["params"].items()
+                                   if k not in TRANSIENT_KEYS and k not in LAUNCH_DEFAULT_KEYS and k not in BRAIN_UI_KEYS})
+        # etat du panneau du cerveau : celui de brain_ui.json (relu par load_params, sauve a chaque changement) est plus recent que
+        # l'instantane (jusqu'a 60 s d'age)
+        recovered.update({k: params[k] for k in BRAIN_UI_KEYS if k in params})
     except Exception as exc:
         sessionlog.error("Auto-sauvegarde illisible : ignoree", exc)
         return params, ""

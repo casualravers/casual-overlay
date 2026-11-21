@@ -350,19 +350,19 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
     page_p: dict[tuple[int, str], float] = {}              # prediction de page deja calculee (reprise par le score)
     for i in range(n):
         step = first + i
-        past = step <= cur
         for row in INSTRUMENTS:
             v = hits.get((step, row), 0.0)
+            past = step < cur or v > 0                     # pas courant : fantome tant que la frappe n'est pas venue (pas de faux miss)
             if rolling:
                 p = predict_rolling(hits, step, row, cur)
             else:
                 p = page_p[(step, row)] = predict_page(hits, step, row, first)
             cells.append((i, row, v, p, status_of(v, p, past)))
 
-    # score : toujours les pas deja passes de la page courante (prediction de page), que la vue soit glissante ou non
+    # score : toujours les pas finis de la page courante (prediction de page, pas courant exclu), que la vue soit glissante ou non
     ok = miss = surprise = 0
     page_first = (cur // PAGE_STEPS) * PAGE_STEPS
-    for step in range(page_first, cur + 1):
+    for step in range(page_first, cur):
         for row in INSTRUMENTS:
             p = page_p.get((step, row))
             if p is None:
