@@ -13696,6 +13696,20 @@ def check_brain_tunnel() -> None:
         shown = [i for i in cv.find_all() if cv.itemcget(i, "state") != "hidden"]
         check(n_pool > 800 and len(cv.find_all()) == n_pool and len(shown) > 60,
               "vue tunnel: un instantane montre ses elements sans en creer", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+        # eclair du strobe : voile blanc trame plein cadre, au-dessus des cases, sous le cadre du present et les libelles
+        fl = getattr(view, "_flash", None)
+        order = list(cv.find_all())
+        cells = [it for tup in view._cells.values() for it in tup]
+        ok_order = fl in order and max(order.index(c) for c in cells) < order.index(fl) < min(
+            order.index(x) for x in [view._frame] + view._ins_labels + view._trk_labels)
+        check(fl is not None and cv.itemcget(fl, "state") != "hidden" and cv.itemcget(fl, "fill") == "#ffffff"
+              and cv.itemcget(fl, "stipple") != "" and [round(v) for v in cv.coords(fl)] == [0, 0, w, h] and ok_order,
+              "vue tunnel: eclair du strobe = voile blanc trame plein cadre (au-dessus des cases, sous les libelles)",
+              "" if fl is None else f"{cv.itemcget(fl, 'state')} {cv.itemcget(fl, 'stipple')} {cv.coords(fl)} ordre {ok_order}")
+        view.update(br.snapshot(log, t0 + 3.0, rolling=True), True, set(), 5.5)
+        check(fl is not None and cv.itemcget(fl, "state") == "hidden", "vue tunnel: le voile de l'eclair s'eteint apres l'eclair",
+              "" if fl is None else cv.itemcget(fl, "state"))
+        view.update(snap, True, set(), 5.0)
 
         snaps = [br.snapshot(log, t0 + 1.0 + n * 0.043, rolling=True) for n in range(200)]
         t_start = _time.perf_counter()

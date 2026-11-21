@@ -1251,7 +1251,8 @@ class TunnelView:
     voile, causes ; l'instantane glissant en a 68, seuls les 4 du passe et les TUN_DEPTH = 32 suivants sont dessines, budget tache 9),
     `update` ne fait que des `coords` sur les elements visibles et des `itemconfigure` quand le statut ou la couleur d'une case change.
     Ordre de creation = ordre de dessin (du fond vers l'avant, comme la maquette). Pas d'alpha sous Tk : melange vers le fond (`blend`) ;
-    l'eclair du strobe eclaircit un rectangle de fond (pas de voile blanc au-dessus de la scene). Les points sont ramenes dans le canvas."""
+    l'eclair du strobe eclaircit le fond et pose un voile blanc trame (`stipple`) au-dessus de la scene, sous le cadre et les libelles.
+    Les points sont ramenes dans le canvas."""
 
     def __init__(self, canvas: tk.Canvas) -> None:
         self.canvas = canvas
@@ -1292,7 +1293,10 @@ class TunnelView:
         self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden", width=1) for _ in range(TUN_VEIL_LINES)]
         self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3), width=1) for _ in range(TUN_MAX_CAUSES)]
         self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(TUN_MAX_CAUSES)]
-        self._frame = cv.create_line(*([0, 0] * 5), fill="#e6e6e6", width=1.5)
+        # eclair du strobe : voile blanc trame au-dessus de la scene, sous le cadre du present et les libelles (pas d'alpha sous Tk)
+        self._flash = cv.create_rectangle(0, 0, 1, 1, fill="#ffffff", outline="", stipple="gray25", state="hidden")
+        self._flash_sig = None
+        self._frame =cv.create_line(*([0, 0] * 5), fill="#e6e6e6", width=1.5)
         self._ins_labels = [cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL) for r in ins]
         self._trk_labels = [cv.create_text(0, 0, text=core_brain.label(r), fill=core_brain.COLORS[r], font=FONT_SMALL,
                                            anchor="w" if k < 4 else "e") for k, r in enumerate(trk)]
@@ -1315,6 +1319,7 @@ class TunnelView:
         self.min_z = 99.0
         cv, pj = self.canvas, self._pj
         cv.coords(self._bgrect, 0, 0, self.w, self.h)
+        cv.coords(self._flash, 0, 0, self.w, self.h)
         zn, zf = _tun_z(-4), _tun_z(TUN_DEPTH)
         for q, x in enumerate(TUN_LANES):
             cv.coords(self._long[q], *pj(x, TUN_YF, zn), *pj(x, TUN_YF, zf))
@@ -1495,11 +1500,18 @@ class TunnelView:
             hov.append((px, py, reason))
             if trk[k] == "strobe" and cursor - i < 2.5:
                 flash = max(flash, (1 - (cursor - i) / 2.5) * (0.5 if reason.startswith("drop") else 0.22))
-        # eclair : le rectangle de fond s'eclaircit
+        # eclair : le rectangle de fond s'eclaircit, et un voile blanc trame couvre toute la scene (trame plus dense au debut de l'eclair)
         fill = blend("#ffffff", flash, bg) if flash > 0.004 else bg
         if fill != self._bg_fill:
             self._bg_fill = fill
             cv.itemconfigure(self._bgrect, fill=fill)
+        fsig = None if flash <= 0.004 else ("gray75" if flash > 0.3 else "gray50" if flash > 0.12 else "gray25")
+        if fsig != self._flash_sig:
+            self._flash_sig = fsig
+            if fsig is None:
+                cv.itemconfigure(self._flash, state="hidden")
+            else:
+                cv.itemconfigure(self._flash, stipple=fsig, state="normal")
         # voile : TUN_VEIL_LINES lignes au plafond (une seule depuis la mesure du budget), du present vers le passe
         vtop = min(cur + 1, len(veil) - 1)
         vcol = None
