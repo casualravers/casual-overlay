@@ -102,6 +102,15 @@ raison, cause), `free` (sans grille).
 - **Pools** : chaque vue cree ses elements une fois puis les deplace / recolore (nombre d'elements constant d'une page a l'autre, teste) ;
   pas d'alpha sous Tk : les couleurs sont melangees vers la teinte de la phase (`blend`). Un canvas par vue (et par surface), construit a la premiere
   apparition puis montre / cache (`_Surface.show_view`) : changer de vue ou perdre puis retrouver la grille ne recree rien.
+- **Formes carrees** (demande de l'utilisateur, 2026-11-24, a la place des rectangles de la maquette) : iso, piliers et effets a base
+  carree (`ISO_CELL` = 0,8, `ISO_FX_CELL` = 0,6, strobe / foudre 0,5, scene en plaque carree) centres dans des rangees de `ISO_R` = 3
+  (4,2 dans la maquette : les libelles des pistes, en escalier, ne se chevauchent pas a 3) ; tunnel, face avant carree centree dans la
+  voie, cote = hauteur = `TUN_CELL0` + `TUN_CELL1` x force (prediction pour un fantome). Teste (`check_brain_iso`, `check_brain_tunnel`).
+- **Comme la maquette** : voiles en sinusoides complets (8 lignes iso, 4 anneaux mandala, 4 lignes sismo, 5 lignes tunnel) ; curseur
+  d'angle dans la barre (place reservee `ANGLE_BOX_W`, montre en iso seulement, `BrainPanel.set_angle`) ; legende a petits carres de
+  couleur ; « predictions N/M realisees » ; jauges en anglais (`bg <- bass`, `SOURCE_EN`, `health`, `fps`, `latency`, `on top`).
+  **Ecarts gardes** : tunnel a 2 mesures devant (`TUN_DEPTH` = 32, 4 dans la maquette : budget, choix de l'utilisateur du 2026-11-24),
+  rafraichissement a 10 Hz (budget), pas d'alpha (melange vers le fond).
 - **iso** : grille isometrique, le temps part de devant ; plateau des instruments (piliers), plateau des effets, voile en lignes de relief,
   plan du present ; angle 18..45 degres. **mandala** : un anneau par mesure, le 1 pile en haut ; couronne de la phrase de 32 temps ; anneaux
   des effets ; aiguille. **tunnel** : couloir en perspective, voies au sol, effets sur les murs, voile au plafond, cadre blanc du present ;
@@ -154,6 +163,13 @@ Historique des moyennes par tick (mur, ms) :
 Mesure 7 (2026-11-21), en ms/s : iso 41, mandala 42, tunnel 81, sismo 76, frise libre 27 ; aucun gel, 60,1 a 60,2 images/s partout.
 Le tunnel est a la limite du budget (81 pour 80 : l'ecart d'une mesure a l'autre est de l'ordre de 1 ms par tick, soit ~8 ms/s).
 
+Mesure 8 (2026-11-24, voiles complets et formes carrees ; moniteur a 144 Hz cette fois, rendu ~70 img/s, PC utilise pendant la mesure) :
+l'outil n'a pas donne de chiffres fiables. Meme seance, `main` : iso 46, mandala 48, tunnel 81, sismo 80, frise libre 36 ms/s ; branche :
+49 / 59 / 113 / 98 / 36 ms/s avec 3 gels `ui_pump` pendant le tunnel ; un autre passage a vu le panneau cesser d'etre visible en cours de
+mesure (fenetre passee derriere). Banc hors application (temps CPU de `view.update` + redessin, journal en montee avec voile, 3 x 200
+mises a jour, alterne main / branche 3 fois) : **aucun ecart au-dela du bruit** (iso 10-15 ms, mandala 3,6-4,2, tunnel 7,7-9,1, sismo
+5,3-6,6 dans les deux). Le budget de 80 ms/s reste a re-mesurer sur un PC au repos (tunnel et sismo etaient deja a la limite).
+
 Mesure 1 : pires 30 a 45 ms, un gel de 302 ms pendant mandala (`ui_pump`, non reproduit ensuite) ; images/s 60,2 partout.
 
 **Decisions** (ordre du plan : cadence 20 -> 10 Hz, profondeur du tunnel 64 -> 32, voile simplifie, dessin hors du fil Tk en dernier
@@ -170,7 +186,8 @@ recours avec l'accord de l'utilisateur), toutes appliquees sauf la derniere :
 3. **Tunnel sur 32 pas** : 36 pas dessines (4 de passe + `TUN_DEPTH`) et seulement ceux-la calcules (`snapshot(..., rolling=True,
    depth=32)`) ; tick 16,4 -> 10,4 ms, puis 9,9 ms.
 4. **Voile simplifie** dans les quatre vues : une ligne (iso, sismo, tunnel) ou un anneau (mandala) au lieu de 8 / 4 / 5 / 4. Le voile n'est
-   dessine que pendant une montee ou juste apres un drop : gain faible a la mesure.
+   dessine que pendant une montee ou juste apres un drop : gain faible a la mesure. **Annule le 2026-11-24** (l'utilisateur ne voyait
+   plus le voile) : voiles complets de la maquette, voir la mesure 8.
 5. **Dernier recours (dessin hors du fil Tk) : non code.**
 
 **Conclusion, apres tous les remedes : seuils du plan pris a la lettre NON tenus.**
