@@ -13008,6 +13008,8 @@ def check_brain_gui() -> None:
     full, empty = gui_brain.BAND_ON * gui_brain.BAND_CELLS, gui_brain.BAND_OFF * gui_brain.BAND_CELLS
     check(("B " + full) in la[1] and ("K " + empty) in la[1] and ("B " + empty) in la[2], "cerveau: barres B / H / K selon les niveaux",
           repr(st_a))
+    check(la[1].startswith("bg   <- all ") and la[2].startswith("logo <- hits ") and lb[2].startswith("logo <- none ")
+          and "fond" not in st_a, "cerveau: jauge sources en anglais (bg, all, hits, none)", repr((st_a, st_b)))
     bt = [gui_brain.build_text(dict(build_s=1.5, strobe_in_s=2.5, strobe_hz=None)),
           gui_brain.build_text(dict(build_s=6.0, strobe_in_s=0.0, strobe_hz=0.5546875)),
           gui_brain.build_text(dict(build_s=125.0, strobe_in_s=None, strobe_hz=None))]
@@ -13225,6 +13227,17 @@ def check_brain_gui() -> None:
             pump()
             same = same and bp.current is iso_view
         out["kept"] = (type(iso_view).__name__, same, n_first, n_items(), max(times) * 1000.0)
+        # curseur d'angle de la barre : montre en iso, cache ailleurs, il regle la vue iso construite
+        a_shown = bool(surf.angle_inner.winfo_manager())
+        bp.set_view("sismo")
+        pump()
+        a_hidden = bool(surf.angle_inner.winfo_manager())
+        bp.set_view("iso")
+        pump()
+        surf.angle_scale.set(37)
+        pump()
+        out["angle"] = (a_shown, a_hidden, bool(surf.angle_inner.winfo_manager()), iso_view.angle)
+        bp.set_angle(30)
         gui_brain.VIEWS["iso"] = Counting
         bp.set_view("iso")
         pump()
@@ -13327,7 +13340,9 @@ def check_brain_gui() -> None:
     check(out.get("cadence_table") == {v: 100 for v in gui_brain.VIEW_NAMES}, "cerveau GUI: les quatre vues a 10 Hz (budget mesure)",
           str(out.get("cadence_table")))
     veils = (gui_brain.ISO_VEIL_LINES, gui_brain.MAN_VEIL_RINGS, gui_brain.SIS_VEIL_LINES, gui_brain.TUN_VEIL_LINES, gui_brain.TUN_DEPTH)
-    check(veils == (1, 1, 1, 1, 32), "cerveau GUI: budget, voile d'une ligne dans les quatre vues et tunnel sur 32 pas", str(veils))
+    check(veils == (8, 4, 4, 5, 32), "cerveau GUI: voiles en sinusoides de la maquette (8 / 4 / 4 / 5), tunnel sur 32 pas (budget)", str(veils))
+    ang = out.get("angle", ())
+    check(ang == (True, False, True, 37), "cerveau GUI: curseur d'angle dans la barre, montre en iso seulement, il regle la vue iso", str(ang))
     check(out.get("collapsed") is True, "cerveau GUI: panneau etendu replie -> plus aucun dessin")
 
 
@@ -13388,6 +13403,15 @@ def check_brain_iso() -> None:
         shown = [i for i in cv.find_all() if cv.type(i) != "window" and cv.itemcget(i, "state") != "hidden"]
         check(n_pool > 500 and len(cv.find_all()) == n_pool and len(shown) > 100,
               "vue iso: une page cree ses elements (pool) et en montre", f"{n_pool} -> {len(cv.find_all())}, montres {len(shown)}")
+        # bases carrees (demande de l'utilisateur) : les deux aretes du dessus d'un pilier ont la meme longueur projetee
+        def top_edges(cell):
+            c = cv.coords(cell.polys[2])
+            e1 = ((c[2] - c[0]) ** 2 + (c[3] - c[1]) ** 2) ** 0.5
+            e2 = ((c[6] - c[0]) ** 2 + (c[7] - c[1]) ** 2) ** 0.5
+            return e1, e2
+        boxes = [c for c in list(view._ins.values()) + list(view._fxc.values()) if c.mode == "box"]
+        ratios = [abs(a - b) / max(a, b, 1e-9) for a, b in map(top_edges, boxes)]
+        check(len(boxes) > 20 and max(ratios) < 0.02, "vue iso: piliers et effets a base carree", f"{len(boxes)} piliers, ecart max {max(ratios, default=1):.3f}")
         view.update(snaps[1], True, set(), 5.1)
         view.update(snaps[2], True, set(), 5.2)
         check(len(cv.find_all()) == n_pool, "vue iso: d'autres pages reutilisent le pool (aucun element de plus)", f"{n_pool} -> {len(cv.find_all())}")
@@ -13723,6 +13747,15 @@ def check_brain_tunnel() -> None:
               and cv.itemcget(fl, "stipple") != "" and [round(v) for v in cv.coords(fl)] == [0, 0, w, h] and ok_order,
               "vue tunnel: eclair du strobe = voile blanc trame plein cadre (au-dessus des cases, sous les libelles)",
               "" if fl is None else f"{cv.itemcget(fl, 'state')} {cv.itemcget(fl, 'stipple')} {cv.coords(fl)} ordre {ok_order}")
+        # faces avant carrees (demande de l'utilisateur) : largeur = hauteur a l'ecran pour chaque case visible
+        fronts = [tup[1] for tup in view._cells.values() if cv.itemcget(tup[1], "state") != "hidden"]
+        bad_sq = []
+        for it in fronts:
+            c = cv.coords(it)
+            fw, fh = abs(c[2] - c[0]), abs(c[1] - c[5])
+            if c[0] > 0.5 and c[2] < w - 0.5 and c[5] > 0.5 and c[1] < h - 0.5 and abs(fw - fh) > 1.0:   # coupees au bord : ignorees
+                bad_sq.append((round(fw, 1), round(fh, 1)))
+        check(len(fronts) > 20 and not bad_sq, "vue tunnel: cases a face avant carree", f"{len(fronts)} faces, pas carrees {bad_sq[:3]}")
         view.update(br.snapshot(log, t0 + 3.0, rolling=True), True, set(), 5.5)
         check(fl is not None and cv.itemcget(fl, "state") == "hidden", "vue tunnel: le voile de l'eclair s'eteint apres l'eclair",
               "" if fl is None else cv.itemcget(fl, "state"))

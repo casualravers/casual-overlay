@@ -43,6 +43,7 @@ VIEW_TICK_MS = {"iso": 100, "mandala": 100, "tunnel": 100, "sismo": 100}   # cad
 BOX_W = 640                                    # largeur du panneau raccroche quand l'espace VJ n'en donne pas (pixels)
 TOGGLE_W = 6                                   # largeur fixe (caracteres) des boutons dont le texte change
 DETACH_W = 7
+ANGLE_BOX_W = 124                              # place reservee au curseur d'angle de la vue iso dans la barre (pixels)
 FROZEN_TEXT = "fige pendant le REC"
 NO_TEMPO = "tempo non detecte"
 WINDOW_TITLE = "casual-overlay - cerveau"
@@ -55,7 +56,9 @@ GEOM_RE = re.compile(r"^\d+x\d+([+-]-?\d+[+-]-?\d+)?$")
 
 BAND_CELLS = 4                                 # jauge sources : 4 cases par bande (texte a chasse fixe : largeur constante)
 BAND_ON, BAND_OFF = "█", "·"
-SOURCE_W = 7                                   # nom de source le plus long (« mediums », « frappes »)
+SOURCE_W = 6                                   # nom de source le plus long, en anglais (« highs »)
+# libelles anglais des sources audio par couche (core.audio_layers les nomme en francais)
+SOURCE_EN = {"tout": "all", "basses": "bass", "mediums": "mids", "aigus": "highs", "kick": "kick", "frappes": "hits", "rien": "none"}
 
 
 def band_bar(v) -> str:
@@ -71,10 +74,11 @@ def sources_text(src: dict, bands: dict) -> str:
     """Jauge « sources » : par couche, la source puis ce que la couche voit (B basses, H aigus, K kick). Toujours 3 lignes de meme
     longueur (les boutons ne bougent pas)."""
     lines = ["sources"]
-    for lay, name in (("bg", "fond"), ("logo", "logo")):
+    for lay, name in (("bg", "bg  "), ("logo", "logo")):
         vec = tuple(bands.get(lay) or (0.0, 0.0, 0.0))[:3]
         vec = vec + (0.0,) * (3 - len(vec))
-        s = str(src.get(lay) or "-")[:SOURCE_W].ljust(SOURCE_W)
+        raw = str(src.get(lay) or "-")
+        s = SOURCE_EN.get(raw, raw)[:SOURCE_W].ljust(SOURCE_W)
         lines.append(f"{name} <- {s} " + " ".join(f"{k} {band_bar(v)}" for k, v in zip("BHK", vec)))
     width = max(len(x) for x in lines)
     return "\n".join(x.ljust(width) for x in lines)
@@ -204,14 +208,17 @@ class FreeView:
 # Vue isometrique : la page (64 pas) en relief, le temps part de devant
 # ---------------------------------------------------------------------------------------------------------------------------
 
-ISO_R = 4.2                                    # largeur d'une rangee d'instrument (pas = 1 unite)
+ISO_R = 3.0                                    # largeur d'une rangee (pas = 1 unite) ; 3 et non 4,2 (maquette) : piliers carres plus serres,
+                                               # et les libelles des pistes (un par rangee, en escalier) ne se chevauchent pas
+ISO_CELL = 0.8                                 # cote de la base carree d'un pilier d'instrument (unites)
+ISO_FX_CELL = 0.6                              # cote d'un effet (strobe et foudre plus fins, scene : plaque carree de la largeur de la rangee)
 ISO_A0 = 5.2                                   # echelle de reference de la maquette (z en pixels a cette echelle)
-ISO_X_MIN, ISO_X_MAX = -67.0, 53.5             # etendue horizontale (x - y) en unites, textes compris
-ISO_S_MAX = 114.5                              # etendue verticale maximale (x + y) en unites
+ISO_X_MIN, ISO_X_MAX = -67.0, 12 * ISO_R + 3.1  # etendue horizontale (x - y) en unites, textes compris
+ISO_S_MAX = 12 * ISO_R + 64.1                  # etendue verticale maximale (x + y) en unites
 ISO_FADE_S = 0.35                              # fondu des fantomes en debut de page
 ISO_ANGLE = (18, 45)
 ISO_MAX_CAUSES = 96
-ISO_VEIL_LINES = 1                             # lignes de relief du voile (budget mesure, tache 9 : 8 -> 1, voile simplifie)
+ISO_VEIL_LINES = 8                             # lignes de relief du voile, une par piste d'effet (comme la maquette)
 ISO_PAGE = core_brain.PAGE_STEPS
 
 
@@ -302,24 +309,10 @@ class IsoView:
         self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(ISO_MAX_CAUSES)]
         self._plane = cv.create_polygon(0, 0, 0, 0, 0, 0, 0, 0, fill="#ffffff", stipple="gray12", outline="")
         self._edge = cv.create_line(0, 0, 0, 0, fill="#e0e0e0", width=1.5)
-        # curseur d'angle (fenetre du canvas, en bas a gauche : zone vide de l'isometrique)
-        self._scale = None
-        old = getattr(canvas, "_iso_scale", None)
-        if old is not None:
-            try:
-                old.destroy()
-            except tk.TclError:
-                pass
-        try:
-            sc = tk.Scale(canvas, from_=ISO_ANGLE[0], to=ISO_ANGLE[1], orient="horizontal", length=96, width=8, sliderlength=12,
-                          showvalue=True, label="angle", font=FONT_SMALL, bg=PANEL_BG, fg=MUTED, troughcolor=BTN_BG, bd=0,
-                          highlightthickness=0, activebackground=BTN_BG)
-            sc.set(type(self).angle)
-            sc.configure(command=lambda v: self.set_angle(int(float(v))))
-            self._scale_win = canvas.create_window(4, 4, window=sc, anchor="sw")
-            canvas._iso_scale = self._scale = sc
-        except tk.TclError:
-            self._scale = None
+        # libelles au-dessus des piliers (crees en premier, ils etaient caches par les cases)
+        for it, _x, _y in self._labels:
+            cv.tag_raise(it)
+        # le curseur d'angle est dans la barre du haut du panneau (comme la maquette), montre seulement pour cette vue
 
     # ---- geometrie
     def _compute(self, w: int, h: int) -> None:
@@ -337,8 +330,6 @@ class IsoView:
     def set_angle(self, angle) -> None:
         angle = max(ISO_ANGLE[0], min(ISO_ANGLE[1], int(angle)))
         type(self).angle = angle
-        if self._scale is not None and int(self._scale.get()) != angle:
-            self._scale.set(angle)
         self._regeo()
         if self._last is not None:
             self.update(*self._last)
@@ -351,8 +342,6 @@ class IsoView:
             cv.coords(it, *P(x1, y1), *P(x2, y2))
         for it, x, y in self._labels:
             cv.coords(it, *P(x, y))
-        if self._scale is not None:
-            cv.coords(self._scale_win, 4, self.h - 4)
 
     def layout(self, w: int, h: int) -> None:
         self.w, self.h = max(1, w), max(1, h)
@@ -381,12 +370,12 @@ class IsoView:
 
     def _cross(self, cell: _IsoCell, x0, y0, col) -> tuple[float, float]:
         cv, P = self.canvas, self.P
-        R = ISO_R
-        cv.coords(cell.lines[0], *P(x0 + R * 0.2, y0 + 0.2), *P(x0 + R * 0.8, y0 + 0.8))
-        cv.coords(cell.lines[1], *P(x0 + R * 0.8, y0 + 0.2), *P(x0 + R * 0.2, y0 + 0.8))
+        cx, hw = x0 + ISO_R / 2, 0.3                               # croix carree au milieu de la rangee
+        cv.coords(cell.lines[0], *P(cx - hw, y0 + 0.2), *P(cx + hw, y0 + 0.8))
+        cv.coords(cell.lines[1], *P(cx + hw, y0 + 0.2), *P(cx - hw, y0 + 0.8))
         for it in cell.lines[:2]:
             cv.itemconfigure(it, fill=col, width=1.2, state="normal")
-        return P(x0 + R * 0.5, y0 + 0.5)
+        return P(cx, y0 + 0.5)
 
     def _mode(self, cell: _IsoCell, mode) -> None:
         """Change le mode d'une case : cache d'abord tous ses elements (seulement quand le mode change)."""
@@ -438,9 +427,10 @@ class IsoView:
                 self._clear(key, cell)
                 continue
             x0, y0, name = rows.index(row) * R, 63 - i, core_brain.label(row)
+            cx, cy, c = x0 + (R - ISO_CELL) / 2, y0 + (1 - ISO_CELL) / 2, ISO_CELL     # base carree au milieu de la rangee
             if status in ("real", "surprise"):
                 self._mode(cell, "box")
-                pt = self._box(cell.polys, x0 + R * 0.12, y0 + 0.12, R * 0.76, 0.76, 5 + 22 * v, C[row], 0.45 + 0.55 * v, bg, status == "surprise")
+                pt = self._box(cell.polys, cx, cy, c, c, 5 + 22 * v, C[row], 0.45 + 0.55 * v, bg, status == "surprise")
                 tip = f"{name} {round(v * 100)} % · predit {round(p * 100)} % · " + ("surprise" if status == "surprise" else "realise")
             elif status == "miss":
                 self._mode(cell, "cross")
@@ -448,7 +438,7 @@ class IsoView:
                 tip = f"{name} predit {round(p * 100)} % · manque"
             else:
                 self._mode(cell, "wire")
-                pt = self._wire(cell, x0 + R * 0.12, y0 + 0.12, R * 0.76, 0.76, 5 + 22 * p * 0.85, blend(C[row], (0.2 + 0.6 * p) * fade, bg))
+                pt = self._wire(cell, cx, cy, c, c, 5 + 22 * p * 0.85, blend(C[row], (0.2 + 0.6 * p) * fade, bg))
                 tip = f"{name} attendu a {round(p * 100)} %"
             cell.pt = pt if status in ("real", "surprise") else None
             self._hov[key] = (pt[0], pt[1], tip)
@@ -471,14 +461,19 @@ class IsoView:
                 self._mode(cell, "box")
                 x0, y0, col = (4 + core_brain.TRACKS.index(track)) * R, 63 - i, C[track]
                 s = max(0.0, min(1.0, float(strength)))
-                if track == "strobe":
-                    cell.pt = self._box(cell.polys, x0 + R * 0.3, y0 + 0.2, R * 0.4, 0.6, 56 if reason.startswith("drop") else 34 * s, col, 0.9, bg)
-                elif track == "scene":
-                    cell.pt = self._box(cell.polys, x0 + R * 0.1, y0 - 2 + 0.1, R * 0.8, 2.8, 3, col, 0.85, bg)
-                elif track == "foudre":
-                    cell.pt = self._box(cell.polys, x0 + R * 0.3, y0 + 0.25, R * 0.4, 0.5, 38, col, 0.85, bg)
+                # bases carrees, centrees dans la rangee (cote c) : strobe et foudre fins et hauts, scene en plaque de la largeur de la rangee
+                if track == "scene":
+                    c = R - 0.2
+                    cell.pt = self._box(cell.polys, x0 + 0.1, y0 + 1 - c, c, c, 3, col, 0.85, bg)
                 else:
-                    cell.pt = self._box(cell.polys, x0 + R * 0.2, y0 + 0.2, R * 0.6, 0.6, 3 + 14 * s, col, 0.5 + 0.5 * s, bg)
+                    c = 0.5 if track in ("strobe", "foudre") else ISO_FX_CELL
+                    bx, by = x0 + (R - c) / 2, y0 + (1 - c) / 2
+                    if track == "strobe":
+                        cell.pt = self._box(cell.polys, bx, by, c, c, 56 if reason.startswith("drop") else 34 * s, col, 0.9, bg)
+                    elif track == "foudre":
+                        cell.pt = self._box(cell.polys, bx, by, c, c, 38, col, 0.85, bg)
+                    else:
+                        cell.pt = self._box(cell.polys, bx, by, c, c, 3 + 14 * s, col, 0.5 + 0.5 * s, bg)
                 self._hov[("fx", i, track)] = (cell.pt[0], cell.pt[1], reason)
             fx_pts[(i, track)] = cell.pt
         # pastilles de pistes masquees
@@ -515,7 +510,7 @@ class IsoView:
             for n in range(len(csig[0]), n_old):
                 cv.itemconfigure(self._cause_lines[n], state="hidden")
                 cv.itemconfigure(self._cause_dots[n], state="hidden")
-        # voile : ISO_VEIL_LINES lignes de relief au-dessus des pistes d'effets (une seule, au milieu, depuis la mesure du budget)
+        # voile : ISO_VEIL_LINES lignes de relief en sinusoide, une au-dessus de chaque piste d'effet (maquette)
         veil = snap.get("veil") or ()
         top = min(cur + 1, ISO_PAGE, len(veil) - 1) if veil else -1
         on = top >= 1 and any(veil[i][1] > 0 for i in range(top + 1))
@@ -527,7 +522,7 @@ class IsoView:
                 for k, it in enumerate(self._veil):
                     cv.itemconfigure(it, fill=blend(col, 0.55 - k * 0.04, bg))
             for k, it in enumerate(self._veil):
-                kp = 3.5 if ISO_VEIL_LINES == 1 else k * 7.0 / (ISO_VEIL_LINES - 1)       # piste (0..7) sous la ligne
+                kp = k * 7.0 / max(1, ISO_VEIL_LINES - 1)                                 # piste (0..7) sous la ligne
                 x0 = (4 + kp) * R + R * 0.5
                 pts = []
                 for i in range(top + 1):
@@ -570,7 +565,7 @@ SIS_RIGHT = 10.0
 SIS_MAX_FX = 160
 SIS_MAX_CAUSES = 96
 SIS_MAX_SCENES = 8
-SIS_VEIL_LINES = 1                             # lignes du voile au-dessus de la portee (budget mesure, tache 9 : 4 -> 1)
+SIS_VEIL_LINES = 4                             # lignes du voile en sinusoide au-dessus de la portee (comme la maquette)
 SIS_Q = 4                                      # points par pas pour l'onde
 
 
@@ -898,7 +893,7 @@ MAN_RMAX = 240.0                               # rayon le plus grand dessine (st
 MAN_SP = 2 * math.pi / 16                      # largeur angulaire d'une case (16 pas par mesure)
 MAN_MAX_FX = 160
 MAN_MAX_CAUSES = 96
-MAN_VEIL_RINGS = 1                             # ondes du voile au centre (budget mesure, tache 9 : 4 -> 1)
+MAN_VEIL_RINGS = 4                             # ondes du voile au centre (comme la maquette)
 
 
 def _man_angle(s: float) -> float:
@@ -1230,7 +1225,8 @@ class MandalaView:
 TUN_STEPS = core_brain.PAGE_STEPS + 4          # pas de l'instantane glissant (les 4 premiers sont le passe)
 TUN_DEPTH = 32                                 # pas montres devant le present (budget mesure, tache 9 : 64 -> 32, soit 2 mesures)
 TUN_SHOWN = 4 + TUN_DEPTH                      # pas dessines : les 4 du passe + la profondeur
-TUN_VEIL_LINES = 1                             # lignes du voile au plafond (budget mesure, tache 9 : 5 -> 1, voile simplifie)
+TUN_VEIL_LINES = 5                             # lignes du voile en sinusoide au plafond (comme la maquette)
+TUN_CELL0, TUN_CELL1 = 0.15, 0.45              # cote de la face avant carree d'une case : 0,15 + 0,45 x force (au plus 0,6 < voie de 0,8)
 TUN_F = 300.0                                  # focale de la maquette (a l'echelle 1 : canvas 640 x 340)
 TUN_W0, TUN_H0 = 640.0, 340.0
 TUN_LANES = (-1.2, -0.4, 0.4, 1.2)             # bords des 3 voies (une par instrument) sur le sol
@@ -1447,12 +1443,17 @@ class TunnelView:
             i, kk = key
             d = i - cursor
             z0, z1, zm = _tun_z(d + 0.1), _tun_z(d + 0.9), _tun_z(d + 0.5)
-            x0, x1 = TUN_LANES[kk] + 0.08, TUN_LANES[kk + 1] - 0.08
             top, front, m1, m2 = self._cells[key]
             status = sig[0]
             v, p = sig[1], sig[2]
+            # face avant carree, centree dans la voie : son cote (= sa hauteur) dit la force (ou la prediction pour un fantome)
+            mid = (TUN_LANES[kk] + TUN_LANES[kk + 1]) / 2
+            side = TUN_CELL0 + TUN_CELL1 * (v if status in ("real", "surprise") else p * 0.85)
+            x0, x1 = mid - side / 2, mid + side / 2
+            if status == "miss":
+                x0, x1 = TUN_LANES[kk] + 0.08, TUN_LANES[kk + 1] - 0.08
             if status in ("real", "surprise"):
-                y1 = TUN_YF + 0.15 + 0.45 * v
+                y1 = TUN_YF + side
                 self._quad(top, pj(x0, y1, z0), pj(x1, y1, z0), pj(x1, y1, z1), pj(x0, y1, z1))
                 self._quad(front, pj(x0, TUN_YF, z0), pj(x1, TUN_YF, z0), pj(x1, y1, z0), pj(x0, y1, z0))
                 px, py = pj((x0 + x1) / 2, y1, zm)
@@ -1464,7 +1465,7 @@ class TunnelView:
                 px, py = pj((x0 + x1) / 2, TUN_YF, zm)
                 hov.append((px, py, (ins[kk], status, v, p)))
             else:
-                y1 = TUN_YF + 0.15 + 0.45 * p * 0.85
+                y1 = TUN_YF + side
                 self._quad(top, pj(x0, y1, z0), pj(x1, y1, z0), pj(x1, y1, z1), pj(x0, y1, z1))
                 self._quad(front, pj(x0, TUN_YF, z0), pj(x1, TUN_YF, z0), pj(x1, y1, z0), pj(x0, y1, z0))
                 px, py = pj((x0 + x1) / 2, y1, z0)
@@ -1512,7 +1513,7 @@ class TunnelView:
                 cv.itemconfigure(self._flash, state="hidden")
             else:
                 cv.itemconfigure(self._flash, stipple=fsig, state="normal")
-        # voile : TUN_VEIL_LINES lignes au plafond (une seule depuis la mesure du budget), du present vers le passe
+        # voile : TUN_VEIL_LINES lignes en sinusoide au plafond, du present vers le passe
         vtop = min(cur + 1, len(veil) - 1)
         vcol = None
         if veil and vtop >= 0:
@@ -1635,10 +1636,29 @@ class _Surface:
                 tip(self.pause_btn, "Fige la vue (l'appli continue de tourner).")
             except Exception:
                 pass
+        # curseur d'angle de la vue iso (comme la maquette : dans la barre, a droite) ; place reservee (largeur fixe), montre en iso seulement
+        self.angle_box = tk.Frame(bar, bg=PANEL_BG, width=ANGLE_BOX_W, height=22)
+        self.angle_box.pack_propagate(False)
+        self.angle_box.pack(side="left", padx=(8, 0))
+        self.angle_scale = None
+        try:
+            inner = tk.Frame(self.angle_box, bg=PANEL_BG)
+            tk.Label(inner, text="angle", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL).pack(side="left", padx=(0, 3))
+            value = tk.Label(inner, text=str(IsoView.angle), bg=PANEL_BG, fg=REASON_FG, font=FONT_SMALL, width=2)
+            sc = tk.Scale(inner, from_=ISO_ANGLE[0], to=ISO_ANGLE[1], orient="horizontal", length=64, width=8, sliderlength=10,
+                          showvalue=False, bg=MUTED, troughcolor="#2a3050", bd=0, highlightthickness=0, activebackground=BTN_ON,
+                          sliderrelief="flat")
+            sc.set(IsoView.angle)
+            sc.configure(command=lambda v: (value.configure(text=str(int(float(v)))), panel.set_angle(int(float(v)))))
+            sc.pack(side="left")
+            value.pack(side="left", padx=(3, 0))
+            self.angle_inner, self.angle_scale = inner, sc
+        except tk.TclError:
+            self.angle_scale = None
         self.topmost_var = None
         if floating:
             self.topmost_var = tk.IntVar(value=int(float(panel.params.get("brain_topmost", 0)) >= 0.5))
-            tk.Checkbutton(bar, text="toujours au-dessus", variable=self.topmost_var, command=panel.apply_topmost, bg=PANEL_BG, fg=MUTED,
+            tk.Checkbutton(bar, text="on top", variable=self.topmost_var, command=panel.apply_topmost, bg=PANEL_BG, fg=MUTED,
                            selectcolor=BTN_BG, activebackground=PANEL_BG, activeforeground=FG, font=FONT, bd=0,
                            highlightthickness=0).pack(side="right", padx=6)
         self.h1 = _rich(frame, 1, FONT_HEAD)
@@ -1651,7 +1671,7 @@ class _Surface:
         self.gauges = {}
         for key in ("sources", "auto", "sante"):
             # 3 lignes des la creation : la vue ne retrecit pas au premier dessin
-            lab = tk.Label(gauges, text=sources_text({}, {}) if key == "sources" else key + "\n-\n-", bg=PANEL_BG, fg=MUTED, font=FONT, justify="left", anchor="nw")
+            lab = tk.Label(gauges, text=sources_text({}, {}) if key == "sources" else ("health" if key == "sante" else key) + "\n-\n-", bg=PANEL_BG, fg=MUTED, font=FONT, justify="left", anchor="nw")
             lab.pack(side="left", fill="both", expand=True)
             self.gauges[key] = lab
         self.feed = _rich(frame, core_brain.FEED_LINES)
@@ -1659,8 +1679,11 @@ class _Surface:
         legend = tk.Frame(frame, bg=PANEL_BG)
         legend.pack(side="bottom", fill="x", padx=4, pady=(2, 2))
         self.pills = {}
-        tk.Label(legend, text="\u25a0 realise \u25a1 predit \u25a3 surprise x manque", bg=PANEL_BG, fg=MUTED,
-                 font=FONT_SMALL).pack(side="right")
+        # legende de la maquette : petits carres de couleur (plein = realise, contour = predit, contour blanc = surprise, x rouge = manque)
+        for sym, col, word in reversed((("\u25a0", BTN_ON, "realise"), ("\u25a1", BTN_ON, "predit"), ("\u25a3", "#ffffff", "surprise"),
+                                        ("x", MISS_FG, "manque"))):
+            tk.Label(legend, text=word, bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, padx=0).pack(side="right", padx=(0, 6))
+            tk.Label(legend, text=sym, bg=PANEL_BG, fg=col, font=FONT_SMALL, padx=0).pack(side="right", padx=(0, 2))
         for name in core_brain.TRACKS:                             # pastilles : un clic masque / montre la piste
             pill = tk.Label(legend, text=core_brain.label(name), bg=PANEL_BG, font=FONT_SMALL, cursor="hand2", padx=1)
             pill.pack(side="left", padx=(0, 3))
@@ -1714,6 +1737,13 @@ class _Surface:
             b.configure(fg=BTN_ON if on else REASON_FG, highlightbackground=BTN_ON if on else "#2a3050")
         self.causes_btn.configure(fg=BTN_ON if p.causes else REASON_FG, highlightbackground=BTN_ON if p.causes else "#2a3050")
         self.pause_btn.configure(fg=BTN_ON if p.paused else REASON_FG, highlightbackground=BTN_ON if p.paused else "#2a3050")
+        if self.angle_scale is not None:
+            if p.view_name == "iso":
+                self.angle_inner.place(x=0, rely=0.5, anchor="w")
+                if int(self.angle_scale.get()) != IsoView.angle:
+                    self.angle_scale.set(IsoView.angle)
+            else:
+                self.angle_inner.place_forget()
         for name, pill in self.pills.items():
             off = name in p.hidden
             pill.configure(fg=DIM if off else core_brain.COLORS.get(name, FG), font=FONT_SMALL + (("overstrike",) if off else ()))
@@ -2087,6 +2117,17 @@ class BrainPanel:
         self._restyle()
         self.tick()
 
+    def set_angle(self, angle: int) -> None:
+        """Curseur d'angle de la barre : toutes les vues iso construites (raccrochee et detachee) suivent."""
+        if int(angle) == IsoView.angle:
+            return
+        IsoView.angle = max(ISO_ANGLE[0], min(ISO_ANGLE[1], int(angle)))
+        for surf in (self._docked, self._float):
+            entry = surf._views.get("iso") if surf is not None else None
+            if entry is not None and entry[1] is not None:
+                entry[1].set_angle(IsoView.angle)
+        self._restyle()
+
     def toggle_causes(self) -> None:
         self.causes = not self.causes
         self.params["brain_causes"] = 1.0 if self.causes else 0.0
@@ -2209,7 +2250,7 @@ class BrainPanel:
         elif h.get("page") is not None:
             line1.append((f"   page {h['page']} \u00b7 bar {h['bar']}/4", FG))
         ok, miss, sur = snap.get("score", (0, 0, 0))
-        line2 = [("predit ", MUTED), (f"{ok}/{ok + miss}", BTN_ON), (" \u00b7 ", MUTED), (str(sur), "#ffffff"),
+        line2 = [("predictions ", MUTED), (f"{ok}/{ok + miss}", BTN_ON), (" realisees \u00b7 ", MUTED), (str(sur), "#ffffff"),
                  (" surprises \u00b7 ", MUTED), (str(miss), MISS_FG), (" manquees", MUTED)]
         cycles = h.get("cycles")
         if cycles:                                                 # temps restants avant la fin des cycles de 8, 16 et 32 temps
@@ -2242,8 +2283,8 @@ class BrainPanel:
                        + f"{dot(auto.get('vj'))} VJ")
         gpu = g.get("gpu")
         gpu_txt = "GPU -" if not gpu else f"GPU {gpu.get('ms', 0.0):.1f}/{gpu.get('budget_ms', 0.0):.0f} ms" + (" !" if gpu.get("over") else "")
-        surf.set_label("sante", "sante\n" + f"{g.get('fps', 0.0) or 0.0:.0f} img/s  {gpu_txt}\n"
-                       + f"latence {g.get('latency_ms', 0.0) or 0.0:.0f} ms  REC {'on' if g.get('rec') else 'off'}")
+        surf.set_label("sante", "health\n" + f"{g.get('fps', 0.0) or 0.0:.0f} fps  {gpu_txt}\n"
+                       + f"latency {g.get('latency_ms', 0.0) or 0.0:.0f} ms  REC {'on' if g.get('rec') else 'off'}")
 
 
 def install(ns) -> BrainPanel:
