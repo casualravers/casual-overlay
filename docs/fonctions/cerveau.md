@@ -125,6 +125,50 @@ raison, cause), `free` (sans grille).
   **portee `device`** (pas « salle » : ils entraient dans les memoires de masters) ; ecrits tout seuls dans `~/.audio2wave/brain_ui.json`
   (`save_brain_ui`, sans attendre P) et relus au lancement ; geometrie de la fenetre detachee sauvee 0,5 s apres le dernier deplacement.
 
+## Stabilite sur de la vraie musique (2026-11-24)
+
+Retour de l'utilisateur : avec de la vraie musique l'interface « clignote et saute », rien n'est fluide ni previsible. Spec :
+`docs/plans/2026-11-24-cerveau-stabilite.md`.
+
+**Mesurer** : `python tools/rejoue_cerveau.py morceau.mp3 [...] [--secondes N] [--brut]` rejoue un morceau dans la VRAIE analyse
+(`AudioAnalyzer._analyze`, vitesse simulee, reglages de l'analyse de `gl_params.json` : sensibilite du kick 2,6 sur le poste de dev ;
+avec la valeur par defaut 1,0 l'analyse ne voyait qu'un kick sur trois et la grille manquait la moitie du temps), ou un **journal**
+enregistre en soiree (bouton **log** du panneau : `~/.audio2wave/cerveau/journal-AAAAMMJJ-HHMMSS.jsonl`, une ligne `[mur, type, args]`
+par appel `publish` / `status` / `clock`, `BrainLog.set_recorder`, rejoue par `core.brain.replay_line` ; le fichier ouvert est garde
+sur la session, il survit a une reconstruction de la fenetre). Il compte, sur des instantanes a 10 Hz : pertes de grille, recalages
+(epoques), changements de teinte, sauts du curseur (> 0,5 pas d'ecart a l'avance attendue par la periode affichee), changements de
+page hors fin de page, surprises et manques ; et la repartition des forces des frappes.
+
+Mesure (4 morceaux techno, 4 min chacun, moyenne par minute) :
+
+| | pertes de grille | sans grille | recalages | teintes | sauts du curseur | pages hors fin | surprises | manques |
+|---|---|---|---|---|---|---|---|---|
+| avant (`--brut`) | 0,6 | 5,7 % | 2,6 | 3,1 | 5,6 | 4,1 | 28 % | 33 % |
+| apres | 0,3 | 3,4 % | 2,6 | 1,3 | 1,7 | 1,7 | 22 % | 17 % |
+
+**Stabiliser ce qui est affiche** (`core.brain.Steady`, un par panneau, passe a `snapshot(..., steady=)`) sans toucher a l'analyse :
+- grille perdue : la derniere gardee `GRID_HOLD_S` = 4 s (elle continue au meme tempo) avant la frise libre ;
+- meme epoque : periode affichee lissee (`PERIOD_TAU_S` = 2 s), phase du curseur rattrapee d'au plus `SLEW_BEATS_S` = 0,5 temps/s,
+  recalage franc au-dela de `SNAP_BEATS` = 1 temps ; les sauts de phrases entieres de `BeatGrid.nudge` ne comptent pas (l'ancre
+  affichee peut differer de phrases entieres, `placed_step` le corrige). Cause des sauts : chaque kick retouche la periode, et l'ancre
+  est jusqu'a une phrase (32 temps) en arriere : 0,4 % de periode = 0,13 temps de saut du curseur ;
+- nouvelle epoque (drop, appui, saut de tempo) : recalage franc (honnete : le 1 a vraiment change). Les **recalages** (2,6/min)
+  viennent de l'analyse (Temps 1 auto, sauts de periode > 12 %) : non traites ici ;
+- teinte : une nouvelle phase affichee apres `PHASE_HOLD_S` = 8 s de constance (3 s laissaient 3 changements par minute) ; pas de
+  fondu (chaque changement recolore toutes les cases : un fondu en 5 images couterait 5 recolorations completes).
+
+**Calmer les predictions** (seulement avec `steady`) : rien de predit (ni fantome, ni manque, ni surprise, score nul) tant que la grille
+n'est pas installee depuis `CONFIDENT_BEATS` = 4 temps (une grille retrouvee dans la continuite reste installee) ; surprise seulement
+sous `CALM_SURPRISE` = 0,25 de prediction, manque seulement a partir de `CALM_MISS` = 0,75 (`status_of(..., calm=True)`) ; frappes
+sous `HIT_MIN` = 0,25 ignorees (le dixieme le plus faible mesure : kick q10 0,24 a 0,49, hi-hat q10 ~0,3).
+
+**Curseur continu** : entre deux rafraichissements (10 Hz), `BrainPanel.cursor_tick` (ordonnanceur `CURSOR_MS` = 33 ms) fait
+avancer le curseur seul, extrapole de la grille affichee (`snap["period"]`), borne a la page : `move_cursor(c)` des vues iso (plan
+du present), mandala (aiguille), sismo (ligne). Cadence par vue `CURSOR_VIEW_MS` : mandala et sismo 30 Hz, iso 20 Hz. Mesure
+(deplacement + redessin Tk) : sismo 0,8 ms, mandala 1,5 ms, iso ~7 ms (le plan du present est une diagonale de toute la grille :
+Tk redessine son rectangle englobant ; le decouper en morceaux ne gagne rien, Tk reunit tout ce qui bouge en un seul rectangle).
+Le tunnel n'en a pas (toute la scene bouge avec le present) : il reste a 10 Hz. Chronometre `brain.cursor`.
+
 ## Budget mesure (tache 9)
 
 Outil : `python tools/mesure_cerveau.py [--duree 60] [--sans-rendu] [--json f] [--profil]`. Il lance la vraie application
@@ -219,6 +263,9 @@ verrou avec le rendu). Les vues construites sont gardees (plus de gel au retour 
 
 - **Jamais d'evenement date dans le futur** : le journal purge par rapport a l'evenement le plus recent ; un `t` futur viderait tout. Le drop
   est date `min(drop_kick, t_audio)`.
+- **Rejouer de la musique avec les reglages de l'application** : `FeatureExtractor` seul a une sensibilite de 1,0 ; l'application
+  applique celle des reglages (2,6 sur le poste de dev). Avec 1,0, un kick sur trois et pas de grille la moitie du temps : de faux
+  chiffres (`tools/rejoue_cerveau.py` lit `gl_params.json`, `--sensibilite` pour forcer).
 - **Ne jamais replacer le passe avec la grille courante** : la periode bouge a chaque kick, les frappes anciennes glissaient (voir « Pas
   fige »). Un nouvel usage des pas passe par `placed_step`, pas par `step_of(e.t, ...)`.
 - Deux horloges : `next_scene_at` en temps mur (fil Tk), le reste en temps du son ; `phase_since` 0,0 = inconnu.
@@ -235,7 +282,8 @@ verrou avec le rendu). Les vues construites sont gardees (plus de gel au retour 
 ## Verifications
 
 `tools/check_gl.py` : `check_brain_pure` (pur : placement, journal borne et concurrent, prediction page / glissante, statuts, score, voile,
-cycles, sans tempo, libelles), `check_brain_engine` (publications du fil audio et du rendu synthetique, image inchangee),
+cycles, sans tempo, libelles), `check_brain_steady` (pur : grille gardee, periode lissee sans saut, teinte retenue, predictions sur
+grille installee, affichage calme, frappes faibles, journal enregistre et rejoue, compteur de `rejoue_cerveau.py`), `check_brain_engine` (publications du fil audio et du rendu synthetique, image inchangee),
 `check_brain_gui` (vraie fenetre de reglages : bascule VJ / brain a la meme place, largeurs fixes, detacher / raccrocher, geometrie retenue
 sans P, fige en REC, rien quand cache, vue qui leve, frise libre, cadence par vue), `check_brain_iso`, `check_brain_sismo`,
 `check_brain_mandala`, `check_brain_tunnel` (pools constants, mises a jour incrementales, survol, causes, rien hors du canvas).

@@ -12847,6 +12847,138 @@ def check_brain_pure() -> None:
         check(br.FxEdge().on == 0.6 and br.FxEdge().off == 0.3 and br.FxEdge().min_gap_s == 0.12, "cerveau: FxEdge seuils par defaut")
 
 
+def check_brain_steady() -> None:
+    """Cerveau (#192), stabilite de l'affichage (Python pur) : grille affichee gardee a sa perte, periode lissee, phase corrigee sans
+    saut, teinte de phase retenue, predictions seulement sur une grille installee, frappes faibles ignorees, journal enregistre et rejoue."""
+    print("Cerveau : stabilite de l'affichage (grille, phase, predictions, journal)")
+    import json
+    from core import brain as br
+    if not hasattr(br, "Steady"):
+        check(False, "stabilite: core.brain.Steady existe")
+        return
+    P = 0.5
+    # ---- grille gardee a sa perte, puis abandonnee
+    sd = br.Steady()
+    sd.update(100.0, (90.0, P), 1, "groove")
+    g0 = sd.grid
+    sd.update(101.0, None, 1, "groove")
+    held = sd.grid
+    sd.update(100.0 + 1.0 + br.GRID_HOLD_S + 0.1, None, 1, "groove")
+    check(g0 is not None and held is not None and abs(held[0] - g0[0]) < 1e-9 and sd.grid is None,
+          f"stabilite: grille perdue gardee {br.GRID_HOLD_S:.0f} s (elle continue au meme tempo), puis abandonnee", f"{g0} {held} {sd.grid}")
+
+    # ---- periode lissee, position du curseur sans saut ; recalage franc d'une nouvelle epoque
+    def beats(g, t):
+        return (t - g[0]) / g[1]
+    sd = br.Steady()
+    t = 200.0
+    sd.update(t, (190.0, P), 1, "groove")
+    worst = 0.0
+    prev = beats(sd.grid, t)
+    raw_p = P * 1.004                                      # un kick a regle la periode de 0,4 % : l'ancre est a 20 temps
+    for k in range(1, 31):
+        t += 0.1
+        sd.update(t, (190.0, raw_p), 1, "groove")
+        cur = beats(sd.grid, t)
+        worst = max(worst, abs((cur - prev) - 0.1 / sd.grid[1]))
+        prev = cur
+    raw_jump = abs(beats((190.0, raw_p), t) - beats((190.0, P), t))
+    check(worst <= br.SLEW_BEATS_S * 0.1 + 0.01 and raw_jump > 0.07,
+          "stabilite: une periode retouchee ne fait pas sauter le curseur (correction au plus SLEW_BEATS_S par seconde)",
+          f"pire ecart {worst:.3f} temps par 0,1 s, saut brut {raw_jump:.3f}")
+    for _ in range(100):
+        t += 0.1
+        sd.update(t, (190.0, raw_p), 1, "groove")
+    check(abs(sd.grid[1] - raw_p) < 1e-4 and abs(((beats(sd.grid, t) - beats((190.0, raw_p), t)) + 16) % 32 - 16) < 0.02,
+          "stabilite: la grille affichee rejoint la grille detectee (periode et phase)", f"{sd.grid} {raw_p}")
+    sd.update(t + 0.1, (t - 0.3, P), 2, "groove")           # nouvelle epoque (drop, appui) : recalage franc
+    check(sd.grid == (t - 0.3, P) and sd.epoch == 2, "stabilite: nouvelle epoque -> la grille affichee se recale d'un coup", str(sd.grid))
+
+    # ---- phase (teinte) retenue
+    sd = br.Steady()
+    sd.update(0.0, (0.0, P), 1, "groove")
+    sd.update(1.0, (0.0, P), 1, "build")
+    sd.update(1.0 + br.PHASE_HOLD_S - 0.5, (0.0, P), 1, "groove")       # retour avant la fin de la retenue : rien ne change
+    a = sd.phase
+    sd.update(10.0, (0.0, P), 1, "peak")
+    b = sd.phase
+    sd.update(10.0 + br.PHASE_HOLD_S + 0.01, (0.0, P), 1, "peak")
+    check(a == "groove" and b == "groove" and sd.phase == "peak",
+          f"stabilite: une phase n'est affichee qu'apres {br.PHASE_HOLD_S:.0f} s (pas de clignotement de la teinte)", f"{a} {b} {sd.phase}")
+
+    # ---- predictions seulement sur une grille installee
+    sd = br.Steady()
+    sd.update(50.0, (49.9, P), 3, None)
+    young = sd.confident(50.0 + 0.5)
+    old = sd.confident(50.0 + br.CONFIDENT_BEATS * P + 0.01)
+    sd.update(52.5, None, 3, None)
+    sd.update(53.0, (49.9, P), 4, None)                      # grille perdue 0,5 s puis retrouvee dans la continuite : toujours installee
+    check(not young and old and sd.confident(53.0),
+          f"stabilite: predictions apres {br.CONFIDENT_BEATS} temps de grille, gardees si la grille revient dans la continuite",
+          f"{young} {old} {sd.confident(53.0)}")
+    check(br.status_of(1.0, 0.0, True, confident=False) == "real" and br.status_of(0.0, 0.9, True, confident=False) is None
+          and br.status_of(0.0, 0.9, False, confident=False) is None and br.status_of(1.0, 0.0, True) == "surprise",
+          "stabilite: sans grille installee, ni fantome, ni manque, ni surprise (frappe simple)")
+    calm = [br.status_of(1.0, 0.4, True, calm=True), br.status_of(1.0, 0.2, True, calm=True), br.status_of(0.0, 0.6, True, calm=True),
+            br.status_of(0.0, 0.8, True, calm=True), br.status_of(1.0, 0.4, True), br.status_of(0.0, 0.6, True)]
+    check(calm == ["real", "surprise", None, "miss", "surprise", "miss"],
+          "stabilite: affichage calme, surprise et manque seulement quand c'est net (prediction < 0,25 ou >= 0,75)", str(calm))
+    ev = [br.Event(10.0, "kick", 0.1), br.Event(10.5, "kick", 0.9)]
+    hits = br.hits_by_step(ev, 10.0, P, None, min_strength=br.HIT_MIN)
+    check(list(hits.values()) == [0.9] and 0.0 < br.HIT_MIN < 0.5, "stabilite: les frappes sous HIT_MIN sont ignorees", str(hits))
+
+    # ---- instantane stabilise : grille jeune -> pas de prediction ; teinte = phase retenue
+    log = br.BrainLog()
+    t0 = 1000.0
+    log.set_clock(t0, t0)
+    log.set_status(bpm=120.0, confidence=0.9, origin="kick", grid=(t0 - 8.0, P), phase="groove")
+    for k in range(-16, 1):
+        log.publish("kick", 0.9, t=t0 + P * k)
+    sd = br.Steady()
+    s1 = br.snapshot(log, t0 + 0.1, steady=sd)
+    st1 = {c[4] for c in s1["cells"]}
+    log.set_status(phase="break")
+    s2 = br.snapshot(log, t0 + 0.2 + br.CONFIDENT_BEATS * P, steady=sd)
+    st2 = {c[4] for c in s2["cells"]}
+    check(s1["grid"] and st1 <= {None, "real"} and s1["score"] == (0, 0, 0) and "ghost" in st2 and s2["header"]["phase"] == "groove",
+          "stabilite: instantane, pas de prediction sur une grille jeune, puis fantomes ; la teinte garde la phase retenue",
+          f"{st1} {s1['score']} {st2} {s2['header']['phase']}")
+
+    # ---- journal enregistre puis rejoue : meme contenu
+    lines = []
+    rec = br.BrainLog()
+    rec.set_recorder(lambda wall, kind, args: lines.append(json.dumps([wall, kind, args])))
+    rec.set_clock(5.0, 4.0)
+    rec.set_status(bpm=124.0, grid=(1.0, 0.48), phase="build", gauges={"fps": 60.0})
+    rec.publish("kick", 0.8, t=5.5)
+    rec.publish("ripple", 0.7, reason="ripple : kick", cause="kick", wall=4.6)
+    rec.set_recorder(None)
+    rec.publish("snare", 0.5, t=6.0)                          # apres l'arret : pas enregistre
+    out = br.BrainLog()
+    for line in lines:
+        wall, kind, args = json.loads(line)
+        br.replay_line(out, kind, args)
+    a_ev = [(e.t, e.family, e.strength, e.reason, e.cause, e.step) for e in rec.events()][:2]
+    b_ev = [(e.t, e.family, e.strength, e.reason, e.cause, e.step) for e in out.events()]
+    check(len(lines) == 4 and a_ev == b_ev and tuple(out.status().get("grid") or ()) == (1.0, 0.48),
+          "stabilite: journal du cerveau enregistre (JSON) puis rejoue a l'identique", f"{len(lines)} {a_ev} {b_ev}")
+    check(abs(out.to_audio(4.0) - 5.0) < 1e-9 and out.status().get("phase") == "build", "stabilite: horloge et etat rejoues")
+
+    # ---- compteur de tools/rejoue_cerveau.py : un saut du curseur, une perte de grille, un changement de teinte
+    import rejoue_cerveau as rc
+    step = rc.SNAP_S / P * br.STEPS_PER_BEAT
+    hd = {"phase": "groove"}
+    seq = [dict(grid=True, first=0, cursor=1.0, period=P, header=hd, score=(0, 0, 0)),
+           dict(grid=True, first=0, cursor=1.0 + step, period=P, header=hd, score=(0, 0, 0)),
+           dict(grid=True, first=0, cursor=1.0 + 2 * step + 2.0, period=P, header=hd, score=(0, 0, 0)),     # saut de 2 pas
+           dict(grid=False, header={"phase": "peak"})]
+    cnt = rc.Counter()
+    for s_ in seq:
+        cnt.add(s_)
+    check((cnt.jumps, cnt.lost, cnt.tints) == (1, 1, 1), "stabilite: le compteur de rejoue_cerveau voit sauts, pertes et teintes",
+          str((cnt.jumps, cnt.lost, cnt.tints)))
+
+
 def check_brain_engine() -> None:
     """Cerveau (#192) : le fil audio publie les frappes datees dans le temps du son et le statut (BPM) ; le rendu publie le strobe, les
     effets et la sante ; un rendu sans cerveau, ou avec, donne la meme image."""
@@ -12978,6 +13110,7 @@ def check_brain_gui() -> None:
     largeur fixe, fenetre detachee (fermer = raccrocher, geometrie retenue), fige pendant le REC, rien quand il est cache, vue qui leve,
     frise libre sans grille puis retour a la vue choisie."""
     print("Cerveau : panneau (bascule VJ, fenetre detachee, REC, vues)")
+    import json
     try:
         import tkinter as tk
         probe = tk.Tk()
@@ -13188,11 +13321,53 @@ def check_brain_gui() -> None:
         log.set_status(grid=None)
         bp.tick()
         pump()
+        out["held"] = type(bp.current).__name__                 # grille perdue : la derniere est gardee GRID_HOLD_S (pas de clignotement)
+        bp.tick(now=time.monotonic() + br.GRID_HOLD_S + 0.5)
+        pump()
         out["free"] = (type(bp.current).__name__, gui_brain.NO_TEMPO in canvas_texts(bp._docked.canvas))
         log.set_status(grid=(t0, 0.5))
         bp.tick()
         pump()
         out["free_back"] = type(bp.current).__name__
+        # curseur continu (vraie vue sismo) : cursor_tick deplace la ligne du present sans redessiner la vue ; rien en pause
+        saved_sismo = gui_brain.VIEWS["sismo"]
+        gui_brain.VIEWS["sismo"] = saved_views.get("sismo", saved_sismo)
+        bp.set_view("sismo")
+        pump()
+        t_c = time.monotonic()
+        bp.tick(now=t_c)
+        sv = bp.current
+        n_up = []
+        real_up = sv.update
+        sv.update = lambda *a, **k: (n_up.append(1), real_up(*a, **k))
+        x0 = sv.canvas.coords(sv._edge)[0]
+        bp.cursor_tick(now=t_c + 0.2)
+        x1 = sv.canvas.coords(sv._edge)[0]
+        bp.paused = True
+        bp.cursor_tick(now=t_c + 0.4)
+        x2 = sv.canvas.coords(sv._edge)[0]
+        bp.paused = False
+        out["cursor"] = (x1 > x0, not n_up, x2 != x1)
+        sv.update = real_up
+        gui_brain.VIEWS["sismo"] = saved_sismo
+        # bouton log : journal dans LOG_DIR (dossier temporaire), puis arret
+        saved_dir = gui_brain.LOG_DIR
+        gui_brain.LOG_DIR = Path(tempfile.mkdtemp(prefix="brainlog_"))
+        try:
+            bp.toggle_log()
+            on = bp.logging
+            log.publish("kick", 0.9, t=log.to_audio(time.monotonic()))
+            log.set_status(bpm=120.0)
+            bp.toggle_log()
+            files = list(gui_brain.LOG_DIR.glob("journal-*.jsonl"))
+            lines = files[0].read_text(encoding="utf-8").splitlines() if files else []
+            replayed = br.BrainLog()
+            for line in lines:
+                _w, kind, args = json.loads(line)
+                br.replay_line(replayed, kind, args)
+            out["log"] = (on, len(lines), any(e.family == "kick" for e in replayed.events()), bp.logging)
+        finally:
+            gui_brain.LOG_DIR = saved_dir
         # vues gardees : iso (la vraie, ~3100 elements) -> free -> iso, puis iso -> sismo -> iso : aucun element recree, aucune
         # reconstruction (la grille revient au drop : pas de gel de 70-215 ms)
         surf = bp._docked
@@ -13328,7 +13503,14 @@ def check_brain_gui() -> None:
     check(out.get("rec_close") == (True, True, True), "cerveau GUI: fermer la fenetre pendant un REC la raccroche", str(out.get("rec_close")))
     check(not tick_errors and not cb_errors, "cerveau GUI: aucune erreur Tk (TclError) dans le journal", str(tick_errors[:2] + cb_errors[:2]))
     check(out.get("raise") == (1, True, True), "cerveau GUI: une vue qui leve ne fait pas tomber le panneau (erreur journalisee une fois)", str(out.get("raise")))
-    check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille, frise libre « tempo non detecte »", str(out.get("free")))
+    check(out.get("held") == "Counting", "cerveau GUI: grille tout juste perdue -> la vue reste (grille gardee, pas de clignotement)",
+          str(out.get("held")))
+    check(out.get("free") == ("FreeView", True), "cerveau GUI: sans grille au-dela de GRID_HOLD_S, frise libre « tempo non detecte »", str(out.get("free")))
+    cu = out.get("cursor", ())
+    check(cu == (True, True, False), "cerveau GUI: entre deux rafraichissements, seul le curseur avance (pas en pause)", str(cu))
+    lg = out.get("log", ())
+    check(len(lg) == 4 and lg[0] and lg[1] > 0 and lg[2] and not lg[3],
+          "cerveau GUI: bouton log, le journal s'ecrit dans LOG_DIR puis s'arrete (rejouable)", str(lg))
     check(out.get("free_back") == "Counting", "cerveau GUI: la grille revient -> la vue choisie reprend", str(out.get("free_back")))
     kp = out.get("kept", ("?", False, 0, -1, 0.0))
     check(kp[0] == "IsoView" and kp[1] and kp[2] > 500 and kp[2] == kp[3],
@@ -14857,12 +15039,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_engine", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
