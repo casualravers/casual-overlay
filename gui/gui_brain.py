@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import json
 import math
+import queue
 import re
+import threading
 import time
 import tkinter as tk
 from pathlib import Path
@@ -1606,6 +1608,43 @@ VIEWS["tunnel"] = TunnelView
 # Une surface : les widgets du panneau dans un parent (raccroche dans le panneau etendu, ou dans la fenetre detachee)
 # ---------------------------------------------------------------------------------------------------------------------------
 
+class _JournalWriter:
+    """Enregistrement du journal du cerveau dans un fichier JSONL. Le journal appelle le puits sous son verrou depuis les fils audio,
+    GL et Tk : le puits ne fait que mettre la ligne en file, un fil a part ecrit (un disque lent ne retarde jamais l'analyse)."""
+
+    def __init__(self, log, folder: Path) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        self.path = folder / time.strftime("journal-%Y%m%d-%H%M%S.jsonl")
+        self._f = open(self.path, "w", encoding="utf-8")
+        self._q: queue.SimpleQueue = queue.SimpleQueue()
+        self._log = log
+        self._thread = threading.Thread(target=self._run, name="cerveau-journal", daemon=True)
+        self._thread.start()
+        log.set_recorder(lambda wall, kind, args: self._q.put((wall, kind, args)))
+
+    def _run(self) -> None:
+        f = self._f
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            try:
+                f.write(json.dumps([round(item[0], 4), item[1], item[2]], default=str) + "\n")
+                if self._q.empty():
+                    f.flush()                                  # file videe : sur le disque (un arret brutal ne perd presque rien)
+            except (OSError, ValueError, TypeError):
+                pass
+        try:
+            f.close()
+        except OSError:
+            pass
+
+    def stop(self) -> None:
+        self._log.set_recorder(None)                          # sous le verrou : plus aucune ligne n'arrive apres
+        self._q.put(None)
+        self._thread.join(timeout=2.0)
+
+
 def _button(parent, text, command, width=None) -> tk.Button:
     b = tk.Button(parent, text=text, command=command, relief="flat", bd=0, padx=7, pady=1, cursor="hand2", bg=BTN_BG, fg=REASON_FG,
                   activebackground=BTN_BG, activeforeground=BTN_ON, font=FONT, highlightthickness=1, highlightbackground="#2a3050")
@@ -2236,9 +2275,12 @@ class BrainPanel:
         if start is None or self.paused:
             return
         surf, view, c0, t0, period = start
-        if surf is not self._active() or surf.view is not view or surf.frozen or not hasattr(view, "move_cursor"):
-            return
         now = time.monotonic() if now is None else float(now)
+        if now - t0 > 1.0:                                       # plus de dessin complet depuis 1 s (cache, reconstruit) : on oublie
+            self._cursor_from = None
+            return
+        if surf is not self._active() or surf.view is not view or surf.frozen or not hasattr(view, "move_cursor") or not surf.visible():
+            return
         if (now - self._cursor_at) * 1000.0 < CURSOR_VIEW_MS.get(self.view_name, CURSOR_MS) - 5:
             return                                               # iso : 20 Hz seulement (son redessin coute ~7 ms)
         self._cursor_at = now
@@ -2253,51 +2295,35 @@ class BrainPanel:
         except Exception as exc:
             self._fail(self.view_name + ".cursor", exc)
 
-    # ---- journal enregistre (bouton « log ») : rejoue par tools/rejoue_cerveau.py ; le fichier ouvert est garde sur la session (il
-    # survit a une reconstruction de la fenetre de reglages, qui recree le panneau)
+    # ---- journal enregistre (bouton « log ») : rejoue par tools/rejoue_cerveau.py ; l'enregistrement en cours est garde sur la session
+    # (il survit a une reconstruction de la fenetre de reglages, qui recree le panneau)
     @property
-    def _rec_file(self):
-        return getattr(self.s, "brain_rec_file", None)
-
-    @_rec_file.setter
-    def _rec_file(self, f) -> None:
-        self.s.brain_rec_file = f
+    def _rec(self):
+        return getattr(self.s, "brain_rec", None)
 
     @property
     def log_path(self):
-        return getattr(self.s, "brain_rec_path", None)
-
-    @log_path.setter
-    def log_path(self, path) -> None:
-        self.s.brain_rec_path = path
+        rec = self._rec
+        return None if rec is None else rec.path
 
     @property
     def logging(self) -> bool:
-        return self._rec_file is not None
+        return self._rec is not None
 
     def toggle_log(self) -> None:
-        log = getattr(self.s, "brain", None)
-        if self._rec_file is not None:
-            if log is not None:
-                log.set_recorder(None)
+        rec = self._rec
+        if rec is not None:
+            rec.stop()
+            self.s.brain_rec = None
+        else:
+            log = getattr(self.s, "brain", None)
+            if log is None:
+                return
             try:
-                self._rec_file.close()
-            except OSError:
-                pass
-            self._rec_file = None
-        elif log is not None:
-            try:
-                LOG_DIR.mkdir(parents=True, exist_ok=True)
-                path = LOG_DIR / time.strftime("journal-%Y%m%d-%H%M%S.jsonl")
-                f = open(path, "w", encoding="utf-8", buffering=1)     # ligne par ligne : rien de perdu a un arret brutal
+                self.s.brain_rec = _JournalWriter(log, LOG_DIR)
             except OSError as exc:
                 sessionlog.error("Cerveau : journal impossible a ouvrir", exc)
                 return
-            self._rec_file, self.log_path = f, path
-
-            def sink(wall, kind, args, f=f):
-                f.write(json.dumps([round(wall, 4), kind, args], default=str) + "\n")
-            log.set_recorder(sink)
         self._restyle()
 
     def _draw(self, surf: _Surface, snap: dict, now: float) -> None:

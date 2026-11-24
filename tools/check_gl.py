@@ -12964,6 +12964,43 @@ def check_brain_steady() -> None:
           "stabilite: journal du cerveau enregistre (JSON) puis rejoue a l'identique", f"{len(lines)} {a_ev} {b_ev}")
     check(abs(out.to_audio(4.0) - 5.0) < 1e-9 and out.status().get("phase") == "build", "stabilite: horloge et etat rejoues")
 
+    # ---- relecture : frappe toute fraiche pendant le rattrapage de phase -> sur la case du curseur (pas un pas a cote)
+    log = br.BrainLog()
+    log.set_clock(0.0, 0.0)
+    log.set_status(bpm=120.0, confidence=0.9, grid=(0.0, P), phase="groove")
+    sd = br.Steady()
+    br.snapshot(log, 10.0, steady=sd)
+    log.set_status(grid=(0.15, P))                          # le kick a recale l'ancre de 0,3 temps (meme epoque)
+    log.publish("kick", 0.9, t=10.15)
+    s_ = br.snapshot(log, 10.18, steady=sd)
+    kick_i = [c[0] for c in s_["cells"] if c[1] == "kick" and c[2] > 0 and c[0] >= 12]
+    check(kick_i and abs(kick_i[-1] - s_["cursor"]) < 1.0,
+          "stabilite: une frappe publiee pendant le rattrapage tombe sur la case du curseur", f"case {kick_i} curseur {s_['cursor']:.2f}")
+    # ---- relecture : pendant la grille gardee (perdue), aucune prediction (pas de manques rouges dans un break)
+    sd = br.Steady()
+    sd.update(0.0, (0.0, P), 1, "groove")
+    sd.update(5.0, (0.0, P), 1, "groove")
+    sd.update(5.5, None, 1, "groove")
+    check(sd.grid is not None and not sd.confident(5.6), "stabilite: grille gardee apres sa perte -> rien de predit", str(sd.grid))
+    # ---- relecture : la duree de phase suit la phase affichee
+    log = br.BrainLog()
+    log.set_clock(0.0, 0.0)
+    log.set_status(bpm=120.0, confidence=0.9, grid=(0.0, P), phase="groove", phase_since=1.0)
+    sd = br.Steady()
+    br.snapshot(log, 20.0, steady=sd)
+    log.set_status(phase="build", phase_since=24.0)
+    s_ = br.snapshot(log, 25.0, steady=sd)
+    check(s_["header"]["phase"] == "groove" and s_["header"]["phase_s"] >= 20.0,
+          "stabilite: la duree de phase de l'en-tete suit la phase affichee (retenue)", f"{s_['header']['phase']} {s_['header']['phase_s']}")
+    # ---- relecture : l'horloge n'est enregistree que quand elle bouge (une ligne par bloc audio sinon)
+    lines = []
+    rec = br.BrainLog()
+    rec.set_recorder(lambda wall, kind, args: lines.append(kind))
+    for k in range(50):
+        rec.set_clock(10.0 + k * 0.01, 5.0 + k * 0.01)       # decalage constant
+    rec.set_clock(12.0, 5.0)                                 # decalage change
+    check(lines.count("clock") == 2, "stabilite: journal, l'horloge enregistree seulement quand son decalage change", str(lines.count("clock")))
+
     # ---- compteur de tools/rejoue_cerveau.py : un saut du curseur, une perte de grille, un changement de teinte
     import rejoue_cerveau as rc
     step = rc.SNAP_S / P * br.STEPS_PER_BEAT

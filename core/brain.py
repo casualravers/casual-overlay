@@ -115,6 +115,7 @@ class BrainLog:
         self._status: dict = {}
         self._epoch = 0                                    # +1 a chaque grille retrouvee (absente -> presente)
         self._recorder = None                              # enregistreur du journal (bouton « log » du panneau) : sink(mur, type, args)
+        self._rec_offset: float | None = None              # decalage d'horloge deja enregistre
 
     # ---- enregistrement (rejoue par tools/rejoue_cerveau.py via `replay_line`)
     def set_recorder(self, sink) -> None:
@@ -122,6 +123,7 @@ class BrainLog:
         Une panne de l'enregistreur ne coupe jamais le journal."""
         with self._lock:
             self._recorder = sink
+            self._rec_offset = None                        # la premiere horloge apres le depart est toujours enregistree
 
     def _record(self, kind: str, args) -> None:
         sink = self._recorder
@@ -136,7 +138,10 @@ class BrainLog:
         """Publie la correspondance entre l'horloge du son et l'horloge murale (fil audio)."""
         with self._lock:
             self._offset = float(t_audio) - float(wall)
-            self._record("clock", [float(t_audio), float(wall)])
+            # enregistree seulement quand le decalage bouge (sinon une ligne par bloc audio, ~94 par seconde)
+            if self._recorder is not None and (self._rec_offset is None or abs(self._offset - self._rec_offset) > 0.001):
+                self._rec_offset = self._offset
+                self._record("clock", [float(t_audio), float(wall)])
 
     def to_audio(self, wall: float) -> float:
         """Date murale convertie en temps du son (telle quelle tant qu'aucune horloge n'est connue)."""
@@ -238,23 +243,24 @@ FREE_S = 8.0                                               # frise libre (sans g
 FEED_LINES = 4
 
 
-def placed_step(ev: Event, anchor: float, period: float, epoch: int | None = None) -> int:
+def placed_step(ev: Event, anchor: float, period: float, epoch: int | None = None, lag: int = 0) -> int:
     """Pas d'un evenement sur la grille courante. Fige a la publication (meme epoque) : seuls les sauts d'ancre de phrases entieres
     (`BeatGrid.nudge`) le deplacent, jamais le reajustement de la periode (sinon les frappes anciennes glissaient toutes ensemble).
-    Sans pas fige, ou grille perdue puis retrouvee depuis : place par sa date."""
+    Sans pas fige, ou grille perdue puis retrouvee depuis : place par sa date. `lag` (affichage stabilise, `Steady.lag_steps`) : retard
+    de la grille affichee sur celle de l'analyse, ajoute aux pas figes seulement (ceux places par la date le sont deja sur la grille affichee)."""
     if ev.step is None or ev.anchor is None or epoch is None or ev.epoch != epoch:
         return step_of(ev.t, anchor, period)
-    return ev.step + PHRASE_STEPS * round((ev.anchor - anchor) * STEPS_PER_BEAT / (PHRASE_STEPS * period))
+    return ev.step + lag + PHRASE_STEPS * round((ev.anchor - anchor) * STEPS_PER_BEAT / (PHRASE_STEPS * period))
 
 
 def hits_by_step(events: list[Event], anchor: float, period: float, epoch: int | None = None,
-                 min_strength: float = 0.0) -> dict[tuple[int, str], float]:
+                 min_strength: float = 0.0, lag: int = 0) -> dict[tuple[int, str], float]:
     """Frappes placees sur la grille : cle (pas, instrument), valeur = force max des frappes tombees sur ce pas. Les frappes plus
     faibles que `min_strength` sont ignorees (affichage stabilise : HIT_MIN)."""
     hits: dict[tuple[int, str], float] = {}
     for ev in events:
         if ev.family in INSTRUMENTS and ev.strength >= min_strength:
-            key = (placed_step(ev, anchor, period, epoch), ev.family)
+            key = (placed_step(ev, anchor, period, epoch, lag), ev.family)
             if ev.strength > hits.get(key, 0.0):
                 hits[key] = ev.strength
     return hits
@@ -323,19 +329,34 @@ class Steady:
         self.epoch: int | None = None
         self.since: float | None = None
         self.phase: str | None = None
+        self.phase_since: float | None = None
         self._t: float | None = None
         self._lost_at: float | None = None
         self._cand: str | None = None
         self._cand_t = 0.0
 
     def confident(self, now: float) -> bool:
-        return self.grid is not None and self.since is not None and now - self.since >= CONFIDENT_BEATS * self.grid[1]
+        """Predictions permises : grille installee depuis CONFIDENT_BEATS temps et pas seulement gardee apres sa perte (un break n'affiche
+        pas une rangee de manques)."""
+        return (self.grid is not None and self.since is not None and self._lost_at is None
+                and now - self.since >= CONFIDENT_BEATS * self.grid[1])
 
-    def update(self, now: float, grid, epoch: int | None, phase: str | None) -> None:
+    def lag_steps(self, raw_grid, raw_epoch: int | None) -> int:
+        """Retard (en pas, arrondi, hors phrases entieres) de la grille affichee sur celle de l'analyse, meme epoque : les frappes figees
+        sur la grille de l'analyse en sont decalees pour tomber sous le curseur affiche pendant le rattrapage de phase."""
+        try:
+            if self.grid is None or raw_epoch != self.epoch or not raw_grid or float(raw_grid[1]) <= 0:
+                return 0
+            d = (float(raw_grid[0]) - self.grid[0]) * STEPS_PER_BEAT / self.grid[1]
+        except (TypeError, ValueError, IndexError):
+            return 0
+        return round(d - PHRASE_STEPS * round(d / PHRASE_STEPS))
+
+    def update(self, now: float, grid, epoch: int | None, phase: str | None, phase_since: float | None = None) -> None:
         now = float(now)
         dt = 0.0 if self._t is None else min(1.0, max(0.0, now - self._t))
         self._t = now
-        self._update_phase(now, phase)
+        self._update_phase(now, phase, phase_since)
         raw = None
         try:
             if grid and float(grid[1]) > 0:
@@ -373,17 +394,21 @@ class Steady:
         pos += max(-lim, min(lim, err))
         self.grid = (now - pos * period, period)
 
-    def _update_phase(self, now: float, phase: str | None) -> None:
+    def _update_phase(self, now: float, phase: str | None, since: float | None = None) -> None:
+        """`phase_since` suit la phase AFFICHEE : celle de l'analyse quand elles concordent, sinon le debut de la phase retenue."""
         if phase == self.phase or not phase:
             self._cand = None
+            if phase and since is not None:
+                self.phase_since = since
             return
         if self.phase is None:
-            self.phase = phase
+            self.phase, self.phase_since = phase, since if since is not None else now
             return
         if phase != self._cand:
             self._cand, self._cand_t = phase, now
         elif now - self._cand_t >= PHASE_HOLD_S:
             self.phase, self._cand = phase, None
+            self.phase_since = since if since is not None else self._cand_t
 
 
 def replay_line(log: "BrainLog", kind: str, args) -> None:
@@ -477,17 +502,19 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
     confidence = st.get("confidence")
     phase = st.get("phase") or struct_now.phase or None
     epoch = st.get("epoch")
-    confident, min_strength, calm = True, 0.0, steady is not None
-    if steady is not None:
-        steady.update(now, grid, epoch, phase)
-        grid, epoch = steady.grid, steady.epoch
-        phase = steady.phase or phase
-        confident, min_strength = steady.confident(now), HIT_MIN
     phase_since = st.get("phase_since")
     if not phase_since:                                    # None, ou 0,0 publie par le fil audio avant le premier changement : inconnue
         phase_since = None
     if phase_since is None:
         phase_since = struct_now.phase_t
+    confident, min_strength, calm, lag = True, 0.0, steady is not None, 0
+    if steady is not None:
+        raw_grid, raw_epoch = grid, epoch
+        steady.update(now, grid, epoch, phase, phase_since)
+        grid, epoch = steady.grid, steady.epoch
+        phase, phase_since = steady.phase or phase, steady.phase_since
+        confident, min_strength = steady.confident(now), HIT_MIN
+        lag = steady.lag_steps(raw_grid, raw_epoch)
     next_at = st.get("next_scene_at")                      # publie par le fil Tk : horloge murale
     header = {
         "bpm": st.get("bpm"),
@@ -539,7 +566,7 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
     # seules les frappes des pas regardes comptent (jusqu'a une phrase avant la page, marge d'un pas pour l'arrondi) : le journal
     # garde 2 minutes, la prediction n'en lit que ~1 (budget du panneau, tache 9)
     t_lo = step_time(first - PAGE_STEPS - PHRASE_STEPS - 1, anchor, period)
-    hits = hits_by_step(events[bisect.bisect_left(events, t_lo, key=_t_of):], anchor, period, epoch, min_strength)
+    hits = hits_by_step(events[bisect.bisect_left(events, t_lo, key=_t_of):], anchor, period, epoch, min_strength, lag)
     cells = []
     page_p: dict[tuple[int, str], float] = {}              # prediction de page deja calculee (reprise par le score)
     for i in range(n):
@@ -573,7 +600,7 @@ def snapshot(log: BrainLog, now_wall: float, rolling: bool = False, depth: int |
     fx = []
     for e in events[bisect.bisect_left(events, step_time(first - 8, anchor, period), key=_t_of):]:
         if e.family in TRACKS:
-            i = placed_step(e, anchor, period, epoch) - first
+            i = placed_step(e, anchor, period, epoch, lag) - first
             if 0 <= i < n:
                 fx.append((i, e.family, e.strength, e.reason, e.cause))
 

@@ -134,8 +134,10 @@ Retour de l'utilisateur : avec de la vraie musique l'interface « clignote et sa
 (`AudioAnalyzer._analyze`, vitesse simulee, reglages de l'analyse de `gl_params.json` : sensibilite du kick 2,6 sur le poste de dev ;
 avec la valeur par defaut 1,0 l'analyse ne voyait qu'un kick sur trois et la grille manquait la moitie du temps), ou un **journal**
 enregistre en soiree (bouton **log** du panneau : `~/.audio2wave/cerveau/journal-AAAAMMJJ-HHMMSS.jsonl`, une ligne `[mur, type, args]`
-par appel `publish` / `status` / `clock`, `BrainLog.set_recorder`, rejoue par `core.brain.replay_line` ; le fichier ouvert est garde
-sur la session, il survit a une reconstruction de la fenetre). Il compte, sur des instantanes a 10 Hz : pertes de grille, recalages
+par appel `publish` / `status` / `clock`, `BrainLog.set_recorder`, rejoue par `core.brain.replay_line` ; l'enregistrement en cours est
+garde sur la session, il survit a une reconstruction de la fenetre). Le puits est appele sous le verrou du journal (fils audio, GL,
+Tk) : il ne fait que mettre en file, un fil a part ecrit (`_JournalWriter` : un disque lent ne retarde jamais l'analyse) ; l'horloge
+n'est enregistree que quand son decalage bouge (sinon une ligne par bloc audio, ~94/s). Il compte, sur des instantanes a 10 Hz : pertes de grille, recalages
 (epoques), changements de teinte, sauts du curseur (> 0,5 pas d'ecart a l'avance attendue par la periode affichee), changements de
 page hors fin de page, surprises et manques ; et la repartition des forces des frappes.
 
@@ -157,7 +159,13 @@ Mesure (4 morceaux techno, 4 min chacun, moyenne par minute) :
 - teinte : une nouvelle phase affichee apres `PHASE_HOLD_S` = 8 s de constance (3 s laissaient 3 changements par minute) ; pas de
   fondu (chaque changement recolore toutes les cases : un fondu en 5 images couterait 5 recolorations completes).
 
-**Calmer les predictions** (seulement avec `steady`) : rien de predit (ni fantome, ni manque, ni surprise, score nul) tant que la grille
+Pendant le rattrapage de phase, les frappes figees sur la grille de l'analyse sont decalees du retard de la grille affichee
+(`Steady.lag_steps`, ajoute par `placed_step(..., lag)` aux pas figes seulement) : une frappe toute fraiche tombe sous le curseur
+(sinon un pas a cote pendant jusqu'a 2 s, trouve par la relecture). La duree de phase de l'en-tete suit la phase affichee
+(`Steady.phase_since`) ; la bande des phases par pas reste celle de l'analyse (historique).
+
+**Calmer les predictions** (seulement avec `steady`) : rien de predit non plus pendant la grille GARDEE apres sa perte (un break
+n'affiche pas une rangee de manques rouges pendant 4 s) ; rien de predit (ni fantome, ni manque, ni surprise, score nul) tant que la grille
 n'est pas installee depuis `CONFIDENT_BEATS` = 4 temps (une grille retrouvee dans la continuite reste installee) ; surprise seulement
 sous `CALM_SURPRISE` = 0,25 de prediction, manque seulement a partir de `CALM_MISS` = 0,75 (`status_of(..., calm=True)`) ; frappes
 sous `HIT_MIN` = 0,25 ignorees (le dixieme le plus faible mesure : kick q10 0,24 a 0,49, hi-hat q10 ~0,3).
