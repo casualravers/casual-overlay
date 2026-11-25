@@ -11976,8 +11976,8 @@ def check_doodles() -> None:
     check(full > 0 and 0.2 * full < mid_in < 0.8 * full and 0.2 * full < mid_out < 0.8 * full and nearly < 0.1 * full,
           "doodle: dissolution en blocs (a mi-parcours environ la moitie des pixels, presque rien a la fin)", f"entier {full}, entree {mid_in}, sortie {mid_out}, fin {nearly}")
     # symetrie : verifiee sur la courbe (exacte) ; en pixels elle derive avec l'horloge reelle du rendu, trop fragile sur le rendu logiciel de la CI
-    check(all(abs(dd.dissolve(x) + dd.dissolve(dd.LIFE_S - x) - 1.0) < 1e-9 for x in (0.05, 0.2, 0.45, 0.7, 0.85)),
-          "doodle: l'apparition est la disparition a l'envers (courbes symetriques : progression a x + progression a vie - x = 1)")
+    check(all(abs(dd.dissolve(x) - dd.dissolve(dd.LIFE_S - x)) < 1e-9 for x in (0.05, 0.2, 0.45, 0.7, 0.85)),
+          "doodle: l'apparition est la disparition a l'envers (courbes en miroir : meme progression a x et a vie - x)")
     check(outside_px <= 0.05 * full and abs(wa - w5) <= 0.15 * w5 and abs(ha - h5) <= 0.15 * h5,
           "doodle: le media ne change ni de taille ni d'angle (les blocs restent sur sa surface)", f"{outside_px} px hors du media, boite {(wa, ha)} contre {(w5, h5)}")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
