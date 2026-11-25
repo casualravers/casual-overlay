@@ -104,3 +104,47 @@ def is_default(params: dict, rid: str | None = None) -> bool:
 def routed_ids(params: dict) -> list[str]:
     """Les lignes modifiees, dans l'ordre de la table."""
     return [r.id for r in routable() if not is_default(params, r.id)]
+
+
+def _scaled(vec: tuple, dose: float) -> tuple:
+    if dose <= 0.0:
+        return al.SILENT
+    return (vec[0] * dose, vec[1] * dose, vec[2] * dose, vec[3])
+
+
+class RouteBank:
+    """Vecteur audio (bass, high, beat, since) de chaque ligne, image par image.
+
+    Ligne par defaut : le vecteur de sa couche tel quel (meme objet : aucun calcul, image identique). `herite` + dosage : le vecteur de la couche
+    (deja retarde / lisse) x dosage. Source explicite : un `SourceMixer` et un `LayerFilter` propres a la ligne (memes retard et lissage que la
+    couche), puis le dosage ; `auto` prend `auto_source` (la source du tableau des phases pour la couche) avec un fondu quand elle change."""
+
+    def __init__(self) -> None:
+        self._mix: dict[str, al.SourceMixer] = {}
+        self._filt: dict[str, al.LayerFilter] = {}
+        self._info: dict[str, tuple[str, float]] = {}
+
+    def vector(self, now: float, state: dict, params: dict, rid: str, base: tuple, auto_source: str,
+               lag: float, smooth: float, kick_layer: str | None = None) -> tuple:
+        src, dose = route_of(params, rid)
+        if src == INHERIT:
+            self._mix.pop(rid, None)
+            self._filt.pop(rid, None)
+            if dose == 1.0:
+                self._info.pop(rid, None)
+                return base
+            out = _scaled(base, dose)
+            self._info[rid] = (INHERIT, max(out[0], out[1], out[2]))
+            return out
+        resolved = auto_source if src == "auto" else src
+        layer = kick_layer or BY_ID[rid].layer or "bg"
+        mixer = self._mix.setdefault(rid, al.SourceMixer())
+        filt = self._filt.setdefault(rid, al.LayerFilter())
+        raw = mixer.levels(now, state, resolved, layer, src == "auto")
+        out = _scaled(filt.step(now, raw, lag, smooth), dose)
+        self._info[rid] = (resolved, max(out[0], out[1], out[2]))
+        return out
+
+    def info(self, rid: str) -> tuple[str, float] | None:
+        """(source resolue, niveau courant) d'une ligne modifiee, None pour une ligne par defaut (voyant de l'onglet Routage)."""
+        return self._info.get(rid)

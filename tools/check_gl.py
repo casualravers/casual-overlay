@@ -9698,6 +9698,48 @@ def check_routage() -> None:
     cp = coerce_params({"rt_bg_wobble": "fin64", "rg_bg_wobble": 7})
     check(cp.get("rt_bg_wobble", "herite") == "herite" and float(cp.get("rg_bg_wobble", 1.0)) <= 2.0, "routage: source inconnue et dosage hors plage corriges", str(cp.get("rt_bg_wobble")))
     check(rt.is_default({**DEFAULT_PARAMS, **coerce_params({})}), "routage: anciens reglages (sans rt_ / rg_) = routes par defaut")
+    # --- RouteBank : vecteur d'une ligne, image par image
+    st = {"bass": 0.8, "mid": 0.5, "high": 0.6, "rms": 0.4, "beat": 0.9, "since_beat": 0.2, "hit": 0.7, "since_hit": 0.1}
+    base = (0.3, 0.2, 0.1, 0.5)
+    bank = rt.RouteBank()
+    v = bank.vector(0.0, st, {}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(v is base and bank.info("bg_wobble") is None, "routage: ligne par defaut = vecteur de la couche tel quel (meme objet)")
+    v = bank.vector(0.0, st, {"rg_bg_wobble": 0.5}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(v == (0.15, 0.1, 0.05, 0.5), "routage: herite + dosage = vecteur de la couche x dosage, since inchange", str(v))
+    v = bank.vector(0.0, st, {"rt_lg_chroma": "kick"}, "lg_chroma", base, "tout", 0.0, 0.0)
+    check(v == (0.0, 0.0, 0.9, 0.2), "routage: source kick = le kick du state, independant de la couche", str(v))
+    check(bank.info("lg_chroma") == ("kick", 0.9), "routage: info = source resolue et niveau", str(bank.info("lg_chroma")))
+    p2 = {"rt_bg_wobble": "basses", "rt_bg_glitch": "aigus"}
+    a, b = bank.vector(0.0, st, p2, "bg_wobble", base, "tout", 0.0, 0.0), bank.vector(0.0, st, p2, "bg_glitch", base, "tout", 0.0, 0.0)
+    check(a == (0.8, 0.0, 0.9, 0.2) and b == (0.6, 0.6, 0.0, al.NO_KICK), "routage: deux lignes d'une couche sur deux sources, independantes", str((a, b)))
+    v = bank.vector(0.0, st, {"rt_bg_wobble": "basses", "rg_bg_wobble": 0.0}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(v == (0.0, 0.0, 0.0, al.NO_KICK), "routage: dosage 0 = vecteur nul, since = NO_KICK", str(v))
+    # auto : la source de la couche dans le tableau des phases, avec fondu
+    bk = rt.RouteBank()
+    pa = {"rt_bg_ripple": "auto"}
+    check(bk.vector(0.0, st, pa, "bg_ripple", base, "basses", 0.0, 0.0) == (0.8, 0.0, 0.9, 0.2), "routage: auto = source du tableau pour la couche")
+    bk.vector(0.5, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)            # la phase change : debut du fondu
+    mid = bk.vector(1.25, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)
+    end = bk.vector(2.5, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)
+    check(0.6 < mid[0] < 0.8 and 0.0 < mid[1] < 0.6 and end == (0.6, 0.6, 0.0, al.NO_KICK), "routage: auto qui change de source = fondu (pas de saut)", str((mid, end)))
+    bk2 = rt.RouteBank()
+    check(bk2.vector(0.0, st, {"rt_bg_ripple": "auto"}, "bg_ripple", base, "tout", 0.0, 0.0)[:3] == (0.8, 0.6, 0.9), "routage: auto sans phase (tout) = tout")
+    # retard : silence pendant `lag` puis le signal ; retard change a chaud sans valeur aberrante
+    bk3, pl, out = rt.RouteBank(), {"rt_bg_wobble": "basses"}, []
+    for k in range(40):
+        out.append(bk3.vector(k * 0.01, st, pl, "bg_wobble", base, "tout", 0.2, 0.0)[0])
+    check(out[0] == 0.0 and out[15] == 0.0 and out[25] == 0.8, "routage: retard 0,2 s = silence puis le signal", str(out[::5]))
+    hot = [bk3.vector(0.4 + k * 0.01, st, pl, "bg_wobble", base, "tout", 0.35, 0.0)[0] for k in range(30)]
+    check(all(0.0 <= x <= 0.8 for x in hot), "routage: retard change a chaud, jamais au-dela du signal", str(hot[::5]))
+    lean = {"bass": 0.4, "high": 0.2, "beat": 0.0, "since_beat": 3.0}
+    try:
+        ok = all(len(rt.RouteBank().vector(0.0, lean, {"rt_bg_wobble": s}, "bg_wobble", base, "tout", 0.0, 0.0)) == 4 for s in rt.ROUTE_SOURCES)
+    except Exception as exc:          # noqa: BLE001
+        ok = False
+        print("   ", exc)
+    check(ok, "routage: state minimal (sans bandes, pulsation, frappes) = toutes les sources sans erreur")
+    v = rt.RouteBank().vector(0.0, st, {"rt_lg_pulse": "kick"}, "lg_pulse", base, "tout", 0.0, 0.0, kick_layer="bg")
+    check(v[2] == 0.9, "routage: le kick d'une ligne du logo lie suit la couche donnee (kick_layer)")
 
 
 def check_effets_auto() -> None:
