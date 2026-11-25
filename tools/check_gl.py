@@ -1551,6 +1551,11 @@ def check_gui() -> None:
     check(len(cg.get("opened") or []) == 1 and cg.get("nothing") == (2, 2, True)
           and cg.get("after") == (1, [2], False, True, "1 extrait(s) pret(s)"),
           "onglet Rec (GUI): Ouvrir le dossier ouvre celui des extraits ; Jeter sans choix ne fait rien, avec un choix supprime ses fichiers et sa ligne", str((cg.get("opened"), cg.get("nothing"), cg.get("after"))))
+    bg_ = out.get("bestof_gui") or {}
+    check(bg_.get("count") == "Best of : 1 media(s) gardes ce soir" and bg_.get("music") == ("musique : zik.mp3", True),
+          "onglet Rec (GUI): le voyant du best of compte les medias gardes ; la musique choisie est affichee et retenue", str((bg_.get("count"), bg_.get("music"))))
+    check(bg_.get("built") == [(True, "zik.mp3", "ffmpeg-test")] and bg_.get("done") == "Best of pret : 1 media(s), 5 s" and bg_.get("busy") is False and bg_.get("same_height"),
+          "onglet Rec (GUI): Monter le best of lance le montage (dossier de la soiree, musique) dans un fil, annonce le resultat, ne change pas la hauteur de l'onglet", str(bg_))
     bm = out.get("bgv_modes", {})
     check(bm == {"live": (True, False, False, "live"), "pattern": (False, True, False, "pattern"),
                  "video": (False, False, True, "video")},
@@ -8681,6 +8686,38 @@ def gui_clips_steps(c, s, out) -> None:
              Path(entries[1]["path"]).is_file(), label.cget("text"))
     heights.append(tab_h())
     out["clips_gui"] = {"toggle": (start, on, off), "empty": empty, "analysing": analysing, "ready": ready, "opened": opened, "nothing": nothing, "after": after, "heights": heights}
+    # --- best of de la soiree (issue #106) : voyant du nombre de medias, choix de la musique, montage dans un fil, hauteur de l'onglet inchangee
+    import core.bestof as _bo
+    bo_tmp = Path(tempfile.mkdtemp(prefix="casual-gui-bestof-"))
+    (bo_tmp / "1-a.png").write_bytes(b"x")
+    real_settings_path = _bo.settings_path
+    _bo.settings_path = lambda: bo_tmp / "bestof.json"                       # jamais le vrai ~/.audio2wave
+    built = []
+
+    def fake_build(folder, music, out_dir, ffmpeg):
+        built.append((Path(folder) == bo_tmp, Path(music).name, ffmpeg))
+        return {"state": "pret", "message": "Best of pret : 1 media(s), 5 s", "path": "x.mp4", "count": 1}
+    ui["bestof_dir"], ui["bestof_build"], ui["bestof_ffmpeg"] = (lambda: bo_tmp), fake_build, "ffmpeg-test"
+    ui["bestof_ask_music"] = lambda: str(bo_tmp / "zik.mp3")
+    ui["rec_cache"].pop("bo_t", None)
+    s.status.pop("bestof", None)
+    ui["rec_refresh"]()
+    bo_h0 = tab_h()
+    bo_count = ui["bestof_label"].cget("text")
+    widget("Button", "Musique...").invoke()
+    bo_music = (widget("Label", "musique : zik.mp3").cget("text"), _bo.load_settings(bo_tmp / "bestof.json")["music"] == str(bo_tmp / "zik.mp3"))
+    widget("Button", "Monter le best of").invoke()
+    t_end = time.monotonic() + 5.0
+    while ui.get("bestof_busy") and time.monotonic() < t_end:
+        root.update()
+        time.sleep(0.02)
+    ui["rec_refresh"]()
+    out["bestof_gui"] = {"count": bo_count, "music": bo_music, "built": built, "done": ui["bestof_label"].cget("text"), "busy": ui.get("bestof_busy"), "same_height": tab_h() == bo_h0}
+    _bo.settings_path = real_settings_path
+    ui.pop("bestof_ffmpeg", None)
+    s.status.pop("bestof", None)
+    import shutil as _sh0
+    _sh0.rmtree(bo_tmp, ignore_errors=True)
     s.status.pop("rec_clips", None)
     params["rec_clips"] = saved
     ui["rec_refresh"]()
@@ -11381,6 +11418,105 @@ def check_core_purity() -> None:
     check(res.returncode == 0 and res.stdout.strip().isdigit(),
           "core/: tout s'importe sans numpy, GL, Tk ni le moteur", (res.stderr or res.stdout).strip().splitlines()[-1] if (res.stderr or res.stdout).strip() else "")
 
+def check_bestof() -> None:
+    """Best of des medias recus (issue #106) : choix, duree, commande ffmpeg, dossier de la soiree, reglage de la musique (core/bestof.py, pur)."""
+    print("Best of des medias : plan, commande, dossier de la soiree")
+    import datetime as _dt
+    import shutil
+    from core import bestof as bo
+    day = lambda y, m, d, h, mi=0: _dt.datetime(y, m, d, h, mi).timestamp()
+    check(bo.evening_key(day(2026, 11, 19, 23, 30)) == "2026-11-19" and bo.evening_key(day(2026, 11, 20, 2, 15)) == "2026-11-19" and bo.evening_key(day(2026, 11, 20, 7, 0)) == "2026-11-20",
+          "soiree: une soiree qui passe minuit reste la meme (changement de jour a 6 h)")
+    check(bo.safe_name("1792-abc.png") == "1792-abc.png" and bo.safe_name("../../x y\\z?.png") == "z_.png" and bo.safe_name("") == "media", "nom: un nom du site ne sort jamais du dossier")
+    check(bo.plan(0, 60.0) == (0, 0.0) and bo.plan(10, 60.0) == (10, 5.0) and bo.plan(20, 60.0) == (20, 3.0) and bo.plan(100, 60.0) == (100, 1.5) and bo.plan(5000, 60.0) == (5000, 1.5),
+          "plan: duree par media = musique / nombre (entre 1,5 et 5 s) ; AUCUNE limite de medias (la video depasse alors la musique)", str((bo.plan(10, 60.0), bo.plan(100, 60.0), bo.plan(5000, 60.0))))
+    check(bo.plan(3, 2.0) == (3, 1.5) and not hasattr(bo, "MAX_MEDIA") and bo.BATCH >= 2, "plan: une musique tres courte n'enleve aucun media ; plus de plafond (lots de BATCH medias par commande)")
+    seg = bo.segment_command("ffmpeg", ["a.png", "b.jpg"], "seg.mp4", 3.0, (720, 1280))
+    sj = " ".join(seg)
+    check(seg[0] == "ffmpeg" and seg.count("-loop") == 2 and "a.png" in seg and "b.jpg" in seg and seg[-1] == "seg.mp4" and "concat=n=2:v=1:a=0" in sj and "scale=720:1280" in sj
+          and "pad=720:1280" in sj and "fade=t=in" in sj and "-an" in seg and "libx264" in sj and "-t 3.000" in sj and "musique" not in sj,
+          "segment: images plein cadre vertical, bandes noires, fondus, concat, sans son", sj)
+    lst = bo.concat_list(["C:\\tmp\\a.mp4", "it's.mp4"])
+    check(lst == "file 'C:/tmp/a.mp4'\nfile 'it'\\''s.mp4'\n", "liste de segments: barres obliques, apostrophe protegee", repr(lst))
+    jn = bo.join_command("ffmpeg", "liste.txt", "musique.mp3", "out.mp4", 20.0, True)
+    jn2 = bo.join_command("ffmpeg", "liste.txt", "musique.mp3", "out.mp4", 6.0, False)
+    check("-stream_loop" in jn and jn.index("-stream_loop") < jn.index("musique.mp3") and "-stream_loop" not in jn2 and "copy" in jn and "afade=t=out:st=18.500:d=1.5" in " ".join(jn)
+          and "-t" in jn and "20.000" in jn and jn[-1] == "out.mp4" and "aac" in jn,
+          "assemblage: video copiee, musique rejouee en boucle seulement si la video est plus longue, fondu final, duree exacte", " ".join(jn))
+    check(bo.out_name("2026-11-19") == "best-of-2026-11-19.mp4", "nom du fichier du best of")
+    tmp = Path(tempfile.mkdtemp(prefix="casual-bestof-"))
+    try:
+        cfgp = tmp / "bestof.json"
+        check(bo.load_settings(cfgp) == {"music": ""}, "reglage: absent = pas de musique")
+        bo.save_settings({"music": "C:/musique/libre.mp3"}, cfgp)
+        check(bo.load_settings(cfgp)["music"] == "C:/musique/libre.mp3", "reglage: la musique choisie est gardee")
+        cfgp.write_text("pas du json", encoding="utf-8")
+        check(bo.load_settings(cfgp) == {"music": ""}, "reglage: fichier illisible = valeurs par defaut, jamais d'exception")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_bestof_engine() -> None:
+    """Best of : medias gardes sur disque puis montage avec le vrai ffmpeg (engine/bestof.py)."""
+    print("Best of des medias : fichiers et montage (ffmpeg reel)")
+    import io
+    import shutil
+    import subprocess
+    from engine import bestof as eb
+
+    def png_bytes(w, h, color):
+        buf = io.BytesIO()
+        gl.PIL_Image.new("RGBA", (w, h), color).save(buf, "PNG")
+        return buf.getvalue()
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        check(False, "ffmpeg et ffprobe disponibles")
+        return
+    root = Path(tempfile.mkdtemp(prefix="casual-bestof-"))
+    try:
+        night = _dt_ts(2026, 11, 19, 23, 0)
+        p1 = eb.save_media("1792-aaa.png", png_bytes(8, 8, (255, 0, 0, 255)), night, root / "medias")
+        p2 = eb.save_media("1793-bbb", png_bytes(8, 8, (0, 255, 0, 255)), night + 7200, root / "medias")        # apres minuit, meme soiree ; sans suffixe
+        again = eb.save_media("1792-aaa.png", b"autre contenu", night, root / "medias")
+        check(p1 is not None and p2 is not None and p1.parent == p2.parent == root / "medias" / "2026-11-19" and p2.suffix == ".png" and again == p1 and p1.read_bytes().startswith(b"\x89PNG"),
+              "medias: gardes dans le dossier de la soiree (minuit compris), un nom deja garde n'est pas reecrit, un nom sans suffixe en recoit un", str((p1, p2)))
+        folder = p1.parent
+        check([Path(x).name for x in eb.list_media(folder)] == ["1792-aaa.png", "1793-bbb.png"] and eb.list_media(root / "inexistant") == [], "medias: liste du plus ancien au plus recent")
+        music = root / "musique.wav"
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=12", str(music)], check=True)
+        check(abs(eb.music_duration(str(music), ffmpeg) - 12.0) < 0.2 and eb.music_duration(str(root / "nope.wav"), ffmpeg) == 0.0, "musique: duree lue avec ffmpeg, 0 si illisible")
+        out_dir = root / "sorties"
+        res = eb.build(folder, str(music), str(out_dir), ffmpeg)
+        mp4 = Path(res["path"] or "x")
+        dur = float(subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(mp4)], capture_output=True, text=True).stdout.strip() or 0)
+        size = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(mp4)], capture_output=True, text=True).stdout.strip()
+        check(res["state"] == "pret" and res["count"] == 2 and mp4.name == "best-of-2026-11-19.mp4" and abs(dur - 10.0) < 0.5 and size == "720,1280" and not list(out_dir.glob("*.tmp.mp4")),
+              "montage: 2 medias sur 12 s de musique = video verticale de 10 s (5 s par media), aucun fichier provisoire", str((res, dur, size)))
+        check(eb.build(root / "vide", str(music), str(out_dir), ffmpeg)["state"] == "vide" and eb.build(folder, "", str(out_dir), ffmpeg)["state"] == "musique"
+              and eb.build(folder, str(root / "nope.wav"), str(out_dir), ffmpeg)["state"] == "musique" and eb.build(folder, str(music), str(out_dir), ffmpeg, free_bytes=lambda d: 1)["state"] == "disque",
+              "montage: sans media, sans musique, musique introuvable ou disque presque plein = un etat clair, aucune exception")
+        many = root / "beaucoup"
+        for i in range(5):
+            eb.save_media(f"2000-{i}.png", png_bytes(8, 8, (i * 40, 0, 0, 255)), night, many)
+        short = root / "courte.wav"
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330:duration=4", str(short)], check=True)
+        res5 = eb.build(next((many).iterdir()), str(short), str(out_dir / "lots"), ffmpeg, batch=2)
+        mp5 = Path(res5["path"] or "x")
+        dur5 = float(subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(mp5)], capture_output=True, text=True).stdout.strip() or 0)
+        streams5 = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(mp5)], capture_output=True, text=True).stdout.split()
+        check(res5["state"] == "pret" and res5["count"] == 5 and abs(dur5 - 7.5) < 0.5 and sorted(streams5) == ["audio", "video"] and not list((out_dir / "lots").glob("*.work")) and not list((out_dir / "lots").glob("*.tmp.mp4")),
+              "montage: 5 medias par lots de 2 sur 4 s de musique = tous montes (7,5 s, 1,5 s chacun), musique rejouee en boucle, dossier de travail supprime", str((res5, dur5, streams5)))
+        bad = eb.build(folder, str(music), str(out_dir), ffmpeg, run=lambda *a, **k: subprocess.CompletedProcess(a, 1, b"", b"") if "-filter_complex" in a[0] else subprocess.run(*a, **k))
+        check(bad["state"] == "erreur" and not list(out_dir.glob("*.tmp.mp4")), "montage: ffmpeg en echec = erreur annoncee, fichier provisoire retire")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _dt_ts(y, m, d, h, mi=0) -> float:
+    import datetime
+    return datetime.datetime(y, m, d, h, mi).timestamp()
+
+
 def check_doodles() -> None:
     """Doodles du site : logique pure (core/doodles.py), fil de recuperation (faux reseau puis vrai serveur HTTP local), rendu par-dessus
     la projection (contexte standalone), et le reglage 'doodle_on' qui ne va ni dans les presets ni dans les scenes."""
@@ -11492,10 +11628,12 @@ def check_doodles() -> None:
     check(dd.height_for(0.0) == dd.MAX_HEIGHT_FRAC and dd.height_for(0.05) == dd.MAX_HEIGHT_FRAC and dd.height_for(0.5) == dd.TEXT_HEIGHT_FRAC
           and dd.height_for(1.0) == dd.TEXT_HEIGHT_FRAC and dd.TEXT_HEIGHT_FRAC < dd.MAX_HEIGHT_FRAC,
           "taille: une photo (opaque) est grande, un texte ou dessin detoure (beaucoup de transparence) garde la taille moderee")
-    a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, 14.3, 14.65, 15, 16)]
+    L = dd.LIFE_S
+    a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, L - 0.7, L - 0.35, L, L + 1)]
     check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
-          and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie, 15 s", str(a))
-    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, 14.55, 15.0))
+          and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie", str(a))
+    check(dd.LIFE_S == 45.0, "cycle de vie: un doodle ou une photo reste affiche 45 s")
+    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, L - 0.45, L))
     check(abs(p0[0]) < 1e-9 and abs(p0[1]) > 0.2 and 1.05 < p1[0] < 1.15 and p2 == (1.0, 0.0) and p3 == (1.0, 0.0)
           and p4[0] > 1.0 and p5 == (0.0, 0.0) and dd.pose(1.0, -1)[1] == dd.pose(1.0, 1)[1] == 0.0
           and dd.pose(0.1, -1)[1] == -dd.pose(0.1, 1)[1] and dd.pose(-1.0) == (0.0, 0.0),
@@ -11505,8 +11643,8 @@ def check_doodles() -> None:
     for i in range(7):
         dropped += wall.add(i, (0, 0, 0.1, 0.1), 100.0 + i)
     check(len(wall) == dd.MAX_VISIBLE == 3 and dropped == [0, 1, 2, 3] and [it["id"] for it in wall.items] == [4, 5, 6], "mur: 3 medias au plus, le plus ancien part", str(dropped))
-    check(wall.step(110.0) == [] and wall.step(119.5) == [4] and len(wall) == 2, "mur: les medias expires sont retires")
-    check(len(wall.visible(112.0)) == 2 and wall.clear() == [5, 6] and len(wall) == 0, "mur: visibles puis vide")
+    check(wall.step(110.0) == [] and wall.step(104.5 + dd.LIFE_S) == [4] and len(wall) == 2, "mur: les medias expires sont retires")
+    check(len(wall.visible(106.5 + dd.LIFE_S - 40.0)) == 2 and wall.clear() == [5, 6] and len(wall) == 0, "mur: visibles puis vide")
 
     # --- un tour d'interrogation avec un faux reseau
     def fake_net(files, fail=()):
@@ -11520,7 +11658,7 @@ def check_doodles() -> None:
             return files[name]
         return post, get
 
-    files = {"old.png": png, "new1.png": png, "bad.png": b"pas une image" * 4, "new2.jpg": jpg}
+    files = {"old.png": png, "new1.png": png + b"1", "bad.png": b"pas une image" * 4, "new2.jpg": jpg}
     post, get = fake_net(files)
     seen = dd.Seen()
     seen.arm([{"name": "old.png", "created_at": "2026-01-01"}])
@@ -11529,10 +11667,36 @@ def check_doodles() -> None:
           "tour: nouveaux fichiers valides rendus, fichier invalide ecarte et journalise", str((good and [n for n, _ in good], rejected, error)))
     check(dd.poll_once(cfg, seen, post, get) == ([], [], ""), "tour suivant: rien de nouveau, rien a refaire")
     seen2 = dd.Seen()
-    post2, get2 = fake_net({"a.png": png, "b.png": png, "c.png": png}, fail=("b.png",))
+    post2, get2 = fake_net({"a.png": png, "b.png": png + b"b", "c.png": png + b"c"}, fail=("b.png",))
     good, rejected, error = dd.poll_once(cfg, seen2, post2, get2)
     check([n for n, _ in good] == ["a.png"] and "b.png" in error and "b.png" not in seen2.names and "c.png" not in seen2.names,
           "tour: coupure en cours de route = fichiers deja recus gardes, le fichier en echec sera reessaye", str((good and [n for n, _ in good], error)))
+
+    # --- #108 : une photo apparaissait en double. Journal reel : 1792879143727-xrq7yc.jpg et 1792879143757-59lv7f.jpg, 30 ms d'ecart, meme taille
+    #     (1200x1600) = le site a envoye le meme fichier deux fois sous deux noms. Un fichier au contenu deja affiche recemment n'est pas reaffiche.
+    twin_files = {"1792879143727-xrq7yc.jpg": jpg, "1792879143757-59lv7f.jpg": jpg, "autre.png": png}
+    tpost, tget = fake_net(twin_files)
+    tseen = dd.Seen()
+    tseen.arm([])
+    good, rejected, error = dd.poll_once(cfg, tseen, tpost, tget)
+    check([n for n, _ in good] == ["1792879143727-xrq7yc.jpg", "autre.png"] and len(rejected) == 1 and "1792879143757-59lv7f.jpg" in rejected[0]
+          and "doublon" in rejected[0] and "1792879143727-xrq7yc.jpg" in rejected[0] and error == "",
+          "doublon (#108): le meme fichier envoye deux fois sous deux noms n'est affiche qu'une fois, le journal dit de quel fichier il est le doublon", str((good and [n for n, _ in good], rejected)))
+    check(dd.poll_once(cfg, tseen, tpost, tget) == ([], [], "") and "1792879143757-59lv7f.jpg" in tseen.names,
+          "doublon: le fichier ecarte est marque vu (pas retelecharge a chaque tour)")
+    twin_files["plus_tard.jpg"] = jpg
+    tpost, tget = fake_net(twin_files)
+    good, rejected, error = dd.poll_once(cfg, tseen, tpost, tget)
+    check(good == [] and len(rejected) == 1 and "plus_tard.jpg" in rejected[0], "doublon: la meme photo renvoyee plus tard est aussi reconnue")
+    bseen = dd.Seen()
+    bseen.arm([])
+    many = {f"f{i:03d}.png": png + str(i).encode() for i in range(dd.DUP_MEMORY + 1)}
+    bpost, bget = fake_net(many)
+    good, rejected, error = dd.poll_once(cfg, bseen, bpost, bget)
+    check(len(good) == dd.DUP_MEMORY + 1 and not rejected and len(bseen.digests) == dd.DUP_MEMORY,
+          "doublon: la memoire des contenus est bornee (les plus anciens sont oublies)", str(len(bseen.digests)))
+    check(bseen.twin("rejoue2.png", png + b"0") is None and bseen.twin("rejoue3.png", png + str(dd.DUP_MEMORY).encode()) == "f%03d.png" % dd.DUP_MEMORY,
+          "doublon: un contenu oublie peut etre reaffiche, un contenu recent non")
 
     # --- le fil (faux reseau, horloge injectee)
     class FakeS:
@@ -11562,7 +11726,8 @@ def check_doodles() -> None:
     def file_get(url):
         return live_files[url.rsplit("/", 1)[1]]
 
-    fd = feed_mod.DoodleFeed(fs, config_loader=lambda: state_cfg["cfg"], post=listing_post, get=file_get, poll_s=5.0, clock=lambda: clock["t"])
+    kept = []
+    fd = feed_mod.DoodleFeed(fs, config_loader=lambda: state_cfg["cfg"], post=listing_post, get=file_get, poll_s=5.0, clock=lambda: clock["t"], saver=lambda n, d: kept.append((n, len(d))))
     fd.tick()
     check(fs.status.get("doodles", "") == "" and fs.doodle_queue.empty(), "fil: desactive = aucune interrogation, aucun statut")
     fs.params["doodle_on"] = 1.0
@@ -11584,18 +11749,19 @@ def check_doodles() -> None:
     clock["t"] = 16.0
     fd.tick()
     check(fs.doodle_queue.empty() and "1 recu" in fs.status["doodles"], "fil: un fichier n'est affiche qu'une fois", fs.status["doodles"])
+    check([n for n, _ in kept] == ["fresh.png"], "best of (#106): le fichier d'origine de chaque media affiche est garde, pas le fichier corrompu", str(kept))
     live_files["__down__"] = True
     clock["t"] = 21.5
     fd.tick()
     check("reseau" in fs.status["doodles"], "fil: erreur reseau = statut, le fil continue", fs.status["doodles"])
     del live_files["__down__"]
-    live_files["after.png"] = png
+    live_files["after.png"] = png + b"a"
     clock["t"] = 27.0
     fd.tick()
     check([g["name"] for g in drain(fs.doodle_queue)] == ["after.png"], "fil: apres une coupure, on reprend au tour suivant")
     fs.params["doodle_on"] = 0.0
     fd.tick()
-    live_files["while_off.png"] = png
+    live_files["while_off.png"] = png + b"w"
     clock["t"] = 40.0
     fd.tick()
     fs.params["doodle_on"] = 1.0
@@ -11719,7 +11885,7 @@ def check_doodles() -> None:
         return (xx.max() - xx.min() + 1, yy.max() - yy.min() + 1) if len(xx) else (0, 0), im
     (w5, h5), _im5 = anim_box(5.0)
     (wa, ha), _ima = anim_box(0.3)
-    (wb, hb), _imb = anim_box(14.9)
+    (wb, hb), _imb = anim_box(dd.LIFE_S - 0.1)
     check(w5 > 0 and 0 < wa and wa * ha != w5 * h5 and 0 < wb * hb < w5 * h5, "doodle: apparition et disparition animees (taille et inclinaison changent)", f"{(w5, h5)} {(wa, ha)} {(wb, hb)}")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
     def doodle_render(pre=None, **kw):
@@ -11770,8 +11936,8 @@ def check_doodles() -> None:
     for _ in range(8):
         r4.add_doodle(half, time.monotonic() - 5.0)
     check(len(r4.wall) == 3 and len(r4.doodle_tex) == 3, "rendu: 3 doodles au plus, les textures des evinces sont liberees", f"{len(r4.wall)} {len(r4.doodle_tex)}")
-    r4._draw_doodles(fbo, size, time.monotonic() + 60.0)
-    check(len(r4.wall) == 0 and not r4.doodle_tex, "rendu: apres 15 s tout est retire et libere")
+    r4._draw_doodles(fbo, size, time.monotonic() + dd.LIFE_S + 5.0)
+    check(len(r4.wall) == 0 and not r4.doodle_tex, "rendu: apres 45 s tout est retire et libere")
     # la panique n'y touche pas (meme regle que le logo et le texte)
     r5 = gl.Renderer(ctx, size, None)
     r5.add_doodle(half, time.monotonic() - 5.0)
@@ -15607,7 +15773,7 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
@@ -15620,7 +15786,7 @@ SUITE = (
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
     "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
-    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
+    "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
     "check_groupes",
 )
@@ -15635,7 +15801,7 @@ GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
                "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_rd_cover", "check_kaleidoscope_frame"),
+               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel"),
