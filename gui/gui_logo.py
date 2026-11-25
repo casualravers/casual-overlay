@@ -241,8 +241,8 @@ def install(c):
         "L'interieur des lettres est colonise par un motif organique (reaction-diffusion) qui joue sur la luminosite : la couleur du texte ne change pas. "
         "Il repart de zero au rallumage de la vague (si elle est cochee), a chaque nouveau texte, sinon toutes les N secondes. Source Texte seulement. "
         "Coupe par defaut ; la panique (X) le coupe.",
-        (("Vitesse", "text_fill_speed", 0.3, 3.0, 0.1, "Vitesse de colonisation des lettres."),
-         ("Finesse", "text_fill_scale", 0.5, 2.5, 0.1, "Finesse du motif : grand = motif plus fin (grille plus dense)."),
+        (("Vitesse", "text_fill_speed", 0.2, 1.0, 0.05, "Vitesse de colonisation des lettres. Le motif se fige une fois forme (~6 s a vitesse 1) : plus aucun calcul jusqu'a la remise a zero."),
+         ("Finesse", "text_fill_scale", 0.5, 1.5, 0.05, "Finesse du motif : grand = motif plus fin (grille plus dense, donc plus couteux pendant la colonisation)."),
          ("Contraste", "text_fill_contrast", 0.0, 1.0, 0.05, "Ecart de luminosite entre les zones claires et sombres des lettres."),
          ("Remise a zero", "text_fill_every", 5.0, 120.0, 1.0, "Sans la vague : le motif repart de zero toutes les N secondes.")))
 

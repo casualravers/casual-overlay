@@ -74,10 +74,14 @@ class OlaClock:
         return tau, relight
 
 
-FILL_GRID_BASE = 256                 # cote long de la grille de simulation a l'echelle 1 (cellules)
-FILL_GRID_MIN, FILL_GRID_MAX = 128, 640
-FILL_STEPS_PER_S = 480.0             # pas de Gray-Scott par seconde a vitesse 1 : un texte est colonise en ~1 a 2 s
+FILL_GRID_BASE = 2048                # cote long de la grille de simulation a l'echelle 1 (cellules) : motif fin, choisi sur maquette
+FILL_GRID_MIN, FILL_GRID_MAX = 256, 3072
+FILL_STEPS_PER_S = 1440.0            # pas de Gray-Scott par seconde a vitesse 1 (24 par image a 60 Hz, le plafond)
 FILL_MAX_STEPS = 24                  # plafond par image (l'exces est jete : pas de retard qui s'accumule)
+FILL_SETTLE_STEPS = 9000             # pas apres lesquels le motif est fige jusqu'a la remise a zero suivante (~6 s a vitesse 1) : le cout retombe a zero
+FILL_SHAPE = 1.5                     # forme du motif (axe 0..2 de core.reaction.shape_feed_kill) : entre lignes et taches, corail
+FILL_DIFF = 0.20                     # facteur sur les diffusions de Gray-Scott : plus petit = motif plus petit
+FILL_SEED_BLOCK = 24                 # un germe par bloc de N x N cellules du masque (colonisation reguliere, aucune zone oubliee)
 
 
 def fill_grid_size(aspect: float, scale: float) -> tuple[int, int]:

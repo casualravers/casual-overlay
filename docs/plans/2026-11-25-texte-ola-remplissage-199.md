@@ -111,3 +111,8 @@ Rien n'est coche par defaut : le rendu est celui d'avant.
 
 Rendu et lisibilite au projecteur dans le noir ; le rythme de 3 s de balayage et 20 s de periode a l'echelle d'une vraie soiree ; cout de la
 simulation sur le PC de soiree ; videos enregistrees en format vertical regardees a l'oeil.
+
+## Evolutions apres essai (2026-11-25, retours de l'utilisateur sur maquettes rendues par le vrai moteur)
+
+- **Vague** : trop rapide, ralentie de moitie : `text_ola_dur` 6 s (3 s a l'origine), `text_ola_fade` 1 s.
+- **Remplissage** : le motif de la premiere version etait invisible (trop gros, trop doux). Apres quatre planches, retenu : **grille 2048 cellules de large, forme 1,5 (corail), diffusion x0,20**, contraste 0,9. Le motif se fige apres ~6 s (cout +13,9 ms seulement pendant la colonisation, +0,2 ms ensuite). `text_fill_scale` 0,5 a 1,5 ; `text_fill_speed` 0,2 a 1. Ces valeurs remplacent celles de la table ci-dessus (grille 256, contraste 0,6, vitesse 0,3 a 3, echelle 0,5 a 2,5).

@@ -7,6 +7,7 @@
 // bilineaire melangerait un peu de V dans les cellules hors des lettres (observe avec le rendu logiciel de la CI).
 uniform sampler2D u_state;
 uniform vec2 u_fk;             // (F, K) du modele
+uniform float u_diff;          // facteur sur les deux diffusions : < 1 = motif plus petit (l'echelle du motif suit sa racine carree)
 
 out vec4 f_color;
 
@@ -37,7 +38,7 @@ void main() {
     float u = c.r;
     float v = c.g;
     float uvv = u * v * v;
-    u += lap.r - uvv + u_fk.x * (1.0 - u);
-    v += 0.5 * lap.g + uvv - (u_fk.x + u_fk.y) * v;
+    u += u_diff * lap.r - uvv + u_fk.x * (1.0 - u);
+    v += 0.5 * u_diff * lap.g + uvv - (u_fk.x + u_fk.y) * v;
     f_color = vec4(clamp(u, 0.0, 1.0), clamp(v, 0.0, 1.0), 1.0, 1.0);
 }

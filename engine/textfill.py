@@ -7,7 +7,6 @@ cree quand la case est cochee avec la source Texte, detruit sinon.
 """
 from __future__ import annotations
 
-from collections import deque
 from pathlib import Path
 
 from core import reaction as rc
@@ -16,8 +15,6 @@ from engine.deps import moderngl, np
 
 MASK_MIN = 0.25                       # part d'une cellule couverte par une lettre pour qu'elle compte dans le masque
 SEED_RADIUS = 2.0                     # rayon d'un germe, en cellules
-CELLS_PER_SEED = 400                  # un germe de plus par tranche de cellules d'une lettre (au moins un par morceau connexe)
-MAX_SEEDS = 120
 
 
 def reduce_mask(alpha, size: tuple[int, int]):
@@ -25,38 +22,23 @@ def reduce_mask(alpha, size: tuple[int, int]):
     d'alpha le sont. `alpha` : tableau (H, W) uint8, haut en premier."""
     gw, gh = size
     H, W = alpha.shape
-    gw, gh = min(gw, W), min(gh, H)
-    ey = np.linspace(0, H, gh + 1).astype(np.int64)
-    ex = np.linspace(0, W, gw + 1).astype(np.int64)
-    sums = np.add.reduceat(np.add.reduceat(alpha.astype(np.float32), ey[:-1], axis=0), ex[:-1], axis=1)
-    area = np.outer(np.diff(ey), np.diff(ex)).astype(np.float32)
-    return (sums / np.maximum(area, 1.0)) >= MASK_MIN * 255.0
-
-
-def components(mask) -> list:
-    """Morceaux connexes (4 voisins) du masque : liste de tableaux d'indices a plat. Un par lettre (ou par groupe de lettres qui se touchent)."""
-    h, w = mask.shape
-    flat = mask.ravel().tolist()
-    seen = [False] * (h * w)
-    out = []
-    for start in range(h * w):
-        if not flat[start] or seen[start]:
-            continue
-        seen[start] = True
-        queue, cells = deque([start]), []
-        while queue:
-            i = queue.popleft()
-            cells.append(i)
-            x = i % w
-            for j in ((i - 1) if x > 0 else -1, (i + 1) if x < w - 1 else -1, i - w, i + w):
-                if 0 <= j < h * w and flat[j] and not seen[j]:
-                    seen[j] = True
-                    queue.append(j)
-        out.append(np.asarray(cells, dtype=np.int64))
-    return out
+    # image integrale : somme de l'alpha sur le bloc de pixels de chaque cellule ; une cellule plus petite qu'un pixel du texte (grille plus
+    # fine que la texture) prend le pixel qui la contient
+    integral = np.zeros((H + 1, W + 1), np.float64)
+    integral[1:, 1:] = alpha.astype(np.float64).cumsum(axis=0).cumsum(axis=1)
+    y0 = np.floor(np.arange(gh) * H / gh).astype(np.int64)
+    y1 = np.minimum(np.maximum(np.ceil((np.arange(gh) + 1) * H / gh).astype(np.int64), y0 + 1), H)
+    x0 = np.floor(np.arange(gw) * W / gw).astype(np.int64)
+    x1 = np.minimum(np.maximum(np.ceil((np.arange(gw) + 1) * W / gw).astype(np.int64), x0 + 1), W)
+    sums = (integral[np.ix_(y1, x1)] - integral[np.ix_(y0, x1)] - integral[np.ix_(y1, x0)] + integral[np.ix_(y0, x0)])
+    area = np.outer(y1 - y0, x1 - x0).astype(np.float64)
+    return (sums / area) >= MASK_MIN * 255.0
 
 
 class TextFill:
+    SHAPE = textfx.FILL_SHAPE          # forme du motif (axe 0..2 de core.reaction.shape_feed_kill : points, lignes, taches)
+    DIFF = textfx.FILL_DIFF            # facteur de diffusion : plus petit = motif plus petit
+
     def __init__(self, ctx, vbo, shader_dir: Path):
         self.ctx = ctx
         vert = (shader_dir / "quad.vert").read_text(encoding="utf-8")
@@ -69,7 +51,7 @@ class TextFill:
         self.size: tuple[int, int] | None = None
         self.dtype = "f4"
         self.mask = None
-        self.comps: list = []
+        self.steps_done = 0                                # pas faits depuis la derniere remise a zero (le motif se fige apres FILL_SETTLE_STEPS)
         self.key = None                                    # (identifiant du texte, echelle arrondie) de la grille construite
 
     @property
@@ -83,7 +65,7 @@ class TextFill:
 
     def release(self) -> None:
         self._release()
-        self.mask, self.comps, self.size, self.key = None, [], None, None
+        self.mask, self.size, self.key = None, None, None
 
     def set_mask(self, alpha, scale: float, key) -> bool:
         """Construit la grille et le masque pour ce texte (`alpha` : (H, W) uint8) a cette echelle ; sans effet si `key` est deja celui de
@@ -92,7 +74,6 @@ class TextFill:
             return False
         H, W = alpha.shape
         gw, gh = textfx.fill_grid_size(W / max(H, 1), scale)
-        gw, gh = min(gw, W), min(gh, H)
         self._release()
         for dtype in ("f4", "f2"):
             try:
@@ -107,29 +88,30 @@ class TextFill:
             t.filter = (moderngl.LINEAR, moderngl.LINEAR)
             t.repeat_x = t.repeat_y = False
         self.mask = reduce_mask(alpha, (gw, gh))
-        self.comps = components(self.mask)
         return True
 
     def reset(self, seed: int) -> None:
-        """Etat initial : U = 1, V = 0 dans les lettres, et des germes (disques) places au hasard (graine) : au moins un par morceau
-        connexe du masque, plus un par tranche de CELLS_PER_SEED cellules."""
+        """Etat initial : U = 1, V = 0 dans les lettres, et des germes (disques) : un par bloc de FILL_SEED_BLOCK x FILL_SEED_BLOCK cellules
+        du masque, a une position tiree au hasard (graine). Aucune zone d'une lettre n'est loin d'un germe (pas de plage blanche), et un
+        morceau de lettre plus petit qu'un bloc a quand meme le sien."""
         if not self.tex or self.mask is None:
             return
         gw, gh = self.size
         rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
         u = np.ones((gh, gw), np.float32)
         v = np.zeros((gh, gw), np.float32)
-        picks = []
-        for cells in self.comps:
-            k = 1 + len(cells) // CELLS_PER_SEED
-            picks.extend(rng.choice(cells, size=min(k, len(cells)), replace=False).tolist())
-        if len(picks) > MAX_SEEDS:
-            picks = rng.permutation(picks)[:MAX_SEEDS].tolist()
-        yy, xx = np.mgrid[0:gh, 0:gw]
-        for i in picks:
-            cy, cx = divmod(int(i), gw)
+        ys, xs = np.nonzero(self.mask)
+        order = rng.permutation(len(ys))
+        ys, xs = ys[order], xs[order]
+        block = textfx.FILL_SEED_BLOCK
+        _, first = np.unique((ys // block) * (gw // block + 2) + xs // block, return_index=True)
+        r = int(SEED_RADIUS)
+        for cy, cx in zip(ys[first].tolist(), xs[first].tolist()):
+            y0, y1, x0, x1 = max(cy - r, 0), min(cy + r + 1, gh), max(cx - r, 0), min(cx + r + 1, gw)
+            yy, xx = np.mgrid[y0:y1, x0:x1]
             disc = (xx - cx) ** 2 + (yy - cy) ** 2 <= SEED_RADIUS ** 2
-            u[disc], v[disc] = 0.5, 0.5
+            u[y0:y1, x0:x1][disc], v[y0:y1, x0:x1][disc] = 0.5, 0.5
+        self.steps_done = 0
         m = self.mask.astype(np.float32)
         u, v = np.where(self.mask, u, 1.0), np.where(self.mask, v, 0.0)
         data = np.stack([u, v, m, np.ones_like(m)], axis=2).astype(np.float16 if self.dtype == "f2" else np.float32)
@@ -137,14 +119,17 @@ class TextFill:
             t.write(np.ascontiguousarray(data).tobytes())
         self.cur = 0
 
-    def step(self, n: int, shape: float = 1.0) -> None:
-        """`n` pas Gray-Scott. `shape` (axe 0..2 de `core.reaction.shape_feed_kill`) : 1 = lignes, qui colonisent un espace ferme."""
+    def step(self, n: int, shape: float | None = None, diff: float | None = None) -> None:
+        """`n` pas Gray-Scott. `shape` (axe 0..2 de `core.reaction.shape_feed_kill`, defaut `SHAPE`) et `diff` (facteur de diffusion, defaut `DIFF`)."""
         if n <= 0 or not self.tex:
             return
+        shape = self.SHAPE if shape is None else shape
+        diff = self.DIFF if diff is None else diff
         prev = self.ctx.fbo
         w, h = self.size
         self.prog["u_state"].value = 0
         self.prog["u_fk"].value = rc.shape_feed_kill(shape)
+        self.prog["u_diff"].value = float(diff)
         for _ in range(n):
             dst = 1 - self.cur
             self.fbo[dst].viewport = (0, 0, w, h)
@@ -152,8 +137,14 @@ class TextFill:
             self.tex[self.cur].use(0)
             self.vao.render(moderngl.TRIANGLE_STRIP)
             self.cur = dst
+        self.steps_done += n
         if prev is not None:
             prev.use()
+
+    @property
+    def settled(self) -> bool:
+        """Vrai quand le motif a fait ses FILL_SETTLE_STEPS pas : il est fige (aucun calcul) jusqu'a la prochaine remise a zero."""
+        return self.steps_done >= textfx.FILL_SETTLE_STEPS
 
     def read(self):
         """Etat (h, w, 4) float32, haut en premier (tests)."""

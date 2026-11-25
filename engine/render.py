@@ -508,7 +508,8 @@ class Renderer:
             tf.reset(self._fill_seed)
         slow = bool(self.perf is not None and self.perf.active)
         n, self._fill_acc = fill_steps(self._fill_acc, dt, float(p["text_fill_speed"]), slow)
-        tf.step(n)
+        if not tf.settled:                                                   # motif fige apres ses pas : plus aucun calcul jusqu'a la remise a zero
+            tf.step(n)
         if not tf.tex:                                                       # allocation impossible : pas d'effet plutot qu'une erreur
             self._set(sp, "u_fill_k", (0.0, 0.0))
             self._fill_dummy.use(3)
@@ -1459,7 +1460,7 @@ class PerfGuard:
 
     HIGH, LOW, HOLD_S, ALPHA = 0.90, 0.80, 2.0, 0.2
     # (cle de reglage, libelle, touche), du plus cher au moins cher (mesure : cellules > halo > fonte)
-    COSTLY = (("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"), ("text_fill_on", "remplissage du texte"))
+    COSTLY = (("text_fill_on", "remplissage du texte"), ("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"))
 
     def __init__(self, refresh_hz: float) -> None:
         self.budget_ms = 1000.0 / max(min(float(refresh_hz or 60.0), 60.0), 20.0)

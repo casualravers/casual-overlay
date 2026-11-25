@@ -2363,7 +2363,8 @@ def check_text_fill() -> None:
     r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
     quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
     base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
-                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_fill_contrast=1.0)
+                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_fill_contrast=1.0,
+                text_fill_scale=0.5)                                                 # grille de 1024 : les tests de rendu restent rapides (le defaut est 2048)
     clock = [300.0]
 
     def frames(n, rr=None, **kw):
@@ -2376,7 +2377,7 @@ def check_text_fill() -> None:
     ref = frames(2)
     check(r.text_fill is None, "remplissage: case decochee = aucune simulation creee")
     inside = ref > 200
-    on = frames(150, text_fill_on=1.0)                                               # ~2,5 s : de quoi coloniser un texte
+    on = frames(300, text_fill_on=1.0)                                               # ~5 s : de quoi coloniser un texte
     tf = r.text_fill
     check(tf is not None and tf.tex, "remplissage: la simulation existe quand la case est cochee (source Texte)")
     st = tf.read()
@@ -2384,7 +2385,7 @@ def check_text_fill() -> None:
     check(float(st[..., 1][~mask].max(initial=0.0)) == 0.0, "remplissage: aucune matiere (V) hors des lettres : le masque est un mur",
           f"max hors masque {float(st[..., 1][~mask].max(initial=0.0)):.4f}")
     colonised = float((st[..., 1][mask] > 0.05).mean())
-    check(colonised > 0.4, "remplissage: le motif colonise l'interieur des lettres en ~2,5 s", f"{colonised:.2f}")
+    check(colonised > 0.4, "remplissage: le motif colonise l'interieur des lettres en ~5 s", f"{colonised:.2f}")
     check(int(on[ref == 0].sum()) == 0, "remplissage: aucun pixel allume hors des lettres")
     vals = on[inside]
     check(vals.min() < 0.7 * vals.max() and on.sum() < ref.sum(), "remplissage: zones claires et sombres dans les lettres (contraste 1), jamais plus claires que le texte",
@@ -2398,16 +2399,33 @@ def check_text_fill() -> None:
     st2 = r.text_fill.read()
     young = float((st2[..., 1][r.text_fill.mask] > 0.05).mean())
     check(young < 0.2, "remplissage: un nouveau texte repart de zero (germes neufs)", f"{young:.2f}")
-    frames(150, text_fill_on=1.0)
+    frames(300, text_fill_on=1.0)
     st3 = r.text_fill.read()
     check(float((st3[..., 1][r.text_fill.mask] > 0.05).mean()) > 0.4, "remplissage: le nouveau texte est colonise a son tour")
+    # motif fige apres ses pas : plus aucun calcul (etat identique d'une image a l'autre) jusqu'a la remise a zero
+    from core import textfx as _tfx
+    keep = _tfx.FILL_SETTLE_STEPS
+    _tfx.FILL_SETTLE_STEPS = 300
+    try:
+        r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
+        frames(30, text_fill_on=1.0)                                                 # 30 images x 24 pas > 300 : fige
+        tfz = r.text_fill
+        done, state = tfz.steps_done, tfz.read().tobytes()
+        frames(10, text_fill_on=1.0)
+        check(tfz.settled and tfz.steps_done == done and tfz.read().tobytes() == state,
+              "remplissage: le motif se fige apres ses pas (aucun calcul, etat inchange) jusqu'a la remise a zero", f"{done} pas")
+        r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
+        frames(2, text_fill_on=1.0)
+        check(not r.text_fill.settled and r.text_fill.steps_done < 100, "remplissage: un nouveau texte relance la simulation (compteur de pas remis a zero)")
+    finally:
+        _tfx.FILL_SETTLE_STEPS = keep
     # remise a zero periodique sans vague
     r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
-    frames(150, text_fill_on=1.0, text_fill_every=5.0)
+    frames(300, text_fill_on=1.0, text_fill_every=8.0)
     full = float((r.text_fill.read()[..., 1][r.text_fill.mask] > 0.05).mean())
     seed0 = r._fill_seed
-    frames(60 * 6, text_fill_on=1.0, text_fill_every=5.0, text_fill_speed=0.3)
-    check(full > 0.3 and r._fill_seed == seed0 + 1, "remplissage: sans vague, une remise a zero apres N = 5 s (une seule en 6 s)", f"{full:.2f} {r._fill_seed - seed0}")
+    frames(60 * 6, text_fill_on=1.0, text_fill_every=8.0, text_fill_speed=0.3)
+    check(full > 0.3 and r._fill_seed == seed0 + 1, "remplissage: sans vague, une remise a zero apres N = 8 s (une seule en 11 s)", f"{full:.2f} {r._fill_seed - seed0}")
     # cumul avec la vague : les lettres eteintes le restent
     ola = frames(1, text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)
     mid = frames(90, text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)                            # 1,5 s apres l'activation de la vague : mi-balayage
@@ -12565,13 +12583,13 @@ def check_textfx() -> None:
     check(abs(total - tf.FILL_STEPS_PER_S) <= 1, "remplissage: a vitesse 1, FILL_STEPS_PER_S pas par seconde", str(total))
     t2, acc2 = 0, 0.0
     for _ in range(60):
-        n, acc2 = tf.fill_steps(acc2, 1 / 60, 2.0, False)
+        n, acc2 = tf.fill_steps(acc2, 1 / 60, 0.5, False)
         t2 += n
     t3, acc3 = 0, 0.0
     for _ in range(60):
         n, acc3 = tf.fill_steps(acc3, 1 / 60, 1.0, True)
         t3 += n
-    check(t2 > 1.8 * total and t3 <= total // 2 + 1 and t3 >= 1, "remplissage: la vitesse multiplie les pas, le GPU charge les divise par deux (au moins 1)", f"{total} {t2} {t3}")
+    check(abs(t2 - total / 2) <= 2 and t3 <= total // 2 + 1 and t3 >= 1, "remplissage: la vitesse multiplie les pas (0,5 = moitie), le GPU charge les divise par deux (au moins 1)", f"{total} {t2} {t3}")
     check(tf.fill_steps(0.0, 5.0, 3.0, False)[0] == tf.FILL_MAX_STEPS, "remplissage: pas par image plafonnes (pas de retard qui s'accumule)")
 
     # ---- table des reglages
@@ -12582,8 +12600,8 @@ def check_textfx() -> None:
           "texte: neuf reglages (vague et remplissage), portee look : presets overlay et scenes")
     d = {k: ps.BY_KEY[k].default for k in keys}
     check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (6.0, 20.0, 1.0)
-          and (d["text_fill_speed"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_every"]) == (1.0, 1.0, 0.6, 20.0),
-          "texte: rien n'est coche par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; contraste 0,6)", str(d))
+          and (d["text_fill_speed"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_every"]) == (1.0, 1.0, 0.9, 20.0),
+          "texte: rien n'est coche par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; contraste 0,9 comme la maquette validee)", str(d))
     # ---- presets overlay, scenes, panique, securite GPU
     from core import safety, scenes as sc
     pr = dict(gl.DEFAULT_PARAMS, **dict({k: ps.BY_KEY[k].default for k in keys}, text_ola_on=1.0, text_fill_on=1.0, text_fill_contrast=0.9))
@@ -12597,12 +12615,12 @@ def check_textfx() -> None:
     check(pn["text_ola_on"] == 0.0 and pn["text_fill_on"] == 0.0 and "text_ola_on" in changed and pn["text_fill_contrast"] == 0.9,
           "texte: la panique coupe la vague et le remplissage (leurs reglages restent)")
     cost = dict((k, ms) for k, _l, ms in safety.EFFECT_COST_MS)
-    check(0.2 <= cost.get("text_fill_on", 0.0) <= 1.5 and cost["cell_on"] > cost["text_fill_on"],
-          "texte: le remplissage est un effet couteux declare (mesure +0,2 a +0,8 ms a 1080p), apres les cellules dans l'ordre de coupe", str(cost))
+    check(cost.get("text_fill_on", 0.0) >= 10.0 and cost["text_fill_on"] > cost["cell_on"] and safety.EFFECT_COST_MS[0][0] == "text_fill_on",
+          "texte: le remplissage est l'effet le plus couteux declare (mesure +13,9 ms a 1080p pendant la colonisation, +0,2 ms une fois fige), le premier coupe", str(cost))
     out_vals, dropped = safety.cap_values({"text_fill_on": 1.0}, {"text_fill_on": 0.0}, gpu_ms=16.0, budget_ms=16.7)
     check(out_vals.get("text_fill_on") == 0.0 and "remplissage du texte" in dropped,
           "texte: une scene qui allume le remplissage est allegee quand le GPU est charge", str(dropped))
-    check(any(k == "text_fill_on" for k, _l in __import__("engine.render", fromlist=["PerfGuard"]).PerfGuard.COSTLY),
+    check(__import__("engine.render", fromlist=["PerfGuard"]).PerfGuard.COSTLY[0][0] == "text_fill_on",
           "texte: PerfGuard cite le remplissage dans son conseil quand le GPU est trop charge")
 
 
