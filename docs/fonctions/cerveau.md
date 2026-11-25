@@ -278,6 +278,11 @@ verrou avec le rendu). Les vues construites sont gardees (plus de gel au retour 
   fige »). Un nouvel usage des pas passe par `placed_step`, pas par `step_of(e.t, ...)`.
 - Deux horloges : `next_scene_at` en temps mur (fil Tk), le reste en temps du son ; `phase_since` 0,0 = inconnu.
 - Un evenement d'effet par front montant (`FxEdge`), sinon un evenement par image et le journal deborde (`MAX_EVENTS`).
+- **Deux ordres d'effets** : les vecteurs audio (`au_bg_fx`, `u_au_*[i]`) suivent `core.audio_layers.EFFECTS` (wobble, ripple, glitch,
+  chroma), les interrupteurs (`fx_on` / `fxl_on`, `layer_effects`, `u_fx_*`) suivent `core.params.FX_NAMES` (wobble, onde, aberration,
+  glitch). `_brain_publish` gatait `vecs[i]` avec `on[i]` : le glitch suivait l'interrupteur de l'aberration et inversement (un effet coupe
+  apparaissait actif dans le cerveau). Il prend maintenant `on[FX_NAMES.index(name)]`, comme `layer_fx` dans `post.frag` (fx.z <-> au[3],
+  fx.w <-> au[2]). Test : « interrupteur 2 coupe -> chroma absent, glitch publie » (et l'inverse) dans `check_brain_engine`.
 - Les reglages `brain_*` en portee « salle » passaient dans les memoires de masters et l'auto-sauvegarde : portee `device` + `brain_ui.json`.
 - Tk n'a pas d'alpha : melange vers la teinte de la phase ; quand la phase change, les couleurs posees sont reecrites (signature `bg`).
 - Le cout reel n'est pas `brain.tick` seul : le redessin du canvas (hors tick) et l'attente du verrou Python comptent (voir Budget).
