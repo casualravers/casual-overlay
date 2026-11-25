@@ -96,6 +96,15 @@ anneau, cases a coche, listes a chevron, curseurs a poignee d'accent, titres de 
   redimensionnement, radio / case / curseur / champ / liste / titre, idempotence, widget a image, deuxieme racine Tk, fichiers embarques
   dans le portable ; le reste de la suite (hauteur sous 700 px, info-bulles, mise en page, gates) verifie que rien n'a casse.
 
+### Routage audio par effet : onglet « Routage » et pastilles (#198, [gui_routing.py](../../gui/gui_routing.py))
+
+Moteur et reglages : `docs/fonctions/audio.md` (section Routage audio par effet). Deux endroits, UNE donnee (`rt_<id>`, `rg_<id>`) :
+- **Pastille** (`Routing.pill`) a cote du curseur d'intensite de chaque effet (onglet Effets, colonne 3 ; couche logo dans « Effets sur le logo »). Largeur fixe (`routing.PILL_CHARS` caracteres, police 9) : grise « Comme le fond » par defaut, a l'accent « Basses 80 % » quand la ligne est reglee, encore plus terne si l'effet est coupe ou sa reaction a 0 (`routing.line_enabled`). Clic = menu des sources par familles (Reglage, Niveaux, Bandes, Rythme, Structure : `SOURCE_FAMILIES`) + sous-menu Dosage (0 a 200 %). Dessinee par le module (`_noskin` : le skin en ferait un champ de liste).
+- **Onglet Routage** (7e onglet OVERLAY, `Routing.build_tab`) : mini-spectre 20 Hz - 20 kHz (echelle log) qui surligne la plage de la ligne survolee ou dit « evenement, pas une bande » (kick, grilles...) ; puis Fond / Logo / Global : libelle, pastille (sans dosage), temoin de niveau (`s.status["routes_now"]`, rafraichi toutes les 250 ms par `ui_every("routage")`), curseur de dosage 0..2, bouton de remise a zero ; « Tout remettre » par zone. Strobe, foudre, noise : une ligne de texte (ils decident seuls).
+- **Variables partagees** : `Routing.vars(rid)` reprend la variable deja liee dans `synced` (sinon la cree et la lie avec `bind_param`) : pastille et tableau editent la meme variable, et l'application d'une scene (qui ecrit `synced`) met les deux a jour.
+- **Logo lie** : ses 4 effets du shader affichent « Suit le fond » (le moteur lit la ligne du fond) ; ses reactions (pulsation...) gardent leur ligne.
+`check_gl.py` : `check_routage_gui` (fenetre Tk isolee, `gui_routing.stub_context`) ; `check_gui` (onglets, pastilles des 8 effets liees au tableau). **Non verifie** : lisibilite au videoprojecteur / en soiree.
+
 ### GUI (`--gui`, [gl_gui.py](../../gui/gl_gui.py))
 
 **La partie Live n'est pas reecrite : c'est la fenetre de reglages d'`audio2wave_live.py`

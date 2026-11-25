@@ -97,6 +97,12 @@ def install(c):
     fx_on_vars: list[tk.IntVar] = []
     fx_int_vars: list[tk.DoubleVar] = []
     fx_labels = ("Wobble", "Onde de choc", "Aberration chromatique", "Glitch", "Logo (pulse/contour)")
+    routing = getattr(c, "routing", None)                 # routage audio par effet (#198) : pastille de source a cote de chaque effet
+    ROUTE_OF_FX = ("wobble", "ripple", "chroma", "glitch")   # ordre des interrupteurs fx_on (different de audio_layers.EFFECTS)
+
+    def route_pill(parent, row, prefix, i):
+        if routing is not None and i < len(ROUTE_OF_FX):
+            routing.pill(parent, f"{prefix}_{ROUTE_OF_FX[i]}").grid(row=row, column=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     fx_tips = ("Ondulation de l'image, amplitude = basses.",
                "Onde de choc depuis le centre : sur le 1er temps de chaque mesure ou a chaque kick (menu « Onde de choc sur » juste dessous).",
                "Canaux R/V/B decales depuis le centre au kick.",
@@ -115,6 +121,7 @@ def install(c):
         int_var.trace_add("write", lambda *_a, i=i, v=int_var: params["fx_int"].__setitem__(i, _safe(v, 1.0)))
         compact_scale(tab_fx, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         add_auto(zone_fx, r, f"fx_int{i}", int_var)
+        route_pill(tab_fx, r, "bg", i)
 
     r = zone_fx.next_row()                         # quand part l'onde de choc : 1er temps de la mesure (defaut) ou chaque kick
     tk.Label(tab_fx, text="Onde de choc sur").grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
@@ -169,6 +176,7 @@ def install(c):
         compact_scale(logo_fx_box, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX,
                                                                   pady=ROW_PADY)
         add_auto(lz, r, f"fxl_int{i}", int_var)
+        route_pill(logo_fx_box, r, "lg", i)
     # « Logo (pulse/contour) » (5e effet) n'a pas de pendant cote fond : fx_on[4] / fx_int[4] ne pilotent que le logo. Meme case et meme curseur
     # ici (variables partagees avec la liste du dessus, pas de nouvel etat) : sans elles, decocher toute cette section laissait le logo
     # pulser, trembler et briller au son sans que rien n'indique ou le couper (#197).

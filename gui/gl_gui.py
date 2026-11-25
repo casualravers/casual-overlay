@@ -49,6 +49,7 @@ import skin
 import theme
 import gui_fond
 import gui_effects
+import gui_routing
 import gui_logo
 import gui_bar
 import gui_palette
@@ -1151,6 +1152,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     tab_fx, tab_logo = new_tab("Effets"), new_tab("Logo")
     tab_aura, tab_melt = new_tab("Aura du logo"), new_tab("Fonte du logo")
     tab_cell, tab_noise = new_tab("Cellules"), new_tab("Noise")
+    tab_routing = new_tab("Routage")                # routage audio par effet (#198) : tout ce qui reagit au son, ligne par ligne
     # « Affichage et analyse » (entree d'analyse, plein ecran, diagnostic, mesures...) est un reglage de la projection, pas de l'overlay :
     # onglet « Affichage » de l'espace de controle global du Mode VJ. Le contenu est construit ici (parent persistant : la barre) puis
     # pose dans l'onglet a sa premiere selection (`pack(in_=...)`, comme le panneau lui-meme).
@@ -1392,7 +1394,11 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     fit()
 
     # ---- colonne A : EFFETS
+    # Routage audio par effet (#198) : memes variables pour les pastilles (a cote des effets) et l'onglet Routage
+    routing_ui = gui_routing.install(types.SimpleNamespace(params=params, synced=synced, bind_param=bind_param, Tooltip=Tooltip, s=s,
+                                                           ui_every=ui_every))
     gui_effects_ctl = gui_effects.install(types.SimpleNamespace(
+        routing=routing_ui,
         ROW_PADX=ROW_PADX,
         ROW_PADY=ROW_PADY,
         SECTION_GAP=SECTION_GAP,
@@ -1438,6 +1444,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     sens_var = gui_effects_ctl.sens_var
     tk.Label(tab_noise, text="Indicateur : ce que le noise envoie aux effets coches.", fg=a2w.GUI_MUTED_FG,
              anchor="w").grid(row=zone_noise.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX)
+    routing_ui.build_tab(tab_routing, Zone(tab_routing), add_separator, compact_scale, ROW_PADX, ROW_PADY)
 
     # ---- colonne B : LOGO
     gui_logo_ctl = gui_logo.install(types.SimpleNamespace(
@@ -2648,7 +2655,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "root": root, "live_host": panel["frame"], "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "aff_toggle": toggle_aff, "aff_frame": aff_outer, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "mosaic_var": mosaic_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "routing": routing_ui, "aff_toggle": toggle_aff, "aff_frame": aff_outer, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "mosaic_var": mosaic_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
             "live_wrap": live_wrap, "right_panel": right_wrap, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,
