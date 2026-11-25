@@ -2453,6 +2453,37 @@ def check_fuzz() -> None:
     check(len(fuzz.describe(long_case)) <= fuzz.DESCRIBE_MAX + 3, "fuzz: describe est plafonne")
 
 
+def check_planche() -> None:
+    """Planche de preuves (#195) : recettes de rendu assemblees en une planche PNG (tools/planche.py)."""
+    print("Planche de preuves")
+    import subprocess
+    import tempfile
+    from PIL import Image
+    from engine import textfill
+    from tools import planche
+    from tools.planches import Cas, Recette
+
+    check("texte-remplissage" in planche.lister(), "planche: la recette texte-remplissage est listee", str(planche.lister()))
+    base = dict(text_scale=0.5, text_fill_on=0.0, text_ola_on=0.0, text_border=0.0)
+    mini = Recette("mini", "AB", (320, 120), base,
+                   [Cas("petit", {"text_scale": 0.3}, 0.0, None), Cas("grand", {"text_scale": 0.9}, 0.0, (0, 0, 80, 40))], None)
+    saved = textfill.tile_cache_path
+    with tempfile.TemporaryDirectory() as tmp:
+        out = planche.rendre(mini, Path(tmp) / "mini.png")
+        img = Image.open(out).convert("RGB")
+        arr = np.asarray(img).astype(int)
+        check(out.exists() and img.size == (320, 2 * (120 + planche.BANDE)) and float(arr.std()) > 5.0,
+              "planche: une recette minimale ecrit un PNG non vide : une ligne par cas, de la largeur de la recette", f"{img.size}")
+        top = arr[planche.BANDE:planche.BANDE + 120]
+        bottom = arr[2 * planche.BANDE + 120:]
+        check(float(np.abs(top - bottom).mean()) > 1.0, "planche: deux cas aux reglages differents donnent deux images differentes")
+        zoom = Path(tmp) / "mini_zoom.png"
+        check(zoom.exists() and Image.open(zoom).size == (240, 120), "planche: un cas avec zoom ecrit aussi <nom>_zoom.png (agrandi x3)")
+    check(textfill.tile_cache_path is saved, "planche: le cache disque de la tuile du texte est restaure apres le rendu")
+    run = subprocess.run([sys.executable, str(ROOT / "tools" / "planche.py"), "inconnue"], capture_output=True, text=True, timeout=120)
+    check(run.returncode == 2 and "recette inconnue : inconnue" in run.stderr, "planche: une recette inconnue echoue (code 2) avec son nom", f"{run.returncode} {run.stderr[-120:]}")
+
+
 def check_text_border() -> None:
     """Fine bordure noire autour du texte (#199), rendu : un anneau noir EXTERIEUR aux lettres, d'epaisseur reglable, qui s'eteint avec la
     vague de lettres ; 0 = image comme avant ; jamais sur un logo image."""
@@ -15910,7 +15941,7 @@ PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_planche", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
