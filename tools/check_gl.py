@@ -2293,7 +2293,8 @@ def check_text_ola() -> None:
     r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
     quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
     base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
-                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_ola_on=1.0)
+                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_ola_on=1.0,
+                text_ola_dur=3.0, text_ola_fade=0.5)                                 # le test fixe son propre balayage (le defaut est plus lent)
 
     def lum(img):
         return img.astype(int)[..., :3].sum(axis=2)
@@ -2408,8 +2409,8 @@ def check_text_fill() -> None:
     frames(60 * 6, text_fill_on=1.0, text_fill_every=5.0, text_fill_speed=0.3)
     check(full > 0.3 and r._fill_seed == seed0 + 1, "remplissage: sans vague, une remise a zero apres N = 5 s (une seule en 6 s)", f"{full:.2f} {r._fill_seed - seed0}")
     # cumul avec la vague : les lettres eteintes le restent
-    ola = frames(1, text_fill_on=1.0, text_ola_on=1.0)
-    mid = frames(90, text_fill_on=1.0, text_ola_on=1.0)                              # 1,5 s apres l'activation de la vague : mi-balayage
+    ola = frames(1, text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)
+    mid = frames(90, text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)                            # 1,5 s apres l'activation de la vague : mi-balayage
     check(mid.sum() < 0.05 * max(ola.sum(), 1) or mid.sum() < 0.05 * ref.sum(), "remplissage + vague : les lettres eteintes restent eteintes", f"{mid.sum() / ref.sum():.3f}")
     # case decochee : la simulation est detruite, image identique a avant
     off = frames(2, text_fill_on=0.0, text_ola_on=0.0)
@@ -12580,9 +12581,9 @@ def check_textfx() -> None:
     check(all(s is not None for s in spec) and all(s.scope == "look" for s in spec),
           "texte: neuf reglages (vague et remplissage), portee look : presets overlay et scenes")
     d = {k: ps.BY_KEY[k].default for k in keys}
-    check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (3.0, 20.0, 0.5)
+    check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (6.0, 20.0, 1.0)
           and (d["text_fill_speed"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_every"]) == (1.0, 1.0, 0.6, 20.0),
-          "texte: rien n'est coche par defaut, valeurs de la spec (3 s, 20 s, fondu 0,5 s ; contraste 0,6)", str(d))
+          "texte: rien n'est coche par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; contraste 0,6)", str(d))
     # ---- presets overlay, scenes, panique, securite GPU
     from core import safety, scenes as sc
     pr = dict(gl.DEFAULT_PARAMS, **dict({k: ps.BY_KEY[k].default for k in keys}, text_ola_on=1.0, text_fill_on=1.0, text_fill_contrast=0.9))

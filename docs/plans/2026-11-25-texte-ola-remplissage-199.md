@@ -17,7 +17,7 @@ Rien n'est coche par defaut : le rendu est celui d'avant.
 | Sujet | Decision |
 |---|---|
 | Vague : granularite | **Lettre par lettre** (chaque lettre a son instant), pas un front vertical qui coupe les lettres |
-| Vague : rythme | **En boucle**, balayage complet (extinction puis rallumage) **~3 s**, recommence **toutes les ~20 s** ; horloge libre en secondes |
+| Vague : rythme | **En boucle**, balayage complet (extinction puis rallumage) **~6 s** (3 s a l'origine, ralenti de moitie apres essai), recommence **toutes les ~20 s** ; horloge libre en secondes |
 | Remplissage : couleurs | **Couleur du texte** ; le motif joue sur la **luminosite** (zones claires et sombres dans les lettres) |
 | Remplissage : renouveau | Repart de zero **au rallumage de la vague** quand elle est cochee, **a chaque changement de texte**, et **toutes les N s** quand la vague n'est pas cochee |
 | Cases « macro » | Dans l'**espace de controle global du Mode VJ** (onglet *Masters*, a cote d'Overlay), en plus des reglages detailles de la partie OVERLAY |
@@ -63,9 +63,9 @@ Rien n'est coche par defaut : le rendu est celui d'avant.
 | Cle | Defaut | Plage | Role |
 |---|---|---|---|
 | `text_ola_on` | 0 | 0..1 | Vague : interrupteur |
-| `text_ola_dur` | 3,0 | 1..10 s | Duree d'un balayage complet (extinction + rallumage) |
+| `text_ola_dur` | 6,0 | 1..10 s | Duree d'un balayage complet (extinction + rallumage) |
 | `text_ola_every` | 20 | 5..120 s | Periode de la boucle (>= `text_ola_dur`) |
-| `text_ola_fade` | 0,5 | 0,1..1,5 s | Duree du fondu d'une lettre |
+| `text_ola_fade` | 1,0 | 0,1..1,5 s | Duree du fondu d'une lettre |
 | `text_fill_on` | 0 | 0..1 | Remplissage : interrupteur |
 | `text_fill_speed` | 1,0 | 0,3..3 | Vitesse de colonisation (pas de simulation par image) |
 | `text_fill_scale` | 1,0 | 0,5..2,5 | Finesse du motif |
