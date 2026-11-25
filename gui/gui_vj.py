@@ -129,6 +129,15 @@ def install(c):
             except tk.TclError:
                 vj_ui.pop("strobe", None)
         update_lock_button()
+        for key in ("text_ola_on", "text_fill_on"):               # coche a l'autre endroit (onglet Logo) ou coupee par la panique
+            var = vj_ui.get("vars", {}).get(key)
+            if var is not None:
+                try:
+                    want = int(round(float(params[key])))
+                    if var.get() != want:
+                        var.set(want)
+                except (tk.TclError, KeyError, ValueError):
+                    pass
         for key, var, factor, dec, text, unit in vj_ui.get("knobs", []):
             if key == "tempo":
                 try:
@@ -493,6 +502,14 @@ def install(c):
             toggle(f, "gpu_cap", "Securite GPU", "Quand le VJ enchaine une scene, ses effets couteux (cellules, halo, fonte) sont coupes si, ajoutes a la charge mesuree "
                                                   "du GPU, ils ne tiendraient plus dans le budget d'une image. Une scene choisie a la main n'est jamais touchee.",
                    row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+
+            toggle(f, "text_ola_on", "Vague de lettres", "Texte de l'overlay : les lettres s'eteignent puis se rallument de gauche a droite, en boucle. "
+                                                          "Meme reglage que la case de l'onglet Logo (source Texte seulement). La panique (X) la coupe.",
+                   row=6, column=0, columnspan=3, sticky="w", padx=6, pady=(3, 0))
+            toggle(f, "text_fill_on", "Remplissage des lettres", "Texte de l'overlay : l'interieur des lettres est colonise par un motif organique "
+                                                                  "(reaction-diffusion, luminosite seulement). Meme reglage que la case de l'onglet Logo "
+                                                                  "(source Texte seulement). La panique (X) le coupe.",
+                   row=6, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
 
             lock = button(f, "Verrou", toggle_scene_lock, row=5, column=3, columnspan=2, sticky="w", padx=6, pady=(3, 0))
             vj_ui["lock"] = lock

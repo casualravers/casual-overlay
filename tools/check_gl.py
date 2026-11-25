@@ -599,6 +599,19 @@ def check_gui() -> None:
             c["melt_var"].set(0)
             c["cell_var"].set(0)
             c["mosaic_var"].set(0)
+            def text_states(*labels):
+                return {str(x.cget("state")) for lb in labels for w in gg.row_of_label(c["text_box"], lb, panels=False)
+                        for x in gg.leaves(w) if x.winfo_class() == "Scale"}
+            ola_labels, fill_labels = ("Duree du balayage", "Periode", "Fondu d'une lettre"), ("Vitesse", "Finesse", "Contraste", "Remise a zero")
+            c["ola_var"].set(0)
+            c["fill_var"].set(0)
+            out["g_text_off"] = (text_states(*ola_labels), text_states(*fill_labels), params["text_ola_on"], params["text_fill_on"])
+            c["ola_var"].set(1)                                              # la vague seule : le remplissage reste grise
+            out["g_text_ola"] = (text_states(*ola_labels), text_states(*fill_labels), params["text_ola_on"])
+            c["fill_var"].set(1)
+            out["g_text_on"] = (text_states(*ola_labels), text_states(*fill_labels), params["text_fill_on"])
+            c["ola_var"].set(0)
+            c["fill_var"].set(0)
             out["g_pal"], out["sto_shown"], out["rd_shown"] = {}, {}, {}
             c["bg_var"].set("pattern")
             for pal in ("classic", "duo", "test", "stochastique", "labyrinthe"):
@@ -1596,6 +1609,10 @@ def check_gui() -> None:
           and lv["g_live_line"].get("Forme") == on, "Live, analyzer en ligne: l'espace entre barres est grise, le reste actif")
     check(out.get("g_holo_off") == off and out.get("g_holo_on") == on, "halo coupe: ses curseurs sont grises, rallumes avec la case",
           f"{out.get('g_holo_off')} {out.get('g_holo_on')}")
+    gto, gta, gtn = out.get("g_text_off"), out.get("g_text_ola"), out.get("g_text_on")
+    check(gto == (off, off, 0.0, 0.0) and gta == (on, off, 1.0) and gtn == (on, on, 1.0),
+          "texte: curseurs de la vague et du remplissage gris tant que leur case est decochee, actifs une fois cochee (chacune la sienne)",
+          f"{gto} {gta} {gtn}")
     check(out.get("g_cell_only") == {"normal", "disabled"}, "mosaique coupee, cellules cochees: seuls les curseurs de la mosaique restent grises", str(out.get("g_cell_only")))
     check(out.get("g_fx_off") == (off, off) and out.get("g_fx_on") == (on, on),
           "fonte et cellules coupees: leurs curseurs sont grises, actifs une fois cochees", f"{out.get('g_fx_off')} {out.get('g_fx_on')}")
@@ -12566,6 +12583,26 @@ def check_textfx() -> None:
     check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (3.0, 20.0, 0.5)
           and (d["text_fill_speed"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_every"]) == (1.0, 1.0, 0.6, 20.0),
           "texte: rien n'est coche par defaut, valeurs de la spec (3 s, 20 s, fondu 0,5 s ; contraste 0,6)", str(d))
+    # ---- presets overlay, scenes, panique, securite GPU
+    from core import safety, scenes as sc
+    pr = dict(gl.DEFAULT_PARAMS, **dict({k: ps.BY_KEY[k].default for k in keys}, text_ola_on=1.0, text_fill_on=1.0, text_fill_contrast=0.9))
+    ov, bgp = gl.capture_overlay(pr), gl.capture_background(pr)
+    check(all(k in ov for k in keys) and not any(k in bgp for k in keys), "texte: les neuf reglages sont dans les presets overlay, jamais dans ceux du fond")
+    scene = sc.capture_scene("T", pr, "live", None)
+    vals = scene.get("values", scene)
+    check(all(k in str(vals) for k in ("text_ola_on", "text_fill_contrast")), "texte: les scenes retiennent la vague et le remplissage")
+    pn = dict(pr)
+    changed = gl.panic(pn)
+    check(pn["text_ola_on"] == 0.0 and pn["text_fill_on"] == 0.0 and "text_ola_on" in changed and pn["text_fill_contrast"] == 0.9,
+          "texte: la panique coupe la vague et le remplissage (leurs reglages restent)")
+    cost = dict((k, ms) for k, _l, ms in safety.EFFECT_COST_MS)
+    check(0.2 <= cost.get("text_fill_on", 0.0) <= 1.5 and cost["cell_on"] > cost["text_fill_on"],
+          "texte: le remplissage est un effet couteux declare (mesure +0,2 a +0,8 ms a 1080p), apres les cellules dans l'ordre de coupe", str(cost))
+    out_vals, dropped = safety.cap_values({"text_fill_on": 1.0}, {"text_fill_on": 0.0}, gpu_ms=16.0, budget_ms=16.7)
+    check(out_vals.get("text_fill_on") == 0.0 and "remplissage du texte" in dropped,
+          "texte: une scene qui allume le remplissage est allegee quand le GPU est charge", str(dropped))
+    check(any(k == "text_fill_on" for k, _l in __import__("engine.render", fromlist=["PerfGuard"]).PerfGuard.COSTLY),
+          "texte: PerfGuard cite le remplissage dans son conseil quand le GPU est trop charge")
 
 
 def check_textcycle() -> None:

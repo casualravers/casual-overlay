@@ -1520,7 +1520,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     rd_sym_var = synced["bg_rd_sym"]
     # cherche dans rd_box : dans pattern_box, la ligne de Branches serait rd_box entier (tout le bloc grise, symetrie comprise)
     gates.add(gui_gates.row_of_label(rd_box, "Branches", panels=False), lambda: rd_sym_var.get() == "rot")
-    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var):
+    text_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(text_box, lb, panels=False)]
+    gates.add(text_rows("Duree du balayage", "Periode", "Fondu d'une lettre"), lambda: gui_logo_ctl.ola_var.get() == 1)           # vague et remplissage (#199)
+    gates.add(text_rows("Vitesse", "Finesse", "Contraste", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
+    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 
@@ -2442,6 +2445,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             melt_var.set(int(float(params["melt_on"]) >= 0.5))
         if holo_var.get() != int(float(params["holo_on"]) >= 0.5):
             holo_var.set(int(float(params["holo_on"]) >= 0.5))
+        for var, key in ((gui_logo_ctl.ola_var, "text_ola_on"), (gui_logo_ctl.fill_var, "text_fill_on")):   # cases du panneau Masters, panique
+            if var.get() != int(float(params[key]) >= 0.5):
+                var.set(int(float(params[key]) >= 0.5))
         if abs(master_var.get() - params["master"]) > 1e-6:
             master_var.set(params["master"])
         if abs(sens_var.get() - params["sensitivity"]) > 1e-6:
@@ -2664,7 +2670,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "automation": automation, "auto_master_var": auto_master_var, "auto_vars": auto_vars,
             "source_var": source_var, "text_widget": text_widget, "apply_text": apply_text,
             "palette": palette_ctl, "stage": stage_ctl, "remote": remote_ctl, "sched_tick": gui_logo_ctl.sched_tick, "sched_var": gui_logo_ctl.sched_var, "sched_text": gui_logo_ctl.sched_text, "apply_sched": gui_logo_ctl.apply_sched,
-            "image_box": image_box, "text_box": text_box, "font_var": font_var, "brain": brain_panel})
+            "image_box": image_box, "text_box": text_box, "font_var": font_var, "brain": brain_panel,
+            "ola_var": gui_logo_ctl.ola_var, "fill_var": gui_logo_ctl.fill_var})
     if on_ready is not None:
         root.after(50, lambda: on_ready(controls_ref["f"]()))
 

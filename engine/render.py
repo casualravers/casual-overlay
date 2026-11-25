@@ -1459,7 +1459,7 @@ class PerfGuard:
 
     HIGH, LOW, HOLD_S, ALPHA = 0.90, 0.80, 2.0, 0.2
     # (cle de reglage, libelle, touche), du plus cher au moins cher (mesure : cellules > halo > fonte)
-    COSTLY = (("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"))
+    COSTLY = (("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"), ("text_fill_on", "remplissage du texte"))
 
     def __init__(self, refresh_hz: float) -> None:
         self.budget_ms = 1000.0 / max(min(float(refresh_hz or 60.0), 60.0), 20.0)
