@@ -15,10 +15,14 @@ ni memoires de masters), sauves tout seuls dans brain_ui.json.
 """
 from __future__ import annotations
 
+import json
 import math
+import queue
 import re
+import threading
 import time
 import tkinter as tk
+from pathlib import Path
 
 from core import brain as core_brain
 from core import params as core_params
@@ -39,6 +43,10 @@ DEFAULT_TINT = (7, 8, 12)
 
 VIEW_NAMES = ("iso", "mandala", "tunnel", "sismo")
 TICK_MS = 50                                   # ~20 Hz
+CURSOR_MS = 33                                 # le curseur seul avance a ~30 Hz entre deux rafraichissements de la vue (iso, mandala, sismo)
+# intervalle minimal du curseur continu par vue (mesure : deplacer le curseur + redessin = iso ~7 ms, mandala ~1,5, sismo ~0,8)
+CURSOR_VIEW_MS = {"iso": 50, "mandala": 33, "sismo": 33}
+LOG_DIR = Path.home() / ".audio2wave" / "cerveau"   # journaux enregistres par le bouton « log » (tools/rejoue_cerveau.py les rejoue)
 VIEW_TICK_MS = {"iso": 100, "mandala": 100, "tunnel": 100, "sismo": 100}   # cadence propre a une vue (budget mesure, tache 9 : toutes a 10 Hz)
 BOX_W = 640                                    # largeur du panneau raccroche quand l'espace VJ n'en donne pas (pixels)
 TOGGLE_W = 6                                   # largeur fixe (caracteres) des boutons dont le texte change
@@ -307,6 +315,8 @@ class IsoView:
         self._veil = [cv.create_line(0, 0, 0, 0, 0, 0, state="hidden") for _ in range(ISO_VEIL_LINES)]
         self._cause_lines = [cv.create_line(0, 0, 0, 0, state="hidden", dash=(3, 3)) for _ in range(ISO_MAX_CAUSES)]
         self._cause_dots = [cv.create_oval(0, 0, 0, 0, state="hidden", outline="") for _ in range(ISO_MAX_CAUSES)]
+        # plan du present (diagonale de toute la grille : chaque deplacement redessine presque toute la vue, ~7 ms ; le decouper ne gagne
+        # rien, Tk reunit tout ce qui bouge en un seul rectangle a redessiner) : curseur continu de l'iso a 20 Hz seulement (CURSOR_VIEW_MS)
         self._plane = cv.create_polygon(0, 0, 0, 0, 0, 0, 0, 0, fill="#ffffff", stipple="gray12", outline="")
         self._edge = cv.create_line(0, 0, 0, 0, fill="#e0e0e0", width=1.5)
         # libelles au-dessus des piliers (crees en premier, ils etaient caches par les cases)
@@ -535,11 +545,13 @@ class IsoView:
             for it in self._veil:
                 cv.itemconfigure(it, state="hidden")
         self._veil_on = on
-        # plan du present
-        yy = 64 - cursor
-        P = self.P
-        cv.coords(self._plane, *P(-1.4, yy), *P(12 * R, yy), *P(12 * R, yy, 60), *P(-1.4, yy, 60))
-        cv.coords(self._edge, *P(-1.4, yy), *P(12 * R, yy))
+        self.move_cursor(cursor)
+
+    def move_cursor(self, cursor: float) -> None:
+        """Plan du present (appele aussi entre deux mises a jour : le curseur avance en continu, `BrainPanel.cursor_tick`)."""
+        yy, P, R = 64 - cursor, self.P, ISO_R
+        self.canvas.coords(self._plane, *P(-1.4, yy), *P(12 * R, yy), *P(12 * R, yy, 60), *P(-1.4, yy, 60))
+        self.canvas.coords(self._edge, *P(-1.4, yy), *P(12 * R, yy))
 
     # ---- survol
     def hover(self, x: float, y: float) -> str | None:
@@ -782,8 +794,11 @@ class SismoView:
             for it in self._veil:
                 cv.itemconfigure(it, state="hidden")
         self._veil_on = on
-        # ligne du present
-        cv.coords(self._edge, self.X(cursor), self.Y(24), self.X(cursor), self.Y(330))
+        self.move_cursor(cursor)
+
+    def move_cursor(self, cursor: float) -> None:
+        """Ligne du present (appelee aussi entre deux mises a jour : `BrainPanel.cursor_tick`)."""
+        self.canvas.coords(self._edge, self.X(cursor), self.Y(24), self.X(cursor), self.Y(330))
 
     def _marks(self, sts: dict, fx_items: list, causes: bool, bg: str) -> None:
         """Surprises, manques, notes des effets et causes : reserves reutilisees (largeurs et formes remises a chaque emploi)."""
@@ -1146,10 +1161,13 @@ class MandalaView:
             for it in self._veil:
                 cv.itemconfigure(it, state="hidden")
         self._veil_on = on
-        # aiguille du present (bord de la case en cours)
+        self.move_cursor(cursor)
+
+    def move_cursor(self, cursor: float) -> None:
+        """Aiguille du present (appelee aussi entre deux mises a jour : `BrainPanel.cursor_tick`)."""
         an = _man_angle(cursor % 16) - MAN_SP / 2
         (x0, y0), (x1, y1) = self.pol(MAN_R0, an), self.pol(MAN_RE + 8 * MAN_GAP, an)
-        cv.coords(self._needle, x0, y0, x1, y1)
+        self.canvas.coords(self._needle, x0, y0, x1, y1)
 
     def _marks(self, fx_items: list, peaks: set, causes: bool, bg: str) -> None:
         """Notes des effets sur les anneaux, causes en pointilles : reserves reutilisees (une reserve par forme)."""
@@ -1590,6 +1608,43 @@ VIEWS["tunnel"] = TunnelView
 # Une surface : les widgets du panneau dans un parent (raccroche dans le panneau etendu, ou dans la fenetre detachee)
 # ---------------------------------------------------------------------------------------------------------------------------
 
+class _JournalWriter:
+    """Enregistrement du journal du cerveau dans un fichier JSONL. Le journal appelle le puits sous son verrou depuis les fils audio,
+    GL et Tk : le puits ne fait que mettre la ligne en file, un fil a part ecrit (un disque lent ne retarde jamais l'analyse)."""
+
+    def __init__(self, log, folder: Path) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        self.path = folder / time.strftime("journal-%Y%m%d-%H%M%S.jsonl")
+        self._f = open(self.path, "w", encoding="utf-8")
+        self._q: queue.SimpleQueue = queue.SimpleQueue()
+        self._log = log
+        self._thread = threading.Thread(target=self._run, name="cerveau-journal", daemon=True)
+        self._thread.start()
+        log.set_recorder(lambda wall, kind, args: self._q.put((wall, kind, args)))
+
+    def _run(self) -> None:
+        f = self._f
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            try:
+                f.write(json.dumps([round(item[0], 4), item[1], item[2]], default=str) + "\n")
+                if self._q.empty():
+                    f.flush()                                  # file videe : sur le disque (un arret brutal ne perd presque rien)
+            except (OSError, ValueError, TypeError):
+                pass
+        try:
+            f.close()
+        except OSError:
+            pass
+
+    def stop(self) -> None:
+        self._log.set_recorder(None)                          # sous le verrou : plus aucune ligne n'arrive apres
+        self._q.put(None)
+        self._thread.join(timeout=2.0)
+
+
 def _button(parent, text, command, width=None) -> tk.Button:
     b = tk.Button(parent, text=text, command=command, relief="flat", bd=0, padx=7, pady=1, cursor="hand2", bg=BTN_BG, fg=REASON_FG,
                   activebackground=BTN_BG, activeforeground=BTN_ON, font=FONT, highlightthickness=1, highlightbackground="#2a3050")
@@ -1625,6 +1680,8 @@ class _Surface:
         self.causes_btn.pack(side="left", padx=(8, 3))
         self.pause_btn = _button(bar, "pause", panel.toggle_pause)
         self.pause_btn.pack(side="left", padx=(0, 3))
+        self.log_btn = _button(bar, "log", panel.toggle_log)
+        self.log_btn.pack(side="left", padx=(0, 3))
         self.detach_btn = _button(bar, "dock" if floating else "detach", panel.dock if floating else panel.detach, width=DETACH_W)
         self.detach_btn.pack(side="right")
         tip = panel.Tooltip
@@ -1634,6 +1691,8 @@ class _Surface:
                     else "Ouvre le cerveau dans une fenetre a part (position et taille retenues) ; la fermer le raccroche ici.")
                 tip(self.causes_btn, "Relie chaque effet a la frappe qui l'a declenche (trait pointille ; « <- kick » dans le fil).")
                 tip(self.pause_btn, "Fige la vue (l'appli continue de tourner).")
+                tip(self.log_btn, "Enregistre ce que le cerveau recoit dans ~/.audio2wave/cerveau (journal-....jsonl) ; "
+                                  "tools/rejoue_cerveau.py le rejoue et compte ce qui fait sauter l'affichage. Re-cliquer arrete.")
             except Exception:
                 pass
         # curseur d'angle de la vue iso (comme la maquette : dans la barre, a droite) ; place reservee (largeur fixe), montre en iso seulement
@@ -1737,6 +1796,7 @@ class _Surface:
             b.configure(fg=BTN_ON if on else REASON_FG, highlightbackground=BTN_ON if on else "#2a3050")
         self.causes_btn.configure(fg=BTN_ON if p.causes else REASON_FG, highlightbackground=BTN_ON if p.causes else "#2a3050")
         self.pause_btn.configure(fg=BTN_ON if p.paused else REASON_FG, highlightbackground=BTN_ON if p.paused else "#2a3050")
+        self.log_btn.configure(fg=MISS_FG if p.logging else REASON_FG, highlightbackground=MISS_FG if p.logging else "#2a3050")
         if self.angle_scale is not None:
             if p.view_name == "iso":
                 self.angle_inner.place(x=0, rely=0.5, anchor="w")
@@ -1859,6 +1919,9 @@ class BrainPanel:
         self.toggle_button = None
         self._errors: set = set()
         self._sched_at = -1e9                                   # dernier rafraichissement demande par l'ordonnanceur
+        self.steady = core_brain.Steady()                       # grille et phase affichees stabilisees (une par panneau)
+        self._cursor_from = None                                # (surface, vue, curseur, instant, periode) du dernier dessin
+        self._cursor_at = -1e9                                  # dernier deplacement du curseur (dessin complet ou curseur seul)
 
     @property
     def params(self) -> dict:
@@ -2196,8 +2259,72 @@ class BrainPanel:
             return
         now = time.monotonic() if now is None else float(now)
         tunnel = self.view_name == "tunnel"
-        snap = core_brain.snapshot(log, now, rolling=tunnel, depth=TUN_DEPTH if tunnel else None)     # le tunnel ne calcule que ce qu'il dessine
+        # grille et phase affichees stabilisees (core.brain.Steady) ; le tunnel ne calcule que ce qu'il dessine
+        snap = core_brain.snapshot(log, now, rolling=tunnel, depth=TUN_DEPTH if tunnel else None, steady=self.steady)
         self._draw(surf, snap, now)
+        # point de depart du curseur continu (cursor_tick) : seulement pour les vues a page (le tunnel fait tout bouger)
+        self._cursor_from = None
+        if snap.get("grid") and not tunnel and snap.get("period"):
+            self._cursor_from = (surf, surf.view, float(snap["cursor"]), now, float(snap["period"]))
+        self._cursor_at = now
+
+    def cursor_tick(self, now: float | None = None) -> None:
+        """Ordonnanceur (CURSOR_MS) : entre deux rafraichissements de la vue, seul le curseur avance (plan iso, aiguille du mandala, ligne
+        du sismo), extrapole de la derniere grille affichee. Rien quand la vue n'a pas ete dessinee juste avant (cachee, figee, pause)."""
+        start = self._cursor_from
+        if start is None or self.paused:
+            return
+        surf, view, c0, t0, period = start
+        now = time.monotonic() if now is None else float(now)
+        if now - t0 > 1.0:                                       # plus de dessin complet depuis 1 s (cache, reconstruit) : on oublie
+            self._cursor_from = None
+            return
+        if surf is not self._active() or surf.view is not view or surf.frozen or not hasattr(view, "move_cursor") or not surf.visible():
+            return
+        if (now - self._cursor_at) * 1000.0 < CURSOR_VIEW_MS.get(self.view_name, CURSOR_MS) - 5:
+            return                                               # iso : 20 Hz seulement (son redessin coute ~7 ms)
+        self._cursor_at = now
+        c = c0 + max(0.0, min(1.0, now - t0)) / period * core_brain.STEPS_PER_BEAT
+        c = min(c, core_brain.PAGE_STEPS - 0.01)                 # jamais au-dela de la page : le prochain instantane change de page
+        try:
+            if self.STATS is not None:
+                with self.STATS.timed("brain.cursor"):
+                    view.move_cursor(c)
+            else:
+                view.move_cursor(c)
+        except Exception as exc:
+            self._fail(self.view_name + ".cursor", exc)
+
+    # ---- journal enregistre (bouton « log ») : rejoue par tools/rejoue_cerveau.py ; l'enregistrement en cours est garde sur la session
+    # (il survit a une reconstruction de la fenetre de reglages, qui recree le panneau)
+    @property
+    def _rec(self):
+        return getattr(self.s, "brain_rec", None)
+
+    @property
+    def log_path(self):
+        rec = self._rec
+        return None if rec is None else rec.path
+
+    @property
+    def logging(self) -> bool:
+        return self._rec is not None
+
+    def toggle_log(self) -> None:
+        rec = self._rec
+        if rec is not None:
+            rec.stop()
+            self.s.brain_rec = None
+        else:
+            log = getattr(self.s, "brain", None)
+            if log is None:
+                return
+            try:
+                self.s.brain_rec = _JournalWriter(log, LOG_DIR)
+            except OSError as exc:
+                sessionlog.error("Cerveau : journal impossible a ouvrir", exc)
+                return
+        self._restyle()
 
     def _draw(self, surf: _Surface, snap: dict, now: float) -> None:
         self._draw_text(surf, snap)
@@ -2295,6 +2422,7 @@ def install(ns) -> BrainPanel:
     every = getattr(ns, "ui_every", None)
     if every is not None:
         every("brain", TICK_MS, panel.scheduled_tick)
+        every("brain_cursor", CURSOR_MS, panel.cursor_tick)
         every("brain_slot", 300, panel.sync_slot)
     if panel._flag("brain_detached"):
         later = getattr(ns, "after", None)
