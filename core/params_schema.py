@@ -165,6 +165,8 @@ TABLE: tuple[Param, ...] = (
     _p("text_fill_stagger", 3.0, 0.0, 8.0, doc="Remplissage : ecart de depart entre la premiere et la derniere lettre, en secondes (la vague de colonisation)."),
     _p("text_fill_scale", 1.0, 0.5, 2.0, doc="Remplissage : finesse du motif (1 = ~2 cellules de motif par pixel de la texture du texte ; plus grand = motif plus fin)."),
     _p("text_fill_contrast", 0.9, 0.0, 1.0, doc="Remplissage, lettres pleines : de combien la matiere assombrit les lettres (sans effet en mode transparent)."),
+    _p("text_front_edge", 3.0, 0.0, 30.0, doc="Remplissage : epaisseur de la ligne du front de colonisation (couleur du texte), en pixels de la texture du texte (0 = aucune)."),
+    _p("text_front_glint", 0.5, 0.0, 1.0, doc="Remplissage : scintillement de la ligne du front (frisson de luminosite qui court le long de la ligne ; 0 = ligne fixe)."),
     _p("text_fill_edge", 3.0, 1.0, 8.0, doc="Remplissage, lettres transparentes : epaisseur du bord conserve, en pixels de la texture du texte."),
     _p("text_fill_clear", 1.0, 0.0, 1.0, doc="Remplissage : 1 = lettres transparentes sauf les bords, la colonisation les remplit ; 0 = lettres pleines que la colonisation assombrit."),
     _p("text_fill_every", 20.0, 5.0, 120.0, doc="Remplissage : le motif repart de zero toutes les N secondes (sans vague ; avec la vague, au rallumage)."),

@@ -390,7 +390,21 @@ float fill_matter(vec2 q) {
     float gain = mix(0.75, 1.0, smoothstep(0.0, 1.0, age));
     return smoothstep(0.08, 0.30, tile.r * gain) * smoothstep(0.0, FILL_SOFT, tau);
 }
-// alpha du texte erode du rayon du bord : 0 a moins d'un bord d'une frontiere de lettre
+// Bord du front : une ligne franche de la couleur du texte, de u_front.x texels, collee a l'avant du front (elle remplit les trous du motif : on la
+// voit passer). Le scintillement est un leger frisson de luminosite qui court le long de la ligne (core.textfx.front_line, memes formules).
+uniform vec4 u_front;          // x = epaisseur (texels, 0 = aucun), y = scintillement 0..1, z = vitesse du front (texels / s)
+float front_band(vec2 q) {
+    if (u_front.x <= 0.0) {
+        return 0.0;
+    }
+    vec2 rr = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;
+    float tau = u_fill_t.x - rr.x * u_fill_t.y - rr.y * u_fill_t.z;
+    float d = tau * u_front.z;                                               // texels derriere le front
+    float line = smoothstep(0.0, 1.0, d) * (1.0 - smoothstep(u_front.x, u_front.x + 1.0, d));    // bords nets : 1 texel d'anticrenelage
+    vec2 cell = q * u_fill_px;
+    float shimmer = 1.0 - 0.35 * u_front.y * (0.5 + 0.5 * sin(0.18 * (cell.x + 0.7 * cell.y) - u_fill_t.x * 14.0));
+    return clamp(line * shimmer, 0.0, 1.0);
+}// alpha du texte erode du rayon du bord : 0 a moins d'un bord d'une frontiere de lettre
 float fill_inner(vec2 q) {
     vec2 e = u_fill_k.w / u_fill_px;
     vec2 g = e * 0.7071;
@@ -477,9 +491,15 @@ vec4 logo_at(vec2 p) {
             vec2 rr0 = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;
             float edge = clamp(c.a - inner, 0.0, 1.0) * smoothstep(0.0, FILL_SOFT, u_fill_t.x - rr0.x * u_fill_t.y - rr0.y * u_fill_t.z);   // le contour arrive avec le front
             float want = clamp(edge + matter * inner, 0.0, 1.0);
+            float band = front_band(q);
+            vec3 txt = c.rgb / max(c.a, 0.001);                              // couleur du texte (droite)
+            float a0 = c.a;
             c *= clamp(want / max(c.a, 0.001), 0.0, 1.0);
+            if (band > 0.0) {                                                // le bord du front : ligne pleine de la couleur du texte
+                c = mix(c, vec4(txt * a0, a0), band);
+            }
         } else {                                                             // lettres pleines : la matiere assombrit
-            c.rgb *= 1.0 - u_fill_k.y * matter;
+            c.rgb *= 1.0 - u_fill_k.y * max(matter, front_band(q));         // la ligne du front a la couleur du motif (noire), comme en mode transparent
         }
     }
     float ola_f = 1.0;
