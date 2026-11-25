@@ -2228,6 +2228,106 @@ def check_render() -> None:
         check(r.post_prog is before, "shader invalide: ShaderError, ancien programme conserve")
 
 
+def check_text_rank() -> None:
+    """Vague de lettres (#199) : carte du rang des lettres calculee depuis l'alpha du texte (une ligne, plusieurs lignes, espaces,
+    accents, points de i et j, texte vide)."""
+    print("Texte : carte du rang des lettres")
+    from engine.render import render_text, text_rank_map
+
+    def ranks(text, align="center"):
+        img = render_text(text, "auto", "#ffffff", align, 128)
+        rk = text_rank_map(img)
+        solid = img[:, :, 3] > 128
+        return img, rk, solid
+
+    img, rk, solid = ranks("HELLO")
+    vals = sorted(set(rk[solid].tolist()))
+    check(rk.shape == img.shape[:2] and rk.dtype == np.uint8 and len(vals) == 5 and vals[0] == 0 and vals[-1] == 255,
+          "rang: une lettre = un rang, HELLO donne 5 rangs de 0 a 255", str(vals))
+    xs = {v: np.nonzero(solid & (rk == v))[1].mean() for v in vals}
+    check(all(xs[a] < xs[b] for a, b in zip(vals, vals[1:])), "rang: il croit de gauche a droite avec la position de la lettre")
+    check(len(set(ranks("A B")[1][ranks("A B")[2]].tolist())) == 2, "rang: les espaces n'ajoutent pas de lettre (A B = 2 rangs)")
+    check(len(set(ranks("ÉTÉ")[1][ranks("ÉTÉ")[2]].tolist())) == 3,
+          "rang: un accent suit sa lettre (ETE accentue = 3 rangs, pas 5)")
+    check(len(set(ranks("ij")[1][ranks("ij")[2]].tolist())) == 2, "rang: le point d'un i ou d'un j suit sa lettre (ij = 2 rangs)")
+    img2, rk2, solid2 = ranks("AB\nAB")
+    check(len(set(rk2[solid2].tolist())) == 2, "rang: deux lignes balaient ensemble (meme x = meme rang, AB sur 2 lignes = 2 rangs)")
+    top = set(rk2[:rk2.shape[0] // 2][solid2[:rk2.shape[0] // 2]].tolist())
+    bottom = set(rk2[rk2.shape[0] // 2:][solid2[rk2.shape[0] // 2:]].tolist())
+    check(top == bottom, "rang: la ligne du haut et celle du bas ont les memes rangs", f"{top} {bottom}")
+    check(len(set(ranks("X")[1][ranks("X")[2]].tolist())) == 1 and not text_rank_map(np.zeros((8, 8, 4), np.uint8)).any(),
+          "rang: une seule lettre = rang 0 ; image vide = carte vide, sans erreur")
+
+
+def check_text_ola() -> None:
+    """Vague de lettres (#199), rendu : les lettres s'eteignent puis se rallument de gauche a droite sur le vrai shader ; texte entier hors
+    balayage ; image identique a avant quand la case est decochee ; cumul avec la fonte acide ; doodles et logo image jamais touches."""
+    print("Texte : vague de lettres (rendu)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    from engine.render import render_text
+    size = (960, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(bytes(size[0] * size[1] * 3))                                  # fond noir : on ne voit que le texte
+    r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
+                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_ola_on=1.0)
+
+    def lum(img):
+        return img.astype(int)[..., :3].sum(axis=2)
+
+    def render(t, rr=None, **kw):
+        (rr or r).draw(fbo, size, quiet, dict(base, **kw), t)
+        return lum(read_target(ctx, fbo, size))
+    ref = render(50.0, text_ola_on=0.0)
+    cols = np.nonzero(ref.sum(axis=0) > 0)[0]
+    x0, x1 = int(cols.min()), int(cols.max())
+    q = (x1 - x0) // 4
+    left, right = slice(x0, x0 + q), slice(x1 - q, x1 + 1)                           # le quart gauche et le quart droit du texte
+    ratio = lambda img, part: img[:, part].sum() / max(ref[:, part].sum(), 1)
+    t0 = 100.0
+    render(t0)                                                                       # activation : le premier balayage demarre ici
+    at = {tau: render(t0 + tau) for tau in (0.0, 0.6, 1.5, 2.3, 3.5, 12.0)}
+    check(abs(ratio(at[0.0], left) - 1) < 0.02 and abs(ratio(at[0.0], right) - 1) < 0.02,
+          "vague: au debut du cycle le texte est entier", f"{ratio(at[0.0], left):.2f} {ratio(at[0.0], right):.2f}")
+    check(ratio(at[0.6], left) < 0.3 and ratio(at[0.6], right) > 0.9,
+          "vague: a 0,6 s les lettres de gauche sont eteintes, celles de droite encore la",
+          f"gauche {ratio(at[0.6], left):.2f} droite {ratio(at[0.6], right):.2f}")
+    check(at[1.5].sum() < 0.05 * ref.sum(), "vague: a la mi-balayage toutes les lettres sont eteintes (le texte a disparu pour de bon)",
+          f"{at[1.5].sum() / ref.sum():.3f}")
+    check(ratio(at[2.3], left) > 0.9 and ratio(at[2.3], right) < 0.15,
+          "vague: au rallumage la gauche revient d'abord (dans le meme sens que l'extinction)",
+          f"gauche {ratio(at[2.3], left):.2f} droite {ratio(at[2.3], right):.2f}")
+    check(abs(at[3.5].sum() / ref.sum() - 1) < 0.02 and abs(at[12.0].sum() / ref.sum() - 1) < 0.02,
+          "vague: apres le balayage le texte est entier et lisible jusqu'au cycle suivant (a 3,5 s et a 12 s)")
+    nxt = render(t0 + 20.6)
+    check(ratio(nxt, left) < 0.3 and ratio(nxt, right) > 0.9, "vague: le balayage recommence toutes les 20 s",
+          f"gauche {ratio(nxt, left):.2f} droite {ratio(nxt, right):.2f}")
+    check(np.array_equal(render(t0 + 5.0, text_ola_on=0.0), ref), "vague: case decochee = image strictement identique a avant")
+    # cumul avec la fonte acide : une lettre eteinte reste eteinte (la fonte ne la fait pas revenir)
+    render(t0 + 30.0)                                                                # la case decochee juste avant a remis l'horloge a zero : nouvelle activation
+    cum = render(t0 + 30.0 + 1.5, melt_on=1.0, melt_depth=0.3)
+    check(cum.sum() < 0.1 * ref.sum(), "vague + fonte acide : les lettres eteintes restent eteintes", f"{cum.sum() / ref.sum():.3f}")
+    # logo image : jamais touche (pas de carte de rang, la vague ne s'applique qu'a la source Texte)
+    ri = gl.Renderer(ctx, size, None)
+    ri.video_tex.write(bytes(size[0] * size[1] * 3))
+    logo = np.zeros((64, 64, 4), np.uint8)
+    logo[:] = (255, 255, 255, 255)
+    ri.set_logo(logo, "x")
+    img_a = render(t0 + 1.5, rr=ri, text_ola_on=0.0, logo_scale=0.4)
+    img_b = render(t0 + 1.5, rr=ri, text_ola_on=1.0, logo_scale=0.4)
+    check(np.array_equal(img_a, img_b) and img_a.sum() > 0, "vague: un logo image n'est jamais touche (source Texte seulement)")
+    # tau suit le `t` de l'image : un nouveau texte ne redemarre pas la vague, mais en change la carte
+    r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
+    two = render(t0 + 22.0, text_scale=0.5)
+    check(two.sum() > 0, "vague: changer de texte (nouvelle carte de rangs) donne un rendu valide hors balayage")
+
+
 def check_text() -> None:
     print("Texte a incruster / plein ecran par defaut")
     img = gl.render_text("CASUAL RAVERS", "auto", "#ff0000", "center", 128)
@@ -15162,12 +15262,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",

@@ -350,6 +350,25 @@ vec4 logo_mosaic(vec2 q, vec4 c) {
     return vec4(mix(c.rgb, rgb, u_mosaic), c.a);
 }
 
+// Vague de lettres (ola, texte uniquement) : rang de la lettre de chaque pixel (R8, 0 = la plus a gauche .. 1 = la plus a droite, unite 2).
+// Meme formule que `core.textfx.ola_alpha` : extinction de gauche a droite de 0 a dur/2, rallumage dans le meme sens de dur/2 a dur.
+uniform sampler2D u_text_rank;
+uniform vec4 u_ola;            // x = 1 si la vague est active, y = tau (secondes depuis le debut du cycle), z = duree du balayage, w = fondu d'une lettre
+float ola_alpha(float rank, float tau, float dur, float fade) {
+    float half_ = 0.5 * dur;
+    float fd = min(max(fade, 0.02), half_);
+    if (tau < 0.0 || tau >= dur) {
+        return 1.0;
+    }
+    float span = half_ - fd;
+    if (tau < half_) {
+        float s = rank * span;
+        return 1.0 - smoothstep(s, s + fd, tau);
+    }
+    float s = half_ + rank * span;
+    return smoothstep(s, s + fd, tau);
+}
+
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
 vec4 logo_at(vec2 p) {
     vec2 d = p - u_logo_rect.xy;
@@ -367,6 +386,10 @@ vec4 logo_at(vec2 p) {
     // Echantillonnage toujours execute (derivees valides pour les mipmaps), masque apres coup.
     vec4 c = texture(u_logo, clamp(q, 0.0, 1.0));
     c.rgb *= mix(1.0, c.a, u_logo_straight);
+    if (u_ola.x > 0.5 && inside > 0.5) {
+        // les lettres eteintes disparaissent vraiment (avant les cellules, la fonte, la mosaique et le contour lumineux)
+        c *= ola_alpha(textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).r, u_ola.y, u_ola.z, u_ola.w);
+    }
     if (u_cell > 0.001 && inside > 0.5) {
         c = logo_cells(q, c);
     }
