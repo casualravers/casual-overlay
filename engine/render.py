@@ -256,6 +256,9 @@ def _letters(alpha):
     return letters
 
 
+_MAP_PAD = 2        # marge (pixels) autour de chaque lettre dans les cartes de rang / portee : les pixels de contour d'alpha < 8 y lisent la valeur de leur lettre
+
+
 def text_rank_map(rgba):
     """Carte du rang des lettres (vague de lettres et vague de colonisation, #199) : tableau uint8 (h, w), 0 a 255 = rang 0 (lettre la plus a
     gauche) a 1 (la plus a droite) de la lettre a laquelle appartient chaque pixel, meme taille que la texture du texte. Rang = centre de la
@@ -267,10 +270,11 @@ def text_rank_map(rgba):
         return out
     centers = [L["cx"] for L in letters]
     lo, hi = min(centers), max(centers)
-    for L in letters:
-        rank = int(round((0.0 if hi <= lo else (L["cx"] - lo) / (hi - lo)) * 255.0))
-        for r0, r1, c0, c1 in L["rects"]:
-            out[r0:r1, c0:c1] = rank
+    ranks = [int(round((0.0 if hi <= lo else (L["cx"] - lo) / (hi - lo)) * 255.0)) for L in letters]
+    for pad in (_MAP_PAD, 0):                          # d'abord la marge (pixels de contour trop pales pour etre comptes), puis les lettres par-dessus
+        for L, rank in zip(letters, ranks):
+            for r0, r1, c0, c1 in L["rects"]:
+                out[max(r0 - pad, 0):r1 + pad, max(c0 - pad, 0):c1 + pad] = rank
     return out
 
 
@@ -281,15 +285,20 @@ def text_reach_map(rgba):
     front arrive a sa portee."""
     alpha = np.asarray(rgba)[:, :, 3] > 8
     out = np.zeros(alpha.shape, np.uint8)
-    for L in _letters(alpha):
-        sx, sy = L["start"]
-        dists = []
-        for r0, r1, c0, c1 in L["rects"]:
-            yy, xx = np.mgrid[r0:r1, c0:c1]
-            dists.append((np.hypot(xx - sx, yy - sy), alpha[r0:r1, c0:c1]))
-        dmax = max(float(d[a].max()) for d, a in dists if a.any())
-        for (r0, r1, c0, c1), (d, _a) in zip(L["rects"], dists):
-            out[r0:r1, c0:c1] = np.rint(np.clip(d / max(dmax, 1.0), 0.0, 1.0) * 255.0).astype(np.uint8)
+    letters = _letters(alpha)
+    for pad in (_MAP_PAD, 0):                          # marge d'abord, lettres par-dessus (comme text_rank_map)
+        for L in letters:
+            sx, sy = L["start"]
+            dmax = 1.0
+            for r0, r1, c0, c1 in L["rects"]:
+                yy, xx = np.mgrid[r0:r1, c0:c1]
+                a = alpha[r0:r1, c0:c1]
+                if a.any():
+                    dmax = max(dmax, float(np.hypot(xx - sx, yy - sy)[a].max()))
+            for r0, r1, c0, c1 in L["rects"]:
+                p0, q0 = max(r0 - pad, 0), max(c0 - pad, 0)
+                yy, xx = np.mgrid[p0:r1 + pad, q0:c1 + pad]
+                out[p0:r1 + pad, q0:c1 + pad] = np.rint(np.clip(np.hypot(xx - sx, yy - sy) / dmax, 0.0, 1.0) * 255.0).astype(np.uint8)[:out.shape[0] - p0, :out.shape[1] - q0]
     return out
 
 def _premultiplied(img):
