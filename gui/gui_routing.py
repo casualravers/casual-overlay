@@ -93,8 +93,18 @@ class Routing:
                 var.trace_add("write", lambda *_a, r=rid: self.paint(r))
         tip = getattr(self.c, "Tooltip", None)
         if tip is not None:
-            tip(mb, f"Source audio de « {rt.BY_ID[rid].label} » ({'fond' if rt.BY_ID[rid].layer == 'bg' else 'logo'}). « Comme la couche » = la source "
-                    "de la couche (menu « reagit a »). Meme reglage que l'onglet Routage.")
+            layer = rt.BY_ID[rid].layer
+            if layer is None:
+                text = (f"Source audio de « {rt.BY_ID[rid].label} ». « Tout le son » = comme avant (le son entier). "
+                        "Meme reglage que l'onglet Routage.")
+            else:
+                text = (f"Source audio de « {rt.BY_ID[rid].label} » ({'fond' if layer == 'bg' else 'logo'}). « Comme la couche » = la source "
+                        "de la couche (menu « reagit a »). Meme reglage que l'onglet Routage.")
+            if rid in rt.FX_LINES and layer == "logo":
+                text += " Logo lie au fond (« Memes effets que le fond ») : ces effets suivent la ligne du fond."
+            if rid == "hue":
+                text += " La teinte vient du rapport aigus / graves de la source ; le dosage regle l'ampleur de la rotation."
+            tip(mb, text)
         mb.bind("<Enter>", lambda _e, r=rid: self.set_hover(r), add="+")
         self.paint(rid)
         return mb
@@ -110,22 +120,27 @@ class Routing:
         default = (src, dose) == (rt.INHERIT, 1.0)
         enabled = rt.line_enabled(self.c.params, rid)
         text = rt.pill_text(src, dose, rt.BY_ID[rid].layer)
-        if rt.fx_route_id(rid, float(self.c.params.get("fx_link", 1.0)) >= 0.5) != rid:
+        follows = rt.follows_bg(self.c.params, rid)
+        if follows:
             text = "Suit le fond"                       # logo lie : ses effets suivent la ligne du fond (sa propre ligne est ignoree)
+        state = "disabled" if follows else "normal"
         if default:
             bg, fg = T.CARD, (T.MUTED if enabled else T.FAINT)
         else:
             bg, fg = (T.OVERLAY, T.ON_ACCENT) if enabled else (T.LINE, T.MUTED)
         for mb in list(self.pills.get(rid, [])):
             try:
-                if mb.cget("text") != text or mb.cget("bg") != bg or mb.cget("fg") != fg:
-                    mb.configure(text=text, bg=bg, fg=fg, activebackground=bg, activeforeground=fg)
+                if mb.cget("text") != text or mb.cget("bg") != bg or mb.cget("fg") != fg or str(mb.cget("state")) != state:
+                    mb.configure(text=text, bg=bg, fg=fg, activebackground=bg, activeforeground=fg, state=state, disabledforeground=fg)
             except tk.TclError:
                 self.pills[rid].remove(mb)
         row = self.rows.get(rid)
         if row is not None:
             try:
                 row["label"].configure(fg=T.FG if enabled else T.FAINT)
+                for w in row.get("scales", ()):
+                    if str(w.cget("state")) != state:
+                        w.configure(state=state)
             except tk.TclError:
                 pass
         if self.hover == rid:
@@ -168,6 +183,7 @@ class Routing:
         _src, dose = self.vars(r.id)
         scale = compact_scale(tab, rt.DOSE_MIN, rt.DOSE_MAX, 0.05, dose, 90)
         scale.grid(row=row, column=3, sticky="w", padx=padx, pady=pady)
+        cells["scales"] = [w for w in (scale, *scale.winfo_children()) if w.winfo_class() == "Scale"]
         reset = tk.Button(tab, text="↺", width=2, command=lambda rid=r.id: self.reset([rid]), font=T.FONT_SMALL)
         reset.grid(row=row, column=4, sticky="w", padx=padx, pady=pady)
         for w in (label, level, scale, reset):
@@ -207,13 +223,18 @@ class Routing:
             return
         src, _dose = self.route(rid)
         shown = src
-        on_bg = rt.BY_ID[rid].layer == "bg" or float(self.c.params.get("fx_link", 1.0)) >= 0.5 and rid in rt.FX_LINES
-        if src == rt.INHERIT:
-            shown = "tout" if rt.BY_ID[rid].layer is None else self.c.params.get("src_bg" if on_bg else "src_logo", "tout")
-        if shown == "auto":                             # la source qu'Auto a choisie, publiee par le rendu (s.status["sources"])
-            status = getattr(getattr(self.c, "s", None), "status", None) or {}
-            sources = status.get("sources")
-            shown = sources[0 if on_bg else 1] if sources else "tout"
+        layer = rt.BY_ID[rid].layer
+        on_bg = layer != "logo" or float(self.c.params.get("fx_link", 1.0)) >= 0.5      # lie, tout le logo ecoute la source du fond (comme le rendu)
+        status = getattr(getattr(self.c, "s", None), "status", None) or {}
+        resolved = (status.get("routes_now") or {}).get(rid)
+        if src == "auto" and resolved is not None:
+            shown = resolved[0]                         # la source qu'Auto a choisie pour cette ligne, publiee par le rendu
+        else:
+            if src == rt.INHERIT:
+                shown = "tout" if layer is None else self.c.params.get("src_bg" if on_bg else "src_logo", "tout")
+            if shown == "auto":                         # la source qu'Auto a choisie pour la couche, publiee par le rendu (s.status["sources"])
+                sources = status.get("sources")
+                shown = sources[0 if on_bg else 1] if sources else "tout"
         rng = rt.source_range_hz(shown)
         name = f"{rt.BY_ID[rid].label} <- {rt.source_label(src)}" + (f" ({rt.source_label(shown)})" if src == rt.INHERIT else "")
         if rng is not None:

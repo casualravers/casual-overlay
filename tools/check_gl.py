@@ -9852,9 +9852,11 @@ def check_routage_gui() -> None:
         check(pill.cget("text") == "Caisse claire 150 %" and tab_pill.cget("text") == "Caisse claire 150 %", "routage gui: une scene appliquee met a jour pastille et onglet")
         check((pill.winfo_reqwidth(), tab_pill.winfo_reqwidth()) == w0, "routage gui: la pastille garde sa largeur quand son texte change (rien ne bouge)", str((w0, pill.winfo_reqwidth())))
         check(pill.cget("bg") == theme_overlay() and ui.rows["bg_ripple"]["pill"].cget("bg") != theme_overlay(), "routage gui: ligne reglee a l'accent, ligne par defaut neutre")
-        ui.reset([r.id for r in rt.ROUTES if r.zone == "fond" and r.kind != "info"])
+        resets = sorted((w for w in tab.grid_slaves() if w.winfo_class() == "Button" and w.cget("text") == "Tout remettre"),
+                        key=lambda w: int(w.grid_info()["row"]))
+        resets[0].invoke()                                         # le bouton de la zone Fond (le premier pose)
         root.update_idletasks()
-        check(rt.is_default(params) and pill.cget("text") == "Comme le fond", "routage gui: Tout remettre = routes par defaut", pill.cget("text"))
+        check(len(resets) == 3 and rt.is_default(params) and pill.cget("text") == "Comme le fond", "routage gui: le bouton Tout remettre = routes par defaut", pill.cget("text"))
         ui.refresh()
         check(ui.rows["bg_chroma"]["label"].cget("fg") != ui.rows["bg_wobble"]["label"].cget("fg"), "routage gui: effet coupe = ligne grisee (aberration coupee)")
         check(ui.rows["lg_wobble"]["pill"].cget("text") == "Suit le fond" and ui.rows["lg_pulse"]["pill"].cget("text") == "Comme le logo",
@@ -9872,8 +9874,34 @@ def check_routage_gui() -> None:
         ui.set_hover("bg_ripple")
         ui.vars("bg_ripple")[0].set("kick")
         texts2 = [ui.spectrum.itemcget(i, "text") for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "text"]
-        check(any("Glitch" in t for t in texts) and any("evenement" in t for t in texts2), "routage gui: le spectre montre la plage de la ligne survolee, ou dit evenement",
+        check(any("Glitch" in t for t in texts) and any("evenement" in t for t in texts2), "routage gui: le spectre nomme la ligne survolee, ou dit evenement",
               str((texts, texts2)))
+
+        def band():
+            rects = [ui.spectrum.coords(i) for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "rectangle"]
+            return rects[0] if rects else None
+        params.update(src_bg="basses", src_logo="aigus", fx_link=1.0)
+        ui.set_hover(None)
+        ui.set_hover("bg_glitch")
+        x_bass = band()
+        ui.set_hover("lg_pulse")
+        check(x_bass is not None and band() == x_bass, "routage gui: logo lie, la pulsation ecoute la source du fond (meme plage au spectre)", str((x_bass, band())))
+        ui.vars("bg_glitch")[0].set("air")
+        ui.set_hover("bg_ripple")
+        ui.set_hover("bg_glitch")
+        check(band() is not None and band()[0] > x_bass[2], "routage gui: une ligne sur l'air surligne les aigus du spectre", str(band()))
+        ui.reset(["bg_glitch"])
+        ui.refresh()
+        lg = ui.rows["lg_wobble"]["pill"]
+        check(str(lg.cget("state")) == "disabled" and str(ui.rows["lg_pulse"]["pill"].cget("state")) == "normal",
+              "routage gui: logo lie, la pastille « Suit le fond » est desactivee (reglage ignore), pas celle des reactions")
+        params["bg_mode"] = "live"
+        ui.refresh()
+        flash_fg = ui.rows["bg_flash"]["label"].cget("fg")
+        params["bg_mode"] = "pattern"
+        ui.refresh()
+        check(flash_fg != ui.rows["bg_flash"]["label"].cget("fg"), "routage gui: flash du motif grise quand le fond est la video (pas le motif)")
+        params.update(src_bg="tout", src_logo="tout")
     finally:
         root.destroy()
 
@@ -10068,6 +10096,16 @@ def check_routage_rendu() -> None:
           str((h_def, r._hue_spec)))
     step(bass_only)
     check(r.routes_now == {} and r._routes.info("breath") is None, "routage: toutes les lignes remises par defaut = plus aucun calcul ni memoire")
+    beats = dict(hit, beats=7)
+    step(beats, **pat)
+    flips_on = r.scene_prog["u_sto_au"].value[2] if "u_sto_au" in r.scene_prog else None
+    step(beats, rg_bg_scroll=0.0, **pat)
+    flips_off = r.scene_prog["u_sto_au"].value[2] if "u_sto_au" in r.scene_prog else None
+    check(flips_on == 7.0 and flips_off == 0.0, "routage: defilement et damier a 0 % = le damier ne bascule plus aux kicks", str((flips_on, flips_off)))
+    r._hue_spec = 0.0
+    for _ in range(20):
+        step(both, hue_spectrum=1.0, rg_hue=0.5)
+    check(abs(r._hue_spec - h_def * 0.5) < 2.0, "routage: teinte spectrale a 50 % = moitie de la rotation (le dosage agit sur l'amplitude)", str((h_def, r._hue_spec)))
     check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None
           and ("wobble", "rien", 1.0) in r.fx_now["bg"] and ("wobble", "basses", 0.6) not in r.fx_now["bg"],
           "routage: une ligne a la main sort d'auto pour CET effet (le voyant le dit), la couche reste en auto par effet", str(r.fx_now["bg"]))

@@ -1250,7 +1250,8 @@ class Renderer:
         spec = _unit(p["hue_spectrum"])
         if spec > 0.0:                                                  # graves = chaud, aigus = froid, suivi lisse (0,5 s) pour ne pas clignoter
             hv = line("hue", base_all)                                  # routage (#198) : par defaut le son entier
-            self._hue_spec += (spectral_hue(hv[0], hv[1]) - self._hue_spec) * (1.0 - math.exp(-raw_dt / 0.5))
+            # la teinte vient du RAPPORT aigus / graves (insensible a un facteur commun) : le dosage de la ligne agit donc sur son amplitude
+            self._hue_spec += (spectral_hue(hv[0], hv[1]) * routing.route_of(p, "hue")[1] - self._hue_spec) * (1.0 - math.exp(-raw_dt / 0.5))
         hue_deg = (float(p["hue_master"]) + self._hue_phase + build * 120.0 + spec * self._hue_spec) % 360.0
         self._comp_t += dt
         self._comp_rot += dt * math.radians(float(p["comp_rot"]))
@@ -1357,7 +1358,9 @@ class Renderer:
         # routage (#198) : defilement et damier (composante basses, compte des kicks), scintillement (composante aigus) ; par defaut le fond
         bg_sc, bg_sp = line("bg_scroll", bg_au), line("bg_sparkle", bg_au)
         scroll_info = self._routes.info("bg_scroll") if "bg_scroll" in active else None
-        kicks_on = react > 0 and react_m > 0 and has_kick(scroll_info[0] if scroll_info and routing.route_of(p, "bg_scroll")[0] != routing.INHERIT else src_bg)
+        scroll_src, scroll_dose = routing.route_of(p, "bg_scroll")
+        kicks_on = (react > 0 and react_m > 0 and scroll_dose > 0.0                 # dosage 0 : le damier ne bascule plus aux kicks
+                    and has_kick(scroll_info[0] if scroll_info and scroll_src != routing.INHERIT else src_bg))
         self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_sc[0]) * 1.5) * (1.0 + _unit(p["breath_pulse"]) * 0.8 * (self._bp_swell - 0.5))      # derive du fond : respire avec la pulsation
         self._bg_flip_t += dt * float(p["bg_flip"])
         self._sto_flick += dt * react * float(bg_sp[1]) * 6.0     # aigus : renouvellements de rang par seconde et par point

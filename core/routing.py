@@ -188,7 +188,14 @@ def line_enabled(params: dict, rid: str) -> bool:
         return _on(params, "fx_on", 4) and _pos(params, "logo_pulse")
     if rid in ("lg_jitter", "lg_glow"):
         return _on(params, "fx_on", 4) and _pos(params, *VEC_GATES[rid])
+    if r.zone == "fond":                                    # flash, defilement, scintillement : seulement avec le motif genere (pas la video)
+        return params.get("bg_mode") == "pattern" and _pos(params, *VEC_GATES[rid])
     return _pos(params, *VEC_GATES[rid])
+
+
+def follows_bg(params: dict, rid: str) -> bool:
+    """Vrai si la ligne est ignoree parce que le logo est lie (ses effets du shader suivent la ligne du fond)."""
+    return fx_route_id(rid, float(params.get("fx_link", 1.0)) >= 0.5) != rid
 
 
 def fx_route_id(rid: str, linked: bool) -> str:
