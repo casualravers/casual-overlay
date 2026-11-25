@@ -9652,6 +9652,54 @@ def check_onsets() -> None:
           "kick par couche: la couche a sensibilite haute rattrape des kicks que le kick commun rate", f"bg {len(e2['bg'])} commun {len(b2)}")
 
 
+ROUTE_IDS = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
+             "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
+             "breath", "hue", "strobe", "foudre", "noise")
+
+
+def check_routage() -> None:
+    """Routage audio par effet (#198, core/routing.py, pur) : table des lignes, reglages, resolution, RouteBank."""
+    print("-- routage audio par effet (pur)")
+    from core import audio_layers as al, routing as rt
+    ids = tuple(r.id for r in rt.ROUTES)
+    check(len(set(ids)) == len(ids), "routage: identifiants uniques")
+    check(ids == ROUTE_IDS, "routage: les lignes de la spec, dans l'ordre d'affichage", str(ids))
+    check(all(r.zone in rt.ZONES and r.layer in (*al.LAYERS, None) and r.kind in ("fx", "vec", "info") and r.label for r in rt.ROUTES),
+          "routage: zone, couche, nature et libelle de chaque ligne")
+    fx = [r.id for r in rt.ROUTES if r.kind == "fx"]
+    check(fx == ["bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma"], "routage: les 8 effets du shader", str(fx))
+    check(rt.FX_LINES == {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS)},
+          "routage: FX_LINES = (couche, indice dans EFFECTS)")
+    check([r.id for r in rt.ROUTES if r.kind == "info"] == ["strobe", "foudre", "noise"], "routage: strobe, foudre, noise en lecture seule")
+    check(rt.ROUTE_SOURCES[0] == "herite" and set(rt.ROUTE_SOURCES[1:]) == set(al.SOURCES) and len(rt.ROUTE_SOURCES) == len(al.SOURCES) + 1,
+          "routage: sources = herite + toutes celles des couches")
+    fam = [s for _, srcs in rt.SOURCE_FAMILIES for s in srcs]
+    check(sorted(fam) == sorted(rt.ROUTE_SOURCES) and len(fam) == len(set(fam)) and rt.SOURCE_FAMILIES[0][1][0] == "herite",
+          "routage: familles du menu = chaque source une fois, herite en tete", str(fam))
+    check(rt.source_key("bg_wobble") == "rt_bg_wobble" and rt.dose_key("bg_wobble") == "rg_bg_wobble", "routage: noms des reglages")
+    check(rt.route_of({}, "bg_wobble") == ("herite", 1.0), "routage: sans reglage = herite, dosage 1")
+    check(rt.route_of({"rt_bg_wobble": "fin64"}, "bg_wobble")[0] == "herite", "routage: source inconnue -> herite")
+    check(rt.route_of({"rg_bg_wobble": 9}, "bg_wobble")[1] == 2.0 and rt.route_of({"rg_bg_wobble": -1}, "bg_wobble")[1] == 0.0
+          and rt.route_of({"rg_bg_wobble": "x"}, "bg_wobble")[1] == 1.0, "routage: dosage borne 0..2 (invalide = 1)")
+    check(rt.is_default({}) and rt.is_default({"rt_bg_wobble": "herite", "rg_bg_wobble": 1.0}), "routage: is_default sans reglage")
+    check(not rt.is_default({"rt_bg_wobble": "basses"}) and not rt.is_default({"rg_lg_glitch": 0.5}) and rt.is_default({"rt_bg_wobble": "basses"}, "lg_glitch"),
+          "routage: is_default d'une ligne ou de toutes")
+    check(rt.routed_ids({"rt_lg_glitch": "aigus", "rt_bg_wobble": "basses"}) == ["bg_wobble", "lg_glitch"], "routage: routed_ids dans l'ordre de la table")
+    # --- reglages de la table unique
+    from core import params_schema as ps
+    from core.params import coerce_params, DEFAULT_PARAMS
+    keys = [k for r in rt.ROUTES if r.kind != "info" for k in (rt.source_key(r.id), rt.dose_key(r.id))]
+    check(all(k in DEFAULT_PARAMS for k in keys) and not any(rt.source_key(r.id) in DEFAULT_PARAMS for r in rt.ROUTES if r.kind == "info"),
+          "routage: deux reglages par ligne routable (aucun pour les lignes informatives)")
+    check(all(DEFAULT_PARAMS[k] == ("herite" if k.startswith("rt_") else 1.0) for k in keys), "routage: defauts herite / 1.0")
+    check(all(ps.BY_KEY[k].scope == "look" for k in keys), "routage: portee look (presets overlay et scenes)")
+    cp = coerce_params({"rt_bg_wobble": "basses", "rg_bg_wobble": 1.5})
+    check(cp.get("rt_bg_wobble") == "basses" and cp.get("rg_bg_wobble") == 1.5, "routage: une route valide est gardee", str((cp.get("rt_bg_wobble"), cp.get("rg_bg_wobble"))))
+    cp = coerce_params({"rt_bg_wobble": "fin64", "rg_bg_wobble": 7})
+    check(cp.get("rt_bg_wobble", "herite") == "herite" and float(cp.get("rg_bg_wobble", 1.0)) <= 2.0, "routage: source inconnue et dosage hors plage corriges", str(cp.get("rt_bg_wobble")))
+    check(rt.is_default({**DEFAULT_PARAMS, **coerce_params({})}), "routage: anciens reglages (sans rt_ / rg_) = routes par defaut")
+
+
 def check_effets_auto() -> None:
     """Reactivite par effet (spec 2026-11-13) : tableau phase x couche x effet, dosages, fondus, derive (core/audio_layers.py, pur)."""
     print("-- reactivite par effet (pur)")
@@ -16021,7 +16069,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
@@ -16033,7 +16081,7 @@ SUITE = (
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
-    "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
+    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
