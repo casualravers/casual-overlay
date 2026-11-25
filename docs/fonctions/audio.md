@@ -67,6 +67,18 @@ Le fond et le logo ne reagissent plus forcement a la meme partie du son. Chaque 
 - **Renforts de fin de cycle** (`phrase_boost`, `accent_vectors`, master `cycle_accent` 0..1, curseur « Renfort fins de cycle » de l'onglet Effets) : en groove et au pic, couches en mode auto par effet, le glitch et l'aberration sont multiplies par 1,3 (fin de 8), 1,5 (fin de 16), de 1,6 a 2 sur les 4 temps de la fin de 32 (plafonnes a 1) ; retour a 1 sur le « 1 » suivant. Les effets DEDIES de fin de cycle viendront dans un second temps.
 `check_gl.py` : `check_structure` (pur). **Non verifie** : justesse du 1 auto et de la caisse claire sur de la vraie musique, rendu des renforts au videoprojecteur.
 
+### Routage audio par effet (#198 ; `core/routing.py`, reglages `rt_*` / `rg_*` ; spec et plan : `docs/plans/2026-11-25-routage-audio-198*.md`)
+
+Chaque chose qui reagit au son (une LIGNE : ondulation du fond, pulsation du logo...) peut avoir SA source audio et son dosage, par-dessus les reglages de couche (qui restent tous). 22 lignes (`ROUTES`) : fond (4 effets shader, flash, defilement et damier, scintillement du motif), logo (4 effets shader, pulsation, tremblement, contour, halo, fonte, cellules), global (respiration, teinte spectrale ; strobe, foudre et noise en lecture seule : ils decident deja seuls, pas de reglage). Mosaique et texte : pas de ligne (aucune reactivite audio).
+- **Reglages** : `rt_<id>` = `herite` (defaut, « comme la couche ») ou une valeur de `audio_layers.SOURCES` (familles du menu : `SOURCE_FAMILIES`) ; `rg_<id>` = dosage 0..2 (defaut 1). Portee `look` (presets overlay, scenes). Source inconnue (scene d'une autre version) -> `herite`.
+- **Zero perte** : ligne par defaut = le vecteur de la couche tel quel (meme objet, aucun calcul) ; `Renderer.draw` ne fait rien tant que `routing.is_default(p)`. Une scene ancienne rend la meme image (`check_routage_rendu`).
+- **Resolution** (`RouteBank.vector`) : `herite` + dosage = vecteur de la couche (deja retarde / lisse) x dosage ; source explicite = `SourceMixer` + `LayerFilter` propres a la ligne (memes `lag_*` / `smooth_*` que la couche), puis dosage ; `auto` = la source de la COUCHE dans le tableau des phases (`auto_sources`, fondu 1,5 s), pas la table par effet (`FX_TABLE`, reservee aux lignes laissees a `herite`). Une ligne a la main sort d'auto pour CET effet seulement.
+- **Decisions** : (1) une ligne modifiee est appliquee APRES `ripple_on_downbeat` et les renforts de fin de cycle (elle est explicite : une onde de choc routee sur `kick` part a chaque kick meme avec `ripple_beat` = mesure ; la source `mesure` existe) ; (2) **lies** (`fx_link` = 1), les 4 effets shader du logo suivent la ligne du fond (`fx_route_id`), comme la source, le retard et le lissage de la couche ; leur propre ligne est ignoree. Les reactions du logo (pulsation...) restent des lignes a part.
+- **Voyant** : `Renderer.routes_now` (ligne modifiee -> source resolue, niveau) -> `s.status["routes_now"]`.
+- **Cout mesure** (poste de dev, 1280x720, mediane de `draw`) : +0,05 a +0,14 ms CPU avec 8 lignes routees (lignes par defaut : 0).
+- Livraison en 3 PR : (1) modele + 8 effets shader (fait) ; (2) onglet Routage + pastilles ; (3) les autres lignes. **Non verifie** : ressenti sur de la vraie musique au videoprojecteur.
+`check_gl.py` : `check_routage` (pur : table, reglages, resolution, retard, auto, lie), `check_routage_rendu` (pixels).
+
 ### Audio (FeatureExtractor, fonctions pures, testables sans fil ni temps reel)
 
 Fenetre 2048 + Hann, `rfft`, bandes basses 20-150 Hz / mediums 150-2000 / aigus 2000-10000 +

@@ -9652,6 +9652,117 @@ def check_onsets() -> None:
           "kick par couche: la couche a sensibilite haute rattrape des kicks que le kick commun rate", f"bg {len(e2['bg'])} commun {len(b2)}")
 
 
+ROUTE_IDS = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
+             "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
+             "breath", "hue", "strobe", "foudre", "noise")
+
+
+def check_routage() -> None:
+    """Routage audio par effet (#198, core/routing.py, pur) : table des lignes, reglages, resolution, RouteBank."""
+    print("-- routage audio par effet (pur)")
+    from core import audio_layers as al, routing as rt
+    ids = tuple(r.id for r in rt.ROUTES)
+    check(len(set(ids)) == len(ids), "routage: identifiants uniques")
+    check(ids == ROUTE_IDS, "routage: les lignes de la spec, dans l'ordre d'affichage", str(ids))
+    check(all(r.zone in rt.ZONES and r.layer in (*al.LAYERS, None) and r.kind in ("fx", "vec", "info") and r.label for r in rt.ROUTES),
+          "routage: zone, couche, nature et libelle de chaque ligne")
+    fx = [r.id for r in rt.ROUTES if r.kind == "fx"]
+    check(fx == ["bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma"], "routage: les 8 effets du shader", str(fx))
+    check(rt.FX_LINES == {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS)},
+          "routage: FX_LINES = (couche, indice dans EFFECTS)")
+    check([r.id for r in rt.ROUTES if r.kind == "info"] == ["strobe", "foudre", "noise"], "routage: strobe, foudre, noise en lecture seule")
+    check(rt.ROUTE_SOURCES[0] == "herite" and set(rt.ROUTE_SOURCES[1:]) == set(al.SOURCES) and len(rt.ROUTE_SOURCES) == len(al.SOURCES) + 1,
+          "routage: sources = herite + toutes celles des couches")
+    fam = [s for _, srcs in rt.SOURCE_FAMILIES for s in srcs]
+    check(sorted(fam) == sorted(rt.ROUTE_SOURCES) and len(fam) == len(set(fam)) and rt.SOURCE_FAMILIES[0][1][0] == "herite",
+          "routage: familles du menu = chaque source une fois, herite en tete", str(fam))
+    check(rt.source_key("bg_wobble") == "rt_bg_wobble" and rt.dose_key("bg_wobble") == "rg_bg_wobble", "routage: noms des reglages")
+    check(rt.route_of({}, "bg_wobble") == ("herite", 1.0), "routage: sans reglage = herite, dosage 1")
+    check(rt.route_of({"rt_bg_wobble": "fin64"}, "bg_wobble")[0] == "herite", "routage: source inconnue -> herite")
+    check(rt.route_of({"rg_bg_wobble": 9}, "bg_wobble")[1] == 2.0 and rt.route_of({"rg_bg_wobble": -1}, "bg_wobble")[1] == 0.0
+          and rt.route_of({"rg_bg_wobble": "x"}, "bg_wobble")[1] == 1.0, "routage: dosage borne 0..2 (invalide = 1)")
+    check(rt.is_default({}) and rt.is_default({"rt_bg_wobble": "herite", "rg_bg_wobble": 1.0}), "routage: is_default sans reglage")
+    check(not rt.is_default({"rt_bg_wobble": "basses"}) and not rt.is_default({"rg_lg_glitch": 0.5}) and rt.is_default({"rt_bg_wobble": "basses"}, "lg_glitch"),
+          "routage: is_default d'une ligne ou de toutes")
+    check(rt.routed_ids({"rt_lg_glitch": "aigus", "rt_bg_wobble": "basses"}) == ["bg_wobble", "lg_glitch"], "routage: routed_ids dans l'ordre de la table")
+    # --- reglages de la table unique
+    from core import params_schema as ps
+    from core.params import coerce_params, DEFAULT_PARAMS
+    keys = [k for r in rt.ROUTES if r.kind != "info" for k in (rt.source_key(r.id), rt.dose_key(r.id))]
+    check(all(k in DEFAULT_PARAMS for k in keys) and not any(rt.source_key(r.id) in DEFAULT_PARAMS for r in rt.ROUTES if r.kind == "info"),
+          "routage: deux reglages par ligne routable (aucun pour les lignes informatives)")
+    check(all(DEFAULT_PARAMS[k] == ("herite" if k.startswith("rt_") else 1.0) for k in keys), "routage: defauts herite / 1.0")
+    check(all(ps.BY_KEY[k].scope == "look" for k in keys), "routage: portee look (presets overlay et scenes)")
+    cp = coerce_params({"rt_bg_wobble": "basses", "rg_bg_wobble": 1.5})
+    check(cp.get("rt_bg_wobble") == "basses" and cp.get("rg_bg_wobble") == 1.5, "routage: une route valide est gardee", str((cp.get("rt_bg_wobble"), cp.get("rg_bg_wobble"))))
+    cp = coerce_params({"rt_bg_wobble": "fin64", "rg_bg_wobble": 7})
+    check(cp.get("rt_bg_wobble", "herite") == "herite" and cp.get("rg_bg_wobble") == 2.0, "routage: source inconnue ignoree, dosage hors plage ramene a 2",
+          str((cp.get("rt_bg_wobble"), cp.get("rg_bg_wobble"))))
+    check(rt.is_default({**DEFAULT_PARAMS, **coerce_params({})}), "routage: anciens reglages (sans rt_ / rg_) = routes par defaut")
+    # --- RouteBank : vecteur d'une ligne, image par image
+    st = {"bass": 0.8, "mid": 0.5, "high": 0.6, "rms": 0.4, "beat": 0.9, "since_beat": 0.2, "hit": 0.7, "since_hit": 0.1}
+    base = (0.3, 0.2, 0.1, 0.5)
+    bank = rt.RouteBank()
+    v = bank.vector(0.0, st, {}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(v is base and bank.info("bg_wobble") is None, "routage: ligne par defaut = vecteur de la couche tel quel (meme objet)")
+    v = bank.vector(0.0, st, {"rg_bg_wobble": 0.5}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(v == (0.15, 0.1, 0.05, 0.5), "routage: herite + dosage = vecteur de la couche x dosage, since inchange", str(v))
+    v = bank.vector(0.0, st, {"rt_lg_chroma": "kick"}, "lg_chroma", base, "tout", 0.0, 0.0)
+    check(v == (0.0, 0.0, 0.9, 0.2), "routage: source kick = le kick du state, independant de la couche", str(v))
+    check(bank.info("lg_chroma") == ("kick", 0.9), "routage: info = source resolue et niveau", str(bank.info("lg_chroma")))
+    p2 = {"rt_bg_wobble": "basses", "rt_bg_glitch": "aigus"}
+    a, b = bank.vector(0.0, st, p2, "bg_wobble", base, "tout", 0.0, 0.0), bank.vector(0.0, st, p2, "bg_glitch", base, "tout", 0.0, 0.0)
+    check(a == (0.8, 0.0, 0.9, 0.2) and b == (0.6, 0.6, 0.0, al.NO_KICK), "routage: deux lignes d'une couche sur deux sources, independantes", str((a, b)))
+    v = bank.vector(0.0, st, {"rt_bg_wobble": "basses", "rg_bg_wobble": 0.0}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(v == (0.0, 0.0, 0.0, al.NO_KICK), "routage: dosage 0 = vecteur nul, since = NO_KICK", str(v))
+    # auto : la source de la couche dans le tableau des phases, avec fondu
+    bk = rt.RouteBank()
+    pa = {"rt_bg_ripple": "auto"}
+    check(bk.vector(0.0, st, pa, "bg_ripple", base, "basses", 0.0, 0.0) == (0.8, 0.0, 0.9, 0.2), "routage: auto = source du tableau pour la couche")
+    bk.vector(0.5, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)            # la phase change : debut du fondu
+    mid = bk.vector(1.25, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)
+    end = bk.vector(2.5, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)
+    check(0.6 < mid[0] < 0.8 and 0.0 < mid[1] < 0.6 and end == (0.6, 0.6, 0.0, al.NO_KICK), "routage: auto qui change de source = fondu (pas de saut)", str((mid, end)))
+    bk2 = rt.RouteBank()
+    check(bk2.vector(0.0, st, {"rt_bg_ripple": "auto"}, "bg_ripple", base, "tout", 0.0, 0.0)[:3] == (0.8, 0.6, 0.9), "routage: auto sans phase (tout) = tout")
+    # retard : silence pendant `lag` puis le signal ; retard change a chaud sans valeur aberrante
+    bk3, pl, out = rt.RouteBank(), {"rt_bg_wobble": "basses"}, []
+    for k in range(40):
+        out.append(bk3.vector(k * 0.01, st, pl, "bg_wobble", base, "tout", 0.2, 0.0)[0])
+    check(out[0] == 0.0 and out[15] == 0.0 and out[25] == 0.8, "routage: retard 0,2 s = silence puis le signal", str(out[::5]))
+    hot = [bk3.vector(0.4 + k * 0.01, st, pl, "bg_wobble", base, "tout", 0.35, 0.0)[0] for k in range(30)]
+    check(all(0.0 <= x <= 0.8 for x in hot), "routage: retard change a chaud, jamais au-dela du signal", str(hot[::5]))
+    lean = {"bass": 0.4, "high": 0.2, "beat": 0.0, "since_beat": 3.0}
+    try:
+        ok = all(len(rt.RouteBank().vector(0.0, lean, {"rt_bg_wobble": s}, "bg_wobble", base, "tout", 0.0, 0.0)) == 4 for s in rt.ROUTE_SOURCES)
+    except Exception as exc:          # noqa: BLE001
+        ok = False
+        print("   ", exc)
+    check(ok, "routage: state minimal (sans bandes, pulsation, frappes) = toutes les sources sans erreur")
+    v = rt.RouteBank().vector(0.0, st, {"rt_lg_pulse": "kick"}, "lg_pulse", base, "tout", 0.0, 0.0, kick_layer="bg")
+    check(v[2] == 0.9, "routage: le kick d'une ligne du logo lie suit la couche donnee (kick_layer)")
+    check(rt.fx_route_id("lg_wobble", True) == "bg_wobble" and rt.fx_route_id("lg_wobble", False) == "lg_wobble"
+          and rt.fx_route_id("lg_pulse", True) == "lg_pulse" and rt.fx_route_id("bg_glitch", True) == "bg_glitch",
+          "routage: lies, les 4 effets shader du logo suivent la ligne du fond (pas les reactions du logo)")
+    v = rt.RouteBank().vector(0.0, st, {"rt_bg_wobble": "aigus", "rt_lg_wobble": "kick"}, "lg_wobble", base, "tout", 0.0, 0.0, like="bg_wobble")
+    check(v == (0.6, 0.6, 0.0, al.NO_KICK), "routage: like = reglages d'une autre ligne", str(v))
+    # une ligne remise par defaut puis reroutee ne rejoue pas sa vieille memoire (retard, lissage) : prune
+    bk4, pr = rt.RouteBank(), {"rt_bg_ripple": "kick"}
+    for k in range(60):
+        bk4.vector(k / 60.0, st, pr, "bg_ripple", base, "tout", 0.2, 0.5)
+    bk4.prune(())                                               # la ligne n'est plus calculee (remise par defaut, ou toutes par defaut)
+    silent = {"bass": 0.0, "high": 0.0, "beat": 0.0, "since_beat": 30.0}
+    ghost = [bk4.vector(60.0 + k * 0.01, silent, pr, "bg_ripple", base, "tout", 0.2, 0.5) for k in range(25)]
+    check(all(g[2] == 0.0 for g in ghost) and bk4.info("bg_ripple")[1] == 0.0, "routage: ligne reroutee apres un retour au defaut = pas d'onde fantome (memoire videe)",
+          str(ghost[:3]))
+    bk4.vector(61.0, st, pr, "bg_ripple", base, "tout", 0.0, 0.0)
+    bk4.prune({"bg_ripple"})
+    check(bk4.info("bg_ripple") is not None, "routage: prune garde les lignes encore calculees")
+    nan = float("nan")
+    check(rt.route_of({"rg_bg_wobble": nan}, "bg_wobble")[1] == 1.0 and rt.route_of({"rg_bg_wobble": float("inf")}, "bg_wobble")[1] == 1.0
+          and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
+
+
 def check_effets_auto() -> None:
     """Reactivite par effet (spec 2026-11-13) : tableau phase x couche x effet, dosages, fondus, derive (core/audio_layers.py, pur)."""
     print("-- reactivite par effet (pur)")
@@ -9727,6 +9838,71 @@ def check_effets_auto() -> None:
         b4.levels(k / 60.0, 1 / 60.0, st, "bg", dict(rest, glitch=("aigus", 1.0)), "bg", fade=False)
     v = b4.levels(5.0, 1 / 60.0, st, "bg", dict(rest, glitch=("kick", 1.0)), "bg", fade=False)[2]
     check(v[1] == 0.0 and v[2] > 0.8, "effets auto: sans fondu (source choisie a la main) le changement de source est immediat", str(v))
+
+def check_routage_rendu() -> None:
+    """Routage audio par effet (#198) en pixels : une ligne modifiee ne change que son effet ; routes par defaut = image d'avant."""
+    print("Routage audio par effet (rendu)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    grad = np.zeros((size[1], size[0], 3), np.uint8)
+    grad[:, :, 0] = (np.arange(size[0]) * 255 // size[0])[None, :] // 2
+    grad[:, :, 1] = (np.arange(size[1]) * 255 // size[1])[:, None]
+    grad[:, :, 2] = 80 + (np.arange(size[0]) // 40 % 2)[None, :] * 100
+    r.video_tex.write(np.ascontiguousarray(grad).tobytes())
+    r.set_logo(np.full((64, 64, 4), 255, np.uint8), "x")
+    bass_only = {"bass": 1.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    hit = dict(bass_only, bass=0.0, beat=1.0, since_beat=0.1)
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.3, logo_opacity=1.0, logo_glow=0.0,
+                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_on=0.0, src_bg="tout", src_logo="tout")
+    def render(state=bass_only, **kw):          # horloge fixe (comme check_audio_layers) : l'image ne depend que du son et des reglages
+        r.draw(fbo, size, state, dict(base, **kw), 1.0)
+        return read_target(ctx, fbo, size).astype(int)
+
+    def changed(img, ref):
+        return int((np.abs(img - ref).max(axis=2) > 4).sum())
+
+    still = render()
+    wob = dict(fx_on=[1, 0, 0, 0, 1], fx_int=[2.0, 1, 1, 1, 1])
+    ref = render(**wob)
+    same = render(rt_bg_wobble="herite", rg_bg_wobble=1.0, **wob)
+    check(changed(ref, still) > 2000 and int(np.abs(same - ref).max()) == 0 and r.routes_now == {},
+          "routage: routes par defaut = chemin d'avant (aucun calcul de ligne, image identique)")
+    render(rt_bg_wobble="aigus", rg_bg_wobble=0.3, **wob)
+    back = render(**wob)
+    check(int(np.abs(back - ref).max()) == 0 and r._routes.info("bg_wobble") is None,
+          "routage: apres une route puis un retour au defaut, image d'avant et memoire de la ligne videe")
+    render(rt_bg_wobble="basses", **wob)
+    check("lg_wobble" not in r.routes_now and "bg_wobble" in r.routes_now, "routage: lies, le voyant ne montre pas la ligne du logo (elle suit le fond)",
+          str(r.routes_now))
+    check(changed(render(rt_bg_wobble="aigus", **wob), still) == 0, "routage: ondulation du fond sur les aigus, des basses seules ne la font plus onduler (logo lie compris)")
+    check(int(np.abs(render(rt_lg_wobble="aigus", **wob) - ref).max()) == 0, "routage: lies, la ligne propre du logo est ignoree (il suit le fond)")
+    check(changed(render(src_bg="aigus", rt_bg_wobble="basses", **wob), still) > 2000, "routage: la ligne gagne sur la source de la couche (fond sur aigus, ondulation sur basses)")
+    check(changed(render(rt_bg_wobble="basses", **wob), still) > 2000 and r.routes_now.get("bg_wobble", ("", 0))[0] == "basses",
+          "routage: le voyant de la ligne dit sa source", str(r.routes_now))
+    check(changed(render(rg_bg_wobble=0.0, **wob), still) == 0, "routage: dosage 0 = effet immobile")
+    half = render(rg_bg_wobble=0.5, **wob)
+    check(0 < changed(half, still) and changed(half, ref) > 0, "routage: dosage 0,5 = ondulation reduite (ni immobile, ni pleine)")
+    # le logo delie : seule la ligne routee reagit, la couche reste sur rien
+    sep = dict(fx_link=0.0, src_bg="rien", src_logo="rien", fxl_on=[0, 0, 1, 0], fxl_int=[1, 1, 2.0, 1])
+    quiet = render(hit, **sep)
+    check(changed(quiet, still) == 0, "routage: sans route, logo et fond sur rien ne reagissent pas au kick")
+    check(changed(render(hit, rt_lg_chroma="kick", **sep), still) > 50 and r.routes_now.get("lg_chroma", ("", 0))[0] == "kick",
+          "routage: aberration du logo sur le kick, la couche reste sur rien", str(r.routes_now))
+    check(changed(render(hit, rt_lg_glitch="kick", **sep), still) == 0,
+          "routage: le glitch du logo route sur le kick ne declenche pas l'aberration (indices glitch / aberration non croises)")
+    # ligne a la main a cote d'effets en auto : elle seule change de source
+    groove = dict(bass_only, phase={"name": "groove"})
+    a = render(groove, src_bg="auto", **wob)
+    check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None
+          and ("wobble", "rien", 1.0) in r.fx_now["bg"] and ("wobble", "basses", 0.6) not in r.fx_now["bg"],
+          "routage: une ligne a la main sort d'auto pour CET effet (le voyant le dit), la couche reste en auto par effet", str(r.fx_now["bg"]))
+
 
 def check_audio_layers() -> None:
     """Sources audio par couche en pixels : chaque couche ne reagit qu'a la partie du son choisie."""
@@ -16021,7 +16197,7 @@ def only_fragile(labels: list[str]) -> bool:
 # `--pur` : seulement les verifications qui n'ont besoin ni de GPU, ni de fenetre, ni de micro, ni de ffmpeg (integration continue : GitHub Actions)
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
-         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
+         "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
          "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
@@ -16033,7 +16209,7 @@ SUITE = (
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
-    "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_automation", "check_params", "check_manager",
+    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",
@@ -16049,7 +16225,7 @@ GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
-               "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_native_modes",
+               "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_routage_rendu", "check_native_modes",
                "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",

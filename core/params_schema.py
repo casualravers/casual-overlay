@@ -27,7 +27,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
-from core import audio_layers, recording
+from core import audio_layers, recording, routing
 
 SCOPES = ("look", "bg", "room", "state", "device")
 
@@ -260,6 +260,8 @@ TABLE: tuple[Param, ...] = (
     _p("brain_topmost", 0, 0, 1, scope="device", keep=True, doc="Cerveau : 1 = fenetre detachee toujours au-dessus."),
     _p("brain_causes", 1, 0, 1, scope="device", keep=True, doc="Cerveau : 1 = lignes de cause (frappe -> effet) et « <- kick » dans le fil."),
     _p("brain_hidden", "", scope="device", keep=True, doc="Cerveau : pistes d'effets masquees, separees par des virgules (strobe,glitch...)."),
+    # Routage audio par effet (#198, core/routing.py) : source et dosage de chaque ligne ; par defaut (herite, 1) = comme avant
+    *(_p(k, d, lo, hi, choices=c, doc=doc) for k, d, lo, hi, c, doc in routing.route_specs()),
 )
 
 assert len({p.key for p in TABLE}) == len(TABLE), "cle en double dans la table des reglages"
