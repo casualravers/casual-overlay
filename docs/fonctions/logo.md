@@ -190,8 +190,17 @@ l'alpha du logo : composite `rgb + fond*(1-a)` = additif, comme avant), puis `po
   (`u_center_logo`), glitch avec un autre tirage (`u_salt_logo`). `layer_effects()` calcule les
   intensites effectives ; `set_fx_link()` copie les reglages du fond en deliant (rien ne saute).
 - `fx_on[0..3]`/`fx_int[0..3]` = fond ; l'indice 4 (pulsation, tremblement, contour) reste l'effet
-  "logo" a part, il n'est pas duplique. Automations `fxl_int0..3` (actives par defaut, periodes
+  "logo" a part, il n'est pas duplique : **un seul etat**, que le logo soit lie ou non (`Renderer.draw` : `logo_fx = fx_on[4] x fx_int[4] x
+  master`, qui multiplie `logo_pulse`, `logo_jitter` et `logo_glow`). Automations `fxl_int0..3` (actives par defaut, periodes
   differentes de celles du fond) ; `get_param`/`set_param` gerent `fx_intN` et `fxl_intN`.
+- **Bug #197** : la section « Effets sur le logo » (logo delie) n'avait que 4 cases, pas « Logo (pulse/contour) » : la decocher en entier
+  laissait le logo pulser, trembler et briller au son, sans rien pour le couper la. Elle a maintenant **la meme case et le meme curseur**
+  que la liste du fond (variables Tk partagees : aucun nouvel etat, donc aucune migration des presets ni des scenes ; agrandir `fxl_on`
+  a 5 cases aurait fait rejeter les anciennes sauvegardes, `validate` refusant une liste de mauvaise longueur). Test : `check_gui`
+  (case et curseur partages, fenetre toujours sous 700 px) et `check_render` (logo separe, tout decoche : aucune reaction au son).
+  **Ce qui fait reagir le logo au son sans passer par les cases Effets** (mesure) : la respiration sur la pulsation (`breath_pulse`) et
+  les curseurs de reactivite du halo, de la fonte et des cellules (`holo_react`, `melt_react`, `cell_react`, nuls par defaut) ; le master
+  de reactivite (`react_master` = 0) les coupe tous. Le bruit et la teinte qui suit le spectre ne font pas reagir un logo aux effets decoches.
 - Aberration chromatique sur la couche logo : chaque canal de couleur vient de son decalage, l'alpha
   est le max des trois (pas de frange sombre aux bords).
 - Touches : Maj+1..4 (effet sur le logo, delie si besoin), L (lier/separer). GUI : case « Memes effets que

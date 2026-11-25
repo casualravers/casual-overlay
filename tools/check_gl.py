@@ -670,6 +670,22 @@ def check_gui() -> None:
             root.update_idletasks()
             out["win_height"] = root.winfo_reqheight()
             out["win_dbg"] = (c["layout"]["name"], root.winfo_width(), root.winfo_reqwidth(), [(w.winfo_class(), w.winfo_reqheight()) for w in root.winfo_children()], [(w.winfo_class(), w.winfo_reqheight()) for w in c["live_wrap"].master.winfo_children()])
+            # #197 : la section « Effets sur le logo » (logo delie) a aussi la case « Logo (pulse/contour) » : la meme variable que celle du fond
+            # (cette reaction n'existe que pour le logo), sinon on ne pouvait pas la couper depuis cette section
+            cb_logo = gg.find(c["logo_fx_box"], "Checkbutton", "Logo (pulse/contour)")
+            sc_logo = []
+            if cb_logo is not None:                      # le curseur est sur la meme ligne que la case
+                row = int(cb_logo.grid_info()["row"])
+                sc_logo = [x for w in c["logo_fx_box"].grid_slaves(row=row) for x in gg.leaves(w) if x.winfo_class() == "Scale"]
+            out["logo_pulse_row"] = (cb_logo is not None, len(sc_logo))
+            if cb_logo is not None:
+                c["fx_on_vars"][4].set(1)
+                cb_logo.invoke()
+                off = (params["fx_on"][4], c["fx_on_vars"][4].get())
+                cb_logo.invoke()
+                out["logo_pulse_cb"] = (off, (params["fx_on"][4], c["fx_on_vars"][4].get()))
+                sc_logo[0].set(0.5) if sc_logo else None
+                out["logo_pulse_int"] = bool(sc_logo) and abs(params["fx_int"][4] - 0.5) < 1e-6 and abs(c["fx_int_vars"][4].get() - 0.5) < 1e-6
             c["link_var"].set(1)
             c["bg_var"].set("live")
             root.update_idletasks()
@@ -1696,6 +1712,10 @@ def check_gui() -> None:
           "reglages logo/effets ecrits tout de suite dans les parametres")
     check(out.get("holo_off") == 0.0 and out.get("holo_on") == 1.0,
           "halo holographique: la case ecrit holo_on")
+    check(out.get("logo_pulse_row", (False, 0)) == (True, 1)
+          and out.get("logo_pulse_cb") == ((0, 0), (1, 1)) and out.get("logo_pulse_int") is True,
+          "effets du logo (delies): la section a aussi « Logo (pulse/contour) » et son curseur, qui partagent l'etat de ceux du fond (#197)",
+          str((out.get("logo_pulse_row"), out.get("logo_pulse_cb"), out.get("logo_pulse_int"))))
     check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise"],
           "partie OVERLAY rangee en onglets (Affichage et analyse n'est plus un onglet d'effets)", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
@@ -2272,6 +2292,31 @@ def check_render() -> None:
         check(False, "shader invalide refuse")
     except gl.ShaderError:
         check(r.post_prog is before, "shader invalide: ShaderError, ancien programme conserve")
+
+    # #197 : logo separe du fond, toutes les cases decochees (les 4 de « Effets sur le logo » ET « Logo (pulse/contour) ») -> plus aucune reaction
+    # du logo au son ; « Logo (pulse/contour) » (fx_on[4]) est la reaction du logo (pulsation, tremblement, contour), seule a le faire bouger
+    if logo is not None:
+        flat_bg = np.full((size[1], size[0], 3), 90, np.uint8).tobytes()
+        zone = (slice(int(size[1] * 0.25), int(size[1] * 0.75)), slice(int(size[0] * 0.3), int(size[0] * 0.7)))
+        quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 10.0, "beats": 0}
+
+        def logo_gap(**over) -> float:
+            base = dict(gl.DEFAULT_PARAMS, fx_link=0.0, fx_on=[0] * 5, fxl_on=[0] * 4, holo_on=0.0, melt_on=0.0, cell_on=0.0, mosaic_on=0.0,
+                        noise_amount=0.0, breath_pulse=0.0, logo_x=0.5, logo_y=0.5, logo_scale=0.4, bg_mode="live")
+            shots = []
+            for st in (quiet, dict(loud, since_beat=0.05, beat=1.0, beats=4)):
+                rr = gl.Renderer(ctx, size, logo)
+                rr.video_tex.write(flat_bg, alignment=1)
+                for k in range(20):
+                    rr.draw(fbo, size, st, dict(base, **over), k * 0.033)
+                shots.append(read_target(ctx, fbo, size).astype(int)[zone])
+            return float(np.abs(shots[0] - shots[1]).mean())
+        none_ = logo_gap()
+        pulse_only = logo_gap(fx_on=[0, 0, 0, 0, 1])
+        own_only = logo_gap(fxl_on=[0, 0, 1, 1])
+        check(none_ < 0.05 and pulse_only > 1.0 and own_only > 0.3,
+              "logo separe: tout decoche (4 cases du logo + « Logo (pulse/contour) ») = aucune reaction au son ; chacune de ces cases le fait reagir",
+              f"rien {none_:.3f}, pulse/contour seule {pulse_only:.2f}, effets propres seuls {own_only:.2f}")
 
 
 def check_text() -> None:
