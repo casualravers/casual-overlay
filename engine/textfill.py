@@ -144,7 +144,6 @@ class TextFill:
         prev = self.ctx.fbo
         w, h = self.size
         self.prog["u_state"].value = 0
-        self.prog["u_texel"].value = (1.0 / w, 1.0 / h)
         self.prog["u_fk"].value = rc.shape_feed_kill(shape)
         for _ in range(n):
             dst = 1 - self.cur
