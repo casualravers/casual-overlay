@@ -38,3 +38,8 @@ Lisibilite de la bordure noire sur le fond reel au projecteur (2 texels ~ 2 px a
 - Bordure : lecture du rang a chaque prise de l'anneau (ing_tap) ; avant, l'anneau hors du cadre de la lettre lisait le rang 0 et suivait la premiere lettre.
 - Front : ill_reveal(tau, v, growth) : front net, motif identique partout, epaississement par l'age (gain 0,45 -> 1) ; plus de dates d'arrivee tirees de la tuile (apparitions au hasard). FRONT_SHARE 0,6.
 - Non verifie : rythme du front sur le projecteur.
+
+## Retouche 2 (2026-11-25, apres #209)
+
+- Empreinte des lettres avant leur arrivee : cartes de rang / portee elargies de 2 px (_MAP_PAD) ; contour et bordure n'apparaissent qu'avec le front.
+- Front moins diffus : fondu 0,06 s, gain 0,75 -> 1, FRONT_SHARE 0,8. Non verifie : rendu au projecteur.

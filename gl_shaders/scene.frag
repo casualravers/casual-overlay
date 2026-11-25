@@ -380,13 +380,13 @@ uniform vec4 u_fill_k;         // x = 1 si le remplissage est actif, y = contras
 uniform vec4 u_fill_t;         // secondes depuis la remise a zero, ecart de depart des lettres, duree du front, duree d'apparition derriere le front
 uniform vec4 u_fill_geom;      // uv de la tuile par uv du texte (x, y), decalage de lecture (z, w)
 uniform vec2 u_fill_px;        // taille de la texture du texte, en texels
-const float FILL_SOFT = 0.18;  // fondu d'apparition (core.textfx.FILL_SOFT_S)
+const float FILL_SOFT = 0.06;  // fondu d'apparition (core.textfx.FILL_SOFT_S)
 float fill_matter(vec2 q) {
     vec2 rr = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;           // rang (gauche -> droite), portee du front (0 = point de depart de la lettre)
     float tau = u_fill_t.x - rr.x * u_fill_t.y - rr.y * u_fill_t.z;
     vec2 tile = textureLod(u_fill, q * u_fill_geom.xy + u_fill_geom.zw, 0.0).rg;
     float age = clamp(tau / max(u_fill_t.w, 0.000001), 0.0, 1.0);             // le front est net, le motif s'epaissit derriere lui (core.textfx.fill_reveal)
-    float gain = mix(0.45, 1.0, smoothstep(0.0, 1.0, age));
+    float gain = mix(0.75, 1.0, smoothstep(0.0, 1.0, age));
     return smoothstep(0.08, 0.30, tile.r * gain) * smoothstep(0.0, FILL_SOFT, tau);
 }
 // alpha du texte erode du rayon du bord : 0 a moins d'un bord d'une frontiere de lettre
@@ -410,8 +410,14 @@ uniform vec3 u_text_border;    // x = epaisseur (texels, 0 = aucune), yz = taill
 // alpha d'une lecture de l'anneau, eteint comme sa lettre pendant la vague (le rang se lit a la lecture, pas au pixel : l'anneau deborde du cadre)
 float ring_tap(vec2 t) {
     float a = textureLod(u_logo, t, 0.0).a;
-    if (u_ola.x > 0.5 && a > 0.0) {
-        a *= ola_alpha(textureLod(u_text_rank, clamp(t, 0.0, 1.0), 0.0).r, u_ola.y, u_ola.z, u_ola.w);
+    if (a > 0.0) {
+        vec2 rr = textureLod(u_text_rank, clamp(t, 0.0, 1.0), 0.0).rg;
+        if (u_ola.x > 0.5) {
+            a *= ola_alpha(rr.x, u_ola.y, u_ola.z, u_ola.w);
+        }
+        if (u_fill_k.x > 0.5 && u_fill_k.z > 0.5) {                            // lettres transparentes : pas d'empreinte (contour, bordure) avant l'arrivee du front
+            a *= smoothstep(0.0, FILL_SOFT, u_fill_t.x - rr.x * u_fill_t.y - rr.y * u_fill_t.z);
+        }
     }
     return a;
 }
@@ -448,7 +454,8 @@ vec4 logo_at(vec2 p) {
         float matter = fill_matter(q);
         if (u_fill_k.z > 0.5) {                                              // lettres transparentes : le bord reste, la matiere remplit l'interieur
             float inner = fill_inner(q);
-            float edge = clamp(c.a - inner, 0.0, 1.0);
+            vec2 rr0 = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;
+            float edge = clamp(c.a - inner, 0.0, 1.0) * smoothstep(0.0, FILL_SOFT, u_fill_t.x - rr0.x * u_fill_t.y - rr0.y * u_fill_t.z);   // le contour arrive avec le front
             float want = clamp(edge + matter * inner, 0.0, 1.0);
             c *= clamp(want / max(c.a, 0.001), 0.0, 1.0);
         } else {                                                             // lettres pleines : la matiere assombrit

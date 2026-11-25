@@ -2406,6 +2406,18 @@ def check_text_rank() -> None:
     ys5 = np.nonzero(solid5.any(axis=1))[0]
     check(int(rc5[int(ys5.min())][solid5[int(ys5.min())]].max()) >= 230 and not text_reach_map(np.zeros((8, 8, 4), np.uint8)).any(),
           "portee: l'accent d'une lettre est tout au bout du front (il est loin du point de depart) ; image vide = carte vide, sans erreur")
+    # marge autour des lettres : le texte est lu avec interpolation, les cartes sans ; le texel juste hors du rectangle d'une lettre doit porter SON rang et sa portee (sinon 0 :
+    # fine ligne visible des le depart le long des montants des lettres pas encore arrivees)
+    img6, rk6, solid6 = ranks("HELLO")
+    rc6 = text_reach_map(img6)
+    ys6, xs6 = np.nonzero(solid6 & (rk6 == 255))                                     # le dernier O
+    x0, x1 = int(xs6.min()), int(xs6.max())
+    rows = np.unique(ys6)
+    out_l = rk6[rows, x0 - 1] == 255
+    out_r = rk6[rows, min(x1 + 1, rk6.shape[1] - 1)] == 255
+    check(bool(out_l.all()) and bool(out_r.all()) and bool((rc6[rows, x0 - 1] > 0).any()),
+          "rang et portee: le texel juste hors d'une lettre porte son rang (marge de 2 px), pas 0 (plus de fine ligne avant l'arrivee du front)",
+          f"{int(out_l.sum())}/{len(rows)} a gauche, {int(out_r.sum())}/{len(rows)} a droite")
 
 def check_text_border() -> None:
     """Fine bordure noire autour du texte (#199), rendu : un anneau noir EXTERIEUR aux lettres, d'epaisseur reglable, qui s'eteint avec la
@@ -2635,7 +2647,7 @@ def check_text_fill() -> None:
         # depart : lettres transparentes, on ne voit que le bord
         t_ready = clock[0]
         start = frames(1, text_fill_on=1.0)
-        check(frac(start, deep) < 0.08 and frac(start, ring) > 0.7, "remplissage: au depart les lettres sont transparentes sauf le bord (pas de matiere)",
+        check(frac(start, deep) < 0.08 and frac(start, ring) < 0.1, "remplissage: au depart rien n'est visible (ni matiere ni empreinte du contour avant l'arrivee du front)",
               f"interieur {frac(start, deep):.2f} bord {frac(start, ring):.2f}")
         # vague : la premiere lettre d'abord, le bas de la lettre d'abord
         t0 = r._fill_t0

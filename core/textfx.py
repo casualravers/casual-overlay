@@ -88,9 +88,9 @@ FILL_DIFF = 0.20                     # facteur sur les diffusions de Gray-Scott 
 CELLS_PER_TEXEL = 2.0                # cellules de la tuile par pixel de la texture du texte a la finesse 1 (texte rendu en police de 128 px)
 FILL_DUR_MIN, FILL_DUR_MAX = 0.5, 3.0    # duree d'une lettre (front + croissance) : 3 s au plus
 FILL_STAGGER_MAX = 8.0               # ecart de depart entre la premiere et la derniere lettre
-FRONT_SHARE = 0.6                    # part de la duree d'une lettre prise par le front circulaire ; le reste = epaississement du motif derriere lui
-GAIN_MIN = 0.45                      # gain du motif a l'arrivee du front (les taches pales n'apparaissent qu'ensuite)
-FILL_SOFT_S = 0.18                   # fondu d'apparition d'une cellule (secondes)
+FRONT_SHARE = 0.8                   # part de la duree d'une lettre prise par le front circulaire ; le reste = epaississement du motif derriere lui
+GAIN_MIN = 0.75                     # gain du motif a l'arrivee du front (les taches pales n'apparaissent qu'ensuite)
+FILL_SOFT_S = 0.06                  # fondu d'apparition d'une cellule (secondes)
 
 
 def tile_key() -> str:
