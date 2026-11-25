@@ -88,7 +88,7 @@ FILL_DIFF = 0.20                     # facteur sur les diffusions de Gray-Scott 
 CELLS_PER_TEXEL = 2.0                # cellules de la tuile par pixel de la texture du texte a la finesse 1 (texte rendu en police de 128 px)
 FILL_DUR_MIN, FILL_DUR_MAX = 0.5, 3.0    # duree d'une lettre (front + croissance) : 3 s au plus
 FILL_STAGGER_MAX = 8.0               # ecart de depart entre la premiere et la derniere lettre
-FRONT_SHARE = 0.45                   # part de la duree d'une lettre prise par le front bas -> haut ; le reste = croissance locale de la tuile
+FRONT_SHARE = 0.8                    # part de la duree d'une lettre prise par le front circulaire ; le reste = apparition locale de la tuile derriere lui
 FILL_SOFT_S = 0.18                   # fondu d'apparition d'une cellule (secondes)
 
 
@@ -111,16 +111,17 @@ def clean_fill(dur: float, stagger: float) -> tuple[float, float]:
 
 
 def fill_times(dur: float) -> tuple[float, float]:
-    """(front, croissance) en secondes pour une lettre de duree `dur` : le front monte du bas au haut de la lettre pendant `front`, puis la
+    """(front, croissance) en secondes pour une lettre de duree `dur` : le front part du bas de la lettre et atteint son point le plus eloigne pendant `front`, puis la
     tuile finit de pousser pendant `growth` (front + croissance = dur)."""
     front = float(dur) * FRONT_SHARE
     return front, float(dur) - front
 
 
-def fill_tau(ft: float, rank: float, rise: float, stagger: float, front: float) -> float:
+def fill_tau(ft: float, rank: float, reach: float, stagger: float, front: float) -> float:
     """Temps local d'un pixel : `ft` secondes depuis la remise a zero, moins le depart de sa lettre (`rank` 0 = la plus a gauche, 1 = la plus a
-    droite, x `stagger`) et le retard du front (`rise` 0 = bas de la lettre, 1 = haut, x `front`). Meme formule que scene.frag."""
-    return float(ft) - min(max(float(rank), 0.0), 1.0) * float(stagger) - min(max(float(rise), 0.0), 1.0) * float(front)
+    droite, x `stagger`) et l'arrivee du front de colonisation (`reach` 0 = point de depart de la lettre, 1 = son pixel le plus eloigne, x `front` :
+    un front circulaire qui grandit depuis un seul point). Meme formule que scene.frag."""
+    return float(ft) - min(max(float(rank), 0.0), 1.0) * float(stagger) - min(max(float(reach), 0.0), 1.0) * float(front)
 
 
 def fill_reveal(tau: float, arrival: float, growth: float) -> float:

@@ -2370,30 +2370,100 @@ def check_text_rank() -> None:
     check(top == bottom, "rang: la ligne du haut et celle du bas ont les memes rangs", f"{top} {bottom}")
     check(len(set(ranks("X")[1][ranks("X")[2]].tolist())) == 1 and not text_rank_map(np.zeros((8, 8, 4), np.uint8)).any(),
           "rang: une seule lettre = rang 0 ; image vide = carte vide, sans erreur")
-    # hauteur dans la lettre (vague de colonisation du bas vers le haut) : 0 en bas de la lettre, 255 en haut
-    from engine.render import text_rise_map
-    img3, _rk3, solid3 = ranks("HEL")
-    rs = text_rise_map(img3)
-    rows = np.nonzero(solid3.any(axis=1))[0]
-    top_row, bottom_row = int(rows.min()), int(rows.max())
-    prof = [int(rs[y][solid3[y]].mean()) for y in range(top_row, bottom_row + 1)]
-    check(rs.shape == img3.shape[:2] and rs.dtype == np.uint8 and prof[0] >= 250 and prof[-1] <= 5,
-          "hauteur: 255 en haut de la lettre, 0 en bas", f"{prof[0]} {prof[-1]}")
-    check(all(a >= b for a, b in zip(prof, prof[1:])), "hauteur: elle decroit du haut vers le bas (le front monte du bas vers le haut)")
-    img4, _rk4, solid4 = ranks("AB\nAB")
-    rs4 = text_rise_map(img4)
+    # portee du front de colonisation : un SEUL point de depart par lettre (le milieu du bas), 0 la, 255 au pixel le plus eloigne
+    from engine.render import text_reach_map
+    img3, rk3, solid3 = ranks("HEL")
+    rc = text_reach_map(img3)
+    check(rc.shape == img3.shape[:2] and rc.dtype == np.uint8, "portee: une carte uint8 de la taille de la texture du texte")
+    exact = True
+    starts_ok = True
+    starts_on = 0
+    far_ok = True
+    for v in sorted(set(rk3[solid3].tolist())):
+        letter = solid3 & (rk3 == v)
+        ys3, xs3 = np.nonzero(letter)
+        sx, sy = (xs3.min() + xs3.max()) / 2.0, float(ys3.max())            # le milieu du bas de la lettre
+        d = np.hypot(xs3 - sx, ys3 - sy)
+        got = rc[ys3, xs3].astype(np.float32) / 255.0
+        exact = exact and float(np.abs(got - d / d.max()).max()) < 0.03             # la portee est la distance au point de depart, normalisee par la plus grande
+        if solid3[int(round(sy)), int(round(sx))]:                                  # le point de depart est sur la lettre (E, L ; pas le H : entre ses montants)
+            starts_on += 1
+            starts_ok = starts_ok and int(rc[int(round(sy)), int(round(sx))]) <= 6  # ~0 au point de depart
+        far_ok = far_ok and int(rc[ys3, xs3].max()) >= 250                          # 255 au point le plus eloigne
+    check(exact, "portee: pour chaque lettre, distance a vol d'oiseau au milieu de son bas, normalisee par la plus grande")
+    check(starts_ok and far_ok and starts_on >= 1, "portee: 0 au point de depart (quand il tombe sur la lettre), 255 au pixel le plus eloigne de la lettre", f"{starts_on} lettres dont le depart est sur la lettre")
+    img4, rk4, solid4 = ranks("AB\nAB")
+    rc4 = text_reach_map(img4)
     steps = np.diff(np.concatenate(([0], solid4.any(axis=1).astype(int), [0])))
     starts, ends = np.nonzero(steps == 1)[0], np.nonzero(steps == -1)[0]
-    first, second = (int(starts[0]), int(ends[0])), (int(starts[1]), int(ends[1]))
-    check(rs4[first[0]][solid4[first[0]]].mean() >= 250 and rs4[second[0]][solid4[second[0]]].mean() >= 250
-          and rs4[first[1] - 1][solid4[first[1] - 1]].mean() <= 5 and rs4[second[1] - 1][solid4[second[1] - 1]].mean() <= 5,
-          "hauteur: chaque ligne a sa propre echelle (le haut et le bas de la 2e ligne comme ceux de la 1re)")
-    img5, _rk5, solid5 = ranks("É")
-    rs5 = text_rise_map(img5)
+    ok2 = True
+    for r0, r1 in zip(starts, ends):                                                # chaque ligne a ses propres points de depart (le bas de SA ligne)
+        band = solid4[r0:r1]
+        ok2 = ok2 and int(rc4[r1 - 1][solid4[r1 - 1]].min()) <= 8 and int(rc4[r0:r1][band].max()) >= 250
+    check(ok2, "portee: chaque ligne de texte a ses propres points de depart (le bas de sa ligne)")
+    img5, rk5, solid5 = ranks("É")
+    rc5 = text_reach_map(img5)
     ys5 = np.nonzero(solid5.any(axis=1))[0]
-    check(rs5[int(ys5.min())][solid5[int(ys5.min())]].max() >= 250 and not text_rise_map(np.zeros((8, 8, 4), np.uint8)).any(),
-          "hauteur: l'accent d'une lettre est tout en haut (255) ; image vide = carte vide, sans erreur")
+    check(int(rc5[int(ys5.min())][solid5[int(ys5.min())]].max()) >= 230 and not text_reach_map(np.zeros((8, 8, 4), np.uint8)).any(),
+          "portee: l'accent d'une lettre est tout au bout du front (il est loin du point de depart) ; image vide = carte vide, sans erreur")
 
+def check_text_border() -> None:
+    """Fine bordure noire autour du texte (#199), rendu : un anneau noir EXTERIEUR aux lettres, d'epaisseur reglable, qui s'eteint avec la
+    vague de lettres ; 0 = image comme avant ; jamais sur un logo image."""
+    print("Texte : bordure noire (rendu)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    from engine.render import render_text
+    size = (960, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(bytes([128]) * (size[0] * size[1] * 3))                        # fond gris : le texte blanc et la bordure noire s'y voient
+    r.set_logo(render_text("HELLO", "auto", "#ffffff", "center", 128), "", "text")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
+                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0)
+    clock = [50.0]
+
+    def frame(rr=None, dt=1 / 60, **kw):
+        clock[0] += dt
+        (rr or r).draw(fbo, size, quiet, dict(base, **kw), clock[0])
+        return read_target(ctx, fbo, size).astype(int)[..., :3].sum(axis=2)
+    none = frame(text_border=0.0)
+    thin = frame(text_border=2.0)
+    thick = frame(text_border=6.0)
+    mask = none > 3 * 235                                                            # les lettres blanches
+    near = mask.copy()
+    for dy in range(-12, 13):
+        for dx in range(-12, 13):
+            if dx * dx + dy * dy <= 144:
+                near |= np.roll(np.roll(mask, dy, axis=0), dx, axis=1)
+    inner = mask.copy()
+    for dy in range(-3, 4):
+        for dx in range(-3, 4):
+            inner &= np.roll(np.roll(mask, dy, axis=0), dx, axis=1)
+    dark = lambda img: img < 3 * 70                                                  # noir (le fond est gris 128)
+    check(int(dark(none).sum()) == 0, "bordure: epaisseur 0 = aucun pixel noir (comme avant)")
+    check(int(dark(thin).sum()) > 400 and int(dark(thick).sum()) > int(dark(thin).sum()) * 1.5,
+          "bordure: un anneau noir apparait et s'epaissit avec le reglage", f"{int(dark(thin).sum())} -> {int(dark(thick).sum())} px noirs")
+    check(not (dark(thin) & ~near).any() and not (dark(thick) & ~near).any(), "bordure: l'anneau reste collee aux lettres (jamais loin d'elles)")
+    check(np.array_equal(thin[inner], none[inner]) and np.array_equal(thick[inner], none[inner]), "bordure: l'interieur des lettres ne change pas (anneau exterieur seulement)")
+    # s'eteint avec la vague de lettres : au milieu du balayage toutes les lettres sont eteintes, la bordure aussi
+    ola = dict(text_border=4.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)
+    frame(**ola)
+    gone = frame(dt=1.5, **ola)
+    check(int(dark(gone).sum()) == 0 and int((gone > 3 * 140).sum()) == 0, "bordure: elle s'eteint avec les lettres (vague de lettres)", f"{int(dark(gone).sum())} px noirs")
+    # jamais sur un logo image
+    ri = gl.Renderer(ctx, size, None)
+    ri.video_tex.write(bytes([128]) * (size[0] * size[1] * 3))
+    logo = np.zeros((64, 64, 4), np.uint8)
+    logo[16:48, 16:48] = (255, 255, 255, 255)
+    ri.set_logo(logo, "x")
+    a = frame(rr=ri, text_border=0.0, logo_scale=0.4)
+    b = frame(rr=ri, text_border=6.0, logo_scale=0.4)
+    check(np.array_equal(a, b) and int((a > 3 * 235).sum()) > 0, "bordure: un logo image n'a jamais de bordure (source Texte seulement)")
 
 def check_text_ola() -> None:
     """Vague de lettres (#199), rendu : les lettres s'eteignent puis se rallument de gauche a droite sur le vrai shader ; texte entier hors
@@ -2557,7 +2627,7 @@ def check_text_fill() -> None:
         early = frames(1, text_fill_on=1.0)
         low_sum, high_sum = float(early[low].sum()), float(early[high].sum())
         check(low_sum > 0.0 and low_sum > 3.0 * high_sum,
-              "remplissage: la colonisation part du bas de la lettre (le bas se remplit avant le haut)", f"bas {low_sum:.0f} haut {high_sum:.0f} ({int(low.sum())} / {int(high.sum())} px, interieur {int(deep.sum())} px, texte y {y0}-{y1})")
+              "remplissage: un seul point de depart en bas de chaque lettre : le bas se remplit avant le haut", f"bas {low_sum:.0f} haut {high_sum:.0f} ({int(low.sum())} / {int(high.sum())} px, interieur {int(deep.sum())} px, texte y {y0}-{y1})")
         frames(1, dt=t0 + 1.8 - clock[0], text_fill_on=1.0)
         mid = frames(1, text_fill_on=1.0)
         check(frac(mid, left) > 0.1 and frac(mid, right) < 0.02,
@@ -12911,14 +12981,14 @@ def check_textfx() -> None:
     check(fc4.update(1.0, "B", True, True, 20.0) and not fc4.update(1.1, "B", True, False, 20.0),
           "remplissage: texte change et rallumage au meme instant -> une seule remise a zero")
 
-    # ---- calendrier du remplissage : motif precalcule sur une tuile, revele par une vague (lettre par lettre, du bas vers le haut)
+    # ---- calendrier du remplissage : motif precalcule sur une tuile, revele par une vague (lettre par lettre, depuis un seul point en bas de chaque lettre)
     check(tf.clean_fill(9.0, 99.0) == (tf.FILL_DUR_MAX, tf.FILL_STAGGER_MAX) and tf.clean_fill(0.0, -1.0) == (tf.FILL_DUR_MIN, 0.0)
           and tf.FILL_DUR_MAX == 3.0, "remplissage: duree par lettre bornee a 3 s au plus, ecart de depart borne", str(tf.clean_fill(9.0, 99.0)))
     front, growth = tf.fill_times(2.7)
     check(abs(front + growth - 2.7) < 1e-9 and abs(front - tf.FRONT_SHARE * 2.7) < 1e-9, "remplissage: la duree d'une lettre = front bas -> haut + croissance locale")
     check(tf.fill_tau(5.0, 0.0, 0.0, 3.0, 1.2) == 5.0 and abs(tf.fill_tau(5.0, 1.0, 0.0, 3.0, 1.2) - 2.0) < 1e-9
           and abs(tf.fill_tau(5.0, 0.0, 1.0, 3.0, 1.2) - 3.8) < 1e-9 and tf.fill_tau(5.0, 7.0, -3.0, 3.0, 1.2) == tf.fill_tau(5.0, 1.0, 0.0, 3.0, 1.2),
-          "remplissage: une lettre a droite part plus tard (ecart de depart), le haut d'une lettre part plus tard que le bas ; rang et hauteur bornes")
+          "remplissage: une lettre a droite part plus tard (ecart de depart), un point plus loin du depart de sa lettre est atteint plus tard ; rang et portee bornes")
     check(tf.fill_reveal(-1.0, 0.0, 1.5) == 0.0 and tf.fill_reveal(0.0 + tf.FILL_SOFT_S, 0.0, 1.5) == 1.0
           and tf.fill_reveal(0.5, 0.5, 1.5) == 0.0 and tf.fill_reveal(0.75 + tf.FILL_SOFT_S, 0.5, 1.5) == 1.0,
           "remplissage: une cellule apparait a son instant d'arrivee (tuile) et reste, avec un fondu bref")
@@ -12932,7 +13002,7 @@ def check_textfx() -> None:
             low = tf.fill_reveal(tf.fill_tau(ft, 0.5, 0.1, 3.0, front), arrival, growth)
             high = tf.fill_reveal(tf.fill_tau(ft, 0.5, 0.9, 3.0, front), arrival, growth)
             ok_order = ok_order and left >= right and low >= high
-    check(ok_order, "remplissage: la premiere lettre se remplit avant la deuxieme, le bas d'une lettre avant son haut (a tout instant, quelle que soit la cellule)")
+    check(ok_order, "remplissage: la premiere lettre se remplit avant la deuxieme, le point de depart d'une lettre avant ses points lointains (a tout instant, quelle que soit la cellule)")
     check(all(tf.fill_reveal(tf.fill_tau(r * 3.0 + 2.7 + tf.FILL_SOFT_S, r, 1.0, 3.0, front), 1.0, growth) == 1.0 for r in (0.0, 0.3, 1.0)),
           "remplissage: chaque lettre est entierement remplie 2,7 s (sa duree) apres son depart, au plus 3 s")
     check(abs(tf.fill_total(2.7, 3.0) - (5.7 + tf.FILL_SOFT_S)) < 1e-9, "remplissage: duree totale de la vague = ecart de depart + duree d'une lettre")
@@ -15778,7 +15848,7 @@ PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
