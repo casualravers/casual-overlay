@@ -170,7 +170,21 @@ Le rendu a 3 passes : `scene.frag` tourne **deux fois** (`u_pass` 0 = fond opaqu
 l'alpha du logo : composite `rgb + fond*(1-a)` = additif, comme avant), puis `post.frag` applique
 `layer_fx()` (wobble, ripple, glitch, aberration) a chaque couche avec ses intensites
 (`u_fx_bg`, `u_fx_logo`, vec4) et pose le logo sur le fond, puis le HUD.
-- **`fx_link` = 1 (defaut)** : le logo reprend les reglages du fond et le centre de l'image, donc le
+- **Onde de choc : baisse de luminosite** (demande de l'utilisateur, 2026-11-25). En plus de pousser les pixels, l'onde assombrit son
+  passage. Historique : un premier filet de -20 % (gaussienne), puis un essai « ombre froide » (saturation + virage bleu + voile bleu
+  nuit, comme en peinture) abandonne : l'utilisateur est revenu a **la luminosite seule, accentuee a -70 %**. `layer_fx` (etape 2)
+  multiplie les trois canaux par `1 - RIPPLE_DARK x ripple_k` (`RIPPLE_DARK` = 0,70 : la teinte ne bouge pas, jamais un noir complet ;
+  l'alpha n'est pas touche : texture premultipliee, un logo sombre ne devient pas transparent). Profil **net puis lisse** : un premier bord franc (`RIPPLE_EDGE` = 0,01, demande « beaucoup plus net ») a ete **lisse** sur
+  validation d'une simulation a 4 variantes (variante D retenue : montee lisse + sommet arrondi). `ripple_k` = `smoothstep(-RIPPLE_EDGE,
+  0, derriere)` (montee devant le pic, `RIPPLE_EDGE` = 0,06 de hauteur d'ecran) x traine `exp(-(x / RIPPLE_TRAIL)^1,5)` (pente nulle au
+  pic : le sommet est arrondi, avec `exp(-x / L)` il y avait un angle ; `RIPPLE_TRAIL` = 0,14, recalee pour s'annuler a ~3 longueurs :
+  le centre reste intact), pic a `RIPPLE_FRONT` = 0,02 devant le rayon de la deformation, x extinction de l'onde en 1 s x `fx.y` x force
+  du noise. Pour retrouver l'ancien bord franc : `RIPPLE_EDGE` = 0,010.
+  **Aucun reglage nouveau** : le curseur « Onde de choc » le regle (a 0 il n'y a plus ni deformation ni ombre), constantes dans
+  `post.frag`. Memes couches, centres et declencheurs que la deformation (kick, « 1 » de la mesure, noise, onde du drop). Teste
+  (`check_render`, image grise uniforme pour isoler l'assombrissement) : jusqu'a -63 % a 0,1 s, trois canaux au meme facteur, jamais
+  noir, front lisse devant (montee progressive) et sommet arrondi, traine derriere, rayon au bon endroit, plus rien apres 1 s ou a curseur 0. **Non verifie** : le rendu au
+  projecteur dans le noir (-70 % sur un fond deja sombre peut paraitre tres marque).- **`fx_link` = 1 (defaut)** : le logo reprend les reglages du fond et le centre de l'image, donc le
   resultat est celui de l'ancien post-traitement unique. `fx_link` = 0 : reglages propres
   (`fxl_on`, `fxl_int`, 4 effets), ondes de choc et aberration centrees sur le **centre du logo**
   (`u_center_logo`), glitch avec un autre tirage (`u_salt_logo`). `layer_effects()` calcule les
