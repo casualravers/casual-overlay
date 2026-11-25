@@ -385,8 +385,9 @@ float fill_matter(vec2 q) {
     vec2 rr = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;           // rang (gauche -> droite), portee du front (0 = point de depart de la lettre)
     float tau = u_fill_t.x - rr.x * u_fill_t.y - rr.y * u_fill_t.z;
     vec2 tile = textureLod(u_fill, q * u_fill_geom.xy + u_fill_geom.zw, 0.0).rg;
-    float start = clamp(tile.g, 0.0, 1.0) * u_fill_t.w;
-    return smoothstep(0.08, 0.30, tile.r) * smoothstep(start, start + FILL_SOFT, tau);
+    float age = clamp(tau / max(u_fill_t.w, 0.000001), 0.0, 1.0);             // le front est net, le motif s'epaissit derriere lui (core.textfx.fill_reveal)
+    float gain = mix(0.45, 1.0, smoothstep(0.0, 1.0, age));
+    return smoothstep(0.08, 0.30, tile.r * gain) * smoothstep(0.0, FILL_SOFT, tau);
 }
 // alpha du texte erode du rayon du bord : 0 a moins d'un bord d'une frontiere de lettre
 float fill_inner(vec2 q) {
@@ -406,14 +407,22 @@ float fill_inner(vec2 q) {
 // Bordure noire du texte : anneau EXTERIEUR de la lettre, epais de u_text_border.x texels (16 lectures : 2 cercles de 8), noir et opaque. L'anneau est
 // ajoute a l'alpha, sa couleur est noire (rgb premultiplie inchange).
 uniform vec3 u_text_border;    // x = epaisseur (texels, 0 = aucune), yz = taille de la texture du texte (texels)
+// alpha d'une lecture de l'anneau, eteint comme sa lettre pendant la vague (le rang se lit a la lecture, pas au pixel : l'anneau deborde du cadre)
+float ring_tap(vec2 t) {
+    float a = textureLod(u_logo, t, 0.0).a;
+    if (u_ola.x > 0.5 && a > 0.0) {
+        a *= ola_alpha(textureLod(u_text_rank, clamp(t, 0.0, 1.0), 0.0).r, u_ola.y, u_ola.z, u_ola.w);
+    }
+    return a;
+}
 float text_ring(vec2 q, float a) {
     vec2 e = u_text_border.x / u_text_border.yz;
     float m = a;
     for (int k = 0; k < 8; k++) {
         float ang = 0.7853982 * float(k);
         vec2 dir = vec2(cos(ang), sin(ang));
-        m = max(m, textureLod(u_logo, q + dir * e, 0.0).a);
-        m = max(m, textureLod(u_logo, q + dir * e * 0.5, 0.0).a);
+        m = max(m, ring_tap(q + dir * e));
+        m = max(m, ring_tap(q + dir * e * 0.5));
     }
     return clamp(m - a, 0.0, 1.0);
 }
@@ -453,7 +462,7 @@ vec4 logo_at(vec2 p) {
         c *= ola_f;
     }
     if (u_text_border.x > 0.0 && inside > 0.5) {                             // fine bordure noire autour du texte (elle s'eteint avec la vague de lettres)
-        float ring = text_ring(q, textureLod(u_logo, clamp(q, 0.0, 1.0), 0.0).a) * ola_f * (1.0 - c.a);
+        float ring = text_ring(q, textureLod(u_logo, clamp(q, 0.0, 1.0), 0.0).a * ola_f) * (1.0 - c.a);
         c.a += ring;
     }
     if (u_cell > 0.001 && inside > 0.5) {
