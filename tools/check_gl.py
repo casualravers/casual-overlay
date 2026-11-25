@@ -682,7 +682,9 @@ def check_gui() -> None:
             fx_ids = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma")
             out["route_pills"] = (all(len(ru.pills.get(rid, [])) == 2 for rid in fx_ids),          # la pastille de l'effet + celle du tableau
                                   all(str(root.nametowidget(p.cget("menu")).entrycget(0, "variable")) == str(ru.vars(rid)[0])
-                                      for rid in fx_ids for p in ru.pills[rid]))
+                                      for rid in fx_ids for p in ru.pills[rid]),
+                                  all(len(ru.pills.get(rid, [])) == 2 for rid in ("lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells"))
+                                  and all(len(ru.pills.get(rid, [])) == 1 for rid in ("bg_flash", "bg_scroll", "bg_sparkle", "breath", "hue")))
             c["bg_var"].set("pattern")                   # pire cas: bloc motif ouvert + effets du logo delies
             c["link_var"].set(0)
             root.update_idletasks()
@@ -1743,7 +1745,8 @@ def check_gui() -> None:
           and out.get("logo_pulse_cb") == ((0, 0), (1, 1)) and out.get("logo_pulse_int") is True,
           "effets du logo (delies): la section a aussi « Logo (pulse/contour) » et son curseur, qui partagent l'etat de ceux du fond (#197)",
           str((out.get("logo_pulse_row"), out.get("logo_pulse_cb"), out.get("logo_pulse_int"))))
-    check(out.get("route_pills") == (True, True), "routage (#198): pastilles a cote des 8 effets, meme variable que le tableau de l'onglet Routage",
+    check(out.get("route_pills") == (True, True, True), "routage (#198): pastilles a cote des 8 effets et des 6 reactions du logo, meme variable que le "
+          "tableau de l'onglet Routage (motif du fond et globales : seulement dans l'onglet)",
           str(out.get("route_pills")))
     check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Routage"],
           "partie OVERLAY rangee en onglets (Affichage et analyse n'est plus un onglet d'effets)", str(out.get("tabs")))
@@ -9772,7 +9775,7 @@ def check_routage() -> None:
     check(all(rt.menu_label(s) for s in rt.ROUTE_SOURCES) and rt.menu_label("mesure") == al.LABELS["mesure"], "routage: libelles longs du menu")
     check(rt.pill_text("herite", 1.0, "bg") == "Comme le fond" and rt.pill_text("herite", 0.6, "logo") == "Comme le logo 60 %"
           and rt.pill_text("basses", 0.8, "bg") == "Basses 80 %" and rt.pill_text("kick", 1.0, "bg") == "Kick"
-          and rt.pill_text("aigus", 1.0, None) == "Aigus", "routage: texte de la pastille")
+          and rt.pill_text("aigus", 1.0, None) == "Aigus" and rt.pill_text("herite", 1.0, None) == "Tout le son", "routage: texte de la pastille")
     check(rt.PILL_CHARS >= max(len(rt.pill_text(s, 1.55, "logo")) for s in rt.ROUTE_SOURCES), "routage: largeur fixe de la pastille = le texte le plus long")
     check(rt.auto_hint("groove", "bg") == "Auto : groove -> Basses" and rt.auto_hint("groove", "logo", since_hit=1.0) == "Auto : groove -> Frappes"
           and rt.auto_hint(None, "bg") == "Auto : phase inconnue -> Tout", "routage: texte d'Auto (phase -> source)")
@@ -10016,6 +10019,55 @@ def check_routage_rendu() -> None:
     # ligne a la main a cote d'effets en auto : elle seule change de source
     groove = dict(bass_only, phase={"name": "groove"})
     a = render(groove, src_bg="auto", **wob)
+    # --- lot 3 : lignes hors shader (motif, reactions du logo, globales) : chaque ligne ne change que sa reaction
+    clock = [10.0]
+
+    def step(state, **kw):
+        """Deux images a 0,1 s d'ecart : rend (avance du defilement, du halo, des cellules) entre elles."""
+        q = dict(base, **kw)
+        r.draw(fbo, size, state, q, clock[0])
+        a0 = (r._bg_scroll, r._holo_t, r._cell_t)
+        clock[0] += 0.1
+        r.draw(fbo, size, state, q, clock[0])
+        clock[0] += 0.1
+        return tuple(b - a for a, b in zip(a0, (r._bg_scroll, r._holo_t, r._cell_t)))
+
+    def uniform(name):
+        return r.scene_prog[name].value if name in r.scene_prog else None
+    pat = dict(bg_mode="pattern", bg_react=1.0, bg_speed=1.0)
+    step(hit, **pat)
+    check(uniform("u_beat") == 1.0, "routage: flash du motif par defaut = kick du fond (comme avant)", str(uniform("u_beat")))
+    step(hit, rt_bg_flash="aigus", **pat)
+    b_aigus = uniform("u_beat")
+    step(dict(hit, hit=0.9, since_hit=0.05), rt_bg_flash="frappes", **pat)
+    check(b_aigus == 0.0 and abs(uniform("u_beat") - 0.9) < 1e-6 and r.routes_now.get("bg_flash", ("",))[0] == "frappes",
+          "routage: flash du motif sur les aigus = plus de flash au kick ; sur les frappes = flash a la frappe", str((b_aigus, uniform("u_beat"))))
+    d_def, d_rien = step(bass_only, **pat)[0], step(bass_only, rt_bg_scroll="rien", **pat)[0]
+    check(d_def > d_rien * 2.0 > 0.0, "routage: defilement sur rien = les basses ne l'accelerent plus", str((d_def, d_rien)))
+    holo = dict(holo_on=1.0, holo_react=1.0, holo_speed=0.5, cell_on=1.0, cell_react=1.0, cell_speed=1.0)
+    d0 = step(bass_only, **holo)
+    d1 = step(bass_only, rt_lg_holo="rien", **holo)
+    check(d0[1] > d1[1] * 2.0 > 0.0 and abs(d0[2] - d1[2]) < 1e-9, "routage: halo sur rien = les basses ne l'accelerent plus, les cellules si (lignes independantes)",
+          str((d0, d1)))
+    rect = lambda **kw: (step(hit, **{"logo_pulse": 0.5, **kw}), tuple(uniform("u_logo_rect")))[1]
+    big, still_rect, tiny = rect(), rect(rt_lg_pulse="aigus"), rect(logo_pulse=0.0)
+    check(big != tiny and still_rect == tiny, "routage: pulsation du logo sur les aigus = plus de pulsation au kick", str((big, still_rect, tiny)))
+    step(bass_only, breath_pulse=1.0)
+    sw_def = r._bp_swell
+    step(bass_only, breath_pulse=1.0, rt_breath="rien")
+    check(sw_def == 1.0 and r._bp_swell == 0.0 and "breath" in r.routes_now, "routage: respiration sur rien = elle ne suit plus les basses", str((sw_def, r._bp_swell)))
+    both = dict(bass_only, high=1.0)                                  # graves et aigus : teinte a mi-chemin sur le son entier
+    r._hue_spec = 0.0
+    for _ in range(20):
+        step(both, hue_spectrum=1.0)
+    h_def = r._hue_spec
+    r._hue_spec = 0.0
+    for _ in range(20):
+        step(both, hue_spectrum=1.0, rt_hue="basses")
+    check(h_def > 10.0 and r._hue_spec < 1.0, "routage: teinte spectrale sur les basses = teinte chaude, alors que le son entier (graves + aigus) la refroidit",
+          str((h_def, r._hue_spec)))
+    step(bass_only)
+    check(r.routes_now == {} and r._routes.info("breath") is None, "routage: toutes les lignes remises par defaut = plus aucun calcul ni memoire")
     check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None
           and ("wobble", "rien", 1.0) in r.fx_now["bg"] and ("wobble", "basses", 0.6) not in r.fx_now["bg"],
           "routage: une ligne a la main sort d'auto pour CET effet (le voyant le dit), la couche reste en auto par effet", str(r.fx_now["bg"]))

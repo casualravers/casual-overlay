@@ -348,11 +348,18 @@ def install(c):
         row=zone_logo.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
     add_separator(zone_aura, "Reaction a l'audio")
+    routing = getattr(c, "routing", None)          # routage audio par effet (#198) : pastille de source a cote de chaque reaction
     param_slider(zone_aura, "Pulsation", "logo_pulse", 0.0, 0.5, 0.01,
                  "Zoom du logo a chaque kick (0,12 = +12 %). Jamais coupe hors cadre.")
+    if routing is not None:
+        routing.pill_after(zone_aura, "lg_pulse", padx=ROW_PADX, pady=ROW_PADY)
     param_slider(zone_aura, "Tremblement", "logo_jitter", 0.0, 0.03, 0.001, "Vibration du logo proportionnelle aux aigus.")
+    if routing is not None:
+        routing.pill_after(zone_aura, "lg_jitter", padx=ROW_PADX, pady=ROW_PADY)
     param_slider(zone_aura, "Contour lumineux", "logo_glow", 0.0, 3.0, 0.1,
                  "Intensite du halo autour du logo, module par les basses.")
+    if routing is not None:
+        routing.pill_after(zone_aura, "lg_glow", padx=ROW_PADX, pady=ROW_PADY)
     param_slider(zone_aura, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
 
     import types

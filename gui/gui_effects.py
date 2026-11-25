@@ -220,6 +220,8 @@ def install(c):
     param_slider(cz, "Vitesse", "holo_speed", 0.0, 1.0, 0.01, "Vitesse des ondes et de la derive des etoiles.")
     param_slider(cz, "Reaction audio", "holo_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
+    if routing is not None:
+        routing.pill_after(cz, "lg_holo", padx=ROW_PADX, pady=ROW_PADY)
 
     # ---- FONTE ACIDE du logo (onglet a cote de l'aura) : dissolution sur place puis reformation, en boucle
     add_separator(zone_melt, "Fonte acide (logo)")
@@ -246,6 +248,8 @@ def install(c):
     melt_color_var = color_row(zone_melt, "Couleur de l'acide", "melt_color")
     param_slider(zone_melt, "Reaction audio", "melt_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: le cycle s'accelere avec les basses.")
+    if routing is not None:
+        routing.pill_after(zone_melt, "lg_melt", padx=ROW_PADX, pady=ROW_PADY)
 
     # ---- CELLULES du logo (Voronoi + metaballes, cell shading)
     add_separator(zone_cell, "Cellules organiques (logo)")
@@ -271,6 +275,8 @@ def install(c):
     cell_ink_var = color_row(zone_cell, "Couleur du contour", "cell_ink")
     param_slider(zone_cell, "Reaction audio", "cell_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: derive acceleree par les basses, cellules gonflees au kick.")
+    if routing is not None:
+        routing.pill_after(zone_cell, "lg_cells", padx=ROW_PADX, pady=ROW_PADY)
 
     # ---- MOSAIQUE de doodles (meme onglet : le logo se recompose aussi, avec les medias du public)
     add_separator(zone_cell, "Mosaique de doodles (logo)")

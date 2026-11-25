@@ -39,8 +39,8 @@ ROUTES: tuple[Route, ...] = (
     Route("lg_holo", "logo", "logo", "Halo holographique", "vec"),
     Route("lg_melt", "logo", "logo", "Fonte acide", "vec"),
     Route("lg_cells", "logo", "logo", "Cellules", "vec"),
-    Route("breath", "global", "bg", "Respiration (pulsation)", "vec"),
-    Route("hue", "global", "bg", "Teinte spectrale", "vec"),
+    Route("breath", "global", None, "Respiration (pulsation)", "vec"),      # sans couche : lisent le son entier (state), pas une couche
+    Route("hue", "global", None, "Teinte spectrale", "vec"),
     Route("strobe", "global", None, "Strobe", "info"),
     Route("foudre", "global", None, "Foudre", "info"),
     Route("noise", "global", None, "Noise", "info"),
@@ -132,7 +132,10 @@ def menu_label(src: str) -> str:
 
 def pill_text(src: str, dose: float, layer: str | None) -> str:
     """« Basses 80 % », « Comme le fond » ; le dosage n'est ecrit que s'il n'est pas de 100 %."""
-    name = f"Comme {LAYER_NAMES[layer]}" if src == INHERIT and layer in LAYER_NAMES else source_label(src)
+    if src == INHERIT:
+        name = f"Comme {LAYER_NAMES[layer]}" if layer in LAYER_NAMES else "Tout le son"      # ligne globale : le son entier, comme avant
+    else:
+        name = source_label(src)
     pct = int(round(float(dose) * 100))
     return name if pct == 100 else f"{name} {pct} %"
 

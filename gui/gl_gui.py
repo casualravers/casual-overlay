@@ -1448,6 +1448,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
 
     # ---- colonne B : LOGO
     gui_logo_ctl = gui_logo.install(types.SimpleNamespace(
+        routing=routing_ui,
         ROW_PADX=ROW_PADX,
         ROW_PADY=ROW_PADY,
         Tooltip=Tooltip,

@@ -99,6 +99,12 @@ class Routing:
         self.paint(rid)
         return mb
 
+    def pill_after(self, zone, rid: str, column: int = 3, padx: int = 6, pady: int = 2) -> tk.Menubutton:
+        """Pastille sur la ligne que `param_slider` vient de poser dans `zone` (colonne libre a droite du curseur et de l'automation)."""
+        mb = self.pill(zone.parent, rid)
+        mb.grid(row=zone.row - 1, column=column, sticky="w", padx=padx, pady=pady)
+        return mb
+
     def paint(self, rid: str) -> None:
         src, dose = self.route(rid)
         default = (src, dose) == (rt.INHERIT, 1.0)
@@ -203,7 +209,7 @@ class Routing:
         shown = src
         on_bg = rt.BY_ID[rid].layer == "bg" or float(self.c.params.get("fx_link", 1.0)) >= 0.5 and rid in rt.FX_LINES
         if src == rt.INHERIT:
-            shown = self.c.params.get("src_bg" if on_bg else "src_logo", "tout")
+            shown = "tout" if rt.BY_ID[rid].layer is None else self.c.params.get("src_bg" if on_bg else "src_logo", "tout")
         if shown == "auto":                             # la source qu'Auto a choisie, publiee par le rendu (s.status["sources"])
             status = getattr(getattr(self.c, "s", None), "status", None) or {}
             sources = status.get("sources")

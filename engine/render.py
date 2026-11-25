@@ -14,7 +14,7 @@ from core import sessionlog
 from core import doodles
 from core import qrcode
 from core.audio_layers import (EFFECTS, DownbeatGate, EffectBank, LayerFilter, SourceMixer, accent_vectors, auto_fx, auto_sources, has_kick, layer_levels,
-                               phrase_boost, ripple_on_downbeat)
+                               phrase_boost, ripple_on_downbeat, NO_KICK)
 from core.pulse import cycle_seconds, swell as pulse_swell
 from core import strobe_auto as core_strobe
 from core.strobe_auto import StrobeBrain
@@ -1202,7 +1202,25 @@ class Renderer:
                 if self.fx_now.get(layer) is not None:
                     effect = EFFECTS[i]
                     self.fx_now[layer] = [a for a in self.fx_now[layer] if a[0] != effect] + [(effect, info[0], routing.route_of(p, like)[1])]
-        self._routes.prune(active)
+        any_route = bool(active) or not routing.is_default(p)
+        base_all = (float(bass), float(high), float(beat), float(state.get("since_beat", NO_KICK)))      # lignes globales : le son entier
+
+        def line(rid: str, base: tuple) -> tuple:
+            """Vecteur d'une ligne hors shader (motif, reactions du logo, globales) : `base` tel quel si elle est par defaut (image d'avant)."""
+            if not any_route or routing.is_default(p, rid):
+                return base
+            layer = routing.BY_ID[rid].layer
+            if layer == "logo":
+                v = self._routes.vector(t, state, p, rid, base, table_logo, p["lag_" + lk], p["smooth_" + lk], lk)
+            elif layer == "bg":
+                v = self._routes.vector(t, state, p, rid, base, table_bg, p["lag_bg"], p["smooth_bg"], "bg")
+            else:
+                v = self._routes.vector(t, state, p, rid, base, table_bg, 0.0, 0.0, "bg")
+            active.append(rid)
+            info = self._routes.info(rid)
+            if info is not None:
+                self.routes_now[rid] = info
+            return v
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt
@@ -1219,18 +1237,20 @@ class Renderer:
         bp = _unit(p["breath_pulse"])
         self._bp_swell = 0.5
         if bp > 0.0:
+            br_bass = line("breath", base_all)[0]                       # routage (#198) : par defaut les basses du son entier, comme avant
             pul = state.get("pulse") or {}
             if pul.get("state") in ("cale", "libre") and pul.get("phase_now") is not None:
                 sw = pulse_swell(pul["phase_now"], float(pul.get("period_ms", 500.0)) / 1000.0, float(state.get("lead_s", 0.0)))
             else:
-                sw = min(max(float(bass), 0.0), 1.0)
+                sw = min(max(float(br_bass), 0.0), 1.0)
             self._bp_swell = sw
             ov *= 1.0 - bp * 0.5 * (1.0 - sw)                           # l'overlay respire : jusqu'a -50 % entre deux temps
-            bg_level *= 1.0 - bp * 0.3 * (1.0 - min(max(float(bass), 0.0), 1.0))       # le fond suit le corps des basses
+            bg_level *= 1.0 - bp * 0.3 * (1.0 - min(max(float(br_bass), 0.0), 1.0))       # le fond suit le corps des basses
         self._hue_phase = (self._hue_phase + dt * (float(p["hue_cycle"]) + float(p["phase_hue"]))) % 360.0
         spec = _unit(p["hue_spectrum"])
         if spec > 0.0:                                                  # graves = chaud, aigus = froid, suivi lisse (0,5 s) pour ne pas clignoter
-            self._hue_spec += (spectral_hue(bass, high) - self._hue_spec) * (1.0 - math.exp(-raw_dt / 0.5))
+            hv = line("hue", base_all)                                  # routage (#198) : par defaut le son entier
+            self._hue_spec += (spectral_hue(hv[0], hv[1]) - self._hue_spec) * (1.0 - math.exp(-raw_dt / 0.5))
         hue_deg = (float(p["hue_master"]) + self._hue_phase + build * 120.0 + spec * self._hue_spec) % 360.0
         self._comp_t += dt
         self._comp_rot += dt * math.radians(float(p["comp_rot"]))
@@ -1241,10 +1261,12 @@ class Renderer:
         nz, nzb = self.noise.swell() * n_amount, self.noise.beat() * n_amount
         self.noise_out = (nz, nzb)
         eff = [float(fx_on[i]) * float(fx_int[i]) * master for i in range(5)]
+        # routage (#198) : pulsation, tremblement et contour ont chacun leur ligne (par defaut le vecteur du logo, comme avant) ; le noise s'ajoute apres
+        lg_pul, lg_jit, lg_glo = line("lg_pulse", lg_au)[2], line("lg_jitter", lg_au)[1], line("lg_glow", lg_au)[0]
         if int(n_fx[4]):                                   # reaction du logo (pulsation, tremblement, contour)
-            beat_l, high_l, bass_l = max(lg_beat, nzb), max(lg_high, nz), max(lg_bass, nz)
+            beat_l, high_l, bass_l = max(lg_pul, nzb), max(lg_jit, nz), max(lg_glo, nz)
         else:
-            beat_l, high_l, bass_l = lg_beat, lg_high, lg_bass
+            beat_l, high_l, bass_l = lg_pul, lg_jit, lg_glo
 
         self._ensure_scene(size)
 
@@ -1274,7 +1296,8 @@ class Renderer:
         self._set(sp, "u_glow", min(float(p["logo_glow"]) * logo_fx, 3.0) * ov)
         self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
         self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
-        self._set(sp, "u_beat", float(bg_au[2]))
+        bg_fl = line("bg_flash", bg_au)                                 # routage (#198) : flash du motif (composante kick), par defaut le fond
+        self._set(sp, "u_beat", float(bg_fl[2]))
         # Vague de lettres (#199) : seulement avec la source Texte ; l'horloge tourne avec le temps `t` de l'image
         text_src = self.logo_kind == "text" and self.has_logo
         ola_dur, ola_every, ola_fade = clean_ola(p["text_ola_dur"], p["text_ola_every"], p["text_ola_fade"])
@@ -1291,12 +1314,12 @@ class Renderer:
         # Halo holographique: phase integree (changer la vitesse ne fait pas sauter les reflets). Sans
         # holo_react (defaut), ni l'intensite ni la vitesse ne dependent de l'audio.
         h_react = max(float(p["holo_react"]), 0.0)
-        self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(lg_bass) * 3.0)
+        self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(line("lg_holo", lg_au)[0]) * 3.0)
         holo_on = float(p["holo_on"]) >= 0.5 and self.has_logo
         # Fonte acide: phase integree (changer la periode ne fait pas sauter l'animation). Triangle 0 -> 1 -> 0 avec
         # un palier intact et un palier dissous, adouci: le logo reste lisible un moment, puis fond, puis se reforme.
         m_react = max(float(p["melt_react"]), 0.0)
-        self._melt_t += dt / max(cycle_seconds(float(p["melt_period"]), float(p["melt_beats"]), pul_period, pul_ok), 1.0) * (1.0 + m_react * float(lg_bass) * 3.0)
+        self._melt_t += dt / max(cycle_seconds(float(p["melt_period"]), float(p["melt_beats"]), pul_period, pul_ok), 1.0) * (1.0 + m_react * float(line("lg_melt", lg_au)[0]) * 3.0)
         self._melt_clock += dt
         tri = 1.0 - abs(2.0 * (self._melt_t % 1.0) - 1.0)
         s_ = min(max((tri - 0.15) / 0.7, 0.0), 1.0)
@@ -1310,11 +1333,12 @@ class Renderer:
         self._set(sp, "u_melt_t", self._melt_clock)
         # Cellules du logo: derive integree (changer la vitesse ne fait pas sauter les gouttes).
         c_react = max(float(p["cell_react"]), 0.0)
-        self._cell_t += dt * float(p["cell_speed"]) * (1.0 + c_react * float(lg_bass) * 3.0)
+        cell_au = line("lg_cells", lg_au)
+        self._cell_t += dt * float(p["cell_speed"]) * (1.0 + c_react * float(cell_au[0]) * 3.0)
         cell_on = float(p["cell_on"]) >= 0.5
         self._set(sp, "u_cell", min(max(float(p["cell_amount"]), 0.0), 1.0) if cell_on else 0.0)
         self._set(sp, "u_cell_scale", max(float(p["cell_scale"]), 0.1))
-        self._set(sp, "u_cell_fusion", max(float(p["cell_fusion"]), 0.05) * (1.0 + c_react * float(lg_beat) * 0.6))
+        self._set(sp, "u_cell_fusion", max(float(p["cell_fusion"]), 0.05) * (1.0 + c_react * float(cell_au[2]) * 0.6))
         self._set(sp, "u_cell_flat", min(max(float(p["cell_flat"]), 0.0), 1.0))
         self._set(sp, "u_cell_ink", hex_to_rgb(p["cell_ink"], DEFAULT_PARAMS["cell_ink"]))
         self._set(sp, "u_cell_t", self._cell_t)
@@ -1330,19 +1354,25 @@ class Renderer:
         if mosaic_on:
             self._mosaic_atlas().use(4)
         react = max(float(p["bg_react"]), 0.0)
-        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_au[0]) * 1.5) * (1.0 + _unit(p["breath_pulse"]) * 0.8 * (self._bp_swell - 0.5))      # derive du fond : respire avec la pulsation
+        # routage (#198) : defilement et damier (composante basses, compte des kicks), scintillement (composante aigus) ; par defaut le fond
+        bg_sc, bg_sp = line("bg_scroll", bg_au), line("bg_sparkle", bg_au)
+        scroll_info = self._routes.info("bg_scroll") if "bg_scroll" in active else None
+        kicks_on = react > 0 and react_m > 0 and has_kick(scroll_info[0] if scroll_info and routing.route_of(p, "bg_scroll")[0] != routing.INHERIT else src_bg)
+        self._bg_scroll += dt * float(p["bg_speed"]) * (1.0 + react * float(bg_sc[0]) * 1.5) * (1.0 + _unit(p["breath_pulse"]) * 0.8 * (self._bp_swell - 0.5))      # derive du fond : respire avec la pulsation
         self._bg_flip_t += dt * float(p["bg_flip"])
-        self._sto_flick += dt * react * float(bg_au[1]) * 6.0     # aigus : renouvellements de rang par seconde et par point
-        flips = self._bg_flip_t + (float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0)
+        self._sto_flick += dt * react * float(bg_sp[1]) * 6.0     # aigus : renouvellements de rang par seconde et par point
+        flips = self._bg_flip_t + (float(state.get("beats", 0)) if kicks_on else 0.0)
         self._set(sp, "u_bg_mode", 1.0 if p["bg_mode"] == "pattern" else 0.0)
         self._bg_clock += dt                       # horloge reelle: la palette "test" tourne a 30 images/s fixes
         self._set(sp, "u_bg_palette", {"duo": 1.0, "test": 2.0, "stochastique": 3.0, "labyrinthe": 4.0}.get(p["bg_palette"], 0.0))
         self._set(sp, "u_sto", (float(p["bg_sto_size"]), float(p["bg_sto_regular"]), float(p["bg_sto_vary"]), float(p["bg_sto_density"])))
         self._set(sp, "u_sto2", ({"waves": 1.0, "gradient": 2.0}.get(p["bg_sto_field"], 0.0), float(p["bg_sto_invert"]),
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
-        self._set(sp, "u_sto_au", (react * float(bg_au[0]), react * float(bg_au[2]),
-                                   float(state.get("beats", 0)) if react > 0 and react_m > 0 and has_kick(src_bg) else 0.0, 0.0))
-        self._labyrinth(sp, p, dt, t, react, bg_au, state, react > 0 and react_m > 0 and has_kick(src_bg), (width, height), raw_dt)
+        self._set(sp, "u_sto_au", (react * float(bg_sc[0]), react * float(bg_fl[2]),
+                                   float(state.get("beats", 0)) if kicks_on else 0.0, 0.0))
+        lab_au = (bg_sc[0], bg_sp[1], bg_fl[2], bg_fl[3])                # labyrinthe : derive = defilement, pulsation = flash (par defaut = bg_au)
+        self._labyrinth(sp, p, dt, t, react, lab_au, state, kicks_on, (width, height), raw_dt)
+        self._routes.prune(active)                                      # toutes les lignes de l'image sont calculees : oublier les autres
         self._set(sp, "u_bg_frame", float(int(self._bg_clock * 30.0)))
         self._set(sp, "u_bg_c1", hex_to_rgb(p["bg_color1"], DEFAULT_PARAMS["bg_color1"]))
         self._set(sp, "u_bg_c2", hex_to_rgb(p["bg_color2"], DEFAULT_PARAMS["bg_color2"]))
