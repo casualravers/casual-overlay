@@ -2328,6 +2328,86 @@ def check_text_ola() -> None:
     check(two.sum() > 0, "vague: changer de texte (nouvelle carte de rangs) donne un rendu valide hors balayage")
 
 
+def check_text_fill() -> None:
+    """Remplissage des lettres par reaction-diffusion (#199), rendu : le motif colonise les lettres sans jamais deborder, joue sur la
+    luminosite seulement, repart de zero au changement de texte, se cumule avec la vague ; case decochee ou logo image : rien ne change."""
+    print("Texte : remplissage par reaction-diffusion (rendu)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    from engine.render import render_text
+    size = (960, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    r = gl.Renderer(ctx, size, None)
+    r.video_tex.write(bytes(size[0] * size[1] * 3))
+    r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
+                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_fill_contrast=1.0)
+    clock = [300.0]
+
+    def frames(n, rr=None, **kw):
+        out = None
+        for _ in range(n):
+            clock[0] += 1 / 60
+            (rr or r).draw(fbo, size, quiet, dict(base, **kw), clock[0])
+            out = read_target(ctx, fbo, size)
+        return out.astype(int)[..., :3].sum(axis=2)
+    ref = frames(2)
+    check(r.text_fill is None, "remplissage: case decochee = aucune simulation creee")
+    inside = ref > 200
+    on = frames(150, text_fill_on=1.0)                                               # ~2,5 s : de quoi coloniser un texte
+    tf = r.text_fill
+    check(tf is not None and tf.tex, "remplissage: la simulation existe quand la case est cochee (source Texte)")
+    st = tf.read()
+    mask = tf.mask
+    check(float(st[..., 1][~mask].max(initial=0.0)) == 0.0, "remplissage: aucune matiere (V) hors des lettres : le masque est un mur",
+          f"max hors masque {float(st[..., 1][~mask].max(initial=0.0)):.4f}")
+    colonised = float((st[..., 1][mask] > 0.05).mean())
+    check(colonised > 0.4, "remplissage: le motif colonise l'interieur des lettres en ~2,5 s", f"{colonised:.2f}")
+    check(int(on[ref == 0].sum()) == 0, "remplissage: aucun pixel allume hors des lettres")
+    vals = on[inside]
+    check(vals.min() < 0.7 * vals.max() and on.sum() < ref.sum(), "remplissage: zones claires et sombres dans les lettres (contraste 1), jamais plus claires que le texte",
+          f"min {vals.min()} max {vals.max()} somme {on.sum() / ref.sum():.2f}")
+    check(on.max() <= ref.max(), "remplissage: la luminosite seulement baisse (la couleur du texte reste le maximum)")
+    flat = frames(1, text_fill_on=1.0, text_fill_contrast=0.0)
+    check(np.array_equal(flat, ref), "remplissage: contraste 0 = image identique au texte seul")
+    # changement de texte : le motif repart de zero
+    r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
+    frames(1, text_fill_on=1.0)
+    st2 = r.text_fill.read()
+    young = float((st2[..., 1][r.text_fill.mask] > 0.05).mean())
+    check(young < 0.2, "remplissage: un nouveau texte repart de zero (germes neufs)", f"{young:.2f}")
+    frames(150, text_fill_on=1.0)
+    st3 = r.text_fill.read()
+    check(float((st3[..., 1][r.text_fill.mask] > 0.05).mean()) > 0.4, "remplissage: le nouveau texte est colonise a son tour")
+    # remise a zero periodique sans vague
+    r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
+    frames(150, text_fill_on=1.0, text_fill_every=5.0)
+    full = float((r.text_fill.read()[..., 1][r.text_fill.mask] > 0.05).mean())
+    seed0 = r._fill_seed
+    frames(60 * 6, text_fill_on=1.0, text_fill_every=5.0, text_fill_speed=0.3)
+    check(full > 0.3 and r._fill_seed == seed0 + 1, "remplissage: sans vague, une remise a zero apres N = 5 s (une seule en 6 s)", f"{full:.2f} {r._fill_seed - seed0}")
+    # cumul avec la vague : les lettres eteintes le restent
+    ola = frames(1, text_fill_on=1.0, text_ola_on=1.0)
+    mid = frames(90, text_fill_on=1.0, text_ola_on=1.0)                              # 1,5 s apres l'activation de la vague : mi-balayage
+    check(mid.sum() < 0.05 * max(ola.sum(), 1) or mid.sum() < 0.05 * ref.sum(), "remplissage + vague : les lettres eteintes restent eteintes", f"{mid.sum() / ref.sum():.3f}")
+    # case decochee : la simulation est detruite, image identique a avant
+    off = frames(2, text_fill_on=0.0, text_ola_on=0.0)
+    check(r.text_fill is None and np.array_equal(off, ref), "remplissage: case decochee = simulation detruite, image strictement identique a avant")
+    # logo image : jamais touche
+    ri = gl.Renderer(ctx, size, None)
+    ri.video_tex.write(bytes(size[0] * size[1] * 3))
+    logo = np.zeros((64, 64, 4), np.uint8)
+    logo[:] = (255, 255, 255, 255)
+    ri.set_logo(logo, "x")
+    a = frames(3, rr=ri, text_fill_on=0.0, logo_scale=0.4)
+    b = frames(3, rr=ri, text_fill_on=1.0, logo_scale=0.4)
+    check(np.array_equal(a, b) and a.sum() > 0 and ri.text_fill is None, "remplissage: un logo image n'est jamais touche (source Texte seulement)")
+
+
 def check_text() -> None:
     print("Texte a incruster / plein ecran par defaut")
     img = gl.render_text("CASUAL RAVERS", "auto", "#ff0000", "center", 128)
@@ -12450,6 +12530,32 @@ def check_textfx() -> None:
     check(fc4.update(1.0, "B", True, True, 20.0) and not fc4.update(1.1, "B", True, False, 20.0),
           "remplissage: texte change et rallumage au meme instant -> une seule remise a zero")
 
+    # ---- grille et pas du remplissage
+    gw, gh = tf.fill_grid_size(4.0, 1.0)
+    check(gw == tf.FILL_GRID_BASE and abs(gw / gh - 4.0) < 0.2, "remplissage: la grille garde le rapport du texte (cote long = base a l'echelle 1)", f"{gw}x{gh}")
+    check(tf.fill_grid_size(4.0, 2.0)[0] > gw > tf.fill_grid_size(4.0, 0.5)[0], "remplissage: plus d'echelle = grille plus fine (motif plus fin)")
+    big = tf.fill_grid_size(4.0, 2.5)
+    small = tf.fill_grid_size(4.0, 0.1)
+    check(max(big) <= tf.FILL_GRID_MAX and min(small) >= 2 and max(small) >= tf.FILL_GRID_MIN, "remplissage: grille bornee (cote long entre min et max)", f"{big} {small}")
+    tall = tf.fill_grid_size(0.25, 1.0)
+    check(tall[1] == tf.FILL_GRID_BASE and tall[0] < tall[1], "remplissage: un texte haut (plusieurs lignes) a son cote long en hauteur", str(tall))
+    n, acc = tf.fill_steps(0.0, 1 / 60, 1.0, False)
+    total, acc = 0, 0.0
+    for _ in range(60):
+        n, acc = tf.fill_steps(acc, 1 / 60, 1.0, False)
+        total += n
+    check(abs(total - tf.FILL_STEPS_PER_S) <= 1, "remplissage: a vitesse 1, FILL_STEPS_PER_S pas par seconde", str(total))
+    t2, acc2 = 0, 0.0
+    for _ in range(60):
+        n, acc2 = tf.fill_steps(acc2, 1 / 60, 2.0, False)
+        t2 += n
+    t3, acc3 = 0, 0.0
+    for _ in range(60):
+        n, acc3 = tf.fill_steps(acc3, 1 / 60, 1.0, True)
+        t3 += n
+    check(t2 > 1.8 * total and t3 <= total // 2 + 1 and t3 >= 1, "remplissage: la vitesse multiplie les pas, le GPU charge les divise par deux (au moins 1)", f"{total} {t2} {t3}")
+    check(tf.fill_steps(0.0, 5.0, 3.0, False)[0] == tf.FILL_MAX_STEPS, "remplissage: pas par image plafonnes (pas de retard qui s'accumule)")
+
     # ---- table des reglages
     keys = ("text_ola_on", "text_ola_dur", "text_ola_every", "text_ola_fade",
             "text_fill_on", "text_fill_speed", "text_fill_scale", "text_fill_contrast", "text_fill_every")
@@ -15262,12 +15368,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_text_fill", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",

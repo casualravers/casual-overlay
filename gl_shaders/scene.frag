@@ -369,6 +369,16 @@ float ola_alpha(float rank, float tau, float dur, float fade) {
     return smoothstep(s, s + fd, tau);
 }
 
+// Remplissage des lettres (reaction-diffusion, texte uniquement) : grille RGBA (r = U, g = V, b = masque), meme coordonnee que le logo.
+// Le motif joue sur la luminosite seulement : la couleur et l'opacite ne changent pas. Non colonise = clair, colonise = sombre.
+uniform sampler2D u_fill;
+uniform vec2 u_fill_k;         // x = 1 si le remplissage est actif, y = contraste (ecart clair / sombre)
+float fill_motif(vec2 q) {
+    vec4 s = texture(u_fill, clamp(q, 0.0, 1.0));
+    float v = s.g / max(s.b, 0.05);                      // normalise par le masque filtre : pas de bord sombre ou clair aux contours des lettres
+    return 1.0 - smoothstep(0.08, 0.30, v);
+}
+
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
 vec4 logo_at(vec2 p) {
     vec2 d = p - u_logo_rect.xy;
@@ -386,6 +396,9 @@ vec4 logo_at(vec2 p) {
     // Echantillonnage toujours execute (derivees valides pour les mipmaps), masque apres coup.
     vec4 c = texture(u_logo, clamp(q, 0.0, 1.0));
     c.rgb *= mix(1.0, c.a, u_logo_straight);
+    if (u_fill_k.x > 0.5 && inside > 0.5) {
+        c.rgb *= 1.0 - u_fill_k.y * (1.0 - fill_motif(q));
+    }
     if (u_ola.x > 0.5 && inside > 0.5) {
         // les lettres eteintes disparaissent vraiment (avant les cellules, la fonte, la mosaique et le contour lumineux)
         c *= ola_alpha(textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).r, u_ola.y, u_ola.z, u_ola.w);

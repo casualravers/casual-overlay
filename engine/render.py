@@ -26,7 +26,8 @@ from core import reaction
 from core.recording import cover_uv as fit_cover, fit_rect
 from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
 from core.brain import FxEdge
-from core.textfx import FillClock, OlaClock, clean_ola
+from core.textfx import FillClock, OlaClock, clean_ola, fill_steps
+from engine.textfill import TextFill
 from core import explain as core_explain
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.reaction import ReactionDiffusion
@@ -417,6 +418,13 @@ class Renderer:
         self.text_rank_tex = None          # carte du rang des lettres du texte (vague de lettres, #199) ; 1 x 1 vide hors source Texte
         self._ola = OlaClock()             # horloge de la vague de lettres (temps = le `t` de draw)
         self.ola_relight = False           # vrai a l'image ou les lettres commencent a se rallumer (remet le remplissage a zero)
+        self.text_fill: TextFill | None = None   # remplissage des lettres (#199) : cree a la demande, detruit quand l'effet est coupe
+        self._fill_clock = FillClock()
+        self._fill_acc = 0.0               # reste de l'accumulateur de pas de la simulation
+        self._fill_seed = 0                # graine des germes, +1 a chaque remise a zero
+        self._fill_dummy = None            # texture 1 x 1 liee a l'unite 3 quand le remplissage est coupe
+        self.text_epoch = 0                # +1 a chaque nouveau texte (set_logo, source Texte) : change de texte = motif neuf
+        self._text_alpha = None            # alpha du texte (H, W) uint8 : masque du remplissage
         self._holo_t = 0.0                 # phase d'animation du halo holographique, integree image par image
         # Dernier chemin DEMANDE (charge ou non): evite de retenter un fichier invalide a chaque image.
         self.logo_requested = logo_path
@@ -467,6 +475,46 @@ class Renderer:
         if old is not None:
             old.release()
         self._set_text_rank(text_rank_map(logo_rgba) if logo_rgba is not None and kind == "text" else None)
+        if logo_rgba is not None and kind == "text":
+            self._text_alpha = np.ascontiguousarray(logo_rgba[..., 3])
+            self.text_epoch += 1
+        else:
+            self._text_alpha = None
+
+    def _update_text_fill(self, sp, t: float, dt: float, p: dict, text_src: bool) -> None:
+        """Remplissage des lettres (#199) : cree / detruit la simulation, remises a zero (FillClock), pas, uniformes de `scene.frag`.
+        Hors source Texte ou case decochee : unite 3 sur une texture vide et `u_fill_k.x` = 0 (image strictement identique a avant)."""
+        on = text_src and float(p["text_fill_on"]) >= 0.5 and self._text_alpha is not None
+        if self._fill_dummy is None:
+            self._fill_dummy = self.ctx.texture((1, 1), 4, dtype="f4", data=bytes(16))
+        self._set(sp, "u_fill", 3)
+        if not on:
+            if self.text_fill is not None:
+                self.text_fill.release()
+                self.text_fill = None
+            self._fill_clock, self._fill_acc = FillClock(), 0.0              # recocher repart d'une simulation neuve
+            self._set(sp, "u_fill_k", (0.0, 0.0))
+            self._fill_dummy.use(3)
+            return
+        if self.text_fill is None:
+            self.text_fill = TextFill(self.ctx, self.vbo, self.shader_dir)
+        tf = self.text_fill
+        scale = round(float(p["text_fill_scale"]), 2)
+        rebuilt = tf.set_mask(self._text_alpha, scale, (self.text_epoch, scale))
+        every = float(p["text_fill_every"])
+        due = self._fill_clock.update(t, self.text_epoch, float(p["text_ola_on"]) >= 0.5, self.ola_relight, every)
+        if due or rebuilt:
+            self._fill_seed += 1
+            tf.reset(self._fill_seed)
+        slow = bool(self.perf is not None and self.perf.active)
+        n, self._fill_acc = fill_steps(self._fill_acc, dt, float(p["text_fill_speed"]), slow)
+        tf.step(n)
+        if not tf.tex:                                                       # allocation impossible : pas d'effet plutot qu'une erreur
+            self._set(sp, "u_fill_k", (0.0, 0.0))
+            self._fill_dummy.use(3)
+            return
+        self._set(sp, "u_fill_k", (1.0, min(max(float(p["text_fill_contrast"]), 0.0), 1.0)))
+        tf.texture.use(3)
 
     def _set_text_rank(self, rank) -> None:
         """Texture de la carte du rang des lettres (R8, sans filtrage : un bord de lettre ne melange pas deux rangs) ; None = une
@@ -1143,6 +1191,7 @@ class Renderer:
         self._set(sp, "u_ola", (0.0, 0.0, ola_dur, ola_fade) if tau is None else (1.0, float(tau), ola_dur, ola_fade))
         self._set(sp, "u_text_rank", 2)
         self.text_rank_tex.use(2)
+        self._update_text_fill(sp, t, dt, p, text_src)
 
         # Fond: video ffmpeg ou motif genere. Les phases avancent meme quand le motif est cache,
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
@@ -1227,6 +1276,7 @@ class Renderer:
             self.layer_fbo.clear(0.0, 0.0, 0.0, 0.0)
         # Les doodles du site passent par la MEME passe que le logo (fonte, cellules, contour, opacite), posee sur sa couche : ils
         # subissent ensuite ses effets par couche, le halo holographique, la trainee et la composition.
+        self._set(sp, "u_fill_k", (0.0, 0.0))
         self._set(sp, "u_ola", (0.0, 0.0, 1.0, 0.1))            # la vague ne touche que le texte : pas les doodles, qui reutilisent logo_at
         doodles_on = self._draw_doodles(self.layer_fbo, size, time.monotonic(), ov)
         (self.mode_tex or self.video_tex).use(0)

@@ -74,6 +74,34 @@ class OlaClock:
         return tau, relight
 
 
+FILL_GRID_BASE = 256                 # cote long de la grille de simulation a l'echelle 1 (cellules)
+FILL_GRID_MIN, FILL_GRID_MAX = 128, 640
+FILL_STEPS_PER_S = 480.0             # pas de Gray-Scott par seconde a vitesse 1 : un texte est colonise en ~1 a 2 s
+FILL_MAX_STEPS = 24                  # plafond par image (l'exces est jete : pas de retard qui s'accumule)
+
+
+def fill_grid_size(aspect: float, scale: float) -> tuple[int, int]:
+    """Taille (largeur, hauteur) de la grille du remplissage pour un texte de rapport `aspect` (largeur / hauteur). Le cote long vaut
+    FILL_GRID_BASE x `scale` (borne), l'autre suit le rapport : plus d'echelle = grille plus fine = motif plus fin dans les lettres."""
+    aspect = max(float(aspect), 0.05)
+    long_side = min(max(round(FILL_GRID_BASE * float(scale)), FILL_GRID_MIN), FILL_GRID_MAX)
+    if aspect >= 1.0:
+        return long_side, max(round(long_side / aspect), 2)
+    return max(round(long_side * aspect), 2), long_side
+
+
+def fill_steps(acc: float, dt: float, speed: float, slow: bool) -> tuple[int, float]:
+    """Pas de simulation a faire a cette image et reste de l'accumulateur. `slow` (GPU charge, PerfGuard) : moitie moins de pas, un au moins."""
+    acc += max(float(dt), 0.0) * FILL_STEPS_PER_S * max(float(speed), 0.0)
+    n = int(acc)
+    acc -= n
+    if slow:
+        n = max(n // 2, 1) if n > 0 else 0
+    if n > FILL_MAX_STEPS:
+        n, acc = FILL_MAX_STEPS, 0.0
+    return n, acc
+
+
 class FillClock:
     """Quand le motif de reaction-diffusion du texte repart de zero (germes neufs) : une premiere fois, a chaque changement de texte, au
     rallumage de la vague quand elle est cochee, sinon toutes les `every` s. `update` rend vrai au plus une fois par appel : un texte qui
