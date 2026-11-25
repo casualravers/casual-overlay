@@ -32,3 +32,9 @@ Retours de l'utilisateur apres la PR #206 (2026-11-25). Une seule PR : spec + co
 ## Non verifie (demande le materiel)
 
 Lisibilite de la bordure noire sur le fond reel au projecteur (2 texels ~ 2 px a 1080p) ; allure du front sur des lettres a plusieurs branches (E, M, W : le front est a vol d'oiseau, pas le long de la lettre) ; rythme de la vague.
+
+## Retouche (2026-11-25, apres essai de #207)
+
+- Bordure : lecture du rang a chaque prise de l'anneau (ing_tap) ; avant, l'anneau hors du cadre de la lettre lisait le rang 0 et suivait la premiere lettre.
+- Front : ill_reveal(tau, v, growth) : front net, motif identique partout, epaississement par l'age (gain 0,45 -> 1) ; plus de dates d'arrivee tirees de la tuile (apparitions au hasard). FRONT_SHARE 0,6.
+- Non verifie : rythme du front sur le projecteur.

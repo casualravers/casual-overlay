@@ -88,7 +88,8 @@ FILL_DIFF = 0.20                     # facteur sur les diffusions de Gray-Scott 
 CELLS_PER_TEXEL = 2.0                # cellules de la tuile par pixel de la texture du texte a la finesse 1 (texte rendu en police de 128 px)
 FILL_DUR_MIN, FILL_DUR_MAX = 0.5, 3.0    # duree d'une lettre (front + croissance) : 3 s au plus
 FILL_STAGGER_MAX = 8.0               # ecart de depart entre la premiere et la derniere lettre
-FRONT_SHARE = 0.8                    # part de la duree d'une lettre prise par le front circulaire ; le reste = apparition locale de la tuile derriere lui
+FRONT_SHARE = 0.6                    # part de la duree d'une lettre prise par le front circulaire ; le reste = epaississement du motif derriere lui
+GAIN_MIN = 0.45                      # gain du motif a l'arrivee du front (les taches pales n'apparaissent qu'ensuite)
 FILL_SOFT_S = 0.18                   # fondu d'apparition d'une cellule (secondes)
 
 
@@ -124,11 +125,13 @@ def fill_tau(ft: float, rank: float, reach: float, stagger: float, front: float)
     return float(ft) - min(max(float(rank), 0.0), 1.0) * float(stagger) - min(max(float(reach), 0.0), 1.0) * float(front)
 
 
-def fill_reveal(tau: float, arrival: float, growth: float) -> float:
-    """Part (0 a 1) de la matiere visible d'une cellule de la tuile : elle apparait a `arrival` (0 a 1 de la tuile) x `growth` secondes du
-    temps local, avec un fondu de FILL_SOFT_S, puis reste. Meme formule que scene.frag."""
-    start = min(max(float(arrival), 0.0), 1.0) * float(growth)
-    return _smoothstep(start, start + FILL_SOFT_S, float(tau))
+def fill_reveal(tau: float, v: float, growth: float) -> float:
+    """Part (0 a 1) de la matiere visible en un point de la tuile (`v` = sa matiere murie, 0 a 1) a l'instant local `tau` : le front est net (fondu de
+    FILL_SOFT_S) et ce qui apparait est le meme partout, seule l'AGE change : derriere le front le motif s'epaissit (gain de GAIN_MIN a 1 sur `growth`
+    secondes), les taches les plus denses d'abord. Aucune date tiree au hasard : le motif avance comme une vague. Meme formule que scene.frag."""
+    age = min(max(float(tau) / max(float(growth), 1e-6), 0.0), 1.0)
+    gain = GAIN_MIN + (1.0 - GAIN_MIN) * _smoothstep(0.0, 1.0, age)
+    return _smoothstep(0.08, 0.30, float(v) * gain) * _smoothstep(0.0, FILL_SOFT_S, float(tau))
 
 
 def fill_total(dur: float, stagger: float) -> float:

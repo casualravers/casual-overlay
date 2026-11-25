@@ -2455,6 +2455,22 @@ def check_text_border() -> None:
     frame(**ola)
     gone = frame(dt=1.5, **ola)
     check(int(dark(gone).sum()) == 0 and int((gone > 3 * 140).sum()) == 0, "bordure: elle s'eteint avec les lettres (vague de lettres)", f"{int(dark(gone).sum())} px noirs")
+    # la bordure suit sa lettre pendant la vague de lettres : a tout instant, du noir seulement autour d'une lettre visible (pas de bordure
+    # d'une lettre eteinte, ni sur les cotes qui depassent du cadre de la lettre)
+    clock[0] = 50.0
+    ola_p = dict(text_border=4.0, text_ola_on=1.0, text_ola_dur=6.0, text_ola_fade=1.0, text_ola_every=60.0)
+    frame(**ola_p)                                                                   # activation : le balayage demarre ici
+    stray = []
+    for k, step in enumerate((0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6)):   # ~6 s de balayage, en passant par chaque phase
+        img = frame(dt=step, **ola_p)
+        shown = img > 3 * 140                                                        # une lettre visible (fondue ou non) est plus claire que le fond gris
+        around = shown.copy()
+        for dy in range(-12, 13):
+            for dx in range(-12, 13):
+                if dx * dx + dy * dy <= 144:
+                    around |= np.roll(np.roll(shown, dy, axis=0), dx, axis=1)
+        stray.append(int((dark(img) & ~around).sum()))
+    check(max(stray) == 0, "bordure: elle suit sa lettre pendant la vague de lettres (jamais de noir loin d'une lettre visible)", f"pixels noirs isoles par instant : {stray}")
     # jamais sur un logo image
     ri = gl.Renderer(ctx, size, None)
     ri.video_tex.write(bytes([128]) * (size[0] * size[1] * 3))
@@ -12989,9 +13005,9 @@ def check_textfx() -> None:
     check(tf.fill_tau(5.0, 0.0, 0.0, 3.0, 1.2) == 5.0 and abs(tf.fill_tau(5.0, 1.0, 0.0, 3.0, 1.2) - 2.0) < 1e-9
           and abs(tf.fill_tau(5.0, 0.0, 1.0, 3.0, 1.2) - 3.8) < 1e-9 and tf.fill_tau(5.0, 7.0, -3.0, 3.0, 1.2) == tf.fill_tau(5.0, 1.0, 0.0, 3.0, 1.2),
           "remplissage: une lettre a droite part plus tard (ecart de depart), un point plus loin du depart de sa lettre est atteint plus tard ; rang et portee bornes")
-    check(tf.fill_reveal(-1.0, 0.0, 1.5) == 0.0 and tf.fill_reveal(0.0 + tf.FILL_SOFT_S, 0.0, 1.5) == 1.0
-          and tf.fill_reveal(0.5, 0.5, 1.5) == 0.0 and tf.fill_reveal(0.75 + tf.FILL_SOFT_S, 0.5, 1.5) == 1.0,
-          "remplissage: une cellule apparait a son instant d'arrivee (tuile) et reste, avec un fondu bref")
+    check(tf.fill_reveal(-1.0, 1.0, 1.5) == 0.0 and tf.fill_reveal(1.5, 1.0, 1.5) == 1.0 and tf.fill_reveal(1.5, 0.0, 1.5) == 0.0
+          and 0.0 < tf.fill_reveal(0.3, 0.3, 1.5) < tf.fill_reveal(1.5, 0.3, 1.5),
+          "remplissage: le front est net (rien avant, motif plein une fois la croissance finie) et le motif s'epaissit derriere lui")
     seq = [tf.fill_reveal(k * 0.05, 0.6, 1.5) for k in range(80)]
     check(all(b >= a - 1e-12 for a, b in zip(seq, seq[1:])) and seq[0] == 0.0 and seq[-1] == 1.0, "remplissage: l'apparition d'une cellule ne revient jamais en arriere")
     ok_order = True
