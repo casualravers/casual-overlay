@@ -27,6 +27,7 @@ from core.recording import cover_uv as fit_cover, fit_rect
 from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
 from core.brain import FxEdge
 from core import textfx
+from core import routing
 from core.textfx import FillClock, OlaClock, clean_fill, clean_ola, fill_times, tile_batch
 from engine.textfill import TextPattern
 from core import explain as core_explain
@@ -434,6 +435,8 @@ class Renderer:
         self._fx_filters = {layer: [LayerFilter() for _ in EFFECTS] for layer in ("bg", "logo")}
         self._fx_t = None
         self.fx_now = {"bg": None, "logo": None}                                       # effets actifs par couche (voyant) ; None = la couche n'est pas en auto par effet
+        self._routes = routing.RouteBank()                                             # routage audio par effet (#198) : un vecteur par ligne modifiee
+        self.routes_now: dict[str, tuple[str, float]] = {}                             # ligne modifiee -> (source resolue, niveau) : voyants de l'onglet Routage
         self._layer_filters = (LayerFilter(), LayerFilter())                         # retard et lissage de la reaction au son : fond, logo
         self._hue_spec = 0.0                                                          # teinte tiree du spectre, lissee
         self._prev_ok = False
@@ -1170,6 +1173,23 @@ class Renderer:
                 au_bg_fx = accent_vectors(au_bg_fx, self.cycle_boost)
             if logo_fx:
                 au_logo_fx = accent_vectors(au_logo_fx, self.cycle_boost)
+        # Routage audio par effet (#198) : une ligne modifiee remplace le vecteur de SON effet, APRES le « 1 » de mesure et les renforts (elle est
+        # explicite). Lignes par defaut : rien ne change (image identique a avant).
+        # Lies (fx_link = 1), les effets du logo suivent la ligne du fond (comme la source, le retard et le lissage de la couche).
+        self.routes_now = {}
+        if not routing.is_default(p):
+            au_bg_fx, au_logo_fx = list(au_bg_fx), list(au_logo_fx)
+            for rid, (layer, i) in routing.FX_LINES.items():
+                like = routing.fx_route_id(rid, linked)
+                if routing.is_default(p, like):
+                    continue
+                if layer == "bg":
+                    au_bg_fx[i] = self._routes.vector(t, state, p, rid, au_bg_fx[i], table_bg, p["lag_bg"], p["smooth_bg"], "bg")
+                else:
+                    au_logo_fx[i] = self._routes.vector(t, state, p, rid, au_logo_fx[i], table_logo, p["lag_" + lk], p["smooth_" + lk], lk, like)
+                info = self._routes.info(rid)
+                if info is not None:
+                    self.routes_now[rid] = info
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt

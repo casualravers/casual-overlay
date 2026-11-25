@@ -106,6 +106,12 @@ def routed_ids(params: dict) -> list[str]:
     return [r.id for r in routable() if not is_default(params, r.id)]
 
 
+def fx_route_id(rid: str, linked: bool) -> str:
+    """La ligne dont un effet shader prend les reglages : lies (fx_link = 1), les effets du logo suivent ceux du fond (comme la source,
+    la sensibilite, le retard et le lissage de la couche)."""
+    return "bg_" + rid[3:] if linked and rid.startswith("lg_") and rid in FX_LINES else rid
+
+
 def _scaled(vec: tuple, dose: float) -> tuple:
     if dose <= 0.0:
         return al.SILENT
@@ -125,8 +131,9 @@ class RouteBank:
         self._info: dict[str, tuple[str, float]] = {}
 
     def vector(self, now: float, state: dict, params: dict, rid: str, base: tuple, auto_source: str,
-               lag: float, smooth: float, kick_layer: str | None = None) -> tuple:
-        src, dose = route_of(params, rid)
+               lag: float, smooth: float, kick_layer: str | None = None, like: str | None = None) -> tuple:
+        """`like` : lire la source et le dosage d'une autre ligne (logo lie : ses effets suivent la ligne du fond) ; l'etat reste celui de `rid`."""
+        src, dose = route_of(params, like or rid)
         if src == INHERIT:
             self._mix.pop(rid, None)
             self._filt.pop(rid, None)

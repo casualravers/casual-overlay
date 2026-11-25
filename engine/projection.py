@@ -582,6 +582,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         recording.after_draw(now, ctx.screen, size)                           # ecrit l'image (doublons si retard) et la copie dans la fenetre
         s.status["sources"] = renderer.sources_now                                    # voyants de l'interface : sources par couche, dernier eclair
         s.status["fx_now"] = renderer.fx_now                                          # effets actifs par couche (reactivite par effet, mode auto)
+        s.status["routes_now"] = dict(renderer.routes_now)                            # routage audio par effet (#198) : ligne -> (source, niveau)
         s.status["strobe_info"] = renderer.strobe_info
         s.status["rd"] = renderer.rd_note                                              # palette labyrinthe : liberte sans effet en 16 bits
         s.status["foudre"] = renderer.bolt.stats()                      # voyant du mode Foudre : segments, pointes, pouls
