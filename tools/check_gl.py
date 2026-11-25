@@ -11700,14 +11700,28 @@ def check_doodles() -> None:
           "taille: une photo (opaque) est grande, un texte ou dessin detoure (beaucoup de transparence) garde la taille moderee")
     L = dd.LIFE_S
     a = [dd.alpha(t) for t in (-1, 0, 0.2, 0.4, 7, L - 0.7, L - 0.35, L, L + 1)]
-    check(a[0] == 0 and a[1] == 0 and abs(a[2] - 0.5) < 1e-9 and a[3] == 1 and a[4] == 1 and abs(a[5] - 1.0) < 1e-9 and abs(a[6] - 0.5) < 1e-9
-          and a[7] == 0 and a[8] == 0, "cycle de vie: fondu d'entree, palier, fondu de sortie", str(a))
+    check(a[0] == 0 and a[1:7] == [1.0] * 6 and a[7] == 0 and a[8] == 0, "cycle de vie: opaque de la naissance a la fin (le fondu est la dissolution en blocs), rien hors de [0, vie]", str(a))
+    fade = dd.Wall(fade_in=0.4, fade_out=0.7)
+    fade.add("f", (0, 0, 0.1, 0.1), 0.0)
+    check(abs(fade.visible(0.2)[0][2] - 0.5) < 1e-9 and fade.visible(7.0)[0][2] == 1.0 and abs(fade.visible(fade.life - 0.35)[0][2] - 0.5) < 1e-9,
+          "cycle de vie: le fondu d'opacite reste disponible (parametre du mur), desactive par defaut")
     check(dd.LIFE_S == 45.0, "cycle de vie: un doodle ou une photo reste affiche 45 s")
-    p0, p1, p2, p3, p4, p5 = (dd.pose(t) for t in (0.0, 0.45, 0.9, 7.0, L - 0.45, L))
-    check(abs(p0[0]) < 1e-9 and abs(p0[1]) > 0.2 and 1.05 < p1[0] < 1.15 and p2 == (1.0, 0.0) and p3 == (1.0, 0.0)
-          and p4[0] > 1.0 and p5 == (0.0, 0.0) and dd.pose(1.0, -1)[1] == dd.pose(1.0, 1)[1] == 0.0
-          and dd.pose(0.1, -1)[1] == -dd.pose(0.1, 1)[1] and dd.pose(-1.0) == (0.0, 0.0),
-          "animation: apparition (pop avec depassement, rotation), palier droit, disparition (gonfle puis rapetisse), sens alterne", str((p0, p1, p4)))
+    # dissolution en blocs (#208) : progression 0 = media entier, 1 = disparu ; aucune echelle ni rotation (le media ne bouge plus)
+    d0, d1, d2, d3, d4, d5, d6 = (dd.dissolve(t) for t in (0.0, dd.INTRO_S / 2, dd.INTRO_S, 7.0, L - dd.OUTRO_S / 2, L - 1e-6, L))
+    check(d0 == 1.0 and 0.4 < d1 < 0.6 and d2 == 0.0 and d3 == 0.0 and 0.4 < d4 < 0.6 and d5 > 0.99 and d6 == 1.0 and dd.dissolve(-1.0) == 1.0
+          and all(0.0 <= dd.dissolve(t / 7.0) <= 1.0 for t in range(0, int(7 * (L + 2)))),
+          "animation: dissolution en blocs a l'apparition (1 -> 0), palier entier, a la disparition (0 -> 1), toujours dans [0, 1]", str((d0, d1, d4, d5)))
+    mono = [dd.dissolve(i * dd.INTRO_S / 20) for i in range(21)]
+    out = [dd.dissolve(L - dd.OUTRO_S + i * dd.OUTRO_S / 20) for i in range(21)]
+    check(all(a >= b for a, b in zip(mono, mono[1:])) and all(a <= b for a, b in zip(out, out[1:])),
+          "animation: l'apparition ne fait que se completer, la disparition que s'effacer (jamais de va-et-vient)")
+    check(not hasattr(dd, "pose") and dd.FADE_IN_S == 0.0 and dd.FADE_OUT_S == 0.0 and dd.alpha(0.01) == 1.0 and dd.alpha(L - 0.01) == 1.0,
+          "animation: plus de pop ni de pivot, plus de fondu d'opacite (le masque en blocs fait tout le travail)")
+    pw = dd.Wall()
+    pw.add("a", (0.1, 0.1, 0.2, 0.2), 0.0)
+    shown = pw.posed(L - dd.OUTRO_S / 2)
+    check(len(shown) == 1 and len(shown[0]) == 4 and shown[0][2] == 1.0 and 0.4 < shown[0][3] < 0.6 and pw.posed(L + 1) == [],
+          "animation: le mur rend (id, rect, opacite, progression de la dissolution)", str(shown))
     wall = dd.Wall()
     dropped = []
     for i in range(7):
@@ -11954,9 +11968,16 @@ def check_doodles() -> None:
         yy, xx = np.nonzero(im)
         return (xx.max() - xx.min() + 1, yy.max() - yy.min() + 1) if len(xx) else (0, 0), im
     (w5, h5), _im5 = anim_box(5.0)
-    (wa, ha), _ima = anim_box(0.3)
-    (wb, hb), _imb = anim_box(dd.LIFE_S - 0.1)
-    check(w5 > 0 and 0 < wa and wa * ha != w5 * h5 and 0 < wb * hb < w5 * h5, "doodle: apparition et disparition animees (taille et inclinaison changent)", f"{(w5, h5)} {(wa, ha)} {(wb, hb)}")
+    (wa, ha), _ima = anim_box(dd.INTRO_S / 2)
+    (wb, hb), _imb = anim_box(dd.LIFE_S - dd.OUTRO_S / 2)
+    (wc, hc), _imc = anim_box(dd.LIFE_S - 0.01)
+    full, mid_in, mid_out, nearly = (int(m.sum()) for m in (_im5, _ima, _imb, _imc))
+    outside_px = int((_ima & ~_im5).sum())
+    check(full > 0 and 0.2 * full < mid_in < 0.8 * full and 0.2 * full < mid_out < 0.8 * full and nearly < 0.1 * full,
+          "doodle: dissolution en blocs (a mi-parcours environ la moitie des pixels, presque rien a la fin)", f"entier {full}, entree {mid_in}, sortie {mid_out}, fin {nearly}")
+    check(abs(mid_in - mid_out) <= 0.02 * full, "doodle: l'apparition est la disparition a l'envers (meme nombre de pixels au meme avancement)", f"{mid_in} {mid_out}")
+    check(outside_px <= 0.05 * full and abs(wa - w5) <= 0.15 * w5 and abs(ha - h5) <= 0.15 * h5,
+          "doodle: le media ne change ni de taille ni d'angle (les blocs restent sur sa surface)", f"{outside_px} px hors du media, boite {(wa, ha)} contre {(w5, h5)}")
     # les doodles sont sur la couche du logo : ils subissent ses effets (et eux seuls)
     def doodle_render(pre=None, **kw):
         rr = gl.Renderer(ctx, size, None)

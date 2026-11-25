@@ -920,16 +920,16 @@ class Renderer:
         self._set(sp, "u_logo_straight", 0.0)
         self._set(sp, "u_mosaic", 0.0)                                           # la mosaique est celle du logo : un doodle garde ses couleurs
         try:
-            for ident, rect, a, scale, rot in visible:
+            for ident, rect, a, gone in visible:
                 x, y, w, h = (float(v) for v in rect)
                 self.doodle_tex[ident].use(1)
-                # apparition / disparition animees : echelle autour du centre et rotation (voir core.doodles.pose)
-                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2 * scale, h / 2 * scale))
-                self._set(sp, "u_logo_cs", (math.cos(rot), math.sin(rot)))
+                # apparition / disparition : dissolution en blocs dans le shader (voir core.doodles.dissolve) ; le media ne bouge pas
+                self._set(sp, "u_logo_rect", (x + w / 2, y + h / 2, w / 2, h / 2))
+                self._set(sp, "u_dissolve", float(gone))
                 self._set(sp, "u_logo_opacity", float(a) * presence)
                 self.scene_vao.render(moderngl.TRIANGLE_STRIP)
         finally:
-            self._set(sp, "u_logo_cs", (1.0, 0.0))                      # le logo, lui, reste droit
+            self._set(sp, "u_dissolve", 0.0)                            # le logo, lui, reste entier
             self.ctx.disable(moderngl.BLEND)
         return True
 
