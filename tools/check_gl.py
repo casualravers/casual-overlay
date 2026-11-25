@@ -12276,6 +12276,92 @@ def check_foudre_render() -> None:
     check(im.max() <= 231, "foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
 
 
+def check_textfx() -> None:
+    """Overlay Texte (#199), calendrier pur : vague de lettres (ola) et remises a zero du remplissage, plus la table des reglages."""
+    print("Texte : vague de lettres et remplissage (calendrier pur)")
+    from core import params_schema as ps
+    try:
+        from core import textfx as tf
+    except ImportError as exc:
+        check(False, "texte: core/textfx.py existe", str(exc))
+        return
+    D, F = 3.0, 0.5
+    ranks = [i / 10 for i in range(11)]
+    # ---- ola_alpha : extinction de gauche a droite, rallumage dans le meme sens, texte entier hors balayage
+    taus = [k * 0.05 for k in range(int(D / 0.05) + 1)]
+    out = [[tf.ola_alpha(r, t, D, F) for r in ranks] for t in taus if t <= D / 2]
+    ok_range = all(0.0 <= a <= 1.0 for row in out for a in row)
+    ok_left_first = all(row[i] <= row[i + 1] + 1e-9 for row in out for i in range(len(row) - 1))      # extinction : la gauche part d'abord
+    ok_mono = all(out[k][j] >= out[k + 1][j] - 1e-9 for k in range(len(out) - 1) for j in range(len(ranks)))
+    check(ok_range and ok_left_first and ok_mono and all(a == 1.0 for a in out[0]) and all(a < 1e-6 for a in out[-1]),
+          "ola: extinction de gauche a droite (opacite 1 au depart, 0 a la mi-cycle, jamais hors 0..1, jamais de retour en arriere)")
+    inn = [[tf.ola_alpha(r, t, D, F) for r in ranks] for t in taus if t >= D / 2]
+    ok_right_later = all(row[i] >= row[i + 1] - 1e-9 for row in inn for i in range(len(row) - 1))     # rallumage : la gauche revient d'abord
+    ok_up = all(inn[k][j] <= inn[k + 1][j] + 1e-9 for k in range(len(inn) - 1) for j in range(len(ranks)))
+    check(ok_right_later and ok_up and all(a > 1 - 1e-6 for a in inn[-1]),
+          "ola: rallumage dans le meme sens (la gauche revient d'abord), tout est visible a la fin du balayage")
+    check(all(tf.ola_alpha(r, t, D, F) == 1.0 for r in ranks for t in (D, D + 0.1, 17.0)),
+          "ola: texte entier et lisible entre la fin du balayage et le cycle suivant")
+    big = [tf.ola_alpha(r, D / 2, D, 9.0) for r in ranks]                  # fondu trop long : borne a D / 2, pas d'erreur
+    check(all(0.0 <= a <= 1.0 for a in big) and all(a < 1e-6 for a in big), "ola: un fondu plus long que la demi-duree est borne", str(big))
+    check(tf.ola_alpha(0.5, -1.0, D, F) == 1.0 and tf.ola_alpha(-3.0, 1.0, D, F) == tf.ola_alpha(0.0, 1.0, D, F)
+          and tf.ola_alpha(7.0, 1.0, D, F) == tf.ola_alpha(1.0, 1.0, D, F), "ola: temps negatif et rang hors 0..1 sans effet de bord")
+
+    # ---- OlaClock : demarre a l'activation, un bord de rallumage par cycle, periode >= duree
+    clk = tf.OlaClock()
+    check(clk.update(50.0, False, D, 20.0) == (None, False), "ola: horloge eteinte -> pas de phase")
+    tau0, rel0 = clk.update(100.0, True, D, 20.0)
+    check(tau0 == 0.0 and not rel0, "ola: le premier balayage demarre a l'activation", f"{tau0} {rel0}")
+    relights, t = [], 100.0
+    while t < 100.0 + 55.0:                                              # 55 s : rallumages a 1,5 s, 21,5 s et 41,5 s (le 4e est a 61,5 s)
+        t += 0.05
+        tau, rel = clk.update(t, True, D, 20.0)
+        if rel:
+            relights.append(round(t, 2))
+        assert tau is not None and 0.0 <= tau < 20.0 + 1e-9
+    check(len(relights) == 3 and all(abs(a - (100.0 + D / 2 + 20.0 * k)) < 0.06 for k, a in enumerate(relights)),
+          "ola: un seul rallumage par cycle, a la mi-balayage, toutes les 20 s", str(relights))
+    clk2 = tf.OlaClock()
+    clk2.update(0.0, True, 6.0, 2.0)                                      # periode plus courte que le balayage : bornee a la duree
+    tau_a, _ = clk2.update(5.0, True, 6.0, 2.0)
+    check(abs(tau_a - 5.0) < 1e-9, "ola: une periode plus courte que la duree est bornee a la duree", str(tau_a))
+    clk.update(300.0, False, D, 20.0)
+    tau_r, _ = clk.update(301.0, True, D, 20.0)
+    check(tau_r == 0.0, "ola: recocher la case redemarre un balayage", str(tau_r))
+
+    # ---- FillClock : remise a zero (germes neufs)
+    fc = tf.FillClock()
+    check(fc.update(0.0, "A", False, False, 20.0), "remplissage: une premiere simulation est ensemencee")
+    seq = [fc.update(0.0 + k * 0.1, "A", False, False, 20.0) for k in range(1, 100)]          # 10 s sans evenement
+    check(not any(seq), "remplissage: rien a faire sans evenement (jamais deux remises a zero d'affilee)")
+    check(fc.update(10.5, "B", False, False, 20.0), "remplissage: un nouveau texte remet a zero")
+    check(not fc.update(10.6, "B", False, False, 20.0), "remplissage: le meme texte ne remet pas a zero")
+    fc2 = tf.FillClock()
+    fc2.update(0.0, "A", False, False, 20.0)
+    hits = [round(k * 0.5, 1) for k in range(1, 121) if fc2.update(k * 0.5, "A", False, False, 20.0)]
+    check(hits == [20.0, 40.0, 60.0], "remplissage: sans vague, remise a zero toutes les N s", str(hits))
+    fc3 = tf.FillClock()
+    fc3.update(0.0, "A", True, False, 20.0)
+    ola_hits = [round(k * 0.5, 1) for k in range(1, 121) if fc3.update(k * 0.5, "A", True, 15.0 < k * 0.5 < 15.6 or k * 0.5 == 30.0, 20.0)]
+    check(ola_hits[:1] == [15.5] and 30.0 in ola_hits and 20.0 not in ola_hits and 40.0 not in ola_hits,
+          "remplissage: avec la vague, remise a zero au rallumage seulement (la periode N s ne joue plus)", str(ola_hits))
+    fc4 = tf.FillClock()
+    fc4.update(0.0, "A", True, False, 20.0)
+    check(fc4.update(1.0, "B", True, True, 20.0) and not fc4.update(1.1, "B", True, False, 20.0),
+          "remplissage: texte change et rallumage au meme instant -> une seule remise a zero")
+
+    # ---- table des reglages
+    keys = ("text_ola_on", "text_ola_dur", "text_ola_every", "text_ola_fade",
+            "text_fill_on", "text_fill_speed", "text_fill_scale", "text_fill_contrast", "text_fill_every")
+    spec = [ps.BY_KEY.get(k) for k in keys]
+    check(all(s is not None for s in spec) and all(s.scope == "look" for s in spec),
+          "texte: neuf reglages (vague et remplissage), portee look : presets overlay et scenes")
+    d = {k: ps.BY_KEY[k].default for k in keys}
+    check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (3.0, 20.0, 0.5)
+          and (d["text_fill_speed"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_every"]) == (1.0, 1.0, 0.6, 20.0),
+          "texte: rien n'est coche par defaut, valeurs de la spec (3 s, 20 s, fondu 0,5 s ; contraste 0,6)", str(d))
+
+
 def check_textcycle() -> None:
     """Textes en rotation du logo : liste, boucle, fondu, repli sans kick, signature du logo, Randomizer a plusieurs textes."""
     import random
@@ -15076,12 +15162,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
