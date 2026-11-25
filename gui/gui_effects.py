@@ -169,6 +169,14 @@ def install(c):
         compact_scale(logo_fx_box, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX,
                                                                   pady=ROW_PADY)
         add_auto(lz, r, f"fxl_int{i}", int_var)
+    # « Logo (pulse/contour) » (5e effet) n'a pas de pendant cote fond : fx_on[4] / fx_int[4] ne pilotent que le logo. Meme case et meme curseur
+    # ici (variables partagees avec la liste du dessus, pas de nouvel etat) : sans elles, decocher toute cette section laissait le logo
+    # pulser, trembler et briller au son sans que rien n'indique ou le couper (#197).
+    r = lz.next_row()
+    cb = tk.Checkbutton(logo_fx_box, text=fx_labels[4], variable=fx_on_vars[4])
+    cb.grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    Tooltip(cb, fx_tips[4] + " Meme case que dans la liste du dessus (cette reaction ne concerne que le logo).")
+    compact_scale(logo_fx_box, 0, 2, 0.05, fx_int_vars[4], 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
 
     def on_link(*_a) -> None:
         linked = bool(link_var.get())
