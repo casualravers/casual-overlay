@@ -14,6 +14,7 @@ uniform float u_pass;           // 0 = couche fond (opaque), 1 = couche logo seu
 uniform float u_logo_straight;  // 1 = texture en alpha droit (logo video): premultiplie ici
 uniform float u_bass;           // 0..1
 uniform float u_logo_opacity;   // 0..1
+uniform float u_dissolve;       // dissolution en blocs d'un doodle : 0 = entier, 1 = disparu (0 pour le logo, #208)
 uniform float u_glow;           // intensite du contour lumineux (0 = coupe)
 uniform float u_glow_radius;    // multiplicateur du rayon du contour
 uniform vec3  u_glow_color;
@@ -434,6 +435,25 @@ float text_ring(vec2 q, float a) {
 }
 
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
+// Dissolution en blocs d'un doodle (#208) : une grille de carres s'eteint dans un ordre aleatoire (le meme a l'apparition, a l'envers).
+// Un bloc en cours d'extinction clignote (il saute d'un etat a l'autre, jamais de fondu) et porte une lisere lumineuse.
+const float DISSOLVE_COLS = 18.0;      // blocs sur la largeur du media
+const float DISSOLVE_BAND = 0.30;      // part de la progression pendant laquelle un bloc est « en train de partir »
+vec4 dissolve_blocks(vec2 q, vec4 c) {
+    vec2 px = 2.0 * u_logo_rect.zw * u_res;                                  // taille du media en pixels : des blocs carres
+    vec2 grid = vec2(DISSOLVE_COLS, max(floor(DISSOLVE_COLS * px.y / px.x + 0.5), 1.0));
+    vec2 cell = floor(q * grid);
+    vec2 f = fract(q * grid);
+    float order = mhash(cell + 17.0);                                         // moment ou ce bloc part, 0..1
+    float phase = clamp((u_dissolve - order * (1.0 - DISSOLVE_BAND)) / DISSOLVE_BAND, 0.0, 1.0);   // 0 entier, 1 eteint
+    float flick = mhash(cell + floor(phase * 5.0) * 3.1 + 41.0);              // tirage qui change par paliers : le bloc scintille
+    float on = (phase >= 1.0) ? 0.0 : ((phase <= 0.0) ? 1.0 : step(phase, flick));
+    float glow_k = 4.0 * phase * (1.0 - phase);                               // 0 aux deux extremes, 1 a mi-chemin
+    float edge = 1.0 - smoothstep(0.0, 0.14, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)));
+    c.rgb += c.a * glow_k * (0.25 + 0.75 * edge) * 0.8;                      // premultiplie : la lisere reste dans l'alpha du media
+    return c * on;
+}
+
 vec4 logo_at(vec2 p) {
     vec2 d = p - u_logo_rect.xy;
     if (u_logo_cs.y != 0.0) {
@@ -493,6 +513,9 @@ vec4 logo_at(vec2 p) {
         float tint = band * clamp(0.9 * u_melt_edge, 0.0, 1.0);
         c.rgb = mix(c.rgb, acid * c.a, tint);
         c.rgb += acid * band * vis * a0 * u_melt_edge * 0.35;
+    }
+    if (u_dissolve > 0.001 && inside > 0.5) {
+        c = dissolve_blocks(q, c);
     }
     return c * inside;
 }

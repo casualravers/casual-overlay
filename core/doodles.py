@@ -18,11 +18,10 @@ MAX_BYTES = 5 * 1024 * 1024   # taille maximale d'un fichier
 MAX_SIDE = 4096               # dimension maximale (px)
 MAX_VISIBLE = 3               # medias visibles en meme temps (plus grands, donc moins nombreux : ils ne se recouvrent pas)
 LIFE_S = 45.0                 # duree d'affichage (fondus compris) ; 15 s au debut, passe a 45 s : le public a le temps de se voir
-FADE_IN_S = 0.4              # courts : le mouvement d'apparition / de disparition (pose) fait le gros du travail
-FADE_OUT_S = 0.7
-INTRO_S = 0.9                 # apparition : le media « pop » (grossit avec un depassement) en tournant un peu
-OUTRO_S = 0.9                 # disparition : il se tasse puis rapetisse en pivotant
-TILT_RAD = 0.30               # inclinaison de depart / d'arrivee (~17 degres)
+FADE_IN_S = 0.0               # plus de fondu d'opacite : la dissolution en blocs (dissolve) fait toute l'apparition / la disparition (#208)
+FADE_OUT_S = 0.0
+INTRO_S = 0.9                 # apparition : les blocs se rallument un a un
+OUTRO_S = 0.9                 # disparition : les blocs s'eteignent un a un
 MAX_HEIGHT_FRAC = 0.45        # hauteur maximale d'une photo (fraction de la hauteur de l'ecran)
 TEXT_HEIGHT_FRAC = 0.30       # hauteur d'un media decoupe (texte, dessin : beaucoup de transparence) : plus petit, il est deja lisible
 CUTOUT_SHARE = 0.10           # part de pixels transparents au-dela de laquelle un media est un texte / dessin et non une photo
@@ -213,38 +212,18 @@ def alpha(age: float, life: float = LIFE_S, fade_in: float = FADE_IN_S, fade_out
     return max(0.0, min(1.0, a))
 
 
-_BACK = 1.70158
-
-
-def _ease_out_back(t: float) -> float:
-    """0 -> 1 avec un depassement (~10 %) avant de se poser."""
-    t = max(0.0, min(1.0, t)) - 1.0
-    return 1.0 + (_BACK + 1.0) * t ** 3 + _BACK * t ** 2
-
-
-def _ease_in_back(t: float) -> float:
-    """0 -> 1 en reculant d'abord un peu (anticipation) puis en accelerant."""
-    t = max(0.0, min(1.0, t))
-    return (_BACK + 1.0) * t ** 3 - _BACK * t ** 2
-
-
-def pose(age: float, direction: float = 1.0, life: float = LIFE_S, intro: float = INTRO_S, outro: float = OUTRO_S) -> tuple[float, float]:
-    """Mouvement d'un media d'age `age` : (echelle, rotation en radians). Apparition : l'echelle va de 0 a 1 avec un depassement et le
-    media se redresse en balancant ; palier : echelle 1, droit ; disparition : il gonfle un instant puis rapetisse en pivotant. `direction`
-    (+1 / -1) choisit le sens de la rotation. Aucun mouvement hors de [0, life] (echelle 0). Pure."""
+def dissolve(age: float, life: float = LIFE_S, intro: float = INTRO_S, outro: float = OUTRO_S) -> float:
+    """Progression de la dissolution en blocs d'un media d'age `age` : 0 = entier, 1 = disparu. Apparition : 1 -> 0 sur `intro` ; palier : 0 ;
+    disparition : 0 -> 1 sur `outro` (la meme courbe a l'envers, le shader ne connait qu'un masque). Hors de [0, life] : 1. Le media ne
+    change ni de taille ni d'angle. Pure."""
     if age < 0.0 or age >= life:
-        return 0.0, 0.0
-    tilt = TILT_RAD * (1.0 if direction >= 0 else -1.0)
-    if age < intro:
-        e = _ease_out_back(age / intro)
-        return max(e, 0.0), tilt * (1.0 - e)                 # la rotation depasse aussi : le media se balance avant de se poser
+        return 1.0
+    if intro > 0.0 and age < intro:
+        return 1.0 - age / intro
     left = life - age
-    if left < outro:
-        u = 1.0 - left / outro
-        e = _ease_in_back(u)
-        return max(1.0 - e, 0.0), -tilt * u * u
-    return 1.0, 0.0
-
+    if outro > 0.0 and left < outro:
+        return 1.0 - left / outro
+    return 0.0
 
 class Wall:
     """Medias visibles. `add` en ajoute un (au-dela de `max_visible` le plus ancien part) ; `step(now)` retire les expires et rend
@@ -278,14 +257,13 @@ class Wall:
         return out
 
     def posed(self, now: float) -> list[tuple]:
-        """Comme `visible`, avec le mouvement : (id, rect, opacite, echelle, rotation). Le sens de rotation alterne d'un media a l'autre."""
+        """Comme `visible`, avec la dissolution : (id, rect, opacite, progression 0 = entier .. 1 = disparu), voir `dissolve`."""
         out = []
         for it in self.items:
             age = now - it["t0"]
             a = alpha(age, self.life, self.fade_in, self.fade_out)
             if a > 0.0:
-                scale, rot = pose(age, 1.0 if hash(it["id"]) % 2 == 0 else -1.0, self.life)
-                out.append((it["id"], it["rect"], a, scale, rot))
+                out.append((it["id"], it["rect"], a, dissolve(age, self.life)))
         return out
 
     def clear(self) -> list:
