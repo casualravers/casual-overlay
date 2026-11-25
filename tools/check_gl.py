@@ -9696,7 +9696,8 @@ def check_routage() -> None:
     cp = coerce_params({"rt_bg_wobble": "basses", "rg_bg_wobble": 1.5})
     check(cp.get("rt_bg_wobble") == "basses" and cp.get("rg_bg_wobble") == 1.5, "routage: une route valide est gardee", str((cp.get("rt_bg_wobble"), cp.get("rg_bg_wobble"))))
     cp = coerce_params({"rt_bg_wobble": "fin64", "rg_bg_wobble": 7})
-    check(cp.get("rt_bg_wobble", "herite") == "herite" and float(cp.get("rg_bg_wobble", 1.0)) <= 2.0, "routage: source inconnue et dosage hors plage corriges", str(cp.get("rt_bg_wobble")))
+    check(cp.get("rt_bg_wobble", "herite") == "herite" and cp.get("rg_bg_wobble") == 2.0, "routage: source inconnue ignoree, dosage hors plage ramene a 2",
+          str((cp.get("rt_bg_wobble"), cp.get("rg_bg_wobble"))))
     check(rt.is_default({**DEFAULT_PARAMS, **coerce_params({})}), "routage: anciens reglages (sans rt_ / rg_) = routes par defaut")
     # --- RouteBank : vecteur d'une ligne, image par image
     st = {"bass": 0.8, "mid": 0.5, "high": 0.6, "rms": 0.4, "beat": 0.9, "since_beat": 0.2, "hit": 0.7, "since_hit": 0.1}
@@ -9745,6 +9746,21 @@ def check_routage() -> None:
           "routage: lies, les 4 effets shader du logo suivent la ligne du fond (pas les reactions du logo)")
     v = rt.RouteBank().vector(0.0, st, {"rt_bg_wobble": "aigus", "rt_lg_wobble": "kick"}, "lg_wobble", base, "tout", 0.0, 0.0, like="bg_wobble")
     check(v == (0.6, 0.6, 0.0, al.NO_KICK), "routage: like = reglages d'une autre ligne", str(v))
+    # une ligne remise par defaut puis reroutee ne rejoue pas sa vieille memoire (retard, lissage) : prune
+    bk4, pr = rt.RouteBank(), {"rt_bg_ripple": "kick"}
+    for k in range(60):
+        bk4.vector(k / 60.0, st, pr, "bg_ripple", base, "tout", 0.2, 0.5)
+    bk4.prune(())                                               # la ligne n'est plus calculee (remise par defaut, ou toutes par defaut)
+    silent = {"bass": 0.0, "high": 0.0, "beat": 0.0, "since_beat": 30.0}
+    ghost = [bk4.vector(60.0 + k * 0.01, silent, pr, "bg_ripple", base, "tout", 0.2, 0.5) for k in range(25)]
+    check(all(g[2] == 0.0 for g in ghost) and bk4.info("bg_ripple")[1] == 0.0, "routage: ligne reroutee apres un retour au defaut = pas d'onde fantome (memoire videe)",
+          str(ghost[:3]))
+    bk4.vector(61.0, st, pr, "bg_ripple", base, "tout", 0.0, 0.0)
+    bk4.prune({"bg_ripple"})
+    check(bk4.info("bg_ripple") is not None, "routage: prune garde les lignes encore calculees")
+    nan = float("nan")
+    check(rt.route_of({"rg_bg_wobble": nan}, "bg_wobble")[1] == 1.0 and rt.route_of({"rg_bg_wobble": float("inf")}, "bg_wobble")[1] == 1.0
+          and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
 
 
 def check_effets_auto() -> None:
@@ -9856,7 +9872,14 @@ def check_routage_rendu() -> None:
     ref = render(**wob)
     same = render(rt_bg_wobble="herite", rg_bg_wobble=1.0, **wob)
     check(changed(ref, still) > 2000 and int(np.abs(same - ref).max()) == 0 and r.routes_now == {},
-          "routage: routes par defaut = image identique, aucun calcul de ligne")
+          "routage: routes par defaut = chemin d'avant (aucun calcul de ligne, image identique)")
+    render(rt_bg_wobble="aigus", rg_bg_wobble=0.3, **wob)
+    back = render(**wob)
+    check(int(np.abs(back - ref).max()) == 0 and r._routes.info("bg_wobble") is None,
+          "routage: apres une route puis un retour au defaut, image d'avant et memoire de la ligne videe")
+    render(rt_bg_wobble="basses", **wob)
+    check("lg_wobble" not in r.routes_now and "bg_wobble" in r.routes_now, "routage: lies, le voyant ne montre pas la ligne du logo (elle suit le fond)",
+          str(r.routes_now))
     check(changed(render(rt_bg_wobble="aigus", **wob), still) == 0, "routage: ondulation du fond sur les aigus, des basses seules ne la font plus onduler (logo lie compris)")
     check(int(np.abs(render(rt_lg_wobble="aigus", **wob) - ref).max()) == 0, "routage: lies, la ligne propre du logo est ignoree (il suit le fond)")
     check(changed(render(src_bg="aigus", rt_bg_wobble="basses", **wob), still) > 2000, "routage: la ligne gagne sur la source de la couche (fond sur aigus, ondulation sur basses)")
@@ -9871,12 +9894,14 @@ def check_routage_rendu() -> None:
     check(changed(quiet, still) == 0, "routage: sans route, logo et fond sur rien ne reagissent pas au kick")
     check(changed(render(hit, rt_lg_chroma="kick", **sep), still) > 50 and r.routes_now.get("lg_chroma", ("", 0))[0] == "kick",
           "routage: aberration du logo sur le kick, la couche reste sur rien", str(r.routes_now))
-    check(changed(render(hit, rt_lg_wobble="kick", **sep), still) == 0, "routage: une autre ligne du logo routee ne declenche pas l'aberration")
+    check(changed(render(hit, rt_lg_glitch="kick", **sep), still) == 0,
+          "routage: le glitch du logo route sur le kick ne declenche pas l'aberration (indices glitch / aberration non croises)")
     # ligne a la main a cote d'effets en auto : elle seule change de source
     groove = dict(bass_only, phase={"name": "groove"})
     a = render(groove, src_bg="auto", **wob)
-    check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None,
-          "routage: une ligne a la main sort d'auto pour CET effet, la couche reste en auto par effet")
+    check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None
+          and ("wobble", "rien", 1.0) in r.fx_now["bg"] and ("wobble", "basses", 0.6) not in r.fx_now["bg"],
+          "routage: une ligne a la main sort d'auto pour CET effet (le voyant le dit), la couche reste en auto par effet", str(r.fx_now["bg"]))
 
 
 def check_audio_layers() -> None:
@@ -16184,7 +16209,7 @@ SUITE = (
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
-    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu","check_automation", "check_params", "check_manager",
+    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",

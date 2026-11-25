@@ -9,6 +9,7 @@ Les lignes `info` (strobe, foudre, noise) decident deja seules : lecture seule, 
 """
 from __future__ import annotations
 
+import math
 from collections import namedtuple
 
 from core import audio_layers as al
@@ -89,8 +90,8 @@ def route_of(params: dict, rid: str) -> tuple[str, float]:
     if src not in ROUTE_SOURCES:
         src = INHERIT
     dose = params.get(dose_key(rid), 1.0)
-    if isinstance(dose, bool) or not isinstance(dose, (int, float)):
-        dose = 1.0
+    if isinstance(dose, bool) or not isinstance(dose, (int, float)) or not math.isfinite(dose):
+        dose = 1.0                      # NaN (fichier edite a la main) : jamais d'uniform NaN
     return src, min(max(float(dose), DOSE_MIN), DOSE_MAX)
 
 
@@ -151,6 +152,13 @@ class RouteBank:
         out = _scaled(filt.step(now, raw, lag, smooth), dose)
         self._info[rid] = (resolved, max(out[0], out[1], out[2]))
         return out
+
+    def prune(self, active) -> None:
+        """Oublie la memoire (fondu, retard, lissage, voyant) des lignes qui ne sont plus calculees : appele a chaque image avec les lignes
+        calculees. Sans cela, une ligne remise par defaut puis reroutee rejouerait son vieil historique (onde de choc fantome)."""
+        for store in (self._mix, self._filt, self._info):
+            for rid in [k for k in store if k not in active]:
+                del store[rid]
 
     def info(self, rid: str) -> tuple[str, float] | None:
         """(source resolue, niveau courant) d'une ligne modifiee, None pour une ligne par defaut (voyant de l'onglet Routage)."""

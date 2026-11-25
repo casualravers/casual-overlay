@@ -806,6 +806,9 @@ class Renderer:
                     active = fx_now.get(layer)
                     entry = [a for a in active if a[0] == name] if active is not None else None
                     source = entry[0][1] if entry else (src_bg if layer == "bg" else src_logo)
+                    routed = self._routes.info(("bg_" if layer == "bg" else "lg_") + name)      # routage (#198) : la source de la ligne fait foi
+                    if routed is not None and not entry:
+                        source = routed[0]
                     reason = core_explain.fx_text("fond" if layer == "bg" else "logo", entry) if entry else ""
                     if not reason:
                         reason = f"{'fond' if layer == 'bg' else 'logo'} : {core_explain.FX_NAMES.get(name, name)} <- {source}"
@@ -1176,20 +1179,30 @@ class Renderer:
         # Routage audio par effet (#198) : une ligne modifiee remplace le vecteur de SON effet, APRES le « 1 » de mesure et les renforts (elle est
         # explicite). Lignes par defaut : rien ne change (image identique a avant).
         # Lies (fx_link = 1), les effets du logo suivent la ligne du fond (comme la source, le retard et le lissage de la couche).
+        # Le voyant (routes_now) ne montre que les lignes reglees par l'utilisateur (pas celles du logo lie, qui suivent le fond) ; une ligne qui
+        # n'est plus calculee perd sa memoire (prune : pas d'onde fantome quand on la reroute) ; fx_now dit la source routee, pas celle du tableau.
         self.routes_now = {}
+        active: list[str] = []
         if not routing.is_default(p):
             au_bg_fx, au_logo_fx = list(au_bg_fx), list(au_logo_fx)
             for rid, (layer, i) in routing.FX_LINES.items():
                 like = routing.fx_route_id(rid, linked)
                 if routing.is_default(p, like):
                     continue
+                active.append(rid)
                 if layer == "bg":
                     au_bg_fx[i] = self._routes.vector(t, state, p, rid, au_bg_fx[i], table_bg, p["lag_bg"], p["smooth_bg"], "bg")
                 else:
                     au_logo_fx[i] = self._routes.vector(t, state, p, rid, au_logo_fx[i], table_logo, p["lag_" + lk], p["smooth_" + lk], lk, like)
                 info = self._routes.info(rid)
-                if info is not None:
+                if info is None:
+                    continue
+                if like == rid:
                     self.routes_now[rid] = info
+                if self.fx_now.get(layer) is not None:
+                    effect = EFFECTS[i]
+                    self.fx_now[layer] = [a for a in self.fx_now[layer] if a[0] != effect] + [(effect, info[0], routing.route_of(p, like)[1])]
+        self._routes.prune(active)
         dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.1)
         self._last_t = t
         raw_dt = dt
