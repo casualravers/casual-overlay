@@ -2664,6 +2664,15 @@ def check_text_fill() -> None:
         far = frames(1, dt=t0 + 14.0 - clock[0], text_fill_on=1.0, text_front_edge=0.0)
         far_line = frames(1, dt=0.0, text_fill_on=1.0, text_front_edge=9.0)
         check(np.array_equal(far, far_line), "front: une fois la vague finie la ligne a disparu (image identique avec et sans)")
+        # lettres pleines (case « transparentes » decochee) : le motif est noir, la ligne du front aussi ; elle ne fait qu'assombrir
+        frames(1, dt=t0 + 1.1 - clock[0], text_fill_on=1.0, text_fill_clear=0.0)       # en pleine vague
+        op_no = frames(1, dt=0.0, text_fill_on=1.0, text_fill_clear=0.0, text_front_edge=0.0)
+        op_line = frames(1, dt=0.0, text_fill_on=1.0, text_fill_clear=0.0, text_front_edge=3.0, text_front_glint=0.0)
+        op_thick = frames(1, dt=0.0, text_fill_on=1.0, text_fill_clear=0.0, text_front_edge=9.0, text_front_glint=0.0)
+        dark = op_no - op_line
+        check(int((dark < -3).sum()) == 0 and int((dark > 60).sum()) > 20 and float(op_no.sum() - op_thick.sum()) > 1.5 * float(op_no.sum() - op_line.sum()),
+              "front (lettres pleines): la ligne du front est noire comme le motif, elle n'assombrit que le front et s'epaissit avec le reglage",
+              f"{int((dark > 60).sum())} pixels assombris, eclaircis {int((dark < -3).sum())}")
         frames(1, dt=t0 + 1.1 - clock[0], text_fill_on=1.0)
         low_sum, high_sum = float(early[low].sum()), float(early[high].sum())
         check(low_sum > 0.0 and low_sum > 3.0 * high_sum,

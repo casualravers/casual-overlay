@@ -479,7 +479,7 @@ vec4 logo_at(vec2 p) {
                 c = mix(c, vec4(txt * a0, a0), band);
             }
         } else {                                                             // lettres pleines : la matiere assombrit
-            c.rgb *= 1.0 - u_fill_k.y * matter;
+            c.rgb *= 1.0 - u_fill_k.y * max(matter, front_band(q));         // la ligne du front a la couleur du motif (noire), comme en mode transparent
         }
     }
     float ola_f = 1.0;
