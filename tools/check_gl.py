@@ -2484,6 +2484,40 @@ def check_planche() -> None:
     check(run.returncode == 2 and "recette inconnue : inconnue" in run.stderr, "planche: une recette inconnue echoue (code 2) avec son nom", f"{run.returncode} {run.stderr[-120:]}")
 
 
+def check_fuzz_reglages() -> None:
+    """Fuzz des reglages (#195), rendu : des jeux de reglages tires depuis la table sont rendus avec le vrai moteur (tools/fuzz_reglages.py) ;
+    un echec donne sa graine, son indice et ses reglages pour etre rejoue."""
+    print("Fuzz des reglages : rendu")
+    import time
+    from engine import textfill
+    from tools import fuzz_reglages as fz
+
+    def boom(renderer, k):
+        if k == 3:
+            raise RuntimeError("echec simule")
+    saved = textfill.tile_cache_path
+    t0 = time.perf_counter()
+    clean = fz.fuzz(2026, 20)
+    elapsed = time.perf_counter() - t0
+    check(clean == [], "fuzz rendu: 20 jeux a graine fixe, textes et images, sans exception, erreur OpenGL ni image impossible",
+          "; ".join(f"cas {e.indice} {e.source} : {e.raison} [{e.reglages[:120]}]" for e in clean[:3]))
+    check(elapsed < 60.0, "fuzz rendu: les 20 jeux tiennent en moins de 60 s", f"{elapsed:.1f} s")
+    bad = fz.fuzz(2026, 20, injecter=boom)
+    check(len(bad) == 2 and {e.source for e in bad} == {"texte", "image"} and all(e.graine == 2026 and e.indice == 3 and "echec simule" in e.raison and isinstance(e.reglages, str) for e in bad),
+          "fuzz rendu: un echec est rapporte avec sa graine, son indice, sa source, sa raison et ses reglages", str(bad[:1]))
+    from core import fuzz as core_fuzz
+    jeux = core_fuzz.cases(2026, 60)
+    k0 = next((k for k, c in enumerate(jeux) if k % 2 == 0 and not fz._cache_logo(dict(c, **fz.PRESENCE), "texte") and not fz._cache_logo(dict(c, **fz.PRESENCE), "image")), None)
+    check(k0 is not None and fz._cache_logo({"logo_opacity": 0.0}, "image") and fz._cache_logo({"text_ola_on": 1.0}, "texte") and not fz._cache_logo({}, "texte"),
+          "fuzz rendu: un jeu qui cache legitimement le logo (opacite 0, vague de lettres) n'est pas exige visible ; un jeu normal l'est", str(k0))
+    vanish = fz.fuzz(2026, 60, injecter=lambda r, k: r.set_logo(None, "", "image") if k == k0 else None)
+    check(any(e.indice == k0 and e.raison.startswith("image impossible") for e in vanish),
+          "fuzz rendu: un logo qui disparait sans raison est rapporte (image impossible)", str(vanish[:2]))
+    replay = fz.fuzz(2026, 1, depuis=3, injecter=boom)
+    check(replay == bad, "fuzz rendu: rejouer un seul cas (--depuis 3 --cas 1) redonne le meme echec")
+    check(textfill.tile_cache_path is saved, "fuzz rendu: le cache disque de la tuile du texte est restaure (le cache de l'utilisateur n'est jamais touche)")
+
+
 def check_text_border() -> None:
     """Fine bordure noire autour du texte (#199), rendu : un anneau noir EXTERIEUR aux lettres, d'epaisseur reglable, qui s'eteint avec la
     vague de lettres ; 0 = image comme avant ; jamais sur un logo image."""
@@ -15941,7 +15975,7 @@ PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_planche", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
