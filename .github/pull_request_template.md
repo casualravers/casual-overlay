@@ -23,9 +23,15 @@ Refs #
 - [ ] `tools/check_gl.py --pur` vert
 - [ ] suite complete verte (ou seuls les echecs connus du poste, cites ici)
 
-## A tester en vrai (ce que la CI ne verifie pas)
+## Verifie par Claude
 
-<!-- Coche ce qui demande du materiel et qui reste a regarder. La carte passe en « A tester » a la fusion : l'utilisateur la ferme quand c'est valide. -->
+<!-- Tire de « Comment je saurai que c'est bon » de l'issue. Une ligne par point, avec ce qui le prouve : le test (`check_...`), la planche de preuves (`tools/planche.py`), le fuzz (`tools/fuzz_reglages.py`). -->
+
+- [ ] ... (preuve : ...)
+
+## A verifier par toi (ce que la CI et les outils ne verifient pas)
+
+<!-- Coche ce qui demande ton oeil ou du materiel et qui reste a regarder. La carte passe en « A tester » a la fusion : l'utilisateur la ferme quand c'est valide. -->
 
 - [ ] videoprojecteur (rendu, plein ecran, ecrans multiples)
 - [ ] micro / haut-parleur reels (kick, BPM, latence)

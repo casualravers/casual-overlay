@@ -60,7 +60,7 @@
 
 ---
 
-### Tache 2 : `tools/planche.py` + recette `texte-front` + `check_planche`
+### Tache 2 : `tools/planche.py` + recette `texte-remplissage` + `check_planche`
 
 **Fichiers**
 - Creer : `tools/planche.py`, `tools/planches/__init__.py`, `tools/planches/texte_front.py`
@@ -74,13 +74,13 @@
   - `lister() -> list[str]` : noms des recettes de `tools/planches/` (un module par recette, expose `RECETTE`).
   - `rendre(recette, sortie: Path, cache_dir: Path | None = None) -> Path` : rend tous les cas (un seul `Renderer`, fond degrade raye synthetique, audio `quiet`), assemble la planche (une ligne par cas, etiquette ecrite dessus avec les valeurs des reglages), ecrit le PNG, rend le chemin. Redirige `engine.textfill.tile_cache_path` vers `cache_dir` (dossier temporaire par defaut) le temps du rendu, puis le restaure.
   - CLI : `python tools/planche.py --liste` ; `python tools/planche.py NOM [--sortie CHEMIN]` (defaut `output/planches/NOM.png`).
-- Recette `texte-front` : texte `CASUAL RAVERS`, taille 1920 x 330, cas = ligne du front 0 / 3 / 9 px en lettres transparentes et en lettres pleines, aux instants 1,3 / 2,1 / 3,1 s (les valeurs de la maquette de #199) ; `attente` = dessiner jusqu'a ce que `renderer.text_tile.ready`, puis caler les instants sur `renderer._fill_t0`.
+- Recette `texte-remplissage` : texte `CASUAL RAVERS`, taille 1920 x 330, cas = ligne du front 0 / 3 / 9 px en lettres transparentes et en lettres pleines, aux instants 1,3 / 2,1 / 3,1 s (les valeurs de la maquette de #199) ; `attente` = dessiner jusqu'a ce que `renderer.text_tile.ready`, puis caler les instants sur `renderer._fill_t0`.
 
-- [ ] **Etape 1 : ecrire `check_planche` (echoue : module absent)** : (a) `lister()` contient `texte-front` ; (b) une recette minimale (texte `AB`, 320 x 120, deux cas sans motif ni tuile, `attente=None`) rendue dans un dossier temporaire ecrit un PNG non vide dont la hauteur vaut `2 * hauteur_de_ligne` et dont la largeur vaut 320 ; (c) deux cas aux reglages differents (`text_scale` 0.3 et 0.9) donnent des lignes d'image differentes ; (d) `tile_cache_path` est restaure apres `rendre` ; (e) un nom de recette inconnu echoue avec le message « recette inconnue : X » (code de sortie 2 en CLI).
+- [ ] **Etape 1 : ecrire `check_planche` (echoue : module absent)** : (a) `lister()` contient `texte-remplissage` ; (b) une recette minimale (texte `AB`, 320 x 120, deux cas sans motif ni tuile, `attente=None`) rendue dans un dossier temporaire ecrit un PNG non vide dont la hauteur vaut `2 * hauteur_de_ligne` et dont la largeur vaut 320 ; (c) deux cas aux reglages differents (`text_scale` 0.3 et 0.9) donnent des lignes d'image differentes ; (d) `tile_cache_path` est restaure apres `rendre` ; (e) un nom de recette inconnu echoue avec le message « recette inconnue : X » (code de sortie 2 en CLI).
 - [ ] **Etape 2 : lancer** `--seulement check_planche` : attendu : echec (module absent).
 - [ ] **Etape 3 : implementer** `tools/planche.py` (le script ajoute la racine du depot a `sys.path`, comme `build_portable.py`) en reprenant l'assemblage de la maquette de #199 (fond : meme degrade raye ; etiquette en jaune sur bande sombre ; redimensionnement final a 1600 px de large) ; puis la recette `texte_front.py`.
-- [ ] **Etape 4 : relancer** `--seulement check_planche`, puis rendre la vraie planche : `.venv\Scripts\python.exe tools/planche.py texte-front` ; l'ouvrir et verifier a l'oeil qu'elle ressemble a la maquette validee (ligne du front visible, deux modes).
-- [ ] **Etape 5 : commit** : « Planche de preuves : tools/planche.py et recette texte-front (Refs #195) ».
+- [ ] **Etape 4 : relancer** `--seulement check_planche`, puis rendre la vraie planche : `.venv\Scripts\python.exe tools/planche.py texte-remplissage` ; l'ouvrir et verifier a l'oeil qu'elle ressemble a la maquette validee (ligne du front visible, deux modes).
+- [ ] **Etape 5 : commit** : « Planche de preuves : tools/planche.py et recette texte-remplissage (Refs #195) ».
 
 ---
 
@@ -131,3 +131,7 @@
 
 - **Couverture de la spec** : planche (tache 2), fuzz pur (1), fuzz rendu (3), checklist + docs (4), verifications `check_fuzz` / `check_planche` / `check_fuzz_reglages` (1, 2, 3), ordre de la spec respecte sauf que la planche passe avant le fuzz rendu pour reutiliser vite les scripts de #199 (meme ordre que la spec : fuzz pur, planche, fuzz rendu, docs).
 - **Coherence des noms** : `cases`, `draw_params`, `describe` (tache 1) sont repris tels quels en tache 3 ; `rendre`, `lister`, `Recette`, `Cas` (tache 2) ne sont utilises qu'en tache 2.
+
+## Ecarts constates a la realisation
+
+Voir la spec : recette `texte-remplissage`, `Cas` / `Recette` dans `tools/planches/__init__.py`, presence du logo epinglee sur un cas sur deux, `--depuis K` rejoue le prefixe. Tache 1 : le module a ete ecrit avant son test (ordre du plan non respecte) ; le test a ete ecrit ensuite et verifie par mutation (tirage non reproductible -> deux echecs).
