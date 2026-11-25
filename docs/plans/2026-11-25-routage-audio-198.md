@@ -94,6 +94,13 @@ Une scene ancienne n'a pas ces cles : defauts appliques, rendu identique. Le tab
 - **Conflits** : touche `engine/render.py`, `core/params_schema.py`, `tools/check_gl.py`, `gui/*` : une PR a la fois, pas de PR parallele sur ces fichiers.
 - **Strobe / foudre** : decident deja seuls (phases, grille) ; en PR 3 seulement, d'abord en lecture (voyant), a confirmer avant de les rendre routables.
 
+## Decisions prises a l'execution (PR 1)
+
+- **22 lignes, pas 23** : le compte du plan etait faux (7 fond, 10 logo, 5 globales) ; la table de l'inventaire ci-dessus est la bonne.
+- **Logo lie** (`fx_link` = 1, defaut) : les 4 effets shader du logo suivent la ligne du FOND (`routing.fx_route_id`), comme ils suivent deja la source, le retard et le lissage du fond ; leur propre ligne est ignoree (elle sera masquee dans l'interface, comme les reglages du logo lie). Sans cela, router « Ondulation du fond » laissait le logo onduler sur les basses.
+- **Reglages par la table** : `routing.route_specs()` rend des tuples que `params_schema` transforme en `_p` (pas d'import de `params_schema` dans `routing` : import circulaire).
+- **Cout mesure** : +0,05 a +0,14 ms CPU par image avec 8 lignes routees (poste de dev, 1280x720, mediane) ; 0 avec les routes par defaut.
+
 ## Documentation
 
 Section « Routage audio par effet » dans `docs/fonctions/audio.md` (modele, resolution, zero perte) et dans `docs/fonctions/gui.md` (onglet, pastille) ; ligne dans l'index de `CLAUDE.md` seulement si une nouvelle fiche est creee (non prevu).

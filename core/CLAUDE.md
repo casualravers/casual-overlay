@@ -4,7 +4,7 @@ Regle : aucun import du moteur, de la GUI, de Tk, numpy, GL, PIL ni audio2wave (
 
 - `params_schema.py`, `scenes.py`, `randomizer.py`, `safety.py`, `uistats.py` : [docs/fonctions/scenes-vj.md](../docs/fonctions/scenes-vj.md)
 - `brain.py` (journal du visualizer du cerveau, issue #192) : [docs/fonctions/cerveau.md](../docs/fonctions/cerveau.md)
-- `onset.py`, `rhythm.py`, `tempo.py`, `phase.py`, `audio_layers.py`, `explain.py` : [docs/fonctions/audio.md](../docs/fonctions/audio.md)
+- `onset.py`, `rhythm.py`, `tempo.py`, `phase.py`, `audio_layers.py`, `explain.py`, `routing.py` (routage audio par effet, #198) : [docs/fonctions/audio.md](../docs/fonctions/audio.md)
 - `pulse.py`, `latency.py` : [docs/fonctions/synchro.md](../docs/fonctions/synchro.md)
 - `strobe_auto.py`, `foudre.py`, `controls.py` (strobe, montee) : [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md)
 - `controls.py` (panique, tap tempo), `sessionlog.py`, `autosave.py`, `palette.py` : [docs/fonctions/exploitation.md](../docs/fonctions/exploitation.md)
