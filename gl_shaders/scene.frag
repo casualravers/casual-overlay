@@ -371,17 +371,18 @@ float ola_alpha(float rank, float tau, float dur, float fade) {
 
 // Remplissage des lettres (texte uniquement) : une tuile de motif de reaction-diffusion, calculee une fois (engine/textfill.py), est rejouee
 // par une vague. Tuile RG : V (matiere) et instant d'arrivee normalise (0 = colonisee d'emblee, 1 = la derniere), periodique. Chaque pixel a un
-// temps local tau = temps - depart de sa lettre (rang) - retard du front (hauteur : le bas d'abord) ; sa matiere apparait a l'instant d'arrivee
+// temps local tau = temps - depart de sa lettre (rang) - arrivee du front (portee : distance au point de depart de la lettre, le milieu de son bas,
+// le front est un cercle qui grandit depuis ce seul point) ; sa matiere apparait a l'instant d'arrivee
 // de la tuile (meme formules que core.textfx.fill_tau / fill_reveal). Lettres transparentes : on garde le bord (alpha - alpha erodee) et la
 // matiere remplit l'interieur ; lettres pleines : la matiere assombrit.
 uniform sampler2D u_fill;
 uniform vec4 u_fill_k;         // x = 1 si le remplissage est actif, y = contraste (lettres pleines), z = 1 lettres transparentes, w = epaisseur du bord (texels)
-uniform vec4 u_fill_t;         // secondes depuis la remise a zero, ecart de depart des lettres, duree du front, duree de croissance
+uniform vec4 u_fill_t;         // secondes depuis la remise a zero, ecart de depart des lettres, duree du front, duree d'apparition derriere le front
 uniform vec4 u_fill_geom;      // uv de la tuile par uv du texte (x, y), decalage de lecture (z, w)
 uniform vec2 u_fill_px;        // taille de la texture du texte, en texels
 const float FILL_SOFT = 0.18;  // fondu d'apparition (core.textfx.FILL_SOFT_S)
 float fill_matter(vec2 q) {
-    vec2 rr = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;           // rang (gauche -> droite), hauteur (0 = bas de la lettre)
+    vec2 rr = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;           // rang (gauche -> droite), portee du front (0 = point de depart de la lettre)
     float tau = u_fill_t.x - rr.x * u_fill_t.y - rr.y * u_fill_t.z;
     vec2 tile = textureLod(u_fill, q * u_fill_geom.xy + u_fill_geom.zw, 0.0).rg;
     float start = clamp(tile.g, 0.0, 1.0) * u_fill_t.w;
@@ -402,6 +403,21 @@ float fill_inner(vec2 q) {
     m = min(m, textureLod(u_logo, q + vec2(-g.x, g.y), 0.0).a);
     return m;
 }
+// Bordure noire du texte : anneau EXTERIEUR de la lettre, epais de u_text_border.x texels (16 lectures : 2 cercles de 8), noir et opaque. L'anneau est
+// ajoute a l'alpha, sa couleur est noire (rgb premultiplie inchange).
+uniform vec3 u_text_border;    // x = epaisseur (texels, 0 = aucune), yz = taille de la texture du texte (texels)
+float text_ring(vec2 q, float a) {
+    vec2 e = u_text_border.x / u_text_border.yz;
+    float m = a;
+    for (int k = 0; k < 8; k++) {
+        float ang = 0.7853982 * float(k);
+        vec2 dir = vec2(cos(ang), sin(ang));
+        m = max(m, textureLod(u_logo, q + dir * e, 0.0).a);
+        m = max(m, textureLod(u_logo, q + dir * e * 0.5, 0.0).a);
+    }
+    return clamp(m - a, 0.0, 1.0);
+}
+
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
 vec4 logo_at(vec2 p) {
     vec2 d = p - u_logo_rect.xy;
@@ -430,9 +446,15 @@ vec4 logo_at(vec2 p) {
             c.rgb *= 1.0 - u_fill_k.y * matter;
         }
     }
+    float ola_f = 1.0;
     if (u_ola.x > 0.5 && inside > 0.5) {
         // les lettres eteintes disparaissent vraiment (avant les cellules, la fonte, la mosaique et le contour lumineux)
-        c *= ola_alpha(textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).r, u_ola.y, u_ola.z, u_ola.w);
+        ola_f = ola_alpha(textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).r, u_ola.y, u_ola.z, u_ola.w);
+        c *= ola_f;
+    }
+    if (u_text_border.x > 0.0 && inside > 0.5) {                             // fine bordure noire autour du texte (elle s'eteint avec la vague de lettres)
+        float ring = text_ring(q, textureLod(u_logo, clamp(q, 0.0, 1.0), 0.0).a) * ola_f * (1.0 - c.a);
+        c.a += ring;
     }
     if (u_cell > 0.001 && inside > 0.5) {
         c = logo_cells(q, c);

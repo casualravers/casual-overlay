@@ -155,6 +155,7 @@ TABLE: tuple[Param, ...] = (
     _p("text_bars", 4, 1, 16, doc="Rotation des textes : changement toutes les N mesures (4 kicks)."),
     _p("text_idx", 0, 0, 10 ** 6, scope="state", doc="Indice du texte affiche dans la rotation (0 = le principal)."),
     _p("text_fade", 1.0, 0.0, 1.0, scope="state", doc="Fondu de la rotation des textes : presence du logo pendant le changement."),
+    _p("text_border", 2.0, 0.0, 8.0, doc="Texte : epaisseur de la fine bordure noire autour des lettres, en pixels de la texture du texte (0 = aucune)."),
     _p("text_ola_on", 0.0, 0.0, 1.0, doc="Texte : vague de lettres (ola) : les lettres s'eteignent puis se rallument de gauche a droite, en boucle."),
     _p("text_ola_dur", 6.0, 1.0, 10.0, doc="Vague de lettres : duree d'un balayage complet (extinction puis rallumage), en secondes."),
     _p("text_ola_every", 20.0, 5.0, 120.0, doc="Vague de lettres : periode de la boucle, en secondes (au moins la duree du balayage)."),

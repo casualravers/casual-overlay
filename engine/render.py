@@ -222,73 +222,75 @@ def _runs(flags) -> list[tuple[int, int]]:
     return list(zip(np.nonzero(d == 1)[0].tolist(), np.nonzero(d == -1)[0].tolist()))
 
 
-def text_rank_map(rgba):
-    """Carte du rang des lettres (vague de lettres, #199) : tableau uint8 (h, w), 0 a 255 = rang 0 (lettre la plus a gauche) a 1 (la plus
-    a droite) de la lettre a laquelle appartient chaque pixel, meme taille que la texture du texte. Calculee depuis l'alpha : bandes de
-    lignes (rangees non vides), puis groupes de colonnes contigues dans chaque bande = une « lettre » (un accent ou le point d'un i sont
-    dans les colonnes de leur lettre ; les espaces n'ont pas de pixels). Rang = centre du groupe, normalise sur tout le texte : toutes les
-    lignes balaient ensemble. Limite : des lettres qui se touchent (police script) forment un seul groupe."""
-    alpha = np.asarray(rgba)[:, :, 3] > 8
-    out = np.zeros(alpha.shape, np.uint8)
+def _letters(alpha):
+    """Lettres d'un texte (tableau booleen de l'alpha) : liste de dictionnaires `{"rects": [(r0, r1, c0, c1), ...], "cx": centre, "start": (x, y)}`.
+    Bandes de lignes (rangees non vides), puis groupes de colonnes contigues dans chaque bande = une « lettre » ; un accent ou le point d'un i ou
+    d'un j (bande basse, separee de sa lettre par une rangee vide) est rattache a la lettre dont les colonnes le recouvrent le plus, sinon c'est
+    une « lettre » a part. `cx` = centre horizontal du groupe principal, `start` = point de depart de la colonisation : le milieu du bas de la
+    lettre (x, y en pixels de la texture). Limite : des lettres qui se touchent (police script) forment un seul groupe."""
     bands = _runs(alpha.any(axis=1))
     if not bands:
-        return out
+        return []
     hmax = max(r1 - r0 for r0, r1 in bands)
-    # bandes basses (accents, points de i et j : separes de leur lettre par une rangee vide) : rattachees a la lettre voisine
     big = [b for b in bands if (b[1] - b[0]) >= 0.4 * hmax]
     marks = [b for b in bands if (b[1] - b[0]) < 0.4 * hmax]
-    groups = []                                              # [ligne debut, ligne fin, colonne debut, colonne fin]
+    letters = []
     for r0, r1 in big:
         for c0, c1 in _runs(alpha[r0:r1].any(axis=0)):
-            groups.append([r0, r1, c0, c1])
-    owner = []                                               # pour chaque marque : (rect, indice du groupe porteur ou None)
+            letters.append({"rects": [(r0, r1, c0, c1)], "cx": (c0 + c1) / 2.0, "start": ((c0 + c1 - 1) / 2.0, float(r1 - 1)), "row": r0})
     for r0, r1 in marks:
         mid = (r0 + r1) / 2.0
-        near = min(big, key=lambda b: min(abs(mid - b[0]), abs(mid - b[1])))            # la bande de lettres la plus proche
-        cand = [i for i, g in enumerate(groups) if g[0] == near[0]]
+        near = min(big, key=lambda b: min(abs(mid - b[0]), abs(mid - b[1])))                # la bande de lettres la plus proche
+        cand = [L for L in letters if L["row"] == near[0] and len(L["rects"]) >= 1]
         for c0, c1 in _runs(alpha[r0:r1].any(axis=0)):
             best, best_ov = None, 0
-            for i in cand:
-                ov = min(c1, groups[i][3]) - max(c0, groups[i][2])
+            for L in cand:
+                m0, m1, g0, g1 = L["rects"][0]
+                ov = min(c1, g1) - max(c0, g0)
                 if ov > best_ov:
-                    best, best_ov = i, ov
-            owner.append(((r0, r1, c0, c1), best))
-    orphans = [g for g, b in owner if b is None]             # marque sans lettre dessous : son propre rang
-    centers = [(g[2] + g[3]) / 2.0 for g in groups] + [(o[2] + o[3]) / 2.0 for o in orphans]
-    lo, hi = min(centers), max(centers)
-
-    def rank_of(c):
-        return int(round((0.0 if hi <= lo else (c - lo) / (hi - lo)) * 255.0))
-    for r0, r1, c0, c1 in groups:
-        out[r0:r1, c0:c1] = rank_of((c0 + c1) / 2.0)
-    for (r0, r1, c0, c1), idx in owner:
-        c = (groups[idx][2] + groups[idx][3]) / 2.0 if idx is not None else (c0 + c1) / 2.0
-        out[r0:r1, c0:c1] = rank_of(c)
-    return out
+                    best, best_ov = L, ov
+            if best is not None:
+                best["rects"].append((r0, r1, c0, c1))
+            else:
+                letters.append({"rects": [(r0, r1, c0, c1)], "cx": (c0 + c1) / 2.0, "start": ((c0 + c1 - 1) / 2.0, float(r1 - 1)), "row": r0})
+    return letters
 
 
-def text_rise_map(rgba):
-    """Carte de la hauteur dans la lettre (vague de colonisation du bas vers le haut, #199) : tableau uint8 (h, w), 0 en bas de la ligne de texte,
-    255 en haut, meme taille que la texture du texte. Chaque ligne de texte (bande de rangees non vides) a sa propre echelle ; un accent ou
-    le point d'un i, bande basse separee de sa lettre, prend l'echelle de la bande de lettres la plus proche (donc 255 au-dessus de la lettre,
-    0 pour une cedille en dessous : bornes)."""
+def text_rank_map(rgba):
+    """Carte du rang des lettres (vague de lettres et vague de colonisation, #199) : tableau uint8 (h, w), 0 a 255 = rang 0 (lettre la plus a
+    gauche) a 1 (la plus a droite) de la lettre a laquelle appartient chaque pixel, meme taille que la texture du texte. Rang = centre de la
+    lettre (voir `_letters`), normalise sur tout le texte : toutes les lignes balaient ensemble. Les espaces n'ont pas de pixels."""
     alpha = np.asarray(rgba)[:, :, 3] > 8
     out = np.zeros(alpha.shape, np.uint8)
-    bands = _runs(alpha.any(axis=1))
-    if not bands:
+    letters = _letters(alpha)
+    if not letters:
         return out
-    hmax = max(r1 - r0 for r0, r1 in bands)
-    big = [b for b in bands if (b[1] - b[0]) >= 0.4 * hmax]
-    for r0, r1 in bands:
-        b0, b1 = r0, r1
-        if (r1 - r0) < 0.4 * hmax:
-            mid = (r0 + r1) / 2.0
-            b0, b1 = min(big, key=lambda b: min(abs(mid - b[0]), abs(mid - b[1])))
-        ys = np.arange(r0, r1, dtype=np.float32)
-        rise = np.clip((b1 - 1 - ys) / max(b1 - 1 - b0, 1), 0.0, 1.0)
-        out[r0:r1, :] = np.rint(rise * 255.0).astype(np.uint8)[:, None]
+    centers = [L["cx"] for L in letters]
+    lo, hi = min(centers), max(centers)
+    for L in letters:
+        rank = int(round((0.0 if hi <= lo else (L["cx"] - lo) / (hi - lo)) * 255.0))
+        for r0, r1, c0, c1 in L["rects"]:
+            out[r0:r1, c0:c1] = rank
     return out
 
+
+def text_reach_map(rgba):
+    """Carte de la portee du front de colonisation (#199) : tableau uint8 (h, w), 0 au point de depart de chaque lettre (le milieu du bas de la
+    lettre : un SEUL point de depart par lettre) a 255 au pixel de la lettre le plus eloigne (distance a vol d'oiseau, accents compris), meme
+    taille que la texture du texte. Le front de colonisation est un cercle qui grandit depuis ce point : un pixel est atteint quand le
+    front arrive a sa portee."""
+    alpha = np.asarray(rgba)[:, :, 3] > 8
+    out = np.zeros(alpha.shape, np.uint8)
+    for L in _letters(alpha):
+        sx, sy = L["start"]
+        dists = []
+        for r0, r1, c0, c1 in L["rects"]:
+            yy, xx = np.mgrid[r0:r1, c0:c1]
+            dists.append((np.hypot(xx - sx, yy - sy), alpha[r0:r1, c0:c1]))
+        dmax = max(float(d[a].max()) for d, a in dists if a.any())
+        for (r0, r1, c0, c1), (d, _a) in zip(L["rects"], dists):
+            out[r0:r1, c0:c1] = np.rint(np.clip(d / max(dmax, 1.0), 0.0, 1.0) * 255.0).astype(np.uint8)
+    return out
 
 def _premultiplied(img):
     """Image PIL RGBA -> uint8 RGBA a alpha premultiplie, reduite a 2048 px maximum."""
@@ -498,7 +500,7 @@ class Renderer:
         if old is not None:
             old.release()
         is_text = logo_rgba is not None and kind == "text"
-        self._set_text_rank(text_rank_map(logo_rgba) if is_text else None, text_rise_map(logo_rgba) if is_text else None)
+        self._set_text_rank(text_rank_map(logo_rgba) if is_text else None, text_reach_map(logo_rgba) if is_text else None)
         if is_text:
             self.text_epoch += 1
 
@@ -543,15 +545,15 @@ class Renderer:
         self._set(sp, "u_fill_px", (float(w), float(h)))
         tile.texture.use(3)
 
-    def _set_text_rank(self, rank, rise=None) -> None:
-        """Texture de la carte du rang (R) et de la hauteur (G) des lettres (RG8, sans filtrage : un bord de lettre ne melange pas deux
+    def _set_text_rank(self, rank, reach=None) -> None:
+        """Texture de la carte du rang (R) et de la portee du front de colonisation (G) des lettres (RG8, sans filtrage : un bord de lettre ne melange pas deux
         valeurs) ; None = une texture vide 1 x 1 (hors source Texte, l'uniforme garde toujours une texture valide)."""
         old = self.text_rank_tex
         if rank is None:
             tex = self.ctx.texture((1, 1), 2, data=bytes(2))
         else:
             h, w = rank.shape
-            data = np.stack([rank, rise if rise is not None else np.zeros_like(rank)], axis=2)
+            data = np.stack([rank, reach if reach is not None else np.zeros_like(rank)], axis=2)
             tex = self.ctx.texture((w, h), 2, data=np.ascontiguousarray(data).tobytes())
         tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
         tex.repeat_x = tex.repeat_y = False
@@ -1219,6 +1221,8 @@ class Renderer:
         self._set(sp, "u_text_rank", 2)
         self.text_rank_tex.use(2)
         self._update_text_fill(sp, t, p, text_src)
+        tw, th = self.logo_tex.size
+        self._set(sp, "u_text_border", (min(max(float(p["text_border"]), 0.0), 8.0) if text_src else 0.0, float(tw), float(th)))     # fine bordure noire du texte (#199)
 
         # Fond: video ffmpeg ou motif genere. Les phases avancent meme quand le motif est cache,
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
@@ -1304,6 +1308,7 @@ class Renderer:
         # Les doodles du site passent par la MEME passe que le logo (fonte, cellules, contour, opacite), posee sur sa couche : ils
         # subissent ensuite ses effets par couche, le halo holographique, la trainee et la composition.
         self._set(sp, "u_fill_k", (0.0, 0.0, 0.0, 0.0))
+        self._set(sp, "u_text_border", (0.0, 1.0, 1.0))
         self._set(sp, "u_ola", (0.0, 0.0, 1.0, 0.1))            # la vague ne touche que le texte : pas les doodles, qui reutilisent logo_at
         doodles_on = self._draw_doodles(self.layer_fbo, size, time.monotonic(), ov)
         (self.mode_tex or self.video_tex).use(0)

@@ -215,6 +215,9 @@ def install(c):
     param_slider(tz, "Taille du texte", "text_scale", 0.03, 0.6, 0.01,
                  "Hauteur du bloc de texte, en fraction de la hauteur de l'image (marges comprises).")
 
+    param_slider(tz, "Bordure noire", "text_border", 0.0, 8.0, 0.5,
+                 "Epaisseur de la fine bordure noire autour des lettres, en pixels de la texture du texte (0 = aucune). Utile sur un fond clair ou charge.")
+
     # ---- vague de lettres et remplissage (#199) : dans le bloc Texte, donc visibles (et actifs) avec la source Texte seulement
     def effect_block(label: str, key: str, tip: str, sliders: tuple) -> tk.IntVar:
         var = tk.IntVar(value=int(float(params[key]) >= 0.5))
