@@ -369,16 +369,39 @@ float ola_alpha(float rank, float tau, float dur, float fade) {
     return smoothstep(s, s + fd, tau);
 }
 
-// Remplissage des lettres (reaction-diffusion, texte uniquement) : grille RGBA (r = U, g = V, b = masque), meme coordonnee que le logo.
-// Le motif joue sur la luminosite seulement : la couleur et l'opacite ne changent pas. Non colonise = clair, colonise = sombre.
+// Remplissage des lettres (texte uniquement) : une tuile de motif de reaction-diffusion, calculee une fois (engine/textfill.py), est rejouee
+// par une vague. Tuile RG : V (matiere) et instant d'arrivee normalise (0 = colonisee d'emblee, 1 = la derniere), periodique. Chaque pixel a un
+// temps local tau = temps - depart de sa lettre (rang) - retard du front (hauteur : le bas d'abord) ; sa matiere apparait a l'instant d'arrivee
+// de la tuile (meme formules que core.textfx.fill_tau / fill_reveal). Lettres transparentes : on garde le bord (alpha - alpha erodee) et la
+// matiere remplit l'interieur ; lettres pleines : la matiere assombrit.
 uniform sampler2D u_fill;
-uniform vec2 u_fill_k;         // x = 1 si le remplissage est actif, y = contraste (ecart clair / sombre)
-float fill_motif(vec2 q) {
-    vec4 s = texture(u_fill, clamp(q, 0.0, 1.0));
-    float v = s.g / max(s.b, 0.05);                      // normalise par le masque filtre : pas de bord sombre ou clair aux contours des lettres
-    return 1.0 - smoothstep(0.08, 0.30, v);
+uniform vec4 u_fill_k;         // x = 1 si le remplissage est actif, y = contraste (lettres pleines), z = 1 lettres transparentes, w = epaisseur du bord (texels)
+uniform vec4 u_fill_t;         // secondes depuis la remise a zero, ecart de depart des lettres, duree du front, duree de croissance
+uniform vec4 u_fill_geom;      // uv de la tuile par uv du texte (x, y), decalage de lecture (z, w)
+uniform vec2 u_fill_px;        // taille de la texture du texte, en texels
+const float FILL_SOFT = 0.18;  // fondu d'apparition (core.textfx.FILL_SOFT_S)
+float fill_matter(vec2 q) {
+    vec2 rr = textureLod(u_text_rank, clamp(q, 0.0, 1.0), 0.0).rg;           // rang (gauche -> droite), hauteur (0 = bas de la lettre)
+    float tau = u_fill_t.x - rr.x * u_fill_t.y - rr.y * u_fill_t.z;
+    vec2 tile = textureLod(u_fill, q * u_fill_geom.xy + u_fill_geom.zw, 0.0).rg;
+    float start = clamp(tile.g, 0.0, 1.0) * u_fill_t.w;
+    return smoothstep(0.08, 0.30, tile.r) * smoothstep(start, start + FILL_SOFT, tau);
 }
-
+// alpha du texte erode du rayon du bord : 0 a moins d'un bord d'une frontiere de lettre
+float fill_inner(vec2 q) {
+    vec2 e = u_fill_k.w / u_fill_px;
+    vec2 g = e * 0.7071;
+    float m = textureLod(u_logo, q, 0.0).a;
+    m = min(m, textureLod(u_logo, q + vec2(e.x, 0.0), 0.0).a);
+    m = min(m, textureLod(u_logo, q - vec2(e.x, 0.0), 0.0).a);
+    m = min(m, textureLod(u_logo, q + vec2(0.0, e.y), 0.0).a);
+    m = min(m, textureLod(u_logo, q - vec2(0.0, e.y), 0.0).a);
+    m = min(m, textureLod(u_logo, q + g, 0.0).a);
+    m = min(m, textureLod(u_logo, q - g, 0.0).a);
+    m = min(m, textureLod(u_logo, q + vec2(g.x, -g.y), 0.0).a);
+    m = min(m, textureLod(u_logo, q + vec2(-g.x, g.y), 0.0).a);
+    return m;
+}
 // p : position ecran, origine HAUT gauche. Renvoie le logo premultiplie (0 hors du rectangle).
 vec4 logo_at(vec2 p) {
     vec2 d = p - u_logo_rect.xy;
@@ -397,7 +420,15 @@ vec4 logo_at(vec2 p) {
     vec4 c = texture(u_logo, clamp(q, 0.0, 1.0));
     c.rgb *= mix(1.0, c.a, u_logo_straight);
     if (u_fill_k.x > 0.5 && inside > 0.5) {
-        c.rgb *= 1.0 - u_fill_k.y * (1.0 - fill_motif(q));
+        float matter = fill_matter(q);
+        if (u_fill_k.z > 0.5) {                                              // lettres transparentes : le bord reste, la matiere remplit l'interieur
+            float inner = fill_inner(q);
+            float edge = clamp(c.a - inner, 0.0, 1.0);
+            float want = clamp(edge + matter * inner, 0.0, 1.0);
+            c *= clamp(want / max(c.a, 0.001), 0.0, 1.0);
+        } else {                                                             // lettres pleines : la matiere assombrit
+            c.rgb *= 1.0 - u_fill_k.y * matter;
+        }
     }
     if (u_ola.x > 0.5 && inside > 0.5) {
         // les lettres eteintes disparaissent vraiment (avant les cellules, la fonte, la mosaique et le contour lumineux)
