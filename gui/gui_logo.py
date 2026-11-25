@@ -215,6 +215,37 @@ def install(c):
     param_slider(tz, "Taille du texte", "text_scale", 0.03, 0.6, 0.01,
                  "Hauteur du bloc de texte, en fraction de la hauteur de l'image (marges comprises).")
 
+    # ---- vague de lettres et remplissage (#199) : dans le bloc Texte, donc visibles (et actifs) avec la source Texte seulement
+    def effect_block(label: str, key: str, tip: str, sliders: tuple) -> tk.IntVar:
+        var = tk.IntVar(value=int(float(params[key]) >= 0.5))
+        bind_param(key, var, float)
+        row = tk.Frame(text_box)
+        row.grid(row=tz.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        check = tk.Checkbutton(row, text=label, variable=var)
+        check.pack(side="left")
+        Tooltip(check, tip)
+        for args in sliders:
+            param_slider(tz, *args)
+        return var
+
+    add_separator(tz, "Vague et remplissage (texte)")
+    ola_var = effect_block(
+        "Vague de lettres", "text_ola_on",
+        "Les lettres s'eteignent en fondu de gauche a droite, puis se rallument dans le meme sens, en boucle (un balayage de quelques secondes, "
+        "puis le texte entier jusqu'au suivant). Source Texte seulement. Coupee par defaut ; la panique (X) la coupe.",
+        (("Duree du balayage", "text_ola_dur", 1.0, 10.0, 0.5, "Duree d'un balayage complet : extinction puis rallumage, en secondes."),
+         ("Periode", "text_ola_every", 5.0, 120.0, 1.0, "Le balayage recommence toutes les N secondes (au moins la duree du balayage)."),
+         ("Fondu d'une lettre", "text_ola_fade", 0.1, 1.5, 0.05, "Duree du fondu de chaque lettre, en secondes.")))
+    fill_var = effect_block(
+        "Remplissage des lettres", "text_fill_on",
+        "L'interieur des lettres est colonise par un motif organique (reaction-diffusion) qui joue sur la luminosite : la couleur du texte ne change pas. "
+        "Il repart de zero au rallumage de la vague (si elle est cochee), a chaque nouveau texte, sinon toutes les N secondes. Source Texte seulement. "
+        "Coupe par defaut ; la panique (X) le coupe.",
+        (("Vitesse", "text_fill_speed", 0.2, 1.0, 0.05, "Vitesse de colonisation des lettres. Le motif se fige une fois forme (~6 s a vitesse 1) : plus aucun calcul jusqu'a la remise a zero."),
+         ("Finesse", "text_fill_scale", 0.5, 1.5, 0.05, "Finesse du motif : grand = motif plus fin (grille plus dense, donc plus couteux pendant la colonisation)."),
+         ("Contraste", "text_fill_contrast", 0.0, 1.0, 0.05, "Ecart de luminosite entre les zones claires et sombres des lettres."),
+         ("Remise a zero", "text_fill_every", 5.0, 120.0, 1.0, "Sans la vague : le motif repart de zero toutes les N secondes.")))
+
     # ---- source video (logo anime)
     r = vz.next_row()
     add_label(vz, "Fichier", r, "Video ou GIF lu en boucle. Pour un logo detoure: WebM VP9 avec alpha, "
@@ -310,4 +341,4 @@ def install(c):
     param_slider(zone_aura, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
 
     import types
-    return types.SimpleNamespace(apply_logo_path=apply_logo_path, apply_text=apply_text, apply_video_path=apply_video_path, font_var=font_var, image_box=image_box, key_var=key_var, logo_var=logo_var, source_var=source_var, text_box=text_box, text_widget=text_widget, video_var=video_var, x_var=x_var, sched_tick=sched_tick, sched_var=sched_var, sched_text=sched_text, apply_sched=apply_sched)
+    return types.SimpleNamespace(ola_var=ola_var, fill_var=fill_var, apply_logo_path=apply_logo_path, apply_text=apply_text, apply_video_path=apply_video_path, font_var=font_var, image_box=image_box, key_var=key_var, logo_var=logo_var, source_var=source_var, text_box=text_box, text_widget=text_widget, video_var=video_var, x_var=x_var, sched_tick=sched_tick, sched_var=sched_var, sched_text=sched_text, apply_sched=apply_sched)

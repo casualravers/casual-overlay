@@ -8,7 +8,8 @@ from __future__ import annotations
 
 # Cout approximatif de chaque effet couteux, en ms par image a 1080p sur le poste de reference (voir CLAUDE.md, « Mesures » : cellules
 # +6,7 ms, halo +3,3 ms, fonte ~1,5 ms), du plus cher au moins cher : c'est l'ordre dans lequel on les coupe.
-EFFECT_COST_MS = (("cell_on", "cellules", 6.7), ("holo_on", "halo", 3.3), ("melt_on", "fonte", 1.5))
+EFFECT_COST_MS = (("text_fill_on", "remplissage du texte", 14.0), ("cell_on", "cellules", 6.7), ("holo_on", "halo", 3.3), ("melt_on", "fonte", 1.5))
+# Remplissage des lettres (#199) : mesure a 1080p +13,9 ms par image PENDANT la colonisation (grille 2048, 24 pas par image, ~6 s apres chaque remise a zero), +0,2 ms ensuite (motif fige) ; compte pleinement par prudence.
 # Surcout du fond genere en palette stochastique, en ms a 1080p (mesure a 1280 x 720 : bruit +2,3 ms, vagues +1,3 ms, x 2,25 pour 1080p ;
 # le degrade, non mesure, est compte comme les vagues). Le fond n'est jamais coupe : il compte seulement dans l'estimation.
 BG_STO_COST_MS = {"noise": 5.2, "waves": 2.9, "gradient": 2.9}

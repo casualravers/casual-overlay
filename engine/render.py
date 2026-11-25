@@ -26,6 +26,8 @@ from core import reaction
 from core.recording import cover_uv as fit_cover, fit_rect
 from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
 from core.brain import FxEdge
+from core.textfx import FillClock, OlaClock, clean_ola, fill_steps
+from engine.textfill import TextFill
 from core import explain as core_explain
 from engine.deps import PIL_Image, PIL_ImageDraw, PIL_ImageFont, moderngl, np
 from engine.reaction import ReactionDiffusion
@@ -212,6 +214,58 @@ def render_text(text: str, font: str = "auto", color: str = "#ffffff", align: st
     return _premultiplied(img)
 
 
+def _runs(flags) -> list[tuple[int, int]]:
+    """Plages [debut, fin[ des suites de valeurs vraies d'un tableau booleen 1D."""
+    f = np.concatenate(([False], np.asarray(flags, dtype=bool), [False]))
+    d = np.diff(f.astype(np.int8))
+    return list(zip(np.nonzero(d == 1)[0].tolist(), np.nonzero(d == -1)[0].tolist()))
+
+
+def text_rank_map(rgba):
+    """Carte du rang des lettres (vague de lettres, #199) : tableau uint8 (h, w), 0 a 255 = rang 0 (lettre la plus a gauche) a 1 (la plus
+    a droite) de la lettre a laquelle appartient chaque pixel, meme taille que la texture du texte. Calculee depuis l'alpha : bandes de
+    lignes (rangees non vides), puis groupes de colonnes contigues dans chaque bande = une « lettre » (un accent ou le point d'un i sont
+    dans les colonnes de leur lettre ; les espaces n'ont pas de pixels). Rang = centre du groupe, normalise sur tout le texte : toutes les
+    lignes balaient ensemble. Limite : des lettres qui se touchent (police script) forment un seul groupe."""
+    alpha = np.asarray(rgba)[:, :, 3] > 8
+    out = np.zeros(alpha.shape, np.uint8)
+    bands = _runs(alpha.any(axis=1))
+    if not bands:
+        return out
+    hmax = max(r1 - r0 for r0, r1 in bands)
+    # bandes basses (accents, points de i et j : separes de leur lettre par une rangee vide) : rattachees a la lettre voisine
+    big = [b for b in bands if (b[1] - b[0]) >= 0.4 * hmax]
+    marks = [b for b in bands if (b[1] - b[0]) < 0.4 * hmax]
+    groups = []                                              # [ligne debut, ligne fin, colonne debut, colonne fin]
+    for r0, r1 in big:
+        for c0, c1 in _runs(alpha[r0:r1].any(axis=0)):
+            groups.append([r0, r1, c0, c1])
+    owner = []                                               # pour chaque marque : (rect, indice du groupe porteur ou None)
+    for r0, r1 in marks:
+        mid = (r0 + r1) / 2.0
+        near = min(big, key=lambda b: min(abs(mid - b[0]), abs(mid - b[1])))            # la bande de lettres la plus proche
+        cand = [i for i, g in enumerate(groups) if g[0] == near[0]]
+        for c0, c1 in _runs(alpha[r0:r1].any(axis=0)):
+            best, best_ov = None, 0
+            for i in cand:
+                ov = min(c1, groups[i][3]) - max(c0, groups[i][2])
+                if ov > best_ov:
+                    best, best_ov = i, ov
+            owner.append(((r0, r1, c0, c1), best))
+    orphans = [g for g, b in owner if b is None]             # marque sans lettre dessous : son propre rang
+    centers = [(g[2] + g[3]) / 2.0 for g in groups] + [(o[2] + o[3]) / 2.0 for o in orphans]
+    lo, hi = min(centers), max(centers)
+
+    def rank_of(c):
+        return int(round((0.0 if hi <= lo else (c - lo) / (hi - lo)) * 255.0))
+    for r0, r1, c0, c1 in groups:
+        out[r0:r1, c0:c1] = rank_of((c0 + c1) / 2.0)
+    for (r0, r1, c0, c1), idx in owner:
+        c = (groups[idx][2] + groups[idx][3]) / 2.0 if idx is not None else (c0 + c1) / 2.0
+        out[r0:r1, c0:c1] = rank_of(c)
+    return out
+
+
 def _premultiplied(img):
     """Image PIL RGBA -> uint8 RGBA a alpha premultiplie, reduite a 2048 px maximum."""
     if max(img.size) > 2048:
@@ -361,6 +415,16 @@ class Renderer:
         self.logo_kind = "image"
         self.logo_path = ""
         self.logo_video: LogoVideo | None = None
+        self.text_rank_tex = None          # carte du rang des lettres du texte (vague de lettres, #199) ; 1 x 1 vide hors source Texte
+        self._ola = OlaClock()             # horloge de la vague de lettres (temps = le `t` de draw)
+        self.ola_relight = False           # vrai a l'image ou les lettres commencent a se rallumer (remet le remplissage a zero)
+        self.text_fill: TextFill | None = None   # remplissage des lettres (#199) : cree a la demande, detruit quand l'effet est coupe
+        self._fill_clock = FillClock()
+        self._fill_acc = 0.0               # reste de l'accumulateur de pas de la simulation
+        self._fill_seed = 0                # graine des germes, +1 a chaque remise a zero
+        self._fill_dummy = None            # texture 1 x 1 liee a l'unite 3 quand le remplissage est coupe
+        self.text_epoch = 0                # +1 a chaque nouveau texte (set_logo, source Texte) : change de texte = motif neuf
+        self._text_alpha = None            # alpha du texte (H, W) uint8 : masque du remplissage
         self._holo_t = 0.0                 # phase d'animation du halo holographique, integree image par image
         # Dernier chemin DEMANDE (charge ou non): evite de retenter un fichier invalide a chaque image.
         self.logo_requested = logo_path
@@ -408,6 +472,63 @@ class Renderer:
         self.logo_tex = tex
         self.has_logo = logo_rgba is not None
         self.logo_path = path if logo_rgba is not None else ""
+        if old is not None:
+            old.release()
+        self._set_text_rank(text_rank_map(logo_rgba) if logo_rgba is not None and kind == "text" else None)
+        if logo_rgba is not None and kind == "text":
+            self._text_alpha = np.ascontiguousarray(logo_rgba[..., 3])
+            self.text_epoch += 1
+        else:
+            self._text_alpha = None
+
+    def _update_text_fill(self, sp, t: float, dt: float, p: dict, text_src: bool) -> None:
+        """Remplissage des lettres (#199) : cree / detruit la simulation, remises a zero (FillClock), pas, uniformes de `scene.frag`.
+        Hors source Texte ou case decochee : unite 3 sur une texture vide et `u_fill_k.x` = 0 (image strictement identique a avant)."""
+        on = text_src and float(p["text_fill_on"]) >= 0.5 and self._text_alpha is not None
+        if self._fill_dummy is None:
+            self._fill_dummy = self.ctx.texture((1, 1), 4, dtype="f4", data=bytes(16))
+        self._set(sp, "u_fill", 3)
+        if not on:
+            if self.text_fill is not None:
+                self.text_fill.release()
+                self.text_fill = None
+            self._fill_clock, self._fill_acc = FillClock(), 0.0              # recocher repart d'une simulation neuve
+            self._set(sp, "u_fill_k", (0.0, 0.0))
+            self._fill_dummy.use(3)
+            return
+        if self.text_fill is None:
+            self.text_fill = TextFill(self.ctx, self.vbo, self.shader_dir)
+        tf = self.text_fill
+        scale = round(float(p["text_fill_scale"]), 2)
+        rebuilt = tf.set_mask(self._text_alpha, scale, (self.text_epoch, scale))
+        every = float(p["text_fill_every"])
+        due = self._fill_clock.update(t, self.text_epoch, float(p["text_ola_on"]) >= 0.5, self.ola_relight, every)
+        if due or rebuilt:
+            self._fill_seed += 1
+            tf.reset(self._fill_seed)
+        slow = bool(self.perf is not None and self.perf.active)
+        n, self._fill_acc = fill_steps(self._fill_acc, dt, float(p["text_fill_speed"]), slow)
+        if not tf.settled:                                                   # motif fige apres ses pas : plus aucun calcul jusqu'a la remise a zero
+            tf.step(n)
+        if not tf.tex:                                                       # allocation impossible : pas d'effet plutot qu'une erreur
+            self._set(sp, "u_fill_k", (0.0, 0.0))
+            self._fill_dummy.use(3)
+            return
+        self._set(sp, "u_fill_k", (1.0, min(max(float(p["text_fill_contrast"]), 0.0), 1.0)))
+        tf.texture.use(3)
+
+    def _set_text_rank(self, rank) -> None:
+        """Texture de la carte du rang des lettres (R8, sans filtrage : un bord de lettre ne melange pas deux rangs) ; None = une
+        texture vide 1 x 1 (hors source Texte, l'uniforme garde toujours une texture valide)."""
+        old = self.text_rank_tex
+        if rank is None:
+            tex = self.ctx.texture((1, 1), 1, data=bytes(1))
+        else:
+            h, w = rank.shape
+            tex = self.ctx.texture((w, h), 1, data=np.ascontiguousarray(rank).tobytes())
+        tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        tex.repeat_x = tex.repeat_y = False
+        self.text_rank_tex = tex
         if old is not None:
             old.release()
 
@@ -1064,6 +1185,14 @@ class Renderer:
         self._set(sp, "u_glow_radius", float(p["logo_glow_radius"]))
         self._set(sp, "u_glow_color", hex_to_rgb(p["logo_glow_color"]))
         self._set(sp, "u_beat", float(bg_au[2]))
+        # Vague de lettres (#199) : seulement avec la source Texte ; l'horloge tourne avec le temps `t` de l'image
+        text_src = self.logo_kind == "text" and self.has_logo
+        ola_dur, ola_every, ola_fade = clean_ola(p["text_ola_dur"], p["text_ola_every"], p["text_ola_fade"])
+        tau, self.ola_relight = self._ola.update(t, text_src and float(p["text_ola_on"]) >= 0.5, ola_dur, ola_every)
+        self._set(sp, "u_ola", (0.0, 0.0, ola_dur, ola_fade) if tau is None else (1.0, float(tau), ola_dur, ola_fade))
+        self._set(sp, "u_text_rank", 2)
+        self.text_rank_tex.use(2)
+        self._update_text_fill(sp, t, dt, p, text_src)
 
         # Fond: video ffmpeg ou motif genere. Les phases avancent meme quand le motif est cache,
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
@@ -1148,6 +1277,8 @@ class Renderer:
             self.layer_fbo.clear(0.0, 0.0, 0.0, 0.0)
         # Les doodles du site passent par la MEME passe que le logo (fonte, cellules, contour, opacite), posee sur sa couche : ils
         # subissent ensuite ses effets par couche, le halo holographique, la trainee et la composition.
+        self._set(sp, "u_fill_k", (0.0, 0.0))
+        self._set(sp, "u_ola", (0.0, 0.0, 1.0, 0.1))            # la vague ne touche que le texte : pas les doodles, qui reutilisent logo_at
         doodles_on = self._draw_doodles(self.layer_fbo, size, time.monotonic(), ov)
         (self.mode_tex or self.video_tex).use(0)
         self.logo_tex.use(1)
@@ -1329,7 +1460,7 @@ class PerfGuard:
 
     HIGH, LOW, HOLD_S, ALPHA = 0.90, 0.80, 2.0, 0.2
     # (cle de reglage, libelle, touche), du plus cher au moins cher (mesure : cellules > halo > fonte)
-    COSTLY = (("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"))
+    COSTLY = (("text_fill_on", "remplissage du texte"), ("cell_on", "cellules (V)"), ("holo_on", "halo (C)"), ("melt_on", "fonte (M)"))
 
     def __init__(self, refresh_hz: float) -> None:
         self.budget_ms = 1000.0 / max(min(float(refresh_hz or 60.0), 60.0), 20.0)
