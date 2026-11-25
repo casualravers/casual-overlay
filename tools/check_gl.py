@@ -12022,8 +12022,15 @@ def check_doodles() -> None:
     r3.draw(fbo, size, st, params, 0.0)                # premier rendu a blanc : compile les shaders (en OpenGL logiciel cela prend plus que le fondu)
     r3.add_doodle(top_red_bottom_green, time.monotonic() + 0.0)
     r3.draw(fbo, size, st, params, 0.0)
-    near_zero = int(read_target(ctx, fbo, size).max())
-    check(near_zero < 40, "rendu: fondu d'entree (quasi invisible a l'apparition)", str(near_zero))
+    start_px = int((read_target(ctx, fbo, size).astype(int).sum(axis=2) > 3).sum())
+    r5 = gl.Renderer(ctx, size, None)
+    r5.video_tex.write(bytes([0, 0, 0]) * (size[0] * size[1]))
+    r5.draw(fbo, size, st, params, 0.0)
+    r5.add_doodle(top_red_bottom_green, time.monotonic() - 5.0)
+    r5.draw(fbo, size, st, params, 0.0)
+    plateau_px = int((read_target(ctx, fbo, size).astype(int).sum(axis=2) > 3).sum())
+    # a l'apparition il ne reste que quelques blocs (marge : l'horloge reelle avance pendant le rendu logiciel de la CI)
+    check(plateau_px > 0 and start_px < 0.5 * plateau_px, "rendu: dissolution a l'apparition (presque rien de visible au tout debut)", f"{start_px} px au debut, {plateau_px} au palier")
     # limite de 5 et liberation des textures ; expiration
     r4 = gl.Renderer(ctx, size, None)
     for _ in range(8):
