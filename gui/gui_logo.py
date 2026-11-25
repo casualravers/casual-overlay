@@ -250,6 +250,8 @@ def install(c):
          ("Finesse", "text_fill_scale", 0.5, 2.0, 0.05, "Finesse du motif : grand = motif plus fin."),
          ("Contraste", "text_fill_contrast", 0.0, 1.0, 0.05, "Lettres pleines seulement : de combien la matiere assombrit les lettres."),
          ("Bord", "text_fill_edge", 1.0, 8.0, 0.5, "Lettres transparentes seulement : epaisseur du bord conserve, en pixels de la texture du texte."),
+         ("Ligne du front", "text_front_edge", 0.0, 30.0, 1.0, "Epaisseur de la ligne qui marque le front de colonisation (couleur du texte), en pixels de la texture du texte ; 0 = aucune."),
+         ("Scintillement", "text_front_glint", 0.0, 1.0, 0.05, "Frisson de luminosite qui court le long de la ligne du front ; 0 = ligne fixe."),
          ("Remise a zero", "text_fill_every", 5.0, 120.0, 1.0, "Sans la vague de lettres : la colonisation repart de zero toutes les N secondes.")))
     clear_var = tk.IntVar(value=int(float(params["text_fill_clear"]) >= 0.5))
     bind_param("text_fill_clear", clear_var, float)

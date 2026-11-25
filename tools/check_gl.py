@@ -2653,6 +2653,18 @@ def check_text_fill() -> None:
         t0 = r._fill_t0
         frames(1, dt=t0 + 1.1 - clock[0], text_fill_on=1.0)
         early = frames(1, text_fill_on=1.0)
+        # ligne du front : meme instant, avec / sans ; elle ne fait qu'ajouter de la matiere au front (les trous du motif sont combles), couleur du texte
+        no_line = frames(1, dt=0.0, text_fill_on=1.0, text_front_edge=0.0)
+        line = frames(1, dt=0.0, text_fill_on=1.0, text_front_edge=3.0, text_front_glint=0.0)
+        thick = frames(1, dt=0.0, text_fill_on=1.0, text_front_edge=9.0, text_front_glint=0.0)
+        added = line - no_line
+        check(int((added < -3).sum()) == 0 and int((added > 60).sum()) > 20 and float(thick.sum() - no_line.sum()) > 1.5 * float(line.sum() - no_line.sum()),
+              "front: la ligne ajoute de la matiere au front (jamais n'en retire), et elle est plus epaisse quand on la regle plus epaisse",
+              f"+{int((added > 60).sum())} pixels, retire {int((added < -3).sum())}, 3 px : {float(line.sum() - no_line.sum()):.0f}, 9 px : {float(thick.sum() - no_line.sum()):.0f}")
+        far = frames(1, dt=t0 + 14.0 - clock[0], text_fill_on=1.0, text_front_edge=0.0)
+        far_line = frames(1, dt=0.0, text_fill_on=1.0, text_front_edge=9.0)
+        check(np.array_equal(far, far_line), "front: une fois la vague finie la ligne a disparu (image identique avec et sans)")
+        frames(1, dt=t0 + 1.1 - clock[0], text_fill_on=1.0)
         low_sum, high_sum = float(early[low].sum()), float(early[high].sum())
         check(low_sum > 0.0 and low_sum > 3.0 * high_sum,
               "remplissage: un seul point de depart en bas de chaque lettre : le bas se remplit avant le haut", f"bas {low_sum:.0f} haut {high_sum:.0f} ({int(low.sum())} / {int(high.sum())} px, interieur {int(deep.sum())} px, texte y {y0}-{y1})")
@@ -13041,14 +13053,15 @@ def check_textfx() -> None:
           "remplissage: la cle du cache de la tuile decrit ses parametres (elle change si le motif change)")
     # ---- table des reglages
     keys = ("text_ola_on", "text_ola_dur", "text_ola_every", "text_ola_fade",
-            "text_fill_on", "text_fill_dur", "text_fill_stagger", "text_fill_scale", "text_fill_contrast", "text_fill_edge", "text_fill_clear", "text_fill_every")
-    spec = [ps.BY_KEY.get(k) for k in keys]
+            "text_fill_on", "text_fill_dur", "text_fill_stagger", "text_fill_scale", "text_fill_contrast", "text_fill_edge", "text_fill_clear", "text_fill_every", "text_front_edge", "text_front_glint")
+    spec =[ps.BY_KEY.get(k) for k in keys]
     check(all(s is not None for s in spec) and all(s.scope == "look" for s in spec),
           "texte: douze reglages (vague et remplissage), portee look : presets overlay et scenes")
     d = {k: ps.BY_KEY[k].default for k in keys}
     check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (6.0, 20.0, 1.0)
-          and (d["text_fill_dur"], d["text_fill_stagger"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_edge"], d["text_fill_clear"], d["text_fill_every"]) == (2.7, 3.0, 1.0, 0.9, 3.0, 1.0, 20.0),
-          "texte: rien n'est coche par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; remplissage : 2,7 s par lettre, depart etale sur 3 s, lettres transparentes par defaut, contraste 0,9)", str(d))
+          and (d["text_fill_dur"], d["text_fill_stagger"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_edge"], d["text_fill_clear"], d["text_fill_every"]) == (2.7, 3.0, 1.0, 0.9, 3.0, 1.0, 20.0)
+          and (d["text_front_edge"], d["text_front_glint"]) == (3.0, 0.5),
+          "texte: rien n'est coche par defaut, ligne du front 3 px et scintillement 0,5 par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; remplissage : 2,7 s par lettre, depart etale sur 3 s, lettres transparentes par defaut, contraste 0,9)", str(d))
     # ---- presets overlay, scenes, panique, securite GPU
     from core import safety, scenes as sc
     pr = dict(gl.DEFAULT_PARAMS, **dict({k: ps.BY_KEY[k].default for k in keys}, text_ola_on=1.0, text_fill_on=1.0, text_fill_contrast=0.9))

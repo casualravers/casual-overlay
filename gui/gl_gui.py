@@ -1522,7 +1522,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     gates.add(gui_gates.row_of_label(rd_box, "Branches", panels=False), lambda: rd_sym_var.get() == "rot")
     text_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(text_box, lb, panels=False)]
     gates.add(text_rows("Duree du balayage", "Periode", "Fondu d'une lettre"), lambda: gui_logo_ctl.ola_var.get() == 1)           # vague et remplissage (#199)
-    gates.add(text_rows("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
+    gates.add(text_rows("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Ligne du front", "Scintillement", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
     for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()

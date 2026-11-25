@@ -43,3 +43,8 @@ Lisibilite de la bordure noire sur le fond reel au projecteur (2 texels ~ 2 px a
 
 - Empreinte des lettres avant leur arrivee : cartes de rang / portee elargies de 2 px (_MAP_PAD) ; contour et bordure n'apparaissent qu'avec le front.
 - Front moins diffus : fondu 0,06 s, gain 0,75 -> 1, FRONT_SHARE 0,8. Non verifie : rendu au projecteur.
+
+## Retouche 3 : ligne du front (2026-11-25)
+
+- Demande : un bord pour le front, plus epais que le trait du motif, scintillant. Apres trois maquettes : ligne franche de 3 px, couleur du texte, sans traine, sans bruit ; scintillement = frisson de luminosite lisse.
+- Reglages 	ext_front_edge (3, 0 a 30) et 	ext_front_glint (0,5) ; GUI : « Ligne du front », « Scintillement ». Non verifie : projecteur.

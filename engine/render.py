@@ -278,6 +278,23 @@ def text_rank_map(rgba):
     return out
 
 
+def text_reach_px(rgba) -> float:
+    """Portee typique du front (pixels de la texture du texte) : la plus grande distance d'une lettre a son point de depart, mediane sur les
+    lettres (la vitesse du front en pixels par seconde = cette portee / duree du front : le bord du front a une epaisseur en pixels). 1 sans lettre."""
+    alpha = np.asarray(rgba)[:, :, 3] > 8
+    reach = []
+    for L in _letters(alpha):
+        sx, sy = L["start"]
+        best = 0.0
+        for r0, r1, c0, c1 in L["rects"]:
+            a = alpha[r0:r1, c0:c1]
+            if a.any():
+                yy, xx = np.mgrid[r0:r1, c0:c1]
+                best = max(best, float(np.hypot(xx - sx, yy - sy)[a].max()))
+        reach.append(best)
+    return max(float(np.median(reach)), 1.0) if reach else 1.0
+
+
 def text_reach_map(rgba):
     """Carte de la portee du front de colonisation (#199) : tableau uint8 (h, w), 0 au point de depart de chaque lettre (le milieu du bas de la
     lettre : un SEUL point de depart par lettre) a 255 au pixel de la lettre le plus eloigne (distance a vol d'oiseau, accents compris), meme
@@ -510,6 +527,7 @@ class Renderer:
             old.release()
         is_text = logo_rgba is not None and kind == "text"
         self._set_text_rank(text_rank_map(logo_rgba) if is_text else None, text_reach_map(logo_rgba) if is_text else None)
+        self._text_reach_px = text_reach_px(logo_rgba) if is_text else 1.0
         if is_text:
             self.text_epoch += 1
 
@@ -552,6 +570,8 @@ class Renderer:
         self._set(sp, "u_fill_t", (max(t - self._fill_t0, 0.0), stagger, front, growth))
         self._set(sp, "u_fill_geom", (w * cells, h * cells, rng.random(), rng.random()))
         self._set(sp, "u_fill_px", (float(w), float(h)))
+        speed = getattr(self, "_text_reach_px", 1.0) / max(front, 0.05)       # vitesse du front, en pixels de la texture du texte par seconde
+        self._set(sp, "u_front", (min(max(float(p["text_front_edge"]), 0.0), 30.0), min(max(float(p["text_front_glint"]), 0.0), 1.0), speed, 0.0))
         tile.texture.use(3)
 
     def _set_text_rank(self, rank, reach=None) -> None:
