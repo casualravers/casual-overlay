@@ -1,4 +1,4 @@
-"""Overlay Texte (#199) : calendrier de la vague de lettres (« ola ») et des remises a zero du remplissage par reaction-diffusion.
+"""Overlay Texte (#199) : calendrier de la vague de lettres (« ola »), du remplissage par reaction-diffusion (tuile rejouee par une vague) et de ses remises a zero.
 
 Python pur (stdlib seulement) : le temps est injecte, aucune fenetre, aucun GL. Spec : docs/plans/2026-11-25-texte-ola-remplissage-199.md.
 
@@ -74,37 +74,65 @@ class OlaClock:
         return tau, relight
 
 
-FILL_GRID_BASE = 2048                # cote long de la grille de simulation a l'echelle 1 (cellules) : motif fin, choisi sur maquette
-FILL_GRID_MIN, FILL_GRID_MAX = 256, 3072
-FILL_STEPS_PER_S = 1440.0            # pas de Gray-Scott par seconde a vitesse 1 (24 par image a 60 Hz, le plafond)
-FILL_MAX_STEPS = 24                  # plafond par image (l'exces est jete : pas de retard qui s'accumule)
-FILL_SETTLE_STEPS = 9000             # pas apres lesquels le motif est fige jusqu'a la remise a zero suivante (~6 s a vitesse 1) : le cout retombe a zero
+# ---- Remplissage (vague 2 de #199) : un motif de reaction-diffusion est calcule UNE fois sur une petite tuile periodique (avec, pour chaque
+# cellule, l'instant ou elle a ete colonisee), puis rejoue par une vague : lettre par lettre (rang), du bas vers le haut de chaque lettre
+# (hauteur), la croissance locale suivant la tuile. Aucune simulation par image : le cout est quelques lectures de texture par pixel du texte.
+TILE_SIZE = 512                      # cote de la tuile (cellules), periodique
+TILE_STEPS = 2000                    # pas de Gray-Scott pour la murir (la plupart des cellules sont colonisees avant 1200)
+TILE_STEPS_PER_FRAME = 8             # pas par image pendant la preparation (la moitie si le GPU est charge)
+TILE_SEED_BLOCK = 24                 # un germe par bloc de N x N cellules (colonisation reguliere)
+TILE_THRESHOLD = 0.12                # V au-dela duquel une cellule est dite colonisee
+TILE_VERSION = 1                     # a incrementer quand le calcul de la tuile change (invalide le cache)
 FILL_SHAPE = 1.5                     # forme du motif (axe 0..2 de core.reaction.shape_feed_kill) : entre lignes et taches, corail
 FILL_DIFF = 0.20                     # facteur sur les diffusions de Gray-Scott : plus petit = motif plus petit
-FILL_SEED_BLOCK = 24                 # un germe par bloc de N x N cellules du masque (colonisation reguliere, aucune zone oubliee)
+CELLS_PER_TEXEL = 2.0                # cellules de la tuile par pixel de la texture du texte a la finesse 1 (texte rendu en police de 128 px)
+FILL_DUR_MIN, FILL_DUR_MAX = 0.5, 3.0    # duree d'une lettre (front + croissance) : 3 s au plus
+FILL_STAGGER_MAX = 8.0               # ecart de depart entre la premiere et la derniere lettre
+FRONT_SHARE = 0.45                   # part de la duree d'une lettre prise par le front bas -> haut ; le reste = croissance locale de la tuile
+FILL_SOFT_S = 0.18                   # fondu d'apparition d'une cellule (secondes)
 
 
-def fill_grid_size(aspect: float, scale: float) -> tuple[int, int]:
-    """Taille (largeur, hauteur) de la grille du remplissage pour un texte de rapport `aspect` (largeur / hauteur). Le cote long vaut
-    FILL_GRID_BASE x `scale` (borne), l'autre suit le rapport : plus d'echelle = grille plus fine = motif plus fin dans les lettres."""
-    aspect = max(float(aspect), 0.05)
-    long_side = min(max(round(FILL_GRID_BASE * float(scale)), FILL_GRID_MIN), FILL_GRID_MAX)
-    if aspect >= 1.0:
-        return long_side, max(round(long_side / aspect), 2)
-    return max(round(long_side * aspect), 2), long_side
+def tile_key() -> str:
+    """Cle du cache de la tuile : decrit tout ce qui change son contenu (une autre cle = le cache est ignore et la tuile recalculee)."""
+    return f"v{TILE_VERSION}-{TILE_SIZE}-{TILE_STEPS}-{FILL_SHAPE}-{FILL_DIFF}-{TILE_SEED_BLOCK}-{TILE_THRESHOLD}"
 
 
-def fill_steps(acc: float, dt: float, speed: float, slow: bool) -> tuple[int, float]:
-    """Pas de simulation a faire a cette image et reste de l'accumulateur. `slow` (GPU charge, PerfGuard) : moitie moins de pas, un au moins."""
-    acc += max(float(dt), 0.0) * FILL_STEPS_PER_S * max(float(speed), 0.0)
-    n = int(acc)
-    acc -= n
-    if slow:
-        n = max(n // 2, 1) if n > 0 else 0
-    if n > FILL_MAX_STEPS:
-        n, acc = FILL_MAX_STEPS, 0.0
-    return n, acc
+def tile_batch(done: int, slow: bool) -> int:
+    """Pas de preparation de la tuile a faire a cette image (0 une fois les TILE_STEPS faits). `slow` (GPU charge) : moitie moins, un au moins."""
+    left = TILE_STEPS - int(done)
+    if left <= 0:
+        return 0
+    return min(left, max(TILE_STEPS_PER_FRAME // 2, 1) if slow else TILE_STEPS_PER_FRAME)
 
+
+def clean_fill(dur: float, stagger: float) -> tuple[float, float]:
+    """(duree d'une lettre, ecart de depart) bornes : la duree dans [0,5 ; 3] s, l'ecart dans [0 ; 8] s."""
+    return min(max(float(dur), FILL_DUR_MIN), FILL_DUR_MAX), min(max(float(stagger), 0.0), FILL_STAGGER_MAX)
+
+
+def fill_times(dur: float) -> tuple[float, float]:
+    """(front, croissance) en secondes pour une lettre de duree `dur` : le front monte du bas au haut de la lettre pendant `front`, puis la
+    tuile finit de pousser pendant `growth` (front + croissance = dur)."""
+    front = float(dur) * FRONT_SHARE
+    return front, float(dur) - front
+
+
+def fill_tau(ft: float, rank: float, rise: float, stagger: float, front: float) -> float:
+    """Temps local d'un pixel : `ft` secondes depuis la remise a zero, moins le depart de sa lettre (`rank` 0 = la plus a gauche, 1 = la plus a
+    droite, x `stagger`) et le retard du front (`rise` 0 = bas de la lettre, 1 = haut, x `front`). Meme formule que scene.frag."""
+    return float(ft) - min(max(float(rank), 0.0), 1.0) * float(stagger) - min(max(float(rise), 0.0), 1.0) * float(front)
+
+
+def fill_reveal(tau: float, arrival: float, growth: float) -> float:
+    """Part (0 a 1) de la matiere visible d'une cellule de la tuile : elle apparait a `arrival` (0 a 1 de la tuile) x `growth` secondes du
+    temps local, avec un fondu de FILL_SOFT_S, puis reste. Meme formule que scene.frag."""
+    start = min(max(float(arrival), 0.0), 1.0) * float(growth)
+    return _smoothstep(start, start + FILL_SOFT_S, float(tau))
+
+
+def fill_total(dur: float, stagger: float) -> float:
+    """Duree de la vague entiere : depart de la derniere lettre + duree d'une lettre (+ fondu) ; ensuite le motif ne bouge plus."""
+    return float(stagger) + float(dur) + FILL_SOFT_S
 
 class FillClock:
     """Quand le motif de reaction-diffusion du texte repart de zero (germes neufs) : une premiere fois, a chaque changement de texte, au

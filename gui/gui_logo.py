@@ -238,14 +238,24 @@ def install(c):
          ("Fondu d'une lettre", "text_ola_fade", 0.1, 1.5, 0.05, "Duree du fondu de chaque lettre, en secondes.")))
     fill_var = effect_block(
         "Remplissage des lettres", "text_fill_on",
-        "L'interieur des lettres est colonise par un motif organique (reaction-diffusion) qui joue sur la luminosite : la couleur du texte ne change pas. "
-        "Il repart de zero au rallumage de la vague (si elle est cochee), a chaque nouveau texte, sinon toutes les N secondes. Source Texte seulement. "
-        "Coupe par defaut ; la panique (X) le coupe.",
-        (("Vitesse", "text_fill_speed", 0.2, 1.0, 0.05, "Vitesse de colonisation des lettres. Le motif se fige une fois forme (~6 s a vitesse 1) : plus aucun calcul jusqu'a la remise a zero."),
-         ("Finesse", "text_fill_scale", 0.5, 1.5, 0.05, "Finesse du motif : grand = motif plus fin (grille plus dense, donc plus couteux pendant la colonisation)."),
-         ("Contraste", "text_fill_contrast", 0.0, 1.0, 0.05, "Ecart de luminosite entre les zones claires et sombres des lettres."),
-         ("Remise a zero", "text_fill_every", 5.0, 120.0, 1.0, "Sans la vague : le motif repart de zero toutes les N secondes.")))
-
+        "Un motif organique (reaction-diffusion) colonise les lettres EN VAGUE : la premiere lettre, puis la deuxieme... ; dans chaque lettre il part du bas et monte "
+        "(3 s au plus par lettre). Le motif est calcule une fois (quelques secondes au premier usage, puis garde en cache) : l'effet ne coute presque rien ensuite. "
+        "Il repart de zero au rallumage de la vague de lettres (si elle est cochee), a chaque nouveau texte, sinon toutes les N secondes, avec un decalage "
+        "different a chaque fois. Source Texte seulement. Coupe par defaut ; la panique (X) le coupe.",
+        (("Duree par lettre", "text_fill_dur", 0.5, 3.0, 0.1, "Duree pour coloniser une lettre : le front monte du bas au haut, puis le motif finit de pousser (3 s au plus)."),
+         ("Ecart de depart", "text_fill_stagger", 0.0, 8.0, 0.1, "Ecart entre le depart de la premiere lettre et celui de la derniere : la vitesse de la vague d'une lettre a l'autre."),
+         ("Finesse", "text_fill_scale", 0.5, 2.0, 0.05, "Finesse du motif : grand = motif plus fin."),
+         ("Contraste", "text_fill_contrast", 0.0, 1.0, 0.05, "Lettres pleines seulement : de combien la matiere assombrit les lettres."),
+         ("Bord", "text_fill_edge", 1.0, 8.0, 0.5, "Lettres transparentes seulement : epaisseur du bord conserve, en pixels de la texture du texte."),
+         ("Remise a zero", "text_fill_every", 5.0, 120.0, 1.0, "Sans la vague de lettres : la colonisation repart de zero toutes les N secondes.")))
+    clear_var = tk.IntVar(value=int(float(params["text_fill_clear"]) >= 0.5))
+    bind_param("text_fill_clear", clear_var, float)
+    clear_row = tk.Frame(text_box)
+    clear_row.grid(row=tz.next_row(), column=0, columnspan=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    clear_check = tk.Checkbutton(clear_row, text="Lettres transparentes (bords seuls)", variable=clear_var)
+    clear_check.pack(side="left")
+    Tooltip(clear_check, "Avec le remplissage : l'interieur des lettres est transparent (on garde le bord) et la colonisation les remplit. "
+                         "Decochee : les lettres restent pleines et la colonisation les assombrit.")
     # ---- source video (logo anime)
     r = vz.next_row()
     add_label(vz, "Fichier", r, "Video ou GIF lu en boucle. Pour un logo detoure: WebM VP9 avec alpha, "
@@ -341,4 +351,4 @@ def install(c):
     param_slider(zone_aura, "Rayon du contour", "logo_glow_radius", 0.0, 3.0, 0.1)
 
     import types
-    return types.SimpleNamespace(ola_var=ola_var, fill_var=fill_var, apply_logo_path=apply_logo_path, apply_text=apply_text, apply_video_path=apply_video_path, font_var=font_var, image_box=image_box, key_var=key_var, logo_var=logo_var, source_var=source_var, text_box=text_box, text_widget=text_widget, video_var=video_var, x_var=x_var, sched_tick=sched_tick, sched_var=sched_var, sched_text=sched_text, apply_sched=apply_sched)
+    return types.SimpleNamespace(ola_var=ola_var, fill_var=fill_var, clear_var=clear_var, apply_logo_path=apply_logo_path, apply_text=apply_text, apply_video_path=apply_video_path, font_var=font_var, image_box=image_box, key_var=key_var, logo_var=logo_var, source_var=source_var, text_box=text_box, text_widget=text_widget, video_var=video_var, x_var=x_var, sched_tick=sched_tick, sched_var=sched_var, sched_text=sched_text, apply_sched=apply_sched)

@@ -602,7 +602,7 @@ def check_gui() -> None:
             def text_states(*labels):
                 return {str(x.cget("state")) for lb in labels for w in gg.row_of_label(c["text_box"], lb, panels=False)
                         for x in gg.leaves(w) if x.winfo_class() == "Scale"}
-            ola_labels, fill_labels = ("Duree du balayage", "Periode", "Fondu d'une lettre"), ("Vitesse", "Finesse", "Contraste", "Remise a zero")
+            ola_labels, fill_labels = ("Duree du balayage", "Periode", "Fondu d'une lettre"), ("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Remise a zero")
             c["ola_var"].set(0)
             c["fill_var"].set(0)
             out["g_text_off"] = (text_states(*ola_labels), text_states(*fill_labels), params["text_ola_on"], params["text_fill_on"])
@@ -2365,6 +2365,29 @@ def check_text_rank() -> None:
     check(top == bottom, "rang: la ligne du haut et celle du bas ont les memes rangs", f"{top} {bottom}")
     check(len(set(ranks("X")[1][ranks("X")[2]].tolist())) == 1 and not text_rank_map(np.zeros((8, 8, 4), np.uint8)).any(),
           "rang: une seule lettre = rang 0 ; image vide = carte vide, sans erreur")
+    # hauteur dans la lettre (vague de colonisation du bas vers le haut) : 0 en bas de la lettre, 255 en haut
+    from engine.render import text_rise_map
+    img3, _rk3, solid3 = ranks("HEL")
+    rs = text_rise_map(img3)
+    rows = np.nonzero(solid3.any(axis=1))[0]
+    top_row, bottom_row = int(rows.min()), int(rows.max())
+    prof = [int(rs[y][solid3[y]].mean()) for y in range(top_row, bottom_row + 1)]
+    check(rs.shape == img3.shape[:2] and rs.dtype == np.uint8 and prof[0] >= 250 and prof[-1] <= 5,
+          "hauteur: 255 en haut de la lettre, 0 en bas", f"{prof[0]} {prof[-1]}")
+    check(all(a >= b for a, b in zip(prof, prof[1:])), "hauteur: elle decroit du haut vers le bas (le front monte du bas vers le haut)")
+    img4, _rk4, solid4 = ranks("AB\nAB")
+    rs4 = text_rise_map(img4)
+    steps = np.diff(np.concatenate(([0], solid4.any(axis=1).astype(int), [0])))
+    starts, ends = np.nonzero(steps == 1)[0], np.nonzero(steps == -1)[0]
+    first, second = (int(starts[0]), int(ends[0])), (int(starts[1]), int(ends[1]))
+    check(rs4[first[0]][solid4[first[0]]].mean() >= 250 and rs4[second[0]][solid4[second[0]]].mean() >= 250
+          and rs4[first[1] - 1][solid4[first[1] - 1]].mean() <= 5 and rs4[second[1] - 1][solid4[second[1] - 1]].mean() <= 5,
+          "hauteur: chaque ligne a sa propre echelle (le haut et le bas de la 2e ligne comme ceux de la 1re)")
+    img5, _rk5, solid5 = ranks("É")
+    rs5 = text_rise_map(img5)
+    ys5 = np.nonzero(solid5.any(axis=1))[0]
+    check(rs5[int(ys5.min())][solid5[int(ys5.min())]].max() >= 250 and not text_rise_map(np.zeros((8, 8, 4), np.uint8)).any(),
+          "hauteur: l'accent d'une lettre est tout en haut (255) ; image vide = carte vide, sans erreur")
 
 
 def check_text_ola() -> None:
@@ -2438,102 +2461,167 @@ def check_text_ola() -> None:
 
 
 def check_text_fill() -> None:
-    """Remplissage des lettres par reaction-diffusion (#199), rendu : le motif colonise les lettres sans jamais deborder, joue sur la
-    luminosite seulement, repart de zero au changement de texte, se cumule avec la vague ; case decochee ou logo image : rien ne change."""
-    print("Texte : remplissage par reaction-diffusion (rendu)")
+    """Remplissage des lettres (#199), rendu : une tuile de motif calculee une fois (cache disque) est rejouee en vague, lettre par lettre, du bas
+    vers le haut de chaque lettre ; lettres transparentes sauf le bord (ou pleines et assombries) ; remises a zero ; cumul avec la vague de
+    lettres ; case decochee, tuile pas prete ou logo image : rien ne change."""
+    print("Texte : remplissage, vague de colonisation (rendu)")
     try:
         ctx = gl.moderngl.create_standalone_context()
     except Exception as exc:
         check(False, "contexte OpenGL standalone", str(exc))
         return
+    import shutil
+    import tempfile
+    from core import textfx as tfx
+    from engine import textfill as tfm
     from engine.render import render_text
-    size = (960, 360)
-    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
-    r = gl.Renderer(ctx, size, None)
-    r.video_tex.write(bytes(size[0] * size[1] * 3))
-    r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
-    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
-    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
-                logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_fill_contrast=1.0,
-                text_fill_scale=0.5)                                                 # grille de 1024 : les tests de rendu restent rapides (le defaut est 2048)
-    clock = [300.0]
-
-    def frames(n, rr=None, **kw):
-        out = None
-        for _ in range(n):
-            clock[0] += 1 / 60
-            (rr or r).draw(fbo, size, quiet, dict(base, **kw), clock[0])
-            out = read_target(ctx, fbo, size)
-        return out.astype(int)[..., :3].sum(axis=2)
-    ref = frames(2)
-    check(r.text_fill is None, "remplissage: case decochee = aucune simulation creee")
-    inside = ref > 200
-    on = frames(300, text_fill_on=1.0)                                               # ~5 s : de quoi coloniser un texte
-    tf = r.text_fill
-    check(tf is not None and tf.tex, "remplissage: la simulation existe quand la case est cochee (source Texte)")
-    st = tf.read()
-    mask = tf.mask
-    check(float(st[..., 1][~mask].max(initial=0.0)) == 0.0, "remplissage: aucune matiere (V) hors des lettres : le masque est un mur",
-          f"max hors masque {float(st[..., 1][~mask].max(initial=0.0)):.4f}")
-    colonised = float((st[..., 1][mask] > 0.05).mean())
-    check(colonised > 0.4, "remplissage: le motif colonise l'interieur des lettres en ~5 s", f"{colonised:.2f}")
-    check(int(on[ref == 0].sum()) == 0, "remplissage: aucun pixel allume hors des lettres")
-    vals = on[inside]
-    check(vals.min() < 0.7 * vals.max() and on.sum() < ref.sum(), "remplissage: zones claires et sombres dans les lettres (contraste 1), jamais plus claires que le texte",
-          f"min {vals.min()} max {vals.max()} somme {on.sum() / ref.sum():.2f}")
-    check(on.max() <= ref.max(), "remplissage: la luminosite seulement baisse (la couleur du texte reste le maximum)")
-    flat = frames(1, text_fill_on=1.0, text_fill_contrast=0.0)
-    check(np.array_equal(flat, ref), "remplissage: contraste 0 = image identique au texte seul")
-    # changement de texte : le motif repart de zero
-    r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
-    frames(1, text_fill_on=1.0)
-    st2 = r.text_fill.read()
-    young = float((st2[..., 1][r.text_fill.mask] > 0.05).mean())
-    check(young < 0.2, "remplissage: un nouveau texte repart de zero (germes neufs)", f"{young:.2f}")
-    frames(300, text_fill_on=1.0)
-    st3 = r.text_fill.read()
-    check(float((st3[..., 1][r.text_fill.mask] > 0.05).mean()) > 0.4, "remplissage: le nouveau texte est colonise a son tour")
-    # motif fige apres ses pas : plus aucun calcul (etat identique d'une image a l'autre) jusqu'a la remise a zero
-    from core import textfx as _tfx
-    keep = _tfx.FILL_SETTLE_STEPS
-    _tfx.FILL_SETTLE_STEPS = 300
+    tmp = Path(tempfile.mkdtemp(prefix="fill_tile_"))
+    keep = (tfx.TILE_SIZE, tfx.TILE_STEPS, tfm.tile_cache_path, tfx.FILL_DIFF)
+    tfx.TILE_SIZE, tfx.TILE_STEPS = 128, 800                                         # tuile de test : quelques dizaines d'images de preparation
+    tfm.tile_cache_path = lambda: tmp / "tile.npz"
     try:
+        size = (960, 360)
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        r = gl.Renderer(ctx, size, None)
+        r.video_tex.write(bytes(size[0] * size[1] * 3))                              # fond noir : on ne voit que le texte
         r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
-        frames(30, text_fill_on=1.0)                                                 # 30 images x 24 pas > 300 : fige
-        tfz = r.text_fill
-        done, state = tfz.steps_done, tfz.read().tobytes()
-        frames(10, text_fill_on=1.0)
-        check(tfz.settled and tfz.steps_done == done and tfz.read().tobytes() == state,
-              "remplissage: le motif se fige apres ses pas (aucun calcul, etat inchange) jusqu'a la remise a zero", f"{done} pas")
-        r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
-        frames(2, text_fill_on=1.0)
-        check(not r.text_fill.settled and r.text_fill.steps_done < 100, "remplissage: un nouveau texte relance la simulation (compteur de pas remis a zero)")
-    finally:
-        _tfx.FILL_SETTLE_STEPS = keep
-    # remise a zero periodique sans vague
-    r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
-    frames(300, text_fill_on=1.0, text_fill_every=8.0)
-    full = float((r.text_fill.read()[..., 1][r.text_fill.mask] > 0.05).mean())
-    seed0 = r._fill_seed
-    frames(60 * 6, text_fill_on=1.0, text_fill_every=8.0, text_fill_speed=0.3)
-    check(full > 0.3 and r._fill_seed == seed0 + 1, "remplissage: sans vague, une remise a zero apres N = 8 s (une seule en 11 s)", f"{full:.2f} {r._fill_seed - seed0}")
-    # cumul avec la vague : les lettres eteintes le restent
-    ola = frames(1, text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)
-    mid = frames(90, text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)                            # 1,5 s apres l'activation de la vague : mi-balayage
-    check(mid.sum() < 0.05 * max(ola.sum(), 1) or mid.sum() < 0.05 * ref.sum(), "remplissage + vague : les lettres eteintes restent eteintes", f"{mid.sum() / ref.sum():.3f}")
-    # case decochee : la simulation est detruite, image identique a avant
-    off = frames(2, text_fill_on=0.0, text_ola_on=0.0)
-    check(r.text_fill is None and np.array_equal(off, ref), "remplissage: case decochee = simulation detruite, image strictement identique a avant")
-    # logo image : jamais touche
-    ri = gl.Renderer(ctx, size, None)
-    ri.video_tex.write(bytes(size[0] * size[1] * 3))
-    logo = np.zeros((64, 64, 4), np.uint8)
-    logo[:] = (255, 255, 255, 255)
-    ri.set_logo(logo, "x")
-    a = frames(3, rr=ri, text_fill_on=0.0, logo_scale=0.4)
-    b = frames(3, rr=ri, text_fill_on=1.0, logo_scale=0.4)
-    check(np.array_equal(a, b) and a.sum() > 0 and ri.text_fill is None, "remplissage: un logo image n'est jamais touche (source Texte seulement)")
+        quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+        base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, text_scale=0.5, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0,
+                    logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 0], holo_on=0.0, text_fill_dur=2.7, text_fill_stagger=3.0,
+                    text_fill_clear=1.0, text_fill_edge=3.0, text_fill_every=60.0)
+        clock = [300.0]
 
+        def frames(n, rr=None, dt=1 / 60, **kw):
+            out = None
+            for _ in range(n):
+                clock[0] += dt
+                (rr or r).draw(fbo, size, quiet, dict(base, **kw), clock[0])
+                out = read_target(ctx, fbo, size)
+            return out.astype(int)[..., :3].sum(axis=2)
+        ref = frames(2)
+        check(r.text_tile is None, "remplissage: case decochee = aucune tuile creee")
+        mask = ref > 200
+
+        def eroded(m, rad):
+            out = m.copy()
+            for dy in range(-rad, rad + 1):
+                for dx in range(-rad, rad + 1):
+                    if dx * dx + dy * dy <= rad * rad:
+                        out &= np.roll(np.roll(m, dy, axis=0), dx, axis=1)
+            return out
+        deep = eroded(mask, 4)                                                       # interieur des lettres, au-dela du bord conserve (~3 px)
+        ring = mask & ~eroded(mask, 2)                                               # le bord des lettres
+        ys, xs = np.nonzero(mask)
+        x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+        q = (x1 - x0) // 4
+        left, right = deep.copy(), deep.copy()
+        left[:, x0 + q:] = False
+        right[:, :x1 - q] = False
+        third = (y1 - y0) // 3
+        low, high = deep.copy(), deep.copy()
+        low[:y1 - third, :] = False
+        high[y0 + third:, :] = False
+
+        def frac(img, region):
+            return float(img[region].sum()) / max(float(ref[region].sum()), 1.0)
+        # tuile pas prete : le texte reste comme avant, la preparation se fait par petites tranches
+        first = frames(1, text_fill_on=1.0)
+        tile = r.text_tile
+        check(tile is not None and not tile.ready and np.array_equal(first, ref), "remplissage: tuile pas encore prete = le texte reste comme avant")
+        steps_seen = [tile.done]
+        for _ in range(200):
+            frames(1, text_fill_on=1.0)
+            steps_seen.append(tile.done)
+            if tile.ready:
+                break
+        per_frame = max(b - a for a, b in zip(steps_seen, steps_seen[1:]))
+        check(tile.ready and per_frame <= tfx.TILE_STEPS_PER_FRAME and len(steps_seen) > tfx.TILE_STEPS / tfx.TILE_STEPS_PER_FRAME - 2,
+              "remplissage: la tuile se prepare par petites tranches (jamais plus de 8 pas par image), puis elle est prete", f"{per_frame} pas max, {len(steps_seen)} images")
+        check((tmp / "tile.npz").exists(), "remplissage: la tuile finie est mise en cache sur disque")
+        arr = tile.read()
+        check(0.0 < float(arr[..., 0].mean()) < 0.6 and float(arr[..., 1].min()) >= 0.0 and float(arr[..., 1].max()) <= 1.0 and float((arr[..., 1] < 0.999).mean()) > 0.3,
+              "remplissage: la tuile contient de la matiere (V) et des dates d'arrivee normalisees de 0 a 1", f"V moyen {float(arr[..., 0].mean()):.2f}")
+        # depart : lettres transparentes, on ne voit que le bord
+        t_ready = clock[0]
+        start = frames(1, text_fill_on=1.0)
+        check(frac(start, deep) < 0.08 and frac(start, ring) > 0.7, "remplissage: au depart les lettres sont transparentes sauf le bord (pas de matiere)",
+              f"interieur {frac(start, deep):.2f} bord {frac(start, ring):.2f}")
+        # vague : la premiere lettre d'abord, le bas de la lettre d'abord
+        t0 = r._fill_t0
+        frames(1, dt=t0 + 1.1 - clock[0], text_fill_on=1.0)
+        early = frames(1, text_fill_on=1.0)
+        low_sum, high_sum = float(early[low].sum()), float(early[high].sum())
+        check(low_sum > 0.0 and low_sum > 3.0 * high_sum,
+              "remplissage: la colonisation part du bas de la lettre (le bas se remplit avant le haut)", f"bas {low_sum:.0f} haut {high_sum:.0f} ({int(low.sum())} / {int(high.sum())} px, interieur {int(deep.sum())} px, texte y {y0}-{y1})")
+        frames(1, dt=t0 + 1.8 - clock[0], text_fill_on=1.0)
+        mid = frames(1, text_fill_on=1.0)
+        check(frac(mid, left) > 0.1 and frac(mid, right) < 0.02,
+              "remplissage: les lettres se remplissent l'une apres l'autre (la premiere a gauche avant la derniere a droite)", f"gauche {frac(mid, left):.2f} droite {frac(mid, right):.2f}")
+        # fin : toutes les lettres remplies, le bord reste, plus rien ne bouge
+        frames(1, dt=t0 + tfx.fill_total(2.7, 3.0) + 1.0 - clock[0], text_fill_on=1.0)
+        done_a = frames(1, text_fill_on=1.0)
+        done_b = frames(1, dt=5.0, text_fill_on=1.0)
+        check(all(0.12 < frac(done_a, reg) < 0.95 for reg in (left, right)) and frac(done_a, ring) > 0.7,
+              "remplissage: a la fin toutes les lettres sont remplies par le motif, le bord est reste", f"gauche {frac(done_a, left):.2f} droite {frac(done_a, right):.2f}")
+        check(np.array_equal(done_a, done_b) or float(np.abs(done_a - done_b).max()) == 0.0, "remplissage: une fois rempli, le motif ne bouge plus jusqu'a la remise a zero")
+        check(int(done_a[ref == 0].sum()) == 0 and done_a.max() <= ref.max(), "remplissage: rien d'allume hors des lettres, jamais plus clair que le texte")
+        # lettres pleines : la colonisation assombrit
+        s0 = frames(1, dt=0.0, text_fill_on=1.0, text_fill_clear=0.0)
+        s1 = frames(1, text_fill_on=1.0, text_fill_clear=0.0)
+        check(s1.sum() < 0.9 * ref.sum() and s1.max() <= ref.max() and int(s1[ref == 0].sum()) == 0 and frac(s1, ring) > 0.5,
+              "remplissage: lettres pleines (transparence coupee) : la matiere assombrit les lettres, qui restent pleines", f"{s1.sum() / ref.sum():.2f}")
+        # remise a zero : nouveau texte -> vague neuve, motif decale
+        seed_before = r._fill_seed
+        r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
+        ref_ab = frames(1, text_fill_on=0.0)
+        r.set_logo(render_text("AB", "auto", "#ffffff", "center", 128), "", "text")
+        hollow = frames(2, text_fill_on=1.0)
+        mask_ab = ref_ab > 200
+        check(float(hollow[eroded(mask_ab, 4)].sum()) < 0.2 * max(float(ref_ab[eroded(mask_ab, 4)].sum()), 1.0) and r._fill_seed > seed_before,
+              "remplissage: un nouveau texte remet la vague a zero (lettres de nouveau transparentes)",
+              f"{float(hollow[eroded(mask_ab, 4)].sum()) / max(float(ref_ab[eroded(mask_ab, 4)].sum()), 1.0):.3f}, graine {seed_before} -> {r._fill_seed}")
+        r.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
+        frames(1, dt=0.0, text_fill_on=1.0)
+        t1 = r._fill_t0
+        frames(1, dt=t1 + tfx.fill_total(2.7, 3.0) + 1.0 - clock[0], text_fill_on=1.0)
+        again = frames(1, text_fill_on=1.0)
+        check(not np.array_equal(again, done_a) and frac(again, left) > 0.12,
+              "remplissage: chaque remise a zero lit la tuile ailleurs (un motif different a chaque cycle)")
+        # cumul avec la vague de lettres : les lettres eteintes restent eteintes
+        ola = dict(text_fill_on=1.0, text_ola_on=1.0, text_ola_dur=3.0, text_ola_fade=0.5)
+        frames(1, **ola)
+        gone = frames(1, dt=1.5, **ola)
+        check(gone.sum() < 0.05 * ref.sum(), "remplissage + vague de lettres : les lettres eteintes restent eteintes", f"{gone.sum() / ref.sum():.3f}")
+        # case decochee : image identique a avant
+        off = frames(2, text_fill_on=0.0, text_ola_on=0.0)
+        check(np.array_equal(off, ref), "remplissage: case decochee = image strictement identique a avant")
+        # cache : un autre Renderer recharge la tuile tout de suite, sans calcul
+        r2 = gl.Renderer(ctx, size, None)
+        r2.video_tex.write(bytes(size[0] * size[1] * 3))
+        r2.set_logo(render_text("HELLO WORLD", "auto", "#ffffff", "center", 128), "", "text")
+        frames(1, rr=r2, text_fill_on=1.0)
+        check(r2.text_tile.ready and r2.text_tile.from_cache and r2.text_tile.done == 0
+              and float(np.abs(r2.text_tile.read() - arr).max()) < 2e-3,
+              "remplissage: la tuile est rechargee du cache sans calcul, identique (a la precision du cache pres)")
+        keyed = tfm.TextPattern(ctx, r.vbo, r.shader_dir)
+        tfx.FILL_DIFF = 0.25
+        check(not keyed.load_cache(), "remplissage: un cache dont la cle ne correspond plus (parametres du motif changes) est ignore")
+        tfx.FILL_DIFF = keep[3]
+        (tmp / "tile.npz").write_bytes(b"pas un cache")
+        broken = tfm.TextPattern(ctx, r.vbo, r.shader_dir)
+        check(not broken.load_cache(), "remplissage: un cache illisible est ignore, sans erreur (la tuile est recalculee)")
+        # logo image : jamais touche
+        ri = gl.Renderer(ctx, size, None)
+        ri.video_tex.write(bytes(size[0] * size[1] * 3))
+        logo = np.zeros((64, 64, 4), np.uint8)
+        logo[:] = (255, 255, 255, 255)
+        ri.set_logo(logo, "x")
+        a = frames(3, rr=ri, text_fill_on=0.0, logo_scale=0.4)
+        b = frames(3, rr=ri, text_fill_on=1.0, logo_scale=0.4)
+        check(np.array_equal(a, b) and a.sum() > 0 and ri.text_tile is None, "remplissage: un logo image n'est jamais touche (source Texte seulement)")
+    finally:
+        tfx.TILE_SIZE, tfx.TILE_STEPS, tfm.tile_cache_path, tfx.FILL_DIFF = keep
+        shutil.rmtree(tmp, ignore_errors=True)
 
 def check_text() -> None:
     print("Texte a incruster / plein ecran par defaut")
@@ -12657,47 +12745,51 @@ def check_textfx() -> None:
     check(fc4.update(1.0, "B", True, True, 20.0) and not fc4.update(1.1, "B", True, False, 20.0),
           "remplissage: texte change et rallumage au meme instant -> une seule remise a zero")
 
-    # ---- grille et pas du remplissage
-    gw, gh = tf.fill_grid_size(4.0, 1.0)
-    check(gw == tf.FILL_GRID_BASE and abs(gw / gh - 4.0) < 0.2, "remplissage: la grille garde le rapport du texte (cote long = base a l'echelle 1)", f"{gw}x{gh}")
-    check(tf.fill_grid_size(4.0, 2.0)[0] > gw > tf.fill_grid_size(4.0, 0.5)[0], "remplissage: plus d'echelle = grille plus fine (motif plus fin)")
-    big = tf.fill_grid_size(4.0, 2.5)
-    small = tf.fill_grid_size(4.0, 0.1)
-    check(max(big) <= tf.FILL_GRID_MAX and min(small) >= 2 and max(small) >= tf.FILL_GRID_MIN, "remplissage: grille bornee (cote long entre min et max)", f"{big} {small}")
-    tall = tf.fill_grid_size(0.25, 1.0)
-    check(tall[1] == tf.FILL_GRID_BASE and tall[0] < tall[1], "remplissage: un texte haut (plusieurs lignes) a son cote long en hauteur", str(tall))
-    n, acc = tf.fill_steps(0.0, 1 / 60, 1.0, False)
-    total, acc = 0, 0.0
-    for _ in range(60):
-        n, acc = tf.fill_steps(acc, 1 / 60, 1.0, False)
-        total += n
-    check(abs(total - tf.FILL_STEPS_PER_S) <= 1, "remplissage: a vitesse 1, FILL_STEPS_PER_S pas par seconde", str(total))
-    t2, acc2 = 0, 0.0
-    for _ in range(60):
-        n, acc2 = tf.fill_steps(acc2, 1 / 60, 0.5, False)
-        t2 += n
-    t3, acc3 = 0, 0.0
-    for _ in range(60):
-        n, acc3 = tf.fill_steps(acc3, 1 / 60, 1.0, True)
-        t3 += n
-    check(abs(t2 - total / 2) <= 2 and t3 <= total // 2 + 1 and t3 >= 1, "remplissage: la vitesse multiplie les pas (0,5 = moitie), le GPU charge les divise par deux (au moins 1)", f"{total} {t2} {t3}")
-    check(tf.fill_steps(0.0, 5.0, 3.0, False)[0] == tf.FILL_MAX_STEPS, "remplissage: pas par image plafonnes (pas de retard qui s'accumule)")
-
+    # ---- calendrier du remplissage : motif precalcule sur une tuile, revele par une vague (lettre par lettre, du bas vers le haut)
+    check(tf.clean_fill(9.0, 99.0) == (tf.FILL_DUR_MAX, tf.FILL_STAGGER_MAX) and tf.clean_fill(0.0, -1.0) == (tf.FILL_DUR_MIN, 0.0)
+          and tf.FILL_DUR_MAX == 3.0, "remplissage: duree par lettre bornee a 3 s au plus, ecart de depart borne", str(tf.clean_fill(9.0, 99.0)))
+    front, growth = tf.fill_times(2.7)
+    check(abs(front + growth - 2.7) < 1e-9 and abs(front - tf.FRONT_SHARE * 2.7) < 1e-9, "remplissage: la duree d'une lettre = front bas -> haut + croissance locale")
+    check(tf.fill_tau(5.0, 0.0, 0.0, 3.0, 1.2) == 5.0 and abs(tf.fill_tau(5.0, 1.0, 0.0, 3.0, 1.2) - 2.0) < 1e-9
+          and abs(tf.fill_tau(5.0, 0.0, 1.0, 3.0, 1.2) - 3.8) < 1e-9 and tf.fill_tau(5.0, 7.0, -3.0, 3.0, 1.2) == tf.fill_tau(5.0, 1.0, 0.0, 3.0, 1.2),
+          "remplissage: une lettre a droite part plus tard (ecart de depart), le haut d'une lettre part plus tard que le bas ; rang et hauteur bornes")
+    check(tf.fill_reveal(-1.0, 0.0, 1.5) == 0.0 and tf.fill_reveal(0.0 + tf.FILL_SOFT_S, 0.0, 1.5) == 1.0
+          and tf.fill_reveal(0.5, 0.5, 1.5) == 0.0 and tf.fill_reveal(0.75 + tf.FILL_SOFT_S, 0.5, 1.5) == 1.0,
+          "remplissage: une cellule apparait a son instant d'arrivee (tuile) et reste, avec un fondu bref")
+    seq = [tf.fill_reveal(k * 0.05, 0.6, 1.5) for k in range(80)]
+    check(all(b >= a - 1e-12 for a, b in zip(seq, seq[1:])) and seq[0] == 0.0 and seq[-1] == 1.0, "remplissage: l'apparition d'une cellule ne revient jamais en arriere")
+    ok_order = True
+    for ft in (0.5, 1.0, 2.0, 3.0, 4.0):
+        for arrival in (0.2, 0.6, 1.0):
+            left = tf.fill_reveal(tf.fill_tau(ft, 0.1, 0.5, 3.0, front), arrival, growth)
+            right = tf.fill_reveal(tf.fill_tau(ft, 0.9, 0.5, 3.0, front), arrival, growth)
+            low = tf.fill_reveal(tf.fill_tau(ft, 0.5, 0.1, 3.0, front), arrival, growth)
+            high = tf.fill_reveal(tf.fill_tau(ft, 0.5, 0.9, 3.0, front), arrival, growth)
+            ok_order = ok_order and left >= right and low >= high
+    check(ok_order, "remplissage: la premiere lettre se remplit avant la deuxieme, le bas d'une lettre avant son haut (a tout instant, quelle que soit la cellule)")
+    check(all(tf.fill_reveal(tf.fill_tau(r * 3.0 + 2.7 + tf.FILL_SOFT_S, r, 1.0, 3.0, front), 1.0, growth) == 1.0 for r in (0.0, 0.3, 1.0)),
+          "remplissage: chaque lettre est entierement remplie 2,7 s (sa duree) apres son depart, au plus 3 s")
+    check(abs(tf.fill_total(2.7, 3.0) - (5.7 + tf.FILL_SOFT_S)) < 1e-9, "remplissage: duree totale de la vague = ecart de depart + duree d'une lettre")
+    check(tf.tile_batch(0, False) == tf.TILE_STEPS_PER_FRAME and tf.tile_batch(0, True) == tf.TILE_STEPS_PER_FRAME // 2
+          and tf.tile_batch(tf.TILE_STEPS - 3, False) == 3 and tf.tile_batch(tf.TILE_STEPS, False) == 0,
+          "remplissage: preparation de la tuile par petites tranches (la moitie si le GPU est charge, rien une fois finie)")
+    check(tf.tile_key() == tf.tile_key() and str(tf.TILE_SIZE) in tf.tile_key() and str(tf.FILL_DIFF) in tf.tile_key(),
+          "remplissage: la cle du cache de la tuile decrit ses parametres (elle change si le motif change)")
     # ---- table des reglages
     keys = ("text_ola_on", "text_ola_dur", "text_ola_every", "text_ola_fade",
-            "text_fill_on", "text_fill_speed", "text_fill_scale", "text_fill_contrast", "text_fill_every")
+            "text_fill_on", "text_fill_dur", "text_fill_stagger", "text_fill_scale", "text_fill_contrast", "text_fill_edge", "text_fill_clear", "text_fill_every")
     spec = [ps.BY_KEY.get(k) for k in keys]
     check(all(s is not None for s in spec) and all(s.scope == "look" for s in spec),
-          "texte: neuf reglages (vague et remplissage), portee look : presets overlay et scenes")
+          "texte: douze reglages (vague et remplissage), portee look : presets overlay et scenes")
     d = {k: ps.BY_KEY[k].default for k in keys}
     check(d["text_ola_on"] == 0 and d["text_fill_on"] == 0 and (d["text_ola_dur"], d["text_ola_every"], d["text_ola_fade"]) == (6.0, 20.0, 1.0)
-          and (d["text_fill_speed"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_every"]) == (1.0, 1.0, 0.9, 20.0),
-          "texte: rien n'est coche par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; contraste 0,9 comme la maquette validee)", str(d))
+          and (d["text_fill_dur"], d["text_fill_stagger"], d["text_fill_scale"], d["text_fill_contrast"], d["text_fill_edge"], d["text_fill_clear"], d["text_fill_every"]) == (2.7, 3.0, 1.0, 0.9, 3.0, 1.0, 20.0),
+          "texte: rien n'est coche par defaut, valeurs retenues (balayage 6 s apres essai, 20 s, fondu 1 s ; remplissage : 2,7 s par lettre, depart etale sur 3 s, lettres transparentes par defaut, contraste 0,9)", str(d))
     # ---- presets overlay, scenes, panique, securite GPU
     from core import safety, scenes as sc
     pr = dict(gl.DEFAULT_PARAMS, **dict({k: ps.BY_KEY[k].default for k in keys}, text_ola_on=1.0, text_fill_on=1.0, text_fill_contrast=0.9))
     ov, bgp = gl.capture_overlay(pr), gl.capture_background(pr)
-    check(all(k in ov for k in keys) and not any(k in bgp for k in keys), "texte: les neuf reglages sont dans les presets overlay, jamais dans ceux du fond")
+    check(all(k in ov for k in keys) and not any(k in bgp for k in keys), "texte: les douze reglages sont dans les presets overlay, jamais dans ceux du fond")
     scene = sc.capture_scene("T", pr, "live", None)
     vals = scene.get("values", scene)
     check(all(k in str(vals) for k in ("text_ola_on", "text_fill_contrast")), "texte: les scenes retiennent la vague et le remplissage")
@@ -12706,12 +12798,12 @@ def check_textfx() -> None:
     check(pn["text_ola_on"] == 0.0 and pn["text_fill_on"] == 0.0 and "text_ola_on" in changed and pn["text_fill_contrast"] == 0.9,
           "texte: la panique coupe la vague et le remplissage (leurs reglages restent)")
     cost = dict((k, ms) for k, _l, ms in safety.EFFECT_COST_MS)
-    check(cost.get("text_fill_on", 0.0) >= 10.0 and cost["text_fill_on"] > cost["cell_on"] and safety.EFFECT_COST_MS[0][0] == "text_fill_on",
-          "texte: le remplissage est l'effet le plus couteux declare (mesure +13,9 ms a 1080p pendant la colonisation, +0,2 ms une fois fige), le premier coupe", str(cost))
+    check(0.1 <= cost.get("text_fill_on", 0.0) <= 2.0 and cost["text_fill_on"] < cost["melt_on"] and safety.EFFECT_COST_MS[-1][0] == "text_fill_on",
+          "texte: le remplissage est declare comme effet peu couteux (tuile precalculee : quelques lectures de texture par pixel du texte), le dernier coupe", str(cost))
     out_vals, dropped = safety.cap_values({"text_fill_on": 1.0}, {"text_fill_on": 0.0}, gpu_ms=16.0, budget_ms=16.7)
     check(out_vals.get("text_fill_on") == 0.0 and "remplissage du texte" in dropped,
           "texte: une scene qui allume le remplissage est allegee quand le GPU est charge", str(dropped))
-    check(__import__("engine.render", fromlist=["PerfGuard"]).PerfGuard.COSTLY[0][0] == "text_fill_on",
+    check(any(k == "text_fill_on" for k, _l in __import__("engine.render", fromlist=["PerfGuard"]).PerfGuard.COSTLY),
           "texte: PerfGuard cite le remplissage dans son conseil quand le GPU est trop charge")
 
 

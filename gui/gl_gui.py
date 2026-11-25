@@ -1522,8 +1522,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     gates.add(gui_gates.row_of_label(rd_box, "Branches", panels=False), lambda: rd_sym_var.get() == "rot")
     text_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(text_box, lb, panels=False)]
     gates.add(text_rows("Duree du balayage", "Periode", "Fondu d'une lettre"), lambda: gui_logo_ctl.ola_var.get() == 1)           # vague et remplissage (#199)
-    gates.add(text_rows("Vitesse", "Finesse", "Contraste", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
-    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var):
+    gates.add(text_rows("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
+    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 
@@ -2445,7 +2445,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             melt_var.set(int(float(params["melt_on"]) >= 0.5))
         if holo_var.get() != int(float(params["holo_on"]) >= 0.5):
             holo_var.set(int(float(params["holo_on"]) >= 0.5))
-        for var, key in ((gui_logo_ctl.ola_var, "text_ola_on"), (gui_logo_ctl.fill_var, "text_fill_on")):   # cases du panneau Masters, panique
+        for var, key in ((gui_logo_ctl.ola_var, "text_ola_on"), (gui_logo_ctl.fill_var, "text_fill_on"), (gui_logo_ctl.clear_var, "text_fill_clear")):   # cases du panneau Masters, panique
             if var.get() != int(float(params[key]) >= 0.5):
                 var.set(int(float(params[key]) >= 0.5))
         if abs(master_var.get() - params["master"]) > 1e-6:
