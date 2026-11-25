@@ -2419,6 +2419,105 @@ def check_text_rank() -> None:
           "rang et portee: le texel juste hors d'une lettre porte son rang (marge de 2 px), pas 0 (plus de fine ligne avant l'arrivee du front)",
           f"{int(out_l.sum())}/{len(rows)} a gauche, {int(out_r.sum())}/{len(rows)} a droite")
 
+def check_fuzz() -> None:
+    """Fuzz des reglages (#195), partie pure : tirage reproductible de jeux valides depuis la table des reglages (core/fuzz.py)."""
+    print("Fuzz des reglages : tirage")
+    import random
+    from core import fuzz
+    from core import params_schema as ps
+
+    a, b = fuzz.cases(7, 5), fuzz.cases(7, 5)
+    check(a == b and fuzz.cases(8, 5) != a, "fuzz: meme graine = memes jeux, une autre graine = d'autres jeux")
+    check(fuzz.cases(3, 1)[0] == fuzz.draw_params(random.Random(3 * fuzz.SEED_STRIDE)) and fuzz.cases(3, 4)[2] == fuzz.draw_params(random.Random(3 * fuzz.SEED_STRIDE + 2)),
+          "fuzz: un cas se rejoue seul (le jeu k ne depend que de la graine et de k)")
+    many = fuzz.cases(11, 200)
+    bad = [(i, k, v) for i, case in enumerate(many) for k, v in case.items() if ps.validate(k, v) != (True, v)]
+    check(not bad, "fuzz: chaque valeur tiree passe validate sans correction (type, plage, enum, longueur de liste)", str(bad[:3]))
+    look = {k for k in ps.keys("look") if ps.BY_KEY[k].default is not None}
+    check(all(set(case) == look for case in many[:20]) and "logo_path" not in many[0],
+          "fuzz: un jeu contient toutes les cles de la portee demandee (sauf le chemin du logo, rempli par defaults()), et rien d'autre")
+    only = fuzz.cases(5, 3, only={"text_border", "text_ola_on"})
+    check(all(set(case) == {"text_border", "text_ola_on"} for case in only), "fuzz: `only` limite le jeu aux cles demandees")
+    borders = [case["text_border"] for case in fuzz.cases(11, 200, only={"text_border"})]
+    check(min(borders) == 0.0 and max(borders) == 8.0 and len({x for x in borders if 0.0 < x < 8.0}) > 20,
+          "fuzz: les bornes sont tirees (0 et 8) et des valeurs intermediaires aussi", f"{min(borders)} {max(borders)}")
+    check(all(len(case["fx_on"]) == 5 and all(v in (0, 1) for v in case["fx_on"]) for case in many),
+          "fuzz: une liste garde sa longueur (fx_on = 5 interrupteurs 0 ou 1)")
+    free = [k for k in ps.keys("look", "bg") if isinstance(ps.BY_KEY[k].default, str) and not ps.BY_KEY[k].choices]
+    check(all(case[k] == ps.BY_KEY[k].default for case in fuzz.cases(2, 20, scopes=("look", "bg")) for k in free) and free,
+          "fuzz: une chaine libre (couleur, texte) garde son defaut", str(free[:4]))
+    base = ps.defaults()
+    check(fuzz.describe({k: base[k] for k in ("text_border", "fx_on")}) == "", "fuzz: un jeu egal aux defauts se decrit par une chaine vide")
+    check(fuzz.describe({"text_border": 6.0, "fx_on": base["fx_on"]}) == "text_border=6.0", "fuzz: describe ne cite que les reglages qui different du defaut")
+    long_case = {k: 1.0 for k in ps.keys("look") if isinstance(base[k], float)}
+    check(len(fuzz.describe(long_case)) <= fuzz.DESCRIBE_MAX + 3, "fuzz: describe est plafonne")
+
+
+def check_planche() -> None:
+    """Planche de preuves (#195) : recettes de rendu assemblees en une planche PNG (tools/planche.py)."""
+    print("Planche de preuves")
+    import subprocess
+    import tempfile
+    from PIL import Image
+    from engine import textfill
+    from tools import planche
+    from tools.planches import Cas, Recette
+
+    check("texte-remplissage" in planche.lister(), "planche: la recette texte-remplissage est listee", str(planche.lister()))
+    base = dict(text_scale=0.5, text_fill_on=0.0, text_ola_on=0.0, text_border=0.0)
+    mini = Recette("mini", "AB", (320, 120), base,
+                   [Cas("petit", {"text_scale": 0.3}, 0.0, None), Cas("grand", {"text_scale": 0.9}, 0.0, (0, 0, 80, 40))], None)
+    saved = textfill.tile_cache_path
+    with tempfile.TemporaryDirectory() as tmp:
+        out = planche.rendre(mini, Path(tmp) / "mini.png")
+        img = Image.open(out).convert("RGB")
+        arr = np.asarray(img).astype(int)
+        check(out.exists() and img.size == (320, 2 * (120 + planche.BANDE)) and float(arr.std()) > 5.0,
+              "planche: une recette minimale ecrit un PNG non vide : une ligne par cas, de la largeur de la recette", f"{img.size}")
+        top = arr[planche.BANDE:planche.BANDE + 120]
+        bottom = arr[2 * planche.BANDE + 120:]
+        check(float(np.abs(top - bottom).mean()) > 1.0, "planche: deux cas aux reglages differents donnent deux images differentes")
+        zoom = Path(tmp) / "mini_zoom.png"
+        check(zoom.exists() and Image.open(zoom).size == (240, 120), "planche: un cas avec zoom ecrit aussi <nom>_zoom.png (agrandi x3)")
+    check(textfill.tile_cache_path is saved, "planche: le cache disque de la tuile du texte est restaure apres le rendu")
+    run = subprocess.run([sys.executable, str(ROOT / "tools" / "planche.py"), "inconnue"], capture_output=True, text=True, timeout=120)
+    check(run.returncode == 2 and "recette inconnue : inconnue" in run.stderr, "planche: une recette inconnue echoue (code 2) avec son nom", f"{run.returncode} {run.stderr[-120:]}")
+
+
+def check_fuzz_reglages() -> None:
+    """Fuzz des reglages (#195), rendu : des jeux de reglages tires depuis la table sont rendus avec le vrai moteur (tools/fuzz_reglages.py) ;
+    un echec donne sa graine, son indice et ses reglages pour etre rejoue."""
+    print("Fuzz des reglages : rendu")
+    import time
+    from engine import textfill
+    from tools import fuzz_reglages as fz
+
+    def boom(renderer, k):
+        if k == 3:
+            raise RuntimeError("echec simule")
+    saved = textfill.tile_cache_path
+    t0 = time.perf_counter()
+    clean = fz.fuzz(2026, 20)
+    elapsed = time.perf_counter() - t0
+    check(clean == [], "fuzz rendu: 20 jeux a graine fixe, textes et images, sans exception, erreur OpenGL ni image impossible",
+          "; ".join(f"cas {e.indice} {e.source} : {e.raison} [{e.reglages[:120]}]" for e in clean[:3]))
+    check(elapsed < 60.0, "fuzz rendu: les 20 jeux tiennent en moins de 60 s", f"{elapsed:.1f} s")
+    bad = fz.fuzz(2026, 20, injecter=boom)
+    check(len(bad) == 2 and {e.source for e in bad} == {"texte", "image"} and all(e.graine == 2026 and e.indice == 3 and "echec simule" in e.raison and isinstance(e.reglages, str) for e in bad),
+          "fuzz rendu: un echec est rapporte avec sa graine, son indice, sa source, sa raison et ses reglages", str(bad[:1]))
+    from core import fuzz as core_fuzz
+    jeux = core_fuzz.cases(2026, 60)
+    k0 = next((k for k, c in enumerate(jeux) if k % 2 == 0 and not fz._cache_logo(dict(c, **fz.PRESENCE), "texte") and not fz._cache_logo(dict(c, **fz.PRESENCE), "image")), None)
+    check(k0 is not None and fz._cache_logo({"logo_opacity": 0.0}, "image") and fz._cache_logo({"text_ola_on": 1.0}, "texte") and not fz._cache_logo({}, "texte"),
+          "fuzz rendu: un jeu qui cache legitimement le logo (opacite 0, vague de lettres) n'est pas exige visible ; un jeu normal l'est", str(k0))
+    vanish = fz.fuzz(2026, 60, injecter=lambda r, k: r.set_logo(None, "", "image") if k == k0 else None)
+    check(any(e.indice == k0 and e.raison.startswith("image impossible") for e in vanish),
+          "fuzz rendu: un logo qui disparait sans raison est rapporte (image impossible)", str(vanish[:2]))
+    replay = fz.fuzz(2026, 1, depuis=3, injecter=boom)
+    check(replay == bad, "fuzz rendu: rejouer un seul cas (--depuis 3 --cas 1) redonne le meme echec")
+    check(textfill.tile_cache_path is saved, "fuzz rendu: le cache disque de la tuile du texte est restaure (le cache de l'utilisateur n'est jamais touche)")
+
+
 def check_text_border() -> None:
     """Fine bordure noire autour du texte (#199), rendu : un anneau noir EXTERIEUR aux lettres, d'epaisseur reglable, qui s'eteint avec la
     vague de lettres ; 0 = image comme avant ; jamais sur un logo image."""
@@ -15871,12 +15970,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
