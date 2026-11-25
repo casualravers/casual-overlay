@@ -79,6 +79,14 @@ float hash(vec2 p) {
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
+// Onde de choc : en plus de la deformation, l'onde assombrit son passage (baisse de luminosite seule, la teinte ne change pas). Front
+// lisse (le pic de l'ombre est arrondi, sans angle), traine douce derriere (sillage vers le centre). Meme cadence, meme centre et meme
+// curseur que la deformation.
+const float RIPPLE_DARK    = 0.70;                     // baisse de luminosite au plus fort (juste apres le kick, curseur a 1) : -70 %, jamais un noir complet
+const float RIPPLE_FRONT   = 0.020;                    // le pic de l'ombre est un peu en avant du rayon de la deformation (distance corrigee de l'aspect)
+const float RIPPLE_EDGE    = 0.060;                    // largeur de la montee devant le pic (plus petit = bord plus franc ; 0,010 = l'ancien bord net)
+const float RIPPLE_TRAIL   = 0.14;                     // longueur de la traine douce derriere le pic
+
 // Les quatre effets appliques a UNE couche (texture premultipliee: les 4 canaux suivent les memes UV).
 // Aberration chromatique: chaque canal de couleur vient de son propre decalage; l'alpha est le plus
 // grand des trois, pour ne pas laisser de frange sombre sur les bords d'un logo.
@@ -104,6 +112,13 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 a
     // L'onde s'eteint sur ~1 s (plus lentement que u_beat), donc visible pendant sa course.
     float ring = exp(-w * w) * clamp(1.0 - since, 0.0, 1.0);
     uv += (d / max(dist, 1e-4)) / vec2(aspect, 1.0) * ring * 0.05 * fx.y * strength;
+    // Ombre : montee lisse devant le pic (smoothstep de largeur RIPPLE_EDGE), pic en RIPPLE_FRONT, traine douce derriere, meme extinction
+    // en 1 s. La traine est exp(-(x/L)^1,5), pente nulle au pic : le sommet est arrondi (avec exp(-x/L) il y avait un angle) ; recalee
+    // pour s'annuler a ~3 longueurs, le centre reste intact.
+    float behind = (radius + RIPPLE_FRONT) - dist;                      // > 0 : derriere le pic (vers le centre), < 0 : devant
+    float prof = smoothstep(-RIPPLE_EDGE, 0.0, behind) *
+                 max(exp(-pow(max(behind, 0.0) / RIPPLE_TRAIL, 1.5)) - 0.05, 0.0) / 0.95;
+    float ripple_k = clamp(prof * clamp(1.0 - since, 0.0, 1.0) * fx.y * strength, 0.0, 1.0);
 
     // 3. Glitch : bandes horizontales decalees, hash quantifie dans le temps, declenche par seuil.
     float trig = max(step(0.55, au[2].z) * au[2].z, step(0.85, au[2].y) * au[2].y * 0.6);
@@ -127,7 +142,9 @@ vec4 layer_fx(sampler2D tex, vec4 fx, vec2 center, float salt, vec2 disp, vec4 a
     vec4 sr = textureLod(tex, uv + off + disp * 1.35, 0.0);
     vec4 sg = textureLod(tex, uv + disp, 0.0);
     vec4 sb = textureLod(tex, uv - off + disp * 0.65, 0.0);
-    return vec4(sr.r, sg.g, sb.b, max(sr.a, max(sg.a, sb.a)));
+    // Texture premultipliee : on assombrit les couleurs (meme facteur sur les trois canaux : la teinte ne bouge pas), jamais l'opacite
+    // (un logo sombre ne devient pas transparent).
+    return vec4(vec3(sr.r, sg.g, sb.b) * (1.0 - RIPPLE_DARK * ripple_k), max(sr.a, max(sg.a, sb.a)));
 }
 
 // --- Halo holographique --------------------------------------------------------------------

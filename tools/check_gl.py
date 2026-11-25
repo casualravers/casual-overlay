@@ -2076,6 +2076,52 @@ def check_render() -> None:
     check(d1 > 0.3 and d2 < d1, "onde de choc au 1er temps: visible apres le 1, plus faible apres le kick suivant (elle ne repart pas)",
           f"apres le 1 {d1:.2f}, apres le 2e kick {d2:.2f}")
 
+    # Onde de choc : l'onde « peint » son passage (ombre froide, jamais du noir). Image grise uniforme : la deformation ne change
+    # rien, seule la couleur peinte se mesure.
+    flat = np.full((size[1], size[0], 3), 200, np.uint8)
+    rf = gl.Renderer(ctx, size, None)
+    rf.video_tex.write(flat.tobytes(), alignment=1)
+    pr = dict(params, fx_on=[0, 1, 0, 0, 0], fx_int=[1.0] * 5, ripple_beat="kick")
+
+    def shock(p_, since):
+        rf.draw(fbo, size, dict(loud, since_beat=since, beat=0.2), p_, 1.0)
+        return read_target(ctx, fbo, size).astype(int)[..., :3]
+
+    def luma(a):
+        return a @ np.array([0.299, 0.587, 0.114])
+    early = shock(pr, 0.1)                                       # juste apres le kick : anneau pres du centre, tres marque
+    mid = shock(pr, 0.4)
+    gone = shock(pr, 1.2)                                        # eteinte (plus d'une seconde)
+    off = shock(dict(pr, fx_int=[1.0, 0.0, 1.0, 1.0, 1.0]), 0.1)  # curseur « Onde de choc » a 0
+    l_early, l_mid = luma(early), luma(mid)
+    ys, xs = np.unravel_index(np.argmin(l_early), l_early.shape)
+    dark = early[ys, xs]
+    check(0.25 * 200 < l_early.min() < 0.45 * 200 and abs(np.median(l_early) - 200) < 1.5,
+          "onde de choc: un anneau net et tres marque (jusqu'a -70 % de luminosite), jamais un noir complet, le reste de l'image intact",
+          f"luminance min {l_early.min():.0f} mediane {np.median(l_early):.0f}")
+    check(abs(int(dark[0]) - int(dark[2])) <= 2 and abs(int(dark[0]) - int(dark[1])) <= 2 and dark.min() > 40,
+          "onde de choc: baisse de luminosite seule, la teinte ne change pas (les trois canaux baissent du meme facteur)", f"rvb {dark}")
+    check(luma(gone).min() > 198 and luma(off).min() > 198 and l_mid.min() < 150,
+          "onde de choc: l'ombre suit l'onde (visible a 0,4 s), disparait avec elle (1,2 s) et le curseur a 0 la coupe",
+          f"a 0,4 s {l_mid.min():.0f}, a 1,2 s {luma(gone).min():.0f}, curseur a 0 {luma(off).min():.0f}")
+    # profil sur une ligne passant par le centre : montee lisse devant l'onde (retour a 200 apres ~0,06 hauteur), pic arrondi (sans angle),
+    # traine douce derriere
+    cy, cx, h = size[1] // 2, size[0] // 2, size[1]
+    row = l_mid[cy, cx:]
+    m = int(np.argmin(row))
+    front_px = (0.9 * 0.4 + 0.02) * h                            # rayon + RIPPLE_FRONT, en hauteurs d'ecran
+    check(abs(m - front_px) < 0.03 * h,
+          "onde de choc: le point le plus sombre est sur le front de l'onde (rayon = 0,9 x temps ecoule depuis le kick)",
+          f"a {m} px, front attendu {front_px:.0f} px")
+    ahead, behind = row[m + int(0.07 * h)], row[m - int(0.05 * h)]
+    check(ahead > 198 and behind < 190 and abs(l_mid[cy, cx] - 200) < 3,
+          "onde de choc: front lisse devant (retour a la couleur d'origine apres 0,07 hauteur), traine douce derriere, centre intact",
+          f"devant {ahead:.0f}, derriere {behind:.0f}, centre {l_mid[cy, cx]:.0f}")
+    mid_ahead = row[m + int(0.03 * h)]                           # a mi-montee : ni la couleur d'origine, ni le pic (un bord franc l'aurait deja quittee)
+    check(l_mid.min() + 8 < mid_ahead < 192 and max(row[m - 2], row[m + 2]) - row[m] < 6,
+          "onde de choc: front lisse (montee progressive devant le pic) et sommet arrondi (pas d'angle au pic)",
+          f"pic {row[m]:.0f}, a mi-montee {mid_ahead:.0f}, voisins {row[m - 2]:.0f} / {row[m + 2]:.0f}")
+
     # Fond genere (motif): rendu dans le shader, sans flux video.
     def render(rr, state, p, t=1.0):
         rr.draw(fbo, size, state, p, t)
