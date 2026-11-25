@@ -9758,6 +9758,29 @@ def check_routage() -> None:
     bk4.vector(61.0, st, pr, "bg_ripple", base, "tout", 0.0, 0.0)
     bk4.prune({"bg_ripple"})
     check(bk4.info("bg_ripple") is not None, "routage: prune garde les lignes encore calculees")
+    # --- aides de l'interface (lot 2)
+    check(rt.source_label("snare") == "Caisse claire" and rt.source_label("herite") == "Comme la couche" and rt.source_label("phrase16") == "Phrase 16"
+          and all(rt.source_label(s) for s in rt.ROUTE_SOURCES) and rt.source_label("inconnue") == "Comme la couche",
+          "routage: libelles courts de toutes les sources")
+    check(all(rt.menu_label(s) for s in rt.ROUTE_SOURCES) and rt.menu_label("mesure") == al.LABELS["mesure"], "routage: libelles longs du menu")
+    check(rt.pill_text("herite", 1.0, "bg") == "Comme le fond" and rt.pill_text("herite", 0.6, "logo") == "Comme le logo 60 %"
+          and rt.pill_text("basses", 0.8, "bg") == "Basses 80 %" and rt.pill_text("kick", 1.0, "bg") == "Kick"
+          and rt.pill_text("aigus", 1.0, None) == "Aigus", "routage: texte de la pastille")
+    check(rt.PILL_CHARS >= max(len(rt.pill_text(s, 1.55, "logo")) for s in rt.ROUTE_SOURCES), "routage: largeur fixe de la pastille = le texte le plus long")
+    check(rt.auto_hint("groove", "bg") == "Auto : groove -> Basses" and rt.auto_hint("groove", "logo", since_hit=1.0) == "Auto : groove -> Frappes"
+          and rt.auto_hint(None, "bg") == "Auto : phase inconnue -> Tout", "routage: texte d'Auto (phase -> source)")
+    check(rt.source_range_hz("sub") == (20.0, 60.0) and rt.source_range_hz("basses") == (20.0, 150.0) and rt.source_range_hz("aigus") == (2000.0, 10000.0)
+          and rt.source_range_hz("kick") is None and rt.source_range_hz("mesure") is None and rt.source_range_hz("herite") is None,
+          "routage: plage du spectre d'une source (None pour un evenement)")
+    on = dict(DEFAULT_PARAMS, fx_on=[1, 1, 0, 1, 1], fx_link=1.0)
+    check(rt.line_enabled(on, "bg_glitch") and not rt.line_enabled(on, "bg_chroma") and rt.line_enabled(on, "bg_wobble"),
+          "routage: une ligne d'effet est grisee quand l'effet est coupe (ordre de fx_on : aberration = 2, glitch = 3)")
+    check(not rt.line_enabled(on, "lg_wobble") and rt.line_enabled(dict(on, fx_link=0.0, fxl_on=[1, 1, 1, 1]), "lg_wobble")
+          and not rt.line_enabled(dict(on, fx_link=0.0, fxl_on=[1, 1, 1, 0]), "lg_glitch"),
+          "routage: lies, les effets du logo suivent le fond (ligne grisee) ; delies, leur interrupteur fait foi")
+    check(rt.line_enabled(dict(on, holo_on=1.0, holo_react=0.5), "lg_holo") and not rt.line_enabled(dict(on, holo_on=1.0, holo_react=0.0), "lg_holo")
+          and not rt.line_enabled(dict(on, breath_pulse=0.0), "breath") and rt.line_enabled(on, "strobe"),
+          "routage: les autres lignes sont grisees tant que leur reaction audio est a 0")
     nan = float("nan")
     check(rt.route_of({"rg_bg_wobble": nan}, "bg_wobble")[1] == 1.0 and rt.route_of({"rg_bg_wobble": float("inf")}, "bg_wobble")[1] == 1.0
           and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
