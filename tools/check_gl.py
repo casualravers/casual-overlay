@@ -3595,6 +3595,37 @@ def measure_latency_isolated(kicks: int, timeout: float = 120.0) -> dict:
     return json.loads(text[text.index("{"):])
 
 
+# Creation du Renderer qui garde le verrou de Python `hold` s (PyDLL : comme la compilation des shaders par Mesa llvmpipe sur le serveur
+# d'integration continue), puis une mesure de 4 kicks ; imprime le resultat en JSON. Windows seulement (kernel32.Sleep).
+SLOW_INIT_PROBE = """
+import ctypes, json, sys
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import audio2wave_gl as gl
+import mesure_latence as ml
+Base, hold = gl.Renderer, float(sys.argv[3])
+class Slow(Base):
+    def __init__(self, *a, **k):
+        ctypes.PyDLL("kernel32").Sleep(int(hold * 1000))
+        super().__init__(*a, **k)
+gl.Renderer = Slow
+print(json.dumps(ml.measure(kicks=4, log=lambda *_a: None)))
+"""
+
+
+def measure_latency_slow_init(hold: float, tool_dir: Path | None = None, timeout: float = 120.0) -> dict:
+    """Mesure de latence (processus neuf) dont la creation du rendu bloque le verrou de Python `hold` s ; `tool_dir` : dossier de
+    mesure_latence.py (tools/ par defaut). Voir SLOW_INIT_PROBE."""
+    import json
+    import subprocess
+    here = Path(__file__).resolve().parent
+    out = subprocess.run([sys.executable, "-c", SLOW_INIT_PROBE, str(here.parent), str(tool_dir or here), str(hold)],
+                         capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    text = out.stdout
+    if "{" not in text:
+        raise RuntimeError(f"mesure impossible (code {out.returncode}) : {(out.stderr or text).strip()[-300:]}")
+    return json.loads(text[text.index("{"):])
+
+
 def check_calibration() -> None:
     """Lot 1 de la spec synchro son / image : horodatage de capture, retard de capture publie, lecture d'une video de calibration."""
     print("Synchro son / image : horodatage de capture et calibration a la camera")
@@ -6084,11 +6115,26 @@ def check_latence() -> None:
         tot = res["total"]
         if tot and res["missed"] <= max_missed and 0 < tot["median"] < bound:
             break
-        print(f"  (information) latence, essai {n}/{tries} insuffisant : {tot} manques={res['missed']} lignes={res['rows']}")
+        print(f"  (information) latence, essai {n}/{tries} insuffisant : {tot} manques={res['missed']} lignes={res['rows']} "
+              f"demarrage={res.get('info', {}).get('init_s')} s diagnostic={res.get('info', {}).get('diag')}")
     check(tot and res["missed"] <= max_missed and 0 < tot["median"] < bound,
           f"latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de {bound} ms",
-          f"{tot} manques={res['missed']}")
-    print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
+          f"{tot} manques={res['missed']} demarrage={res.get('info', {}).get('init_s')} s diagnostic={res.get('info', {}).get('diag')}")
+    print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms ; "
+          f"demarrage du rendu {res.get('info', {}).get('init_s')} s ; {res.get('info', {}).get('diag')}")
+    # Cause des echecs du serveur d'integration continue (4 kicks sur 4 manques) : le rendu etait cree PENDANT la mesure, et la compilation des
+    # shaders par Mesa llvmpipe garde le verrou de Python des secondes : le son et l'analyse etaient bloques, les kicks tombaient dans ce trou.
+    # Reproduit ici sans Mesa : une creation du rendu qui bloque le verrou 5 s ne doit plus rien changer a la mesure (elle est faite avant).
+    if sys.platform == "win32":
+        try:
+            slow = measure_latency_slow_init(5.0)
+        except Exception as exc:
+            check(False, "latence: mesure avec un demarrage du rendu lent", str(exc))
+            return
+        st = slow["total"]
+        check(st and slow["missed"] <= max_missed and 0 < st["median"] < bound and slow["info"].get("init_s", 0) >= 5.0,
+              "latence: un demarrage du rendu lent qui bloque Python (compilation des shaders sous llvmpipe) ne fait plus manquer les kicks",
+              f"{st} manques={slow['missed']} demarrage={slow['info'].get('init_s')} s")
 
 
 def check_stage_layout() -> None:
