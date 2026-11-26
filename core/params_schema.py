@@ -264,6 +264,15 @@ TABLE: tuple[Param, ...] = (
        doc="Palette labyrinthe : symetrie de colonisation (germes et zones) ; le motif lui-meme n'est jamais strictement symetrique."),
     _p("bg_rd_branches", 4, 2, 8, scope="bg", doc="Palette labyrinthe : nombre de branches de la symetrie en rotation."),
     _p("bg_rd_free", 0.5, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : liberte de la symetrie (0 = la plus stricte possible, 1 = presque aucune)."),
+    # Masque d'expansion du labyrinthe (#178, core/reaction.py : mask_value) : limite ou la matiere a le droit de vivre
+    _p("bg_rd_mask", "none", choices=("none", "circles", "bands", "gradient", "noise"), scope="bg",
+       doc="Palette labyrinthe : masque d'expansion (cercles, bandes, degrade, bruit) qui limite ou le motif vit ; none = pas de masque."),
+    _p("bg_rd_mask_count", 3.0, 1.0, 8.0, scope="bg", doc="Palette labyrinthe : masque, nombre de zones (cellules, bandes, periodes, finesse du bruit)."),
+    _p("bg_rd_mask_size", 0.5, 0.1, 0.9, scope="bg", doc="Palette labyrinthe : masque, part de l'image ou la matiere vit."),
+    _p("bg_rd_mask_angle", 0.0, 0.0, 360.0, scope="bg", doc="Palette labyrinthe : masque, rotation de la disposition (degres)."),
+    _p("bg_rd_mask_soft", 0.4, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : masque, douceur des bords (0 = net, 1 = tres progressif)."),
+    _p("bg_rd_mask_invert", 0.0, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : masque, 1 = la matiere vit hors de la forme."),
+    _p("bg_rd_mask_drift", 0.4, 0.0, 2.0, scope="bg", doc="Palette labyrinthe : masque, vitesse de derive des zones."),
     _p("auto_master", 1.0, 0.0, 1.0, keep=True, doc="Interrupteur general des automations (1 = actives)."),
     # visualizer du cerveau (#192, gui/gui_brain.py) : etat du panneau, portee device (ni presets, ni scenes, ni memoires de masters),
     # sauve tout seul dans brain_ui.json (core/params.py : save_brain_ui) et relu au lancement

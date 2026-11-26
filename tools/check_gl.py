@@ -13473,6 +13473,86 @@ def check_reaction_sim() -> None:
           "garde-fou : un motif eteint est ressemee au controle suivant (graine suivante)", str((first, second, dead.seed)))
 
 
+def check_rd_mask_pure() -> None:
+    """Masque d'expansion de la reaction-diffusion (#178), partie pure : formes, taille, nombre, rotation, douceur, inversion, derive, symetrie, reglages."""
+    print("Reaction-diffusion : masque d'expansion (formules pures)")
+    from core import automation as au_
+    from core import params_schema as ps
+    try:
+        from core import reaction as rc
+    except ImportError as exc:
+        check(False, "masque RD: core/reaction.py", str(exc))
+        return
+    if not hasattr(rc, "Mask"):
+        check(False, "masque RD: core.reaction.Mask existe")
+        return
+    M = rc.Mask
+    pts =[((i + 0.5) / 96.0, (j + 0.5) / 54.0) for j in range(54) for i in range(96)]
+
+    def field(m, **kw):
+        return [rc.mask_value(m, x, y, 16 / 9, **kw) for x, y in pts]
+
+    check(rc.MASK_SHAPES == ("none", "circles", "bands", "gradient", "noise") and rc.MASK_SPEED > 0.0, "masque RD: formes none / circles / bands / gradient / noise")
+    check(all(abs(v - 1.0) < 1e-12 for v in field(M())) and all(abs(v - 1.0) < 1e-12 for v in field(M(shape="none", size=0.1, invert=True))),
+          "masque RD: 'none' = 1 partout (rien n'est limite), meme inverse")
+    for shape in ("circles", "bands", "gradient", "noise"):
+        for size in (0.3, 0.5, 0.7):
+            alive = sum(v > 0.5 for v in field(M(shape=shape, count=3.0, size=size, soft=0.2))) / len(pts)
+            check(abs(alive - size) < 0.15, f"masque RD: {shape}, taille {size} = environ {int(size * 100)} % de l'image vivante", f"{alive:.2f}")
+    big = sum(v > 0.5 for v in field(M(shape="circles", count=3.0, size=0.9, soft=0.0))) / len(pts)
+    check(0.6 < big < 0.9, "masque RD: des cercles trop gros plafonnent a la maille (~78 %), sans deborder", f"{big:.2f}")
+    a, b = field(M(shape="bands", count=3.0, size=0.4, soft=0.3)), field(M(shape="bands", count=3.0, size=0.4, soft=0.3, invert=True))
+    check(max(abs(x + y - 1.0) for x, y in zip(a, b)) < 1e-12, "masque RD: l'inversion donne exactement 1 - masque")
+    hard, soft_ = field(M(shape="circles", count=3.0, size=0.5, soft=0.0)), field(M(shape="circles", count=3.0, size=0.5, soft=1.0))
+    mid = lambda f: sum(0.05 < v < 0.95 for v in f) / len(f)
+    check(mid(hard) < 0.05 and mid(soft_) > 0.3, "masque RD: douceur 0 = bord net, douceur 1 = transition large (bords progressifs)", f"{mid(hard):.2f} / {mid(soft_):.2f}")
+    # ---- rotation : des bandes a 0 degre varient le long de x, a 90 degres le long de y
+    b0 = M(shape="bands", count=4.0, size=0.5, soft=0.2, angle=0.0)
+    b90 = M(shape="bands", count=4.0, size=0.5, soft=0.2, angle=90.0)
+    v0 = [rc.mask_value(b0, x, 0.3, 1.0) for x in (0.1, 0.3, 0.55, 0.8)]
+    v0y = [rc.mask_value(b0, 0.37, y, 1.0) for y in (0.1, 0.3, 0.55, 0.8)]
+    v90x = [rc.mask_value(b90, x, 0.37, 1.0) for x in (0.1, 0.3, 0.55, 0.8)]
+    check(max(v0y) - min(v0y) < 1e-9 and max(v0) - min(v0) > 0.5 and max(v90x) - min(v90x) < 1e-9,
+          "masque RD: la rotation tourne les bandes (verticales a 0 degre, horizontales a 90)")
+    def crossings(m):                                  # nombre de passages dedans / dehors le long d'une ligne
+        row = [rc.mask_value(m, (i + 0.5) / 400.0, 0.4, 1.0) > 0.5 for i in range(400)]
+        return sum(a_ != b_ for a_, b_ in zip(row, row[1:]))
+
+    check(crossings(M(shape="bands", count=6.0, size=0.5, soft=0.0)) >= 2.5 * crossings(M(shape="bands", count=2.0, size=0.5, soft=0.0)) - 2,
+          "masque RD: le nombre de zones regle le nombre de bandes")
+    # ---- derive : periodique sur une maille, sans saccade
+    cb0, cb1 = field(M(shape="bands", count=3.0, size=0.5, soft=0.2, t=0.0)), field(M(shape="bands", count=3.0, size=0.5, soft=0.2, t=1.0))
+    cb_half = field(M(shape="bands", count=3.0, size=0.5, soft=0.2, t=0.5))
+    check(max(abs(x - y) for x, y in zip(cb0, cb1)) < 1e-9 and sum(abs(x - y) for x, y in zip(cb0, cb_half)) / len(cb0) > 0.2,
+          "masque RD: la derive deplace les zones et revient a l'identique apres une maille")
+    cc0, cc5 = field(M(shape="circles", count=3.0, size=0.5, soft=0.2, t=0.0)), field(M(shape="circles", count=3.0, size=0.5, soft=0.2, t=5.0))
+    check(max(abs(x - y) for x, y in zip(cc0, cc5)) < 1e-9, "masque RD: les cercles aussi bouclent (decalage entier dans les deux axes)")
+    for shape in ("circles", "bands", "gradient", "noise"):
+        f0, f1 = field(M(shape=shape, count=3.0, size=0.5, soft=0.4, t=1.0)), field(M(shape=shape, count=3.0, size=0.5, soft=0.4, t=1.02))
+        check(sum(abs(x - y) for x, y in zip(f0, f1)) / len(f0) < 0.06, f"masque RD: {shape}, la derive est continue (pas de saccade entre deux instants proches)")
+    # ---- symetrie : replie comme les zones
+    sm = M(shape="noise", count=3.0, size=0.5, soft=0.3, t=2.0)
+    check(all(abs(rc.mask_value(sm, x, y, 16 / 9, sym="mirror_lr") - rc.mask_value(sm, 1.0 - x, y, 16 / 9, sym="mirror_lr")) < 1e-9 for x, y in pts[::40])
+          and all(abs(rc.mask_value(sm, x, y, 16 / 9, sym="mirror_tb") - rc.mask_value(sm, x, 1.0 - y, 16 / 9, sym="mirror_tb")) < 1e-9 for x, y in pts[::40]),
+          "masque RD: avec une symetrie le masque la respecte (miroir parfait)")
+    check(rc.Zone().mask == M() and rc.Zone(mask=M(shape="bands")).mask.shape == "bands", "masque RD: Zone porte le masque (defaut : aucun)")
+    # ---- table des reglages et automations
+    import audio2wave_gl as gl_
+    d = gl_.DEFAULT_PARAMS
+    keys = ("bg_rd_mask", "bg_rd_mask_count", "bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_invert", "bg_rd_mask_drift")
+    check(d["bg_rd_mask"] == "none" and (d["bg_rd_mask_count"], d["bg_rd_mask_size"], d["bg_rd_mask_angle"], d["bg_rd_mask_soft"], d["bg_rd_mask_invert"], d["bg_rd_mask_drift"])
+          == (3.0, 0.5, 0.0, 0.4, 0.0, 0.4) and all(k in gl_.BG_KEYS for k in keys), "masque RD: 7 reglages du fond (presets de fond, scenes), masque coupe par defaut")
+    cp = gl_.coerce_params({"bg_rd_mask": "x", "bg_rd_mask_count": 99, "bg_rd_mask_size": 5, "bg_rd_mask_soft": -1, "bg_rd_mask_drift": 9})
+    check(cp["bg_rd_mask"] == "none" and cp["bg_rd_mask_count"] == 8.0 and cp["bg_rd_mask_size"] == 0.9 and cp["bg_rd_mask_soft"] == 0.0 and cp["bg_rd_mask_drift"] == 2.0,
+          "masque RD: valeurs hors plage ramenees (forme inconnue = none)")
+    specs = au_.AUTOMATION_SPECS
+    check(all(k in specs and specs[k][5] is False for k in ("bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_drift"))
+          and "bg_rd_mask_count" not in specs and set(au_.DEFAULT_RANGES) == set(specs),
+          "masque RD: taille, angle, douceur et derive automatisables (coupes par defaut), pas le nombre ni la forme")
+    check(rc.mask_cells(3) == (3, 2) == rc.VOID_CELLS and rc.mask_cells(1) == (2, 2) and rc.mask_cells(8) == (8, 5),
+          "masque RD: le bruit du masque a la finesse du Vide pour 3 zones")
+
+
 def check_rd_zones() -> None:
     print("Reaction-diffusion : zones de formes (points, lignes, taches dans la meme image)")
     from core import reaction as rc
@@ -17102,12 +17182,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
