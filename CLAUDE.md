@@ -187,7 +187,7 @@ Le moteur est dans [audio2wave_gl.py](audio2wave_gl.py) (le Python pur est dans 
 
 - `python tools/check_gl.py` (aucun peripherique requis) : `--pur` d'abord, `--seulement MOTIF` pour la zone touchee, `--groupe NOM`, `--sans-pur`, `--duree`.
   Une nouvelle verification : son nom dans `SUITE` (sinon `check_groupes` echoue), et dans `PURES` si elle ne demande rien de materiel.
-- CI (`.github/workflows/check.yml`, `main` protegee) : jobs `pur`, `complet` (4 groupes en parallele, Mesa llvmpipe) et `portable`. Code de sortie 3 = seuls
+- CI (`.github/workflows/check.yml`, `main` protegee) : jobs `pur`, `complet` (7 groupes en parallele, ~10 min, Mesa llvmpipe) et `portable`. Code de sortie 3 = seuls
   des tests de mise en page instables (`FRAGILES`) ont echoue, ils sont relances seuls ; `SCREEN_DEPENDENT` sont ecartes sur un petit ecran.
 - Deux lancements de `check_gl.py` en meme temps (deux sessions en parallele) font echouer les tests de mise en page : un seul a la fois.
 - Non verifie automatiquement (demande le materiel) : touches clavier, vrai videoprojecteur, phase du kick avec la vraie musique, latence acoustique.

@@ -8,7 +8,8 @@ name: Verifications
 # La mesure de latence logicielle est ecrite dans le resume du job (information, jamais un seuil : un serveur partage est trop variable).
 #
 # Duree (spec docs/plans/2026-11-13-optimiser-tests-et-flux-design.md) : `complet` est coupe en groupes independants (GROUPES de tools/check_gl.py) qui tournent en
-# PARALLELE (temps reel = le plus long groupe) et sautent les verifications deja passees par `pur` (--sans-pur). Sur un push de `main` (la PR vient de passer la meme
+# PARALLELE (temps reel = le plus long groupe) et sautent les verifications deja passees par `pur` (--sans-pur). Sept groupes (`moteur` a ete coupe en quatre,
+# #232 : 33 min -> ~10 min) ; ils sont a lister ICI et dans GROUPES (check_groupes verifie que les deux listes sont identiques). Sur un push de `main` (la PR vient de passer la meme
 # suite) seuls `pur` et `portable` tournent ; la suite complete tourne sur chaque PR, chaque nuit sur `main` et a la demande.
 on:
   push:
@@ -48,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false                    # un groupe rouge ne cache pas les autres
       matrix:
-        groupe: [labyrinthe, moteur, gui, reste]
+        groupe: [labyrinthe, moteur, rendu, fond, medias, gui, reste]     # = GROUPES de tools/check_gl.py + le groupe par defaut (check_groupes le verifie)
     env:
       MESA_VERSION: "26.2.4"
     steps:
