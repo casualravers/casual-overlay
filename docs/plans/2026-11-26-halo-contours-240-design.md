@@ -1,6 +1,6 @@
 # Halo holographique : suivre le contour du sujet, sans devenir un ovale (#240)
 
-Spec a valider dans le chat. Une seule PR : cette spec, son plan et le code. Fiche a lire : [docs/fonctions/logo.md](../fonctions/logo.md) (halo holographique, `holo_*`).
+Spec validee dans le chat le 2026-11-26. Une seule PR : cette spec, son plan et le code. Fiche a lire : [docs/fonctions/logo.md](../fonctions/logo.md) (halo holographique, `holo_*`).
 
 ## Ce que veut l'utilisateur
 
@@ -23,9 +23,9 @@ A la meme basse resolution (1/4, `HOLO_DOWNSCALE`) :
 
 ### 2. Mapping distance -> v (formules pures, `core/holo.py`, TDD, repliquees en GLSL comme `core/textfx.py`)
 
-- **Portee** `Dmax = clamp(holo_reach x 0,9 x sqrt(l x h), 0,10, 0,60)` (hauteurs d'ecran, `l x h` = rectangle du logo `u_logo_rect`) : un logo compact a une portee proche de celle d'aujourd'hui (`holo_reach` 1 = environ 1,5 x le logo) ; un texte large n'a pas une portee proportionnelle a sa largeur.
+- **Portee** `Dmax = clamp(holo_reach x 0,9 x sqrt(l x h), 0,10, 0,60)` (hauteurs d'ecran, `l x h` = rectangle du logo `u_logo_rect`, **rapport l / h plafonne a 3** : ajoute a l'implementation apres un essai de rendu, une ligne de texte plein cadre donnait une portee de 0,6) : un logo compact a une portee proche de celle d'aujourd'hui (`holo_reach` 1 = environ 1,5 x le logo) ; un texte large n'a pas une portee proportionnelle a sa largeur.
 - **Arrondi progressif** : `w = smoothstep(0,2, 2,7 x d / Dmax)`-equivalent, soit 0 jusqu'a `0,2 x Dmax` et 1 a `2,7 x Dmax` ; `s = d x (1 - w) + 0,9 x w x dcirc` avec `dcirc = max(|p - u_holo_center| - 0,9 x min(l, h) / 2, 0)`. Pres du sujet les anneaux sont des **copies exactes du contour** ; loin ils tendent doucement vers un cercle (jamais d'ovale decale ni de coupure).
-- **v** : `v = 1 - clamp(s / Dmax, 0, 1)` passe par une courbe douce (`v^1,5`, reglable en constante `HOLO_CURVE`), 1 contre le logo, 0 a la portee. Le gradient vient du **vecteur vers la graine la plus proche** (norme 1 pointant vers le logo), plus de differences finies : moins de lectures.
+- **v** : `v = 1 - clamp(s / Dmax, 0, 1)` lineaire (`HOLO_CURVE` = 1 : essayee a 1,5 en spec, gardee a 1 pour que les franges restent espacees regulierement), 1 contre le logo, 0 a la portee. Le gradient vient du **vecteur vers la graine la plus proche** (norme 1 pointant vers le logo), plus de differences finies : moins de lectures.
 - Le **fondu radial fixe disparait** ; `u_holo_center` reste (derive de la poussiere, centre de l'arrondi lointain).
 
 ### 3. Plafond de la lumiere lointaine (`post.frag`, `holo()`)

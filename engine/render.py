@@ -28,6 +28,7 @@ from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
 from core.brain import FxEdge
 from core import textfx
 from core import stotex
+from core import holo as core_holo
 from core import routing
 from core import sto_fields
 from core.textfx import FillClock, OlaClock, clean_fill, clean_ola, fill_times, tile_batch
@@ -482,6 +483,9 @@ class Renderer:
         self.vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
         self.scene_prog = self.post_prog = self.scene_vao = self.post_vao = None
         self.scene_tex = self.scene_fbo = self.layer_tex = self.layer_fbo = self.holo_tex = self.holo_fbo = None
+        self.holo_jfa_tex: list = []               # halo (#240) : deux textures de ping-pong du jump flooding (RG, position de la graine la plus proche)
+        self.holo_jfa_fbo: list = []
+        self.holo_jfa_prog = self.holo_jfa_vao = None
         self.bolt = Lightning(1)                   # mode Foudre du strobe (core/foudre.py) : arbre de lumiere declenche par les kicks
         self._new_kicks, self._fired_seen = 0, 0   # kicks vus a cette image, eclairs du strobe deja traduits en decharges
         self._drop_seen = self._clear_seen = None  # compteurs foudre_drop / foudre_clear deja vus (None : pas encore lus)
@@ -648,6 +652,7 @@ class Renderer:
             scene = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("scene.frag"))
             post = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("post.frag"))
             holo = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("holo.frag"))
+            holo_jfa = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("holo_jfa.frag"))
             foudre = self.ctx.program(vertex_shader=self._read("foudre.vert"), fragment_shader=self._read("foudre.frag"))
             sto_field = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("sto_field.frag"))
         except Exception as exc:
@@ -659,11 +664,13 @@ class Renderer:
         self.scene_vao = self.ctx.vertex_array(scene, [(self.vbo, "2f", "in_pos")])
         self.post_vao = self.ctx.vertex_array(post, [(self.vbo, "2f", "in_pos")])
         self.holo_vao = self.ctx.vertex_array(holo, [(self.vbo, "2f", "in_pos")])
+        self.holo_jfa_prog = holo_jfa                   # halo (#240) : distance au contour du sujet par jump flooding, a basse resolution
+        self.holo_jfa_vao = self.ctx.vertex_array(holo_jfa, [(self.vbo, "2f", "in_pos")])
 
     def _ensure_scene(self, size: tuple[int, int]) -> None:
         if self.scene_tex is not None and self.scene_tex.size == size:
             return
-        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.foudre_tex, self.trans_tex, getattr(self, "sto_field_tex", None), *self.fb_tex):
+        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.foudre_tex, self.trans_tex, getattr(self, "sto_field_tex", None), *self.fb_tex, *self.holo_jfa_tex):
             if old is not None:
                 old.release()
         self._prev_ok = False
@@ -681,6 +688,12 @@ class Renderer:
         self.holo_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.holo_tex.repeat_x = self.holo_tex.repeat_y = False
         self.holo_fbo = self.ctx.framebuffer(color_attachments=[self.holo_tex])
+        # Jump flooding du halo (#240) : deux textures RG de la meme taille (position de la graine la plus proche), lues sans filtrage.
+        self.holo_jfa_tex = [self.ctx.texture(self.holo_tex.size, 2, dtype="f2") for _ in range(2)]
+        for tex in self.holo_jfa_tex:
+            tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+            tex.repeat_x = tex.repeat_y = False
+        self.holo_jfa_fbo = [self.ctx.framebuffer(color_attachments=[tex]) for tex in self.holo_jfa_tex]
         # Champ du stochastique (#229) : forme du champ au quart de la scene, une passe par image (lu au centre de chaque point, lissage bilineaire).
         self.sto_field_tex = self.ctx.texture((max(size[0] // STO_FIELD_DOWNSCALE, 16), max(size[1] // STO_FIELD_DOWNSCALE, 9)), 1, dtype="f2")
         self.sto_field_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -1436,14 +1449,39 @@ class Renderer:
             # champ est calcule a basse resolution (holo.frag) puis lu par le post-traitement.
             self.layer_tex.build_mipmaps()
             self.layer_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-            hp = self.holo_prog
+            # (#240) La distance au contour du sujet vient d'un jump flooding : graines (couche non vide) puis passes de pas decroissant
+            # (core.holo.jfa_steps), a la resolution du champ ; holo.frag en tire v (anneaux = copies du contour, arrondis loin du sujet).
+            hp, jp = self.holo_prog, self.holo_jfa_prog
+            hw, hh = self.holo_tex.size
+            aspect = width / max(height, 1)
+            dmax = core_holo.halo_range(float(p["holo_reach"]), 2.0 * float(rect[2]) * aspect, 2.0 * float(rect[3]))     # taille du logo en hauteurs d'ecran
+            self._set(jp, "u_logo", 0)
+            self._set(jp, "u_state", 1)
+            self._set(jp, "u_texel", (1.0 / hw, 1.0 / hh))
+            self._set(jp, "u_aspect", aspect)
+            self._set(jp, "u_seed_alpha", core_holo.SEED_ALPHA)
+            self.layer_tex.use(0)
+            for fbo in self.holo_jfa_fbo:
+                fbo.viewport = (0, 0, hw, hh)
+            self.holo_jfa_fbo[0].use()
+            self._set(jp, "u_init", 1)
+            self.holo_jfa_vao.render(moderngl.TRIANGLE_STRIP)
+            cur = 0
+            self._set(jp, "u_init", 0)
+            for step in core_holo.jfa_steps(hw, hh):
+                self.holo_jfa_tex[cur].use(1)
+                cur = 1 - cur
+                self.holo_jfa_fbo[cur].use()
+                self._set(jp, "u_step", float(step))
+                self.holo_jfa_vao.render(moderngl.TRIANGLE_STRIP)
             self._set(hp, "u_logo", 0)
+            self._set(hp, "u_state", 1)
             self._set(hp, "u_res", (float(width), float(height)))
-            self._set(hp, "u_holo_reach", max(float(p["holo_reach"]), 0.05))
+            self._set(hp, "u_holo_shape", (dmax, core_holo.CIRC_K * min(2.0 * float(rect[2]) * aspect, 2.0 * float(rect[3])) / 2.0, 1.0 if self.has_logo else 0.0, 0.0))
             self._set(hp, "u_holo_lod0", math.log2(max(height, 1) / 720.0))
             self._set(hp, "u_holo_center", (float(rect[0]), float(1.0 - rect[1])))
-            self.layer_tex.use(0)
-            self.holo_fbo.viewport = (0, 0) + tuple(self.holo_tex.size)
+            self.holo_jfa_tex[cur].use(1)
+            self.holo_fbo.viewport = (0, 0, hw, hh)
             self.holo_fbo.use()
             self.holo_vao.render(moderngl.TRIANGLE_STRIP)
         if not holo_on:
