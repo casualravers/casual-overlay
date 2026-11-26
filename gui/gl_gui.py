@@ -1524,9 +1524,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     sto_tex_var, sto_sync_var = synced["bg_sto_tex"], synced["bg_sto_tex_sync"]
     gates.add(pal_rows("Angle du degrade"),             # stochastique : direction des vagues, du degrade et du pavage (le bruit seul n'en a pas)
               lambda: palette_var.get() == "duo" or (palette_var.get() == "stochastique" and (sto_field_var.get() != "noise" or sto_tex_var.get() == "tiling")))
-    gates.add(pal_rows("Finesse de la texture", "Contraste de la texture"), lambda: sto_tex_var.get() != "none")        # texture de la tache (#220)
-    gates.add(pal_rows("Intervalle des vagues"), lambda: sto_tex_var.get() == "tiling" and not sto_sync_var.get())
-    gates.add(pal_rows("Mesures entre vagues"), lambda: sto_tex_var.get() == "tiling" and bool(sto_sync_var.get()))
+    sto_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(sto_box, lb, panels=False)]     # lignes du bloc stochastique (sa propre grille)
+    gates.add(sto_rows("Finesse de la texture", "Contraste de la texture"), lambda: sto_tex_var.get() != "none")        # texture de la tache (#220)
+    gates.add(sto_rows("Intervalle des vagues"), lambda: sto_tex_var.get() == "tiling" and not sto_sync_var.get())
+    gates.add(sto_rows("Mesures entre vagues"), lambda: sto_tex_var.get() == "tiling" and bool(sto_sync_var.get()))
     gates.add(pal_rows("Teinte", "Vitesse", "Reaction a l'audio"), lambda: palette_var.get() != "test")
     gates.add(pal_rows("Taille des carreaux", "Contraste du damier", "Cadence du damier"), lambda: palette_var.get() in ("classic", "duo"))
     rd_sym_var = synced["bg_rd_sym"]
