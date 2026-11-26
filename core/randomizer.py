@@ -35,6 +35,8 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core import sto_fields
+
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".bmp")
 VIDEO_EXT = (".gif", ".webm", ".mp4", ".mov", ".mkv", ".avi", ".webp", ".apng")
 ROOT_CATEGORY = "(racine)"        # categorie des fichiers poses directement dans le dossier declare
@@ -247,7 +249,7 @@ def random_background_params(rng: random.Random) -> dict:
             r, g, b = colorsys.hsv_to_rgb(hue, rng.uniform(0.55, 1.0), rng.uniform(0.35, 1.0) if key == "bg_color1" else 1.0)
             values[key] = "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
     if palette == "stochastique":
-        values.update({"bg_sto_field": rng.choice(("noise", "waves", "gradient")), "bg_sto_size": round(rng.uniform(5, 30), 1),
+        values.update({"bg_sto_field": rng.choice(sto_fields.VALUES), "bg_sto_size": round(rng.uniform(5, 30), 1),      # champ : les 8 (#229)
                        "bg_sto_regular": round(rng.uniform(0.4, 1.0), 2), "bg_sto_vary": round(rng.uniform(0.0, 0.8), 2),
                        "bg_sto_density": round(rng.uniform(0.3, 0.7), 2), "bg_sto_invert": float(rng.random() < 0.5),
                        "bg_sto_rainbow": 0.0 if rng.random() < 0.5 else round(rng.uniform(0.0, 0.6), 2)})

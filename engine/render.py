@@ -29,6 +29,7 @@ from core.brain import FxEdge
 from core import textfx
 from core import stotex
 from core import routing
+from core import sto_fields
 from core.textfx import FillClock, OlaClock, clean_fill, clean_ola, fill_times, tile_batch
 from engine.textfill import TextPattern
 from core import explain as core_explain
@@ -360,6 +361,7 @@ def logo_layout(width: int, height: int, aspect: float, scale: float, pos: tuple
 
 
 HOLO_DOWNSCALE = 4      # le champ du halo holographique est calcule a 1/4 de la resolution de l'ecran
+STO_FIELD_DOWNSCALE = 4  # le champ du stochastique aussi (#229) : il est lisse a l'echelle des points
 MOSAIC_GRID = 8         # atlas de la mosaique : 8 x 8 vignettes
 MOSAIC_MAX = MOSAIC_GRID * MOSAIC_GRID
 MOSAIC_TILE = 96        # cote d'une vignette (px)
@@ -670,9 +672,12 @@ class Renderer:
             post = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("post.frag"))
             holo = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("holo.frag"))
             foudre = self.ctx.program(vertex_shader=self._read("foudre.vert"), fragment_shader=self._read("foudre.frag"))
+            sto_field = self.ctx.program(vertex_shader=vert, fragment_shader=self._read("sto_field.frag"))
         except Exception as exc:
             raise ShaderError(str(exc)) from exc
         self.scene_prog, self.post_prog, self.holo_prog, self.foudre_prog = scene, post, holo, foudre
+        self.sto_field_prog = sto_field                 # champ du stochastique (#229), une passe par image
+        self.sto_field_vao = self.ctx.vertex_array(sto_field, [(self.vbo, "2f", "in_pos")])
         self.foudre_vao = self.ctx.vertex_array(foudre, [(self.foudre_vbo, "2f 2f 1f 1f 1f 1f 1f", "in_ctr", "in_off", "in_across", "in_vig", "in_dist", "in_fine", "in_cov")])
         self.scene_vao = self.ctx.vertex_array(scene, [(self.vbo, "2f", "in_pos")])
         self.post_vao = self.ctx.vertex_array(post, [(self.vbo, "2f", "in_pos")])
@@ -681,7 +686,7 @@ class Renderer:
     def _ensure_scene(self, size: tuple[int, int]) -> None:
         if self.scene_tex is not None and self.scene_tex.size == size:
             return
-        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.foudre_tex, self.trans_tex, *self.fb_tex):
+        for old in (self.scene_tex, self.layer_tex, self.holo_tex, self.foudre_tex, self.trans_tex, getattr(self, "sto_field_tex", None), *self.fb_tex):
             if old is not None:
                 old.release()
         self._prev_ok = False
@@ -699,6 +704,11 @@ class Renderer:
         self.holo_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.holo_tex.repeat_x = self.holo_tex.repeat_y = False
         self.holo_fbo = self.ctx.framebuffer(color_attachments=[self.holo_tex])
+        # Champ du stochastique (#229) : forme du champ au quart de la scene, une passe par image (lu au centre de chaque point, lissage bilineaire).
+        self.sto_field_tex = self.ctx.texture((max(size[0] // STO_FIELD_DOWNSCALE, 16), max(size[1] // STO_FIELD_DOWNSCALE, 9)), 1, dtype="f2")
+        self.sto_field_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.sto_field_tex.repeat_x = self.sto_field_tex.repeat_y = False
+        self.sto_field_fbo = self.ctx.framebuffer(color_attachments=[self.sto_field_tex])
         # Foudre : rubans additifs a demi-resolution, flottants demi-precision, mipmaps reconstruites a chaque image ou elle est visible (halo).
         self.foudre_tex = self.ctx.texture((max(size[0] // 2, 1), max(size[1] // 2, 1)), 4, dtype="f2")
         self.foudre_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
@@ -1438,6 +1448,18 @@ class Renderer:
         self._set(sp, "u_bg_react", react)
         self._set(sp, "u_bg_hue", float(p["bg_hue"]))
         self._set(sp, "u_bg_angle", float(p["bg_angle"]))
+        if p["bg_mode"] == "pattern" and p["bg_palette"] == "stochastique":
+            # Champ du stochastique (#229) : sa forme (taches, cellules, marbre...) une fois par image, au quart de la scene
+            fp = self.sto_field_prog
+            for name, value in (("u_res", (float(width), float(height))), ("u_phase", float(self._bg_scroll)),
+                                ("u_angle", float(p["bg_angle"])), ("u_kick", float(state.get("beats", 0)) if kicks_on else 0.0),
+                                ("u_field", sto_fields.index(p["bg_sto_field"]))):
+                self._set(fp, name, value)
+            self.sto_field_fbo.viewport = (0, 0, *self.sto_field_tex.size)
+            self.sto_field_fbo.use()
+            self.sto_field_vao.render(moderngl.TRIANGLE_STRIP)
+        self.sto_field_tex.use(7)                  # unite 7 : la 5 est la tuile de la texture du stochastique (#220), la 6 le labyrinthe
+        self._set(sp, "u_sto_ftex", 7)
         (self.mode_tex or self.video_tex).use(0)
         self.logo_tex.use(1)
         # Passe 1a: couche fond. 1b: couche logo seule (videe si pas de logo: le post-traitement

@@ -10,6 +10,23 @@ from tkinter import filedialog
 import audio2wave_gl as gl
 import tkinter as tk
 
+import skin
+import theme as T
+from core import sto_fields
+
+ICON_ROOT = Path(__file__).resolve().parent.parent      # racine du depot ou du dossier portable (asset/ y est copie)
+STO_MENU_PX = 168                                        # largeur fixe de la liste « Champ » avec vignettes (pixels)
+STO_MENU_CHARS = 14                                      # sans vignettes (caracteres)
+
+
+def _sto_icon(w: tk.Misc, value: str):
+    """Vignette d'un champ du stochastique (PhotoImage gardee par la racine Tk), ou None si le fichier manque ou est illisible."""
+    try:
+        from PIL import Image
+        return skin.photo(w, Image.open(ICON_ROOT / sto_fields.ICON_DIR / f"{value}.png").convert("RGB"))
+    except Exception:          # noqa: BLE001 : dossier absent, Pillow absent, fichier abime -> texte seul
+        return None
+
 
 def install(c):
     """Installe ce bloc dans la fenetre construite par `gl_gui.build_window` ; `c` donne les noms de la fenetre dont il depend."""
@@ -37,6 +54,34 @@ def install(c):
     pattern_item = c.pattern_item
     tab_fond = c.tab_fond
     zone_f = c.zone_f
+
+    def sto_field_menu(z, parent) -> tk.Menubutton:
+        """Liste « Champ » du stochastique (#229) : une entree par champ, avec sa vignette (asset/sto_fields, tools/make_sto_icons.py). Largeur
+        fixe : rien ne bouge quand le choix change. Sans les vignettes (dossier absent) : la meme liste, en texte seul."""
+        r = z.next_row()
+        add_label(z, "Champ", r, "Ce que les points dessinent : " + " ; ".join(f"{lab} = {desc}" for _v, lab, _i, desc in sto_fields.FIELDS) + ".")
+        var = tk.StringVar(value=params["bg_sto_field"])
+        bind_param("bg_sto_field", var, str)
+        icons = {value: _sto_icon(parent, value) for value in sto_fields.VALUES}
+        with_icons = all(icons.values())
+        mb = tk.Menubutton(parent, relief="flat", borderwidth=0, highlightthickness=0, anchor="w", compound="left", padx=6, pady=2,
+                           indicatoron=0, cursor="hand2", bg=T.PANEL, fg=T.FG, activebackground=T.CARD, activeforeground=T.FG,
+                           width=STO_MENU_PX if with_icons else STO_MENU_CHARS)
+        mb._noskin = True                                  # dessinee ici (le skin en ferait un champ de liste sans image)
+        menu = tk.Menu(mb, tearoff=0)
+        for value, lab, _i, _d in sto_fields.FIELDS:
+            extra = {"image": icons[value], "compound": "left"} if with_icons else {}
+            menu.add_radiobutton(label=f"  {lab}", value=value, variable=var, **extra)
+        mb.configure(menu=menu)
+
+        def show(*_a) -> None:
+            value = var.get()
+            mb.configure(text=f"  {sto_fields.label(value)}  ▾", image=(icons.get(value) or "") if with_icons else "")
+        var.trace_add("write", show)
+        show()
+        mb.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        z.parent.sto_field_menu = mb                      # sonde des tests
+        return mb
 
     load_overlay_preset, update_overlay_preset = overlay_presets["load"], overlay_presets["update"]
     save_overlay_preset = overlay_presets["save"]
@@ -99,9 +144,7 @@ def install(c):
     sto_box.grid(row=pz.next_row(), column=0, columnspan=3, sticky="new")
     sto_box.columnconfigure(2, weight=1)
     sz = Zone(sto_box)
-    param_radio(sz, "Champ", "bg_sto_field", (("Bruit", "noise"), ("Vagues", "waves"), ("Degrade", "gradient")),
-                tooltip="Ce que les points dessinent : des taches qui derivent, des bandes qui se propagent (dans la direction de l'angle) "
-                        "ou un degrade aller-retour.")
+    sto_field_menu(sz, sto_box)
     param_slider(sz, "Taille des points", "bg_sto_size", 3, 60, 1, "Taille des points, en pixels pour une image de 720 px de haut.")
     param_slider(sz, "Regularite", "bg_sto_regular", 0.0, 1.0, 0.05,
                  "1 = points repartis sans amas ni trous (tramage stochastique) ; 0 = grain aleatoire brut.")

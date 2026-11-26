@@ -622,6 +622,16 @@ def check_gui() -> None:
                                                                     "Reaction a l'audio")}
                 out["sto_shown"][pal] = c["sto_box"].winfo_ismapped()
                 out["rd_shown"][pal] = c["rd_box"].winfo_ismapped()
+                if pal == "stochastique":                  # liste « Champ » (#229) : 8 entrees avec vignette, choisir ecrit le reglage, largeur fixe
+                    mb = getattr(c["sto_box"], "sto_field_menu", None)
+                    if mb is not None:
+                        m_ = root.nametowidget(mb.cget("menu"))
+                        entries = [(m_.entrycget(i, "label").strip(), bool(str(m_.entrycget(i, "image")))) for i in range(m_.index("end") + 1)]
+                        w_before = mb.winfo_reqwidth()
+                        m_.invoke(4)                           # Veines
+                        root.update_idletasks()
+                        out["sto_menu"] = (entries, params["bg_sto_field"], mb.winfo_reqwidth() == w_before, "Veines" in mb.cget("text"))
+                        m_.invoke(0)
             c["palette_var"].set("labyrinthe")
             for w in gg.leaves(c["rd_box"]):
                 if w.winfo_class() == "Scale" and float(w.cget("to")) == 2.0:
@@ -1659,6 +1669,11 @@ def check_gui() -> None:
           f"{gs} {out.get('sto_angle_waves')}")
     check(out.get("sto_shown") == {"classic": False, "duo": False, "test": False, "stochastique": True, "labyrinthe": False},
           "palette stochastique: ses reglages ne s'affichent que pour elle", str(out.get("sto_shown")))
+    from core import sto_fields as sf_
+    sm = out.get("sto_menu") or ([], None, False, False)
+    check([e[0] for e in sm[0]] == [lab for _v, lab, _i, _d in sf_.FIELDS] and all(e[1] for e in sm[0]) and sm[1] == "veins" and sm[2] and sm[3],
+          "palette stochastique: liste « Champ » = 8 champs dans l'ordre, chacun avec sa vignette ; choisir Veines ecrit le reglage, la largeur ne bouge pas (#229)",
+          str(sm))
     check(out.get("rd_shown") == {"classic": False, "duo": False, "test": False, "stochastique": False, "labyrinthe": True},
           "palette labyrinthe: ses reglages ne s'affichent que pour elle", str(out.get("rd_shown")))
     gl_ = gp.get("labyrinthe", {})
@@ -3411,6 +3426,21 @@ def check_bg_stochastic() -> None:
     for i in range(1, 30):                       # dt est plafonne a 0,1 s par image : 1,5 s = 30 images
         moved = render(rr=rr, t=0.05 * i, bg_speed=1.0)
     check(abs(moved - still).mean() > 2, "stochastique: le champ derive au cours du temps", f"ecart {abs(moved - still).mean():.1f}")
+    # Types de bruit du champ (#229) : 8 champs, champ precalcule une fois par image (sto_field.frag)
+    from core import sto_fields as sf
+    imgs = {v: render(bg_sto_field=v) for v in sf.VALUES}
+    same_pairs = [(x, y) for i, x in enumerate(sf.VALUES) for y in sf.VALUES[i + 1:] if abs(imgs[x] - imgs[y]).mean() < 3]
+    check(not same_pairs, "stochastique: les 8 champs donnent 8 motifs differents", str(same_pairs))
+    cov = {v: [lit(render(bg_sto_field=v, bg_sto_density=d)) for d in (0.2, 0.5, 0.8)] for v in sf.VALUES}
+    bad = {v: [round(x, 3) for x in c] for v, c in cov.items() if not (c[0] < c[1] < c[2] and 0.08 <= c[1] <= 0.7)}
+    check(not bad, "stochastique: pour chaque champ, la densite fait la part de points allumes (densite 0,5 : ni vide ni plein)", str(bad or cov))
+    check(abs(render(bg_sto_field="inconnu") - imgs["noise"]).max() == 0, "stochastique: champ inconnu = Taches")
+    rz = gl.Renderer(ctx, (640, 360), None)
+    first = render(rr=rz, bg_sto_field="cells")
+    render(rr=rz, size=(1280, 720), bg_sto_field="cells")
+    render(rr=rz, bg_palette="labyrinthe")
+    check(abs(render(rr=rz, bg_sto_field="cells") - first).max() == 0,
+          "stochastique: apres un changement de taille de la scene et un passage par le labyrinthe, le champ est recalcule (pas de texture perimee)")
     # Douceur (#223) : un point nait et meurt en fondu de rayon autour de son rang (plus de saut quand le champ derive)
     check(abs(render(bg_sto_soft=0.0) - a).max() == 0, "stochastique: douceur 0 = image d'origine (allumage sec)")
 
@@ -9961,6 +9991,42 @@ def check_routage() -> None:
           and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
 
 
+def check_sto_fields() -> None:
+    """Champs du stochastique (#229) : table, numeros du shader, vignettes livrees, liste sans vignettes."""
+    print("Stochastique : types de champ (core/sto_fields.py, asset/sto_fields)")
+    from core import sto_fields as sf, params_schema as ps
+    check(sf.VALUES == ps.BY_KEY["bg_sto_field"].choices and sf.VALUES[0] == sf.DEFAULT == ps.BY_KEY["bg_sto_field"].default == "noise",
+          "champs: la table des reglages propose les 8 champs dans l'ordre de la liste, Taches par defaut")
+    check(sf.index("noise") == 0 and sf.index("waves") == 1 and sf.index("gradient") == 2 and sf.index("inconnu") == 0
+          and sorted(i for _v, _l, i, _d in sf.FIELDS) == list(range(8)),
+          "champs: les 3 champs d'origine gardent leur numero dans le shader, inconnu = Taches, numeros 0..7 uniques")
+    check(sf.label("veins") == "Veines" and sf.label("x") == "Taches" and all(sf.describe(v) for v in sf.VALUES), "champs: libelles et descriptions")
+    from PIL import Image
+    root_dir = Path(__file__).resolve().parent.parent
+    sizes = {}
+    for v in sf.VALUES:
+        f = root_dir / sf.ICON_DIR / f"{v}.png"
+        sizes[v] = Image.open(f).size if f.is_file() else None
+    check(all(s == sf.ICON_SIZE for s in sizes.values()), "champs: une vignette 48 x 27 par champ dans asset/sto_fields (tools/make_sto_icons.py)", str(sizes))
+    import tkinter as tk_
+    import gui_fond
+    try:
+        root = tk_.Tk()
+        root.withdraw()
+    except tk_.TclError as exc:
+        check(False, "champs: Tk disponible", str(exc))
+        return
+    try:
+        old = gui_fond.ICON_ROOT
+        gui_fond.ICON_ROOT = Path(tempfile.mkdtemp())        # dossier sans vignettes (portable incomplet)
+        missing = gui_fond._sto_icon(root, "veins")
+        gui_fond.ICON_ROOT = old
+        present = gui_fond._sto_icon(root, "veins")
+        check(missing is None and present is not None, "champs: vignette absente = texte seul (aucune exception), presente = image")
+    finally:
+        root.destroy()
+
+
 def check_routage_gui() -> None:
     """Routage (#198) : pastille et tableau de l'onglet partagent la meme donnee ; largeur fixe ; temoins ; grisage ; scene appliquee."""
     print("-- routage audio : pastille et onglet")
@@ -11255,8 +11321,8 @@ def check_randomizer() -> None:
     st = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(len(st) > 30 and all(5 <= v["bg_sto_size"] <= 30 and 0.4 <= v["bg_sto_regular"] <= 1 and 0 <= v["bg_sto_vary"] <= 0.8
                                and 0.3 <= v["bg_sto_density"] <= 0.7 and v["bg_sto_invert"] in (0.0, 1.0) and 0 <= v["bg_sto_rainbow"] <= 0.6
-                               and v["bg_sto_field"] in ("noise", "waves", "gradient") for v in st)
-          and len({v["bg_sto_field"] for v in st}) == 3
+                               and v["bg_sto_field"] in gl.params_schema.BY_KEY["bg_sto_field"].choices for v in st)
+          and len({v["bg_sto_field"] for v in st}) >= 6
           and all(gl.coerce_params(v)[k] == v[k] for v in st for k in v),        # aucune valeur ramenee par la validation
           "fond aleatoire: la palette stochastique est tiree, dans les plages", f"{len(st)} sur 300")
     check(all(not any(k.startswith("bg_sto_") for k in v) for v in vals if v["bg_palette"] != "stochastique"),
@@ -11280,6 +11346,10 @@ def check_randomizer() -> None:
           "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
     st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
+    from core import sto_fields as sf2
+    seen_fields = {v["bg_sto_field"] for v in st_}
+    check(len(st_) >= 40 and seen_fields <= set(sf2.VALUES) and len(seen_fields) >= 6,
+          "fond aleatoire: le champ du stochastique est tire parmi les 8 (#229)", f"{len(st_)} tirages, champs vus {sorted(seen_fields)}")
     tx_share = sum(1 for v in st_ if v.get("bg_sto_tex") == "none") / max(len(st_), 1)
     check(all(v.get("bg_sto_tex") in ("none", "wave", "tiling") and ("bg_sto_tex_scale" in v) == (v["bg_sto_tex"] != "none")
               and (v["bg_sto_tex"] == "none" or (0.6 <= v["bg_sto_tex_scale"] <= 1.8 and 0.4 <= v["bg_sto_tex_contrast"] <= 0.9
@@ -15307,8 +15377,8 @@ def check_brain_gui() -> None:
                 bp.view_name, bp._sched_at = name, -1e9
                 bp.scheduled_tick()
                 bp.scheduled_tick()                             # aussitot : trop tot pour les deux
-                time.sleep(0.06)
-                bp.scheduled_tick()                             # 60 ms plus tard : assez pour 20 Hz, pas pour 10 Hz
+                bp._sched_at -= 0.06                            # 60 ms plus tard (horloge simulee : un vrai sleep depassait 90 ms sur un serveur charge)
+                bp.scheduled_tick()                             # assez pour 20 Hz, pas pour 10 Hz
         finally:
             del bp.tick
             bp.view_name = saved_view
@@ -16379,8 +16449,9 @@ def check_safeguards() -> None:
     check(sf.cap_values(sto_next, dict(duo_now, bg_palette="stochastique", bg_sto_field="noise"), 3.5, 16.7, full)[1] == [],
           "securite GPU: un fond stochastique deja affiche (mesure incluse) n'est pas compte deux fois")
     check(sf.background_cost({}, full) == 0.0 and sf.background_cost(dict(bg_mode="live", bg_palette="stochastique"), full) == 0.0
-          and sf.background_cost(sto_next, full) > sf.background_cost(dict(sto_next, bg_sto_field="waves"), full) > 0.0,
-          "securite GPU: cout du fond stochastique (bruit > vagues), nul hors du fond genere")
+          and all(sf.background_cost(dict(sto_next, bg_sto_field=v), full) > 0.0 for v in gl.params_schema.BY_KEY["bg_sto_field"].choices)
+          and sf.background_cost(dict(sto_next, bg_sto_field="inconnu"), full) == sf.background_cost(sto_next, full),
+          "securite GPU: cout du fond stochastique compte pour chacun des 8 champs (#229 : champ precalcule), nul hors du fond genere")
     fine = dict(bg_mode="pattern", bg_palette="labyrinthe", bg_rd_scale=0.5)
     check(sf.background_cost(dict(fine, bg_rd_sym="none"), full) < sf.background_cost(dict(fine, bg_rd_sym="quad"), full),
           "securite GPU: labyrinthe sans symetrie (demi-precision, #225) compte moins qu'avec une symetrie (RG32F) a l'echelle 0,5")
@@ -16931,7 +17002,7 @@ SUITE = (
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
-    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu", "check_routage_gui", "check_automation", "check_params", "check_manager",
+    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu", "check_routage_gui", "check_sto_fields", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",

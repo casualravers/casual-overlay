@@ -10,9 +10,10 @@ from __future__ import annotations
 # +6,7 ms, halo +3,3 ms, fonte ~1,5 ms), du plus cher au moins cher : c'est l'ordre dans lequel on les coupe.
 EFFECT_COST_MS = (("cell_on", "cellules", 6.7), ("holo_on", "halo", 3.3), ("melt_on", "fonte", 1.5), ("text_fill_on", "remplissage du texte", 0.5))
 # Remplissage des lettres (#199) : tuile precalculee rejouee par une vague, quelques lectures de texture par pixel du texte ; mesure a 1080p +0,2 ms (0,5 par prudence). La preparation de la tuile (une fois, ~4 s) n'est pas comptee.
-# Surcout du fond genere en palette stochastique, en ms a 1080p (mesure a 1280 x 720 : bruit +2,3 ms, vagues +1,3 ms, x 2,25 pour 1080p ;
-# le degrade, non mesure, est compte comme les vagues). Le fond n'est jamais coupe : il compte seulement dans l'estimation.
-BG_STO_COST_MS = {"noise": 5.2, "waves": 2.9, "gradient": 2.9}
+# Surcout du fond genere en palette stochastique, en ms a 1080p. Depuis #229 la forme du champ est precalculee une fois par image (quart de la
+# scene) : tous les champs coutent pareil, la boucle des 9 points voisins domine. Mesure a 1280 x 720 (meme session, par rapport au duo) :
+# +1,5 a +2,2 ms selon le champ (taches : +2,9 avant #229), x 2,25 pour 1080p -> 4,5. Le fond n'est jamais coupe : il compte seulement dans l'estimation.
+BG_STO_COST_MS = {v: 4.5 for v in ("noise", "organic", "cells", "network", "veins", "marble", "waves", "gradient")}
 # Palette labyrinthe (reaction-diffusion) : mesure +0,6 ms a 1280 x 720 (simulation a grille fixe, quasi independante de la taille,
 # + trois lectures par pixel) ; 1,0 ms a 1080p par prudence.
 BG_RD_COST_MS = 1.0
