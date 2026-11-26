@@ -105,6 +105,9 @@ def install(c):
     param_slider(sz, "Taille des points", "bg_sto_size", 3, 60, 1, "Taille des points, en pixels pour une image de 720 px de haut.")
     param_slider(sz, "Regularite", "bg_sto_regular", 0.0, 1.0, 0.05,
                  "1 = points repartis sans amas ni trous (tramage stochastique) ; 0 = grain aleatoire brut.")
+    param_radio(sz, "Paliers de taille", "bg_sto_levels", (("Continu", "continuous"), ("2", "2"), ("3", "3")),
+                tooltip="Continu = taille qui varie sans palier. 2 ou 3 = chaque point prend l'une des tailles fixes selon le champ "
+                        "(rendu facon trame d'imprimerie) ; les basses font passer des points au palier suivant. Remplace la variation de taille.")
     param_slider(sz, "Variation de taille", "bg_sto_vary", 0.0, 1.0, 0.05,
                  "0 = tous les points ont la meme taille ; 1 = gros la ou le champ est fort, fins la ou il est faible.")
     param_slider(sz, "Densite", "bg_sto_density", 0.0, 1.0, 0.02, "Part de points allumes au repos (0 = aucun, 1 = presque tous).")
