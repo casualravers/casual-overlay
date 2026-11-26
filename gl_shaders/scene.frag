@@ -38,6 +38,7 @@ uniform float u_beat;          // enveloppe du kick 1 -> 0
 uniform vec4  u_sto;           // x = taille des points (px pour 720 px de haut), y = regularite, z = variation de taille, w = densite
 uniform vec4  u_sto2;          // x = champ (0 bruit, 1 vagues, 2 degrade), y = inversion, z = arc-en-ciel, w = phase du scintillement
 uniform float u_sto_soft;      // douceur 0..1 (#223) : naissance / mort des points en fondu de rayon
+uniform vec4  u_sto_border;    // xyz = couleur de la bordure, w = epaisseur en px pour 720 px de haut (#219 ; 0 = aucune)
 uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (deja multiplies par la reaction)
 // Palette labyrinthe (u_bg_palette = 4) : etat d'une reaction-diffusion (r = U, g = V, grille en boucle, origine BAS gauche) lu trois
 // fois avec un petit decalage chacune : trois couches colorees decalees, posees dans l'ordre sur le fond.
@@ -154,6 +155,8 @@ vec3 stochastic_pattern(vec2 p) {
     float reach = min(0.5 * s * grow * (1.0 + abs(u_sto.z)), rmax) + 1.0;     // rayon maximal (bord anti-crenele compris)
     float cover = 0.0;
     float fdot = 0.0;
+    float ring = 0.0;                                      // part de bordure du point retenu (0 = interieur, 1 = bordure)
+    float bw = u_sto_border.w * u_res.y / 720.0;
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             vec2 c = home + vec2(float(i), float(j));
@@ -177,16 +180,19 @@ vec3 stochastic_pattern(vec2 p) {
             if (soft > 0.0) {
                 rad *= smoothstep(rank - soft, rank + soft, f);
             }
-            float k = 1.0 - smoothstep(rad - 1.0, rad + 1.0, length(px - ctr));
+            float dist = length(px - ctr);
+            float k = 1.0 - smoothstep(rad - 1.0, rad + 1.0, dist);
             if (k > cover) {
                 cover = k;
                 fdot = f;
+                // bordure (#219) : anneau de bw px a l'interieur du point (sa taille ne change pas ; bw >= rayon = disque plein)
+                ring = bw > 0.0 ? smoothstep(rad - bw - 0.5, rad - bw + 0.5, dist) : 0.0;
             }
         }
     }
     vec3 dots = u_sto2.y > 0.5 ? u_bg_c2 : u_bg_c1;
     vec3 ground = u_sto2.y > 0.5 ? u_bg_c1 : u_bg_c2;
-    vec3 col = mix(ground, hue_rotate(dots, fdot * u_sto2.z), cover);
+    vec3 col = mix(ground, mix(hue_rotate(dots, fdot * u_sto2.z), u_sto_border.rgb, ring), cover);
     return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
 }
 
