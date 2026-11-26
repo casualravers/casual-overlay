@@ -13634,6 +13634,75 @@ def check_rd_zones() -> None:
     check(float(np.abs(k_t2 - k_t0).mean()) > 5e-4, "vide : les zones vides derivent avec le temps")
 
 
+def check_rd_mask() -> None:
+    print("Reaction-diffusion : masque d'expansion (carte GPU, matiere dedans / absente dehors)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+    M = rc.Mask
+
+    def sim(shape, steps, zone=None, scale=1.5):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(scale)
+        r.reset(0)
+        for _ in range(max(steps // 20, 1)):
+            r.step(20, shape, zone=zone)
+        return r
+
+    def gone_of(r):                                            # part eteinte lue dans la carte (forme 1 = labyrinthe), ligne 0 = bas (comme v_uv)
+        k = np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 2)[:, :, 1]
+        return (k - rc.MAZE[1]) / (rc.VOID_FK[1] - rc.MAZE[1])
+
+    plain = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0)).read_v()
+    nomask = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0, mask=M(shape="none", size=0.2, invert=True))).read_v()
+    check(np.array_equal(plain, nomask), "masque RD: forme 'none' = simulation identique (bit pour bit, zones actives)")
+    check(np.array_equal(sim(0.6, 1000).read_v(), sim(0.6, 1000, rc.Zone(mask=M())).read_v()), "masque RD: sans masque ni zones = simulation d'origine")
+    # ---- la carte GPU concorde avec la fonction pure
+    for shape in ("circles", "bands", "gradient", "noise"):
+        mk = M(shape=shape, count=3.0, size=0.5, angle=30.0, soft=0.4, t=0.7)
+        g = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=mk)))
+        h_, w_ = g.shape
+        cpu = np.array([[rc.mask_value(mk, (i + 0.5) / w_, (j + 0.5) / h_, w_ / h_) for i in range(0, w_, 5)] for j in range(0, h_, 5)])
+        gpu = g[::5, ::5]
+        err = float(np.abs(cpu - gpu).max())
+        check(err < 0.05, f"masque RD: {shape}, la carte du GPU concorde avec la fonction pure", f"ecart max {err:.3f}")
+    # ---- avec une symetrie, la derive, l'inversion, la douceur
+    mir = gone_of(sim(1.0, 20, rc.Zone(sym="mirror_lr", mask=M(shape="noise", count=4.0, t=1.3))))
+    check(float(np.abs(mir - mir[:, ::-1]).max()) < 1e-4, "masque RD: avec une symetrie le masque de la carte la respecte")
+    a = gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="bands", t=0.0))))
+    b = gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="bands", t=0.4))))
+    check(float(np.abs(a - b).mean()) > 0.05, "masque RD: la derive deplace le masque")
+    m0 = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=0.4))))
+    m1 = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=0.4, invert=True))))
+    check(float(np.abs(m0 + m1 - 1.0).max()) < 0.02, "masque RD: l'inversion donne le complement")
+    hard = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=0.0))))
+    soft_ = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=1.0))))
+    inter = lambda g_: float(((g_ > 0.05) & (g_ < 0.95)).mean())
+    check(inter(soft_) > 2.5 * inter(hard) and inter(soft_) > 0.3, "masque RD: douceur 1 = bords progressifs, douceur 0 = bords nets", f"{inter(hard):.2f} / {inter(soft_):.2f}")
+    # ---- cohabite avec le Vide : eteint si l'un des deux l'eteint
+    gv = gone_of(sim(1.0, 20, rc.Zone(void=1.0)))
+    gm = gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="bands", size=0.5))))
+    gb = gone_of(sim(1.0, 20, rc.Zone(void=1.0, mask=M(shape="bands", size=0.5))))
+    check(float((gb - np.maximum(gv, gm)).min()) > -0.02 and gb.mean() > max(gv.mean(), gm.mean()) + 0.05,
+          "masque RD: le masque et le Vide cohabitent (la zone eteinte est leur union)", f"{gv.mean():.2f} + {gm.mean():.2f} -> {gb.mean():.2f}")
+    # ---- la matiere vit dedans, absente dehors (simulation)
+    r = sim(1.0, 5000, rc.Zone(mask=M(shape="circles", count=4.0, size=0.5, soft=0.2)))
+    v = r.read_v()[::-1]                                       # read_v : haut en premier ; la carte : bas en premier
+    g = 1.0 - gone_of(r)
+    inside, outside = g > 0.95, g < 0.05
+    vin, vout = float(v[inside].mean()), float(v[outside].mean())
+    check(inside.mean() > 0.2 and outside.mean() > 0.2 and vout < 0.02 and vin > 0.05,
+          "masque RD: la matiere est absente hors de la zone et presente dedans", f"V {vin:.3f} dedans, {vout:.3f} dehors")
+    cov = float((v > 0.25).mean())
+    check(0.03 < cov < 0.6, "masque RD: le motif reste vivant avec un masque", f"couverture {cov:.2f}")
+
+
 def check_rd_symmetry() -> None:
     print("Reaction-diffusion : symetries de colonisation (germes et zones, liberte)")
     from core import reaction as rc
@@ -17187,7 +17256,7 @@ PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
@@ -17210,7 +17279,7 @@ ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui val
 # check_recording_render 197, check_rd_cover 98, check_kaleidoscope_frame 65, check_native_modes 42, check_drop_render 41, check_holo 32 ; le reste, moins de 30 chacune.
 GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
-    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
+    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     # ~8 min : le rendu des effets, du logo et des modes
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_holo_contour", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
     # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels

@@ -216,8 +216,10 @@ class ReactionDiffusion:
         prog["u_grid"].value = (float(w), float(h))
         prog["u_fk"].value = rc.shape_feed_kill(shape)
         sym = rc.SYM_MODES.index(zone.sym) if zone.sym in rc.SYM_MODES else 0
-        zoned = zone.mix > 0.0 or zone.void > 0.0
-        if zoned:                                          # carte (F, K) des zones : une passe par appel, pas une par pas
+        mask = zone.mask
+        mask_on = mask.shape in rc.MASK_SHAPES[1:]
+        zoned = zone.mix > 0.0 or zone.void > 0.0 or mask_on
+        if zoned:                                         # carte (F, K) des zones : une passe par appel, pas une par pas
             zp = self.zone_prog
             for name, value in (("u_mix", float(zone.mix)), ("u_base", float(shape)), ("u_zone_t", float(zone.t)),
                                 ("u_fk3", [rc.SPOTS, rc.MAZE, rc.BLOB]), ("u_zone_cells", tuple(float(c) for c in rc.ZONE_CELLS)),
@@ -225,7 +227,8 @@ class ReactionDiffusion:
                                 ("u_aspect", w / h), ("u_free_zone", rc.FREE_ZONE),
                                 ("u_void", float(zone.void)), ("u_void_fk", rc.VOID_FK), ("u_void_cells", tuple(float(c) for c in rc.VOID_CELLS)),
                                 ("u_void_thr", rc.void_threshold(zone.void)), ("u_void_edge", rc.VOID_EDGE), ("u_dense_thr", rc.DENSE_THR),
-                                ("u_dense_pull", rc.DENSE_PULL * min(max(float(zone.void), 0.0), 1.0)), ("u_void_t", float(zone.t) * rc.VOID_SPEED)):
+                                ("u_dense_pull", rc.DENSE_PULL * min(max(float(zone.void), 0.0), 1.0)), ("u_void_t", float(zone.t) * rc.VOID_SPEED),
+                                *rc.mask_uniforms(mask)):
                 if name in zp:
                     zp[name].value = value
             self.zone_fbo.viewport = (0, 0, w, h)

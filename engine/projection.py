@@ -585,6 +585,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         s.status["routes_now"] = dict(renderer.routes_now)                            # routage audio par effet (#198) : ligne -> (source, niveau)
         s.status["strobe_info"] = renderer.strobe_info
         s.status["rd"] = renderer.rd_note                                              # palette labyrinthe : liberte sans effet en 16 bits
+        s.status["rd_mask_t"] = renderer._rd_mask_t                                    # derive du masque d'expansion (#178) : la vignette de la GUI la suit
         s.status["foudre"] = renderer.bolt.stats()                      # voyant du mode Foudre : segments, pointes, pouls
         if args.screenshot and not shot_done and now - t0 >= args.max_seconds - 0.2:
             # Lecture AVANT swap_buffers: apres, le tampon arriere est indefini.

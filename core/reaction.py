@@ -160,9 +160,24 @@ def mask_cells(count: float) -> tuple[int, int]:
     return max(2, round(c)), max(2, round(c * 2.0 / 3.0))
 
 
+def mask_uniforms(mask: Mask) -> list[tuple[str, object]]:
+    """Uniforms de rd_zone.frag pour le masque (la meme preparation que mask_value : le shader ne refait que la geometrie)."""
+    shape = MASK_SHAPES.index(mask.shape) if mask.shape in MASK_SHAPES else 0
+    count = min(max(float(mask.count), 1.0), 8.0)
+    size = min(max(float(mask.size), 0.0), 1.0)
+    soft = min(max(float(mask.soft), 0.0), 1.0)
+    a = math.radians(mask.angle)
+    noise = mask.shape == "noise"
+    edge = (MASK_NOISE_EDGE_MIN + MASK_NOISE_EDGE_SOFT * soft) if noise else (MASK_EDGE_MIN + MASK_EDGE_SOFT * soft)
+    return [("u_mask", shape), ("u_mask_count", count), ("u_mask_size", size), ("u_mask_rot", (math.cos(a), math.sin(a))), ("u_mask_edge", edge),
+            ("u_mask_r", min(math.sqrt(size / math.pi), 0.5)), ("u_mask_thr", MASK_NOISE_CENTER + (size - 0.5) * MASK_NOISE_SPREAD),
+            ("u_mask_cells", tuple(float(c) for c in mask_cells(count))), ("u_mask_invert", int(bool(mask.invert))), ("u_mask_t", float(mask.t)),
+            ("u_mask_salt", MASK_SALT)]
+
+
 def mask_value(mask: Mask, x: float, y: float, aspect: float, sym: str = "none", branches: int = 4) -> float:
-    """Masque d'expansion au point (x, y) de l'image (0..1, y vers le bas ou le haut : peu importe, la derive n'y depend pas) : 1 = la
-    matiere vit, 0 = eteinte, bord progressif. `none` = 1. Replique exacte de rd_zone.frag (qui calcule 1 - ceci comme part eteinte)."""
+    """Masque d'expansion au point (x, y) de l'image (0..1, y vers le haut comme `v_uv` du shader) : 1 = la matiere vit, 0 = eteinte,
+    bord progressif. `none` = 1. Replique de rd_zone.frag (qui en tire la part eteinte, 1 - ceci)."""
     if mask.shape not in MASK_SHAPES[1:]:
         return 1.0
     x, y = _fold(x, y, sym, branches, aspect)

@@ -387,6 +387,7 @@ class Renderer:
         self.rd: ReactionDiffusion | None = None   # palette labyrinthe : simulation creee au premier besoin
         self._rd_acc = 0.0                         # reste de l'accumulateur de pas de simulation
         self._rd_zone_t = 0.0                      # temps de derive des zones de formes (integre, tempo compris)
+        self._rd_mask_t = 0.0                      # temps de derive du masque d'expansion (#178, integre de la meme facon ; publie dans s.status["rd_mask_t"])
         self.rd_note = ""                          # message de la palette labyrinthe pour l'interface (s.status["rd"])
         self._rd_beats: int | None = None          # compteur de kicks deja semes
         self._rd_pending: list = []                # germes des kicks en attente d'un pas (motif fige : tempo ou vitesse a 0)
@@ -1015,6 +1016,12 @@ class Renderer:
         self._qr = (url, tex, side)
         return tex, side
 
+    def _rd_mask(self, p: dict) -> "reaction.Mask":
+        """Masque d'expansion (#178) selon les reglages et le temps de derive integre."""
+        return reaction.Mask(shape=str(p["bg_rd_mask"]), count=float(p["bg_rd_mask_count"]), size=float(p["bg_rd_mask_size"]),
+                             angle=float(p["bg_rd_mask_angle"]), soft=float(p["bg_rd_mask_soft"]), invert=float(p["bg_rd_mask_invert"]) >= 0.5,
+                             t=self._rd_mask_t)
+
     def _labyrinth(self, sp, p: dict, dt: float, t: float, react: float, bg_au, state: dict, kicks_on: bool, size: tuple[int, int] | None = None,
                    real_dt: float | None = None) -> None:
         """Palette labyrinthe : fait avancer la simulation (seulement si elle est affichee) et pose ses uniforms (texture unite 6).
@@ -1031,8 +1038,8 @@ class Renderer:
             sym, branches, free = str(p["bg_rd_sym"]), int(p["bg_rd_branches"]), float(p["bg_rd_free"])
             want_half = sym == "none"
             zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh,
-                                 void=float(p["bg_rd_void"]))
-            sig = (sym, branches if sym == "rot" else 0)
+                                 void=float(p["bg_rd_void"]), mask=self._rd_mask(p))
+            sig =(sym, branches if sym == "rot" else 0)
             if not self._rd_active:                    # activation : repart d'un etat seme propre (germes en orbite si symetrie)
                 self.rd.reset(self.rd.seed, zone, half=want_half)
                 self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
@@ -1059,7 +1066,8 @@ class Renderer:
             n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass, gw * gh, half=self.rd.dtype == "f2")
             if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes et les zones attendent
                 self._rd_zone_t += dt * reaction.ZONE_SPEED * float(p["bg_rd_drift"])
-                zone = zone._replace(t=self._rd_zone_t)
+                self._rd_mask_t += dt * reaction.MASK_SPEED * float(p["bg_rd_mask_drift"])
+                zone = zone._replace(t=self._rd_zone_t, mask=self._rd_mask(p))
                 self._rd_pending = self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending, zone, bud)
             self.rd.watch(t, zone)
             self.rd_note = "" if self.rd.dtype == "f4" or sym == "none" else "Liberte sans effet : etat de la simulation en 16 bits"
