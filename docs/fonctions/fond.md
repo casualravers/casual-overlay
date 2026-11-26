@@ -68,8 +68,12 @@ les basses).
   rayon x `smoothstep(rang - l, rang + l, champ)`, `l` = 0,15 x douceur, uniform `u_sto_soft` ; les points naissent et meurent en grossissant au lieu
   de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720),
   `bg_sto_border` / `bg_sto_border_color` (« Taille de bordure » 0..12 px pour 720 px de haut et « Couleur de bordure », #219 : uniform `u_sto_border`,
-  anneau trace DANS le point retenu, `smoothstep(rayon - bordure +- 0,5 px)`, le point garde sa taille et la grille ne change pas ; bordure >= rayon =
-  disque plein de la couleur de bordure ; 0 = image d'origine ; le Randomizer la tire une fois sur deux, 1 a 4 px, blanc / noir / couleur 2),
+  anneau trace DANS le contour du **groupe** : des points qui se touchent ou se chevauchent n'ont qu'UNE bordure autour de l'ensemble, jamais a l'interieur
+  d'un autre point. Le shader accumule dans la boucle des 9 cellules la couverture de l'union des points en 12 echantillons a bw (et 0,55 bw) autour du
+  pixel ; un pixel est en bordure si un echantillon est hors de l'union ; un pixel a plus de bw + 1 px sous la surface d'un seul point est interieur
+  (raccourci, sans echantillon). Le point isole garde sa taille et la grille ne change pas ; bordure >= rayon = disque plein pour un point isole (un
+  groupe garde son interieur) ; 0 = image d'origine. Cout (1080p, AMD) : +1,4 ms a 2 px, +5,2 ms a 12 px (`core.safety.BG_STO_BORDER_*`, compte dans la securite GPU).
+  Le Randomizer la tire une fois sur deux, 1 a 4 px, blanc / noir / couleur 2),
   `bg_sto_levels` (« Paliers de taille », #222 : `continuous` / `2` / `3`, uniform `u_sto_levels` ; en paliers le rayon vaut
   `0,5 x s x (palier + 1) / n` avec `palier = min(floor(champ x n), n - 1)` : taille fixe selon le champ, facon trame d'imprimerie ; remplace
   la variation de taille et la croissance aux basses, mais les basses haussent le champ donc des points passent au palier suivant ; se combine avec

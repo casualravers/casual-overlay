@@ -154,6 +154,11 @@ float sto_texture(vec2 p) {
     return tau > 0.0 ? cur : old;
 }
 
+// Echantillons de la bordure de groupe (en fraction de l'epaisseur) : 12 directions tous les 30 degres, a 1 et a 0,55 en alternance.
+const vec2 STO_SAMPLES[12] = vec2[12](vec2(1.0, 0.0), vec2(0.4763, 0.275), vec2(0.5, 0.8660254), vec2(0.0, 0.55),
+                                       vec2(-0.5, 0.8660254), vec2(-0.4763, 0.275), vec2(-1.0, 0.0), vec2(-0.4763, -0.275),
+                                       vec2(-0.5, -0.8660254), vec2(0.0, -0.55), vec2(0.5, -0.8660254), vec2(0.4763, -0.275));
+
 vec3 stochastic_pattern(vec2 p) {
     float s = max(u_sto.x * u_res.y / 720.0, 2.0);
     float grow = 1.0 + 0.3 * u_sto_au.x;                   // basses : points plus gros (la grille ne bouge pas)
@@ -166,14 +171,18 @@ vec3 stochastic_pattern(vec2 p) {
     float reach = min(0.5 * s * grow * (1.0 + abs(u_sto.z)), rmax) + 1.0;     // rayon maximal (bord anti-crenele compris)
     float cover = 0.0;
     float fdot = 0.0;
-    float ring = 0.0;                                      // part de bordure du point retenu (0 = interieur, 1 = bordure)
     float bw = u_sto_border.w * u_res.y / 720.0;
+    float ins[12];                                         // bordure de groupe : couverture (0..1) de l'union des points en 12 echantillons autour du pixel (accumules dans la boucle)
+    for (int q = 0; q < 12; q++) {
+        ins[q] = 0.0;
+    }
+    bool deep = false;
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             vec2 c = home + vec2(float(i), float(j));
             vec2 jit = jamp * (vec2(sto_hash(c + 1.7), sto_hash(c + 4.1)) * 2.0 - 1.0);
             vec2 ctr = (c + 0.5 + jit) * s;
-            if (length(px - ctr) > reach) {                // ce point ne peut pas atteindre le pixel : pas de champ a calculer
+            if (length(px - ctr) > reach + bw) {           // ce point ne peut atteindre ni le pixel ni (bordure) ses voisins a bw px : pas de champ a calculer
                 continue;
             }
             float r2 = fract(c.x * 0.7548776662 + c.y * 0.5698402910);
@@ -199,8 +208,14 @@ vec3 stochastic_pattern(vec2 p) {
             if (k > cover) {
                 cover = k;
                 fdot = f;
-                // bordure (#219) : anneau de bw px a l'interieur du point (sa taille ne change pas ; bw >= rayon = disque plein)
-                ring = bw > 0.0 ? smoothstep(rad - bw - 0.5, rad - bw + 0.5, dist) : 0.0;
+            }
+            if (rad - dist > bw + 1.0) {
+                deep = true;                               // pixel a plus de bw px sous la surface de CE point : tous ses echantillons y sont, jamais en bordure
+            }
+            if (bw > 0.0 && !deep && dist < rad + bw + 1.0) {       // bordure : ce point peut couvrir un des echantillons du pixel (a bw px au plus)
+                for (int q = 0; q < 12; q++) {
+                    ins[q] = max(ins[q], 1.0 - smoothstep(rad - 1.0, rad + 1.0, length(px + STO_SAMPLES[q] * bw - ctr)));
+                }
             }
         }
     }
@@ -211,6 +226,15 @@ vec3 stochastic_pattern(vec2 p) {
         float luma = dot(body, vec3(0.299, 0.587, 0.114));
         vec3 lift = mix(body, luma > 0.75 ? vec3(0.0) : vec3(1.0), 0.85 * u_sto_tex.z);
         body = mix(body, lift, sto_texture(p));
+    }
+    // Bordure (#219) : anneau de bw px a l'interieur du contour du GROUPE de points qui se touchent ou se chevauchent (jamais autour d'un
+    // point a l'interieur d'un autre). Un pixel couvert est en bordure si un point voisin, a bw px (et a bw / 2), est hors de l'union des
+    // points du voisinage (12 echantillons) ; un point isole garde son anneau interieur (taille inchangee ; bw >= rayon = disque plein).
+    float ring = 0.0;
+    if (bw > 0.0 && cover > 0.0 && !deep) {
+        for (int q = 0; q < 12; q++) {
+            ring = max(ring, 1.0 - smoothstep(0.3, 0.7, ins[q]));
+        }
     }
     vec3 col = mix(ground, mix(body, u_sto_border.rgb, ring), cover);
     return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
