@@ -118,6 +118,20 @@ def install(c):
                  "Contour de chaque point, en pixels pour une image de 720 px de haut, trace dans le point (0 = aucun ; "
                  "au moins le rayon = point entierement de la couleur de bordure).")
     color_row(sz, "Couleur de bordure", "bg_sto_border_color")
+    param_radio(sz, "Texture de la tache", "bg_sto_tex", (("Aucune", "none"), ("Onde sonore", "wave"), ("Pavage", "tiling")),
+                tooltip="Remplit la zone formee par tous les points qui se touchent. Onde sonore : lignes d'oscilloscope (basses = amplitude, aigus = "
+                        "frequence, mediums = vitesse, kick = epaisseur). Pavage : motif de reaction-diffusion, une vague le peint puis l'efface "
+                        "a chaque intervalle (direction = l'angle).")
+    param_slider(sz, "Finesse de la texture", "bg_sto_tex_scale", 0.3, 3.0, 0.1, "Espacement des lignes (onde) ou taille du motif (pavage).")
+    param_slider(sz, "Contraste de la texture", "bg_sto_tex_contrast", 0.0, 1.0, 0.05,
+                 "Eclaircissement de la couleur 1 sur les lignes / le motif (0 = aplat).")
+    param_slider(sz, "Intervalle des vagues", "bg_sto_tex_every", 2, 30, 1, "Secondes entre deux vagues du pavage (sans calage sur la mesure).")
+    param_radio(sz, "Mesures entre vagues", "bg_sto_tex_bars", (("1", "1"), ("2", "2"), ("4", "4"), ("8", "8")),
+                tooltip="Avec « Caler sur la mesure » : la vague repart toutes les N mesures, sur le temps 1.")
+    sto_sync_var = tk.IntVar(value=int(float(params["bg_sto_tex_sync"]) >= 0.5))
+    bind_param("bg_sto_tex_sync", sto_sync_var, float)
+    tk.Checkbutton(sto_box, text="Caler la vague sur la mesure (BPM)", variable=sto_sync_var).grid(
+        row=sz.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     sto_inv_var = tk.IntVar(value=int(float(params["bg_sto_invert"]) >= 0.5))
     bind_param("bg_sto_invert", sto_inv_var, float)
     tk.Checkbutton(sto_box, text="Inverser (couleur 2 sur couleur 1)", variable=sto_inv_var).grid(

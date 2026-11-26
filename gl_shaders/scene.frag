@@ -39,6 +39,11 @@ uniform vec4  u_sto;           // x = taille des points (px pour 720 px de haut)
 uniform vec4  u_sto2;          // x = champ (0 bruit, 1 vagues, 2 degrade), y = inversion, z = arc-en-ciel, w = phase du scintillement
 uniform float u_sto_soft;      // douceur 0..1 (#223) : naissance / mort des points en fondu de rayon
 uniform float u_sto_levels;    // nombre de paliers de taille (#222) : 0 = rayon continu, 2 ou 3 = tailles fixes
+uniform vec4  u_sto_tex;       // texture de la tache (#220) : x = 0 aucune / 1 onde / 2 pavage, y = finesse, z = contraste, w = 1 si une vague precedente reste a effacer
+uniform vec4  u_sto_wave;      // onde : x = amplitude (px pour 720 px de haut), y = frequence (rad par px), z = phase (rad), w = demi-epaisseur des lignes (px)
+uniform vec4  u_sto_sweep;     // pavage : x = age de la vague (s), y = duree du front (s), z = duree de croissance (s), w = cellules de la tuile par px (pour 720 px de haut)
+uniform vec4  u_sto_off;       // pavage : decalage de lecture de la tuile, xy = vague courante, zw = vague precedente
+uniform sampler2D u_sto_tile;  // tuile de reaction-diffusion du remplissage du texte (r = V, g = instant d'arrivee), repetee, partagee avec lui
 uniform vec4  u_sto_border;   // xyz = couleur de la bordure, w = epaisseur en px pour 720 px de haut (#219 ; 0 = aucune)
 uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (deja multiplies par la reaction)
 // Palette labyrinthe (u_bg_palette = 4) : etat d'une reaction-diffusion (r = U, g = V, grille en boucle, origine BAS gauche) lu trois
@@ -144,6 +149,33 @@ float sto_field(vec2 q) {
 
 // Grille jitteree : une cellule = un point, allume si le champ depasse son rang. Rang a faible discrepance (suite R2) = points
 // repartis sans amas (bruit bleu) ; rang blanc = grain aleatoire ; la regularite melange les deux. 3 x 3 cellules voisines.
+// Texture de la tache (#220) : masque 0..1 continu a travers toute la zone des points (calcule en ecran, pas par point). Onde : lignes
+// d'oscilloscope horizontales qui ondulent (cisaillement continu : jamais de recouvrement). Pavage : la tuile de reaction-diffusion lue
+// deux fois (vague courante et precedente) ; un front traverse l'ecran le long de bg_angle (core.stotex.sweep_tau), derriere lui le
+// nouveau motif pousse (meme formule que core.textfx.fill_reveal), devant lui l'ancien reste, puis le front l'efface.
+float sto_texture(vec2 p) {
+    vec2 px = p * vec2(u_res.x / max(u_res.y, 1.0) * 720.0, 720.0);        // pixels pour 720 px de haut
+    if (u_sto_tex.x < 1.5) {
+        float period = 12.0 * u_sto_tex.y;
+        float y = px.y + u_sto_wave.x * sin(px.x * u_sto_wave.y + u_sto_wave.z + px.y * 0.012);
+        float dist = abs(fract(y / period) - 0.5) * period;                // distance a la ligne (au milieu de sa bande), en px
+        float aa = 0.5 * 720.0 / max(u_res.y, 1.0);
+        return 1.0 - smoothstep(u_sto_wave.w - aa, u_sto_wave.w + aa, dist);
+    }
+    vec2 base = px * u_sto_sweep.w;
+    float vc = textureLod(u_sto_tile, base + u_sto_off.xy, 0.0).r;
+    float vp = textureLod(u_sto_tile, base + u_sto_off.zw, 0.0).r;
+    float a = radians(u_bg_angle);
+    vec2 dir = vec2(cos(a), sin(a));
+    float pos = clamp(dot(p - 0.5, dir) / max(0.5 * (abs(dir.x) + abs(dir.y)), 0.001) * 0.5 + 0.5, 0.0, 1.0);
+    float tau = u_sto_sweep.x - pos * u_sto_sweep.y;
+    float age = clamp(tau / max(u_sto_sweep.z, 0.000001), 0.0, 1.0);
+    float gain = 0.75 + 0.25 * smoothstep(0.0, 1.0, age);
+    float cur = smoothstep(0.08, 0.30, vc * gain) * smoothstep(0.0, 0.06, tau);
+    float old = u_sto_tex.w * smoothstep(0.08, 0.30, vp);
+    return tau > 0.0 ? cur : old;
+}
+
 vec3 stochastic_pattern(vec2 p) {
     float s = max(u_sto.x * u_res.y / 720.0, 2.0);
     float grow = 1.0 + 0.3 * u_sto_au.x;                   // basses : points plus gros (la grille ne bouge pas)
@@ -196,7 +228,13 @@ vec3 stochastic_pattern(vec2 p) {
     }
     vec3 dots = u_sto2.y > 0.5 ? u_bg_c2 : u_bg_c1;
     vec3 ground = u_sto2.y > 0.5 ? u_bg_c1 : u_bg_c2;
-    vec3 col = mix(ground, mix(hue_rotate(dots, fdot * u_sto2.z), u_sto_border.rgb, ring), cover);
+    vec3 body = hue_rotate(dots, fdot * u_sto2.z);
+    if (u_sto_tex.x > 0.5 && cover > 0.0) {                // texture de la tache (#220) : la couleur du point eclaircie (assombrie si elle est deja claire)
+        float luma = dot(body, vec3(0.299, 0.587, 0.114));
+        vec3 lift = mix(body, luma > 0.75 ? vec3(0.0) : vec3(1.0), 0.85 * u_sto_tex.z);
+        body = mix(body, lift, sto_texture(p));
+    }
+    vec3 col = mix(ground, mix(body, u_sto_border.rgb, ring), cover);
     return clamp(hue_rotate(clamp(col, 0.0, 1.0), u_bg_hue), 0.0, 1.0);
 }
 

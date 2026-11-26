@@ -255,6 +255,11 @@ def random_background_params(rng: random.Random) -> dict:
         values["bg_sto_border"] = 0.0 if rng.random() < 0.5 else round(rng.uniform(1.0, 4.0), 1)     # bordure (#219), tiree apres la douceur
         values["bg_sto_border_color"] = rng.choice(("#ffffff", "#000000", values["bg_color2"]))
         values["bg_sto_levels"] = rng.choice(("continuous", "continuous", "2", "3"))      # paliers (#222), tires apres la bordure
+        values["bg_sto_tex"] = rng.choice(("none", "none", "wave", "tiling"))             # texture de la tache (#220), tiree apres les paliers
+        if values["bg_sto_tex"] != "none":
+            values.update({"bg_sto_tex_scale": round(rng.uniform(0.6, 1.8), 2), "bg_sto_tex_contrast": round(rng.uniform(0.4, 0.9), 2),
+                           "bg_sto_tex_every": round(rng.uniform(4.0, 16.0), 1), "bg_sto_tex_sync": float(rng.random() < 0.5),
+                           "bg_sto_tex_bars": rng.choice(("1", "2", "4", "8"))})
     if palette == "labyrinthe":
         h = rng.random()
         hues = (h, (h + rng.uniform(0.2, 0.4)) % 1.0, (h + rng.uniform(0.6, 0.8)) % 1.0)      # trois teintes espacees d'au moins 0,2
