@@ -27,7 +27,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
-from core import audio_layers, recording, routing
+from core import audio_layers, recording, routing, sto_fields
 
 SCOPES = ("look", "bg", "room", "state", "device")
 
@@ -220,8 +220,8 @@ TABLE: tuple[Param, ...] = (
     _p("bg_checker", 0.24, 0.0, 1.0, scope="bg", doc="Contraste du damier."),
     _p("bg_flip", 2.0, 0.0, 8.0, scope="bg", doc="Bascules du damier par seconde."),
     _p("bg_react", 1.0, 0.0, 2.0, scope="bg", doc="Reaction a l'audio : flash + damier au kick, defilement aux basses."),
-    _p("bg_sto_field", "noise", choices=("noise", "waves", "gradient"), scope="bg",
-       doc="Palette stochastique : forme du champ que les points dessinent (bruit fluide, vagues, degrade)."),
+    _p("bg_sto_field", "noise", choices=sto_fields.VALUES, scope="bg",
+       doc="Palette stochastique : forme du champ que les points dessinent (taches, organique, cellules, reseau, veines, marbre, vagues, degrade ; #229)."),
     _p("bg_sto_size", 10.0, 3.0, 60.0, scope="bg", doc="Palette stochastique : taille des points, en pixels pour 720 px de haut."),
     _p("bg_sto_regular", 1.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : 1 = bruit bleu (sans amas), 0 = aleatoire brut (grain)."),
     _p("bg_sto_vary", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : la taille des points suit le champ (0 = taille constante)."),

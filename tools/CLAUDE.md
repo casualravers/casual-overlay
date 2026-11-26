@@ -6,5 +6,5 @@ Avant de modifier un outil, lis sa fiche :
 - `mesure_latence.py`, `calibrer_avance.py`, `bench_kick.py` : [docs/fonctions/synchro.md](../docs/fonctions/synchro.md)
 - `mesure_cerveau.py` (cout du panneau du cerveau), `rejoue_cerveau.py` (stabilite de l'affichage sur de la vraie musique ou un journal) : [docs/fonctions/cerveau.md](../docs/fonctions/cerveau.md)
 - `planche.py` (+ `planches/`), `fuzz_reglages.py` : [docs/fonctions/outillage.md](../docs/fonctions/outillage.md)
-- `rd_sweep.py` : [docs/fonctions/fond.md](../docs/fonctions/fond.md)
+- `rd_sweep.py`, `make_sto_icons.py` (vignettes de la liste « Champ » du stochastique, #229) : [docs/fonctions/fond.md](../docs/fonctions/fond.md)
 - `make_logo_chargement.py` : [docs/fonctions/scenes-vj.md](../docs/fonctions/scenes-vj.md)

@@ -52,7 +52,18 @@ les basses).
   cellule 0,3 a 0,5 ; 3 x 3 cellules voisines par pixel, **rayon plafonne** a ce que ce voisinage montre (`(1,5 - decalage) x s - 1`, sinon les gros
   points etaient coupes a plat), et **une voisine hors de portee du pixel ne calcule pas le champ** (-40 % de temps GPU, image identique).
   Champs (`bg_sto_field`) : `noise` (2 octaves de bruit de valeur, hachage sans `sin`), `waves` (bandes vers `bg_angle`), `gradient` (aller-retour
-  comme Duo) ; ils derivent avec `_bg_scroll`. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
+  comme Duo) ; ils derivent avec `_bg_scroll`. **Types de bruit** (issue #229 ; design et plan : `docs/plans/2026-11-26-stochastique-bruits-229-*.md`) :
+  8 champs (`core/sto_fields.py`, ordre de la liste) : Taches (`noise`, d'origine), Organique (`organic`, Perlin 4 octaves), Cellules (`cells`, Worley
+  F1, germes qui orbitent), Reseau (`network`, F2 - F1 : bords des cellules), Veines (`veins`, cretes du bruit de gradient), Marbre (`marble`,
+  domaine deforme), Vagues, Degrade ; numeros du shader : les 3 d'origine gardent 0, 1, 2. **Champ precalcule** : `gl_shaders/sto_field.frag`
+  calcule la FORME du champ (0..1, derive et quart d'onde des vagues compris) une fois par image dans `Renderer.sto_field_tex` (R16F, 1/4 de la
+  scene, `STO_FIELD_DOWNSCALE`, unite 5), seulement quand le stochastique est affiche ; `stochastic_pattern()` la lit au centre de chaque point
+  puis applique le coup de contraste du kick et la densite. Mesure (1280 x 720, meme session, par rapport au duo) : taches +2,9 -> +1,7 ms, tous
+  les champs +1,5 a +2,2 ms (la boucle des 9 points voisins domine) ; `BG_STO_COST_MS` = 4,5 ms a 1080p pour chacun. Chaque champ est ramene a
+  0..1 avec une couverture de 24 a 49 % a densite 0,5 (« Densite » garde son sens). **Liste « Champ »** (`gui_fond.sto_field_menu`) : Menubutton
+  de largeur fixe (`STO_MENU_PX`) + Menu, une entree par champ avec sa vignette 48 x 27 (`asset/sto_fields/<valeur>.png`, les vrais points du
+  stochastique rendus par le shader de l'appli : `python tools/make_sto_icons.py [--planche fichier.png]`, a relancer si un champ change) ;
+  vignettes absentes = texte seul. Full Randomizer : parmi les 8. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
   `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ), `bg_sto_soft` (« Douceur », #223 :
   rayon x `smoothstep(rang - l, rang + l, champ)`, `l` = 0,15 x douceur, uniform `u_sto_soft` ; les points naissent et meurent en grossissant au lieu
   de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720),

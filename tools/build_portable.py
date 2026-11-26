@@ -8,7 +8,7 @@ Contenu du dossier :
     python/        un Python 3.12 complet (copie de l'installation locale : tkinter compris) + les modules de requirements-gl.txt
     audio2wave/    les scripts d'audio2wave (copie interne de sources/audio2wave/)
     ffmpeg/        ffmpeg.exe et ffprobe.exe (ajoutes au PATH par le programme, aucune installation)
-    *.py, gl_shaders/, asset/ (+ asset/images/, sans animations ni videos), start.bat, LISEZMOI.txt
+    *.py, gl_shaders/, asset/ (+ asset/images/ et asset/sto_fields/, sans animations ni videos), start.bat, LISEZMOI.txt
 
 On ne gele PAS le programme (PyInstaller) : audio2wave est importe dynamiquement, tkinter et les modules de calcul changent selon
 le mode, et un Python complet reste le plus fiable. Fichier stdlib seulement, Windows seulement.
@@ -125,7 +125,7 @@ def build_app(out: Path, a2w_dir: Path) -> None:
         copy_tree(HERE / name, out / name)
     asset = out / "asset"
     asset.mkdir(exist_ok=True)
-    for sub in ("", "images"):                              # les fichiers de asset/ et de asset/images/ (logos), pas les animations ni les videos perso
+    for sub in ("", "images", "sto_fields"):                # asset/, asset/images/ (logos), asset/sto_fields/ (vignettes du stochastique, #229) ; pas les animations ni les videos perso
         src_dir = HERE / "asset" / sub
         if not src_dir.is_dir():
             continue
