@@ -31,6 +31,15 @@ visuel d'audio2wave, il ne le complete pas) :
 - Stockage : `SceneBook` (`~/.audio2wave/scenes.json`) : **bibliotheque de scenes** (sans limite, meme nom a la casse pres =
   remplace) + **sets** (voir plus bas). Le rang d'une entree dans le set actif donne la touche F1..F9 (`scenes.KEYS` = 9
   premieres ; les suivantes n'ont pas de touche F mais ont leur bouton dans la barre).
+- **Dossiers de la bibliotheque** : un dossier est le prefixe du nom (`club/neon`, un seul niveau ; `scene_folder`, `library_tree`), deplacement a la
+  main par « Ranger » (clic droit). **Rangement automatique par type de fond (#241)** : `scenes.fond_folder(scene)` (palette du fond genere `duo` /
+  `test` / `stochastique` / `labyrinthe`, `video`, ou mode d'audio2wave `live` / `snap` / `ridge` / `sphere` ; repli `fond` / `live`) et
+  `scenes.auto_name(nom, scene)` (`neon` -> `snap/neon`, un nom deja range est respecte). `capture_scene_now` range une scene **nouvelle** si le
+  reglage de salle `scene_auto_folder` est actif (**actif par defaut**, case « Ranger auto » dans l'en-tete de la bibliotheque ; jamais capture
+  par une scene) ; une mise a jour (nom deja connu) ne bouge pas. Bouton « Ranger par type » = `SceneBook.organize()` : seules les scenes **a la
+  racine** sont rangees (les dossiers de l'utilisateur ne sont jamais touches), un nom range deja pris laisse la scene a la racine (message
+  « N laissee(s) »), les sets suivent (`rename_scene`) ; marche aussi reglage coupe. Les tests d'`check_gl.py` coupent `scene_auto_folder` (ils
+  relisent une scene par le nom saisi) ; `gui_autofolder_steps` a son propre test. Spec : `docs/plans/2026-11-26-scenes-rangement-auto-241-design.md`.
 - **Changement de mode** (Live -> Snap...) : `request_mode` ne reconstruit QUE le panneau d'audio2wave (`swap_live_panel`, ~0,25 s) ; le preset est garde dans
   `s.pending_live_overrides` et applique a la fin de `build_window` du panneau neuf (`after(150)`). **Piege (vu en soiree)** : `apply_scene_dict` SORT apres avoir programme `request_mode` (le reste de la fonction, dont `refresh_scene_bar`, n'est pas execute) ; sans un `refresh_scene_bar()` avant ce `return`, la touche d'une scene d'un autre mode n'etait jamais surlignee en ambre (l'ancienne restait allumee). Test : « un clic a la main sur une scene d'un autre mode ... surligne sa touche ».
 - **Interface** : rangee ambre posee en ligne 0 de `root` (au-dessus de la page defilante : toujours visible), une touche par

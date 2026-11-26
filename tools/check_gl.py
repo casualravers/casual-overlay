@@ -321,6 +321,7 @@ def check_gui() -> None:
     analyzer = NS(latest=lambda: {"bass": 0.5, "mid": 0.3, "high": 0.2, "beat": 1.0})
     audio = NS(synthetic=True, name="synthetique", analyzer=analyzer)
     params = gl.load_params()
+    params["scene_auto_folder"] = 0.0                  # les tests de scenes relisent une scene par le nom saisi : le rangement auto (#241, actif par defaut) a son propre test
 
     class FakeProjection:
         """Projection factice : la GUI ouvre / ferme la fenetre de rendu par son bouton."""
@@ -1139,6 +1140,7 @@ def check_gui() -> None:
                     gui_macro_scroll_steps(c, s, out)
                     gui_rec_steps(c, s, out)
                     gui_clips_steps(c, s, out)
+                    gui_autofolder_steps(c, s, out)
                 except Exception:
                     import traceback
                     out["sets_error"] = traceback.format_exc()
@@ -1418,6 +1420,8 @@ def check_gui() -> None:
           str(out.get("x_stage")))
     check(out.get("x_library_tree") == (True,) * 7, "bibliotheque (GUI): favoris en tete, dossiers (dossier/nom), ranger / sortir d'un dossier, recherche, mise a jour sur place",
           str(out.get("x_library_tree")))
+    check(out.get("x_auto_folder") == (True,) * 7, "bibliotheque (GUI): rangement auto (nouvelle scene rangee par type de fond, mise a jour intacte, case « Ranger auto », bouton « Ranger par type »)",
+          str(out.get("x_auto_folder")))
     check(out.get("x_library_del") == (True,) * 3, "bibliotheque (GUI): Suppr ouvre la modale de confirmation, la scene n'est supprimee qu'apres validation",
           str(out.get("x_library_del")))
     check(out.get("x_palette") == (True,) * 7, "palette (GUI): scenes, sets, presets et commandes listes ; une saisie lance la bonne commande", str(out.get("x_palette")))
@@ -7624,6 +7628,33 @@ def check_sets_pure(sc, tmp) -> None:
           and tr["starred"] == ["club/neon"] and tr["root"] == ["Alpha", "zeta"] and tr["folders"] == {"club": ["club/Acid", "club/neon"], "salle": ["salle/x"]}
           and tr["total"] == 5 and sc.library_tree(lib_scenes, "AC")["shown"] == 1 and sc.library_tree(lib_scenes, "AC")["folders"] == {"club": ["club/Acid"]},
           "bibliotheque: favoris, dossiers (un niveau), racine, tri sans casse, recherche", str(tr))
+    # rangement automatique par type de fond (#241) : le dossier est le prefixe du nom
+    check(sc.fond_folder({"bg": "pattern", "fond": {"bg_palette": "stochastique"}}) == "stochastique"
+          and sc.fond_folder({"bg": "pattern", "fond": {"bg_palette": "labyrinthe"}}) == "labyrinthe"
+          and sc.fond_folder({"bg": "pattern", "fond": {"bg_palette": "duo"}}) == "duo"
+          and sc.fond_folder({"bg": "pattern", "fond": {}}) == "fond" and sc.fond_folder({"bg": "pattern", "fond": {"bg_palette": "x"}}) == "fond"
+          and sc.fond_folder({"bg": "video"}) == "video"
+          and [sc.fond_folder({"bg": "live", "mode": m}) for m in ("live", "snap", "ridge", "sphere")] == ["live", "snap", "ridge", "sphere"]
+          and sc.fond_folder({"bg": "live", "mode": None}) == "live" and sc.fond_folder({"bg": "live", "mode": "inconnu"}) == "live"
+          and sc.fond_folder({}) == "live",
+          "rangement auto: dossier d'une scene = palette du fond genere, video, ou mode d'audio2wave (repli sans erreur)")
+    snap_scene = {"name": "neon", "bg": "live", "mode": "snap"}
+    check(sc.auto_name("neon", snap_scene) == "snap/neon" and sc.auto_name("club/neon", snap_scene) == "club/neon"
+          and sc.auto_name("  neon ", snap_scene) == "snap/neon" and sc.auto_name("a/", snap_scene) == "snap/a/",
+          "rangement auto: un nom sans dossier prend le dossier du type, un nom deja range est respecte")
+    obook = sc.SceneBook(lambda: tmp.with_name("organize.json"))
+    for nm_, bg_, mode_ in (("neon", "live", "snap"), ("vague", "live", "ridge"), ("club/acid", "live", "snap"), ("ciel", "video", None)):
+        obook.put({"name": nm_, "bg": bg_, "mode": mode_, "overlay": {}})
+    obook.put({"name": "points", "bg": "pattern", "fond": {"bg_palette": "stochastique"}, "overlay": {}})
+    obook.put({"name": "snap/neon2", "bg": "live", "mode": "snap", "overlay": {}})
+    obook.put({"name": "ridge/vague", "bg": "live", "mode": "ridge", "overlay": {}})            # prend la place du rangement de « vague »
+    n_moved, n_kept = obook.organize()
+    names_o = obook.names()
+    check(n_moved == 3 and n_kept == 1 and {"snap/neon", "video/ciel", "stochastique/points", "club/acid", "snap/neon2", "ridge/vague", "vague"} <= set(names_o)
+          and "neon" not in names_o and "ciel" not in names_o,
+          "rangement auto: seules les scenes de la racine sont rangees, un dossier de l'utilisateur est intact, un nom deja pris laisse la scene a la racine",
+          str(sorted(names_o)))
+    check(obook.organize() == (0, 1), "rangement auto: relancer ne change plus rien (la scene en collision reste signalee)")
     sbook = sc.SceneBook(lambda: tmp.with_name("stars.json"))
     sbook.put({"name": "S1", "bg": "live", "overlay": {}})
     check(sbook.set_star("S1", True) and sbook.get("S1").get("star") is True and sbook.set_star("S1", False) and "star" not in sbook.get("S1")
@@ -9355,6 +9386,53 @@ def gui_macro_scroll_steps(c, s, out) -> None:
     sc["expand"](False)
     root.update()
     out["macro_scroll"] = (res, small)
+
+
+def gui_autofolder_steps(c, s, out) -> None:
+    """Rangement automatique par type de fond (#241) : case « Ranger auto » (reglage de salle), enregistrement, bouton « Ranger par type ».
+    Etape a part, appelee en dernier : elle ajoute des scenes et ouvre la bibliotheque, ce dont les autres etapes ne dependent pas."""
+    sc, book, root, params = c["scenes"], c["scene_book"], c["root"], s.params
+    ops = sc["panel_ops"]
+    sc["expand"](True)                                       # la bibliotheque vit dans le panneau etendu
+    root.update()
+    opened = sc["panel_state"].get("lib") is None
+    if opened:
+        ops.toggle_library()
+        root.update()
+    lib = sc["panel_state"]["lib"]
+    auto_was, bg_was = params.get("scene_auto_folder"), params.get("bg_mode")
+    act_was = (getattr(s, "active_scene", None), getattr(s, "active_entry", None))
+    params["scene_auto_folder"] = 1.0
+    params["bg_mode"] = "live"
+    sc["capture"]("AutoA")
+    in_folder = [n for n in book.names() if n.endswith("/AutoA")]
+    params["scene_auto_folder"] = 0.0
+    sc["capture"]("AutoB")
+    stays_root = "AutoB" in book.names()
+    n_before = len(book.names())
+    sc["capture"](in_folder[0] if in_folder else "?")        # recapturer la scene rangee par son nom : une mise a jour, ni doublon ni deplacement
+    no_dup = len(book.names()) == n_before
+    params["scene_auto_folder"] = 1.0
+    book.put({"name": "AutoC", "bg": "live", "mode": "ridge", "overlay": {}})
+    lib["organize"]()
+    root.update()
+    organized = ("ridge/AutoC" in book.names() and "AutoC" not in book.names() and "AutoB" not in book.names()
+                 and any(n.endswith("/AutoB") for n in book.names()))
+    lib = sc["panel_state"]["lib"]
+    cb_ok = bool(lib["auto_cb"].winfo_exists()) and lib["auto_cb"].cget("text") == "Ranger auto"
+    lib["auto_cb"].invoke()
+    toggled = params["scene_auto_folder"] == 0.0
+    lib["auto_cb"].invoke()
+    out["x_auto_folder"] = (len(in_folder) == 1, stays_root, no_dup, organized, cb_ok, toggled and params["scene_auto_folder"] == 1.0, "AutoA" not in book.names())
+    for n_ in [n for n in book.names() if n.split("/")[-1] in ("AutoA", "AutoB", "AutoC")]:
+        book.delete(n_)
+    s.active_scene, s.active_entry = act_was
+    params["scene_auto_folder"] = 0.0 if auto_was is None else auto_was
+    params["bg_mode"] = bg_was
+    if opened:
+        ops.toggle_library()
+    sc["expand"](False)
+    root.update()
 
 
 def gui_zoom_steps(c, s, out) -> None:

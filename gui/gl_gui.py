@@ -1686,6 +1686,9 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                 note = " (reglages du panneau audio2wave non retenus)"
         shown = {"overlay": overlay_var.get(), "fond": bg_presets["var"].get()}
         scene = scenes.capture_scene(name, params, s.mode, overrides, presets=shown)
+        if float(params.get("scene_auto_folder", 1.0)) >= 0.5 and scene_book.get(scene["name"]) is None:
+            scene["name"] = scenes.auto_name(scene["name"], scene)       # nouvelle scene sans dossier : rangee par type de fond (#241) ; une mise a jour ne bouge pas
+            name = scene["name"]
         scene_book.put(scene)                          # nouvelle : bibliotheque + fin du set actif ; sinon mise a jour partout
         s.active_scene = scene["name"]
         s.active_entry = current_index(scene_book.rows())
@@ -2252,6 +2255,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         move_entry_now=move_entry_now,
         move_entry_to=move_entry_to,
         panel_state=panel_state,
+        params=params,
         redo_now=lambda: redo_now(),
         undo_now=lambda: undo_now(),
         random_bank=random_bank,
