@@ -71,8 +71,10 @@ def match(onsets: list[float], detections: list[float], flashes: list[float], ga
     return rows
 
 
-def _render_loop(an, size, fps, t_end, np, moderngl):
-    """Boucle de rendu a cadence fixe (comme l'ecran) : rend l'etat de l'analyse, lit l'image, releve les eclairs. Rend les instants d'eclair."""
+def _render_setup(size, np, moderngl):
+    """Contexte, Renderer (compilation des shaders) et une image de chauffe, AVANT que le son et l'analyse ne demarrent : sur un serveur sans
+    carte graphique (Mesa llvmpipe) la compilation prend des secondes sans rendre la main aux autres fils (verrou de Python) ; faite pendant la
+    mesure, elle bloquait l'injection du son et l'analyse, et les kicks tombaient dans ce trou (tous manques)."""
     import audio2wave_gl as gl
     ctx = moderngl.create_standalone_context()
     target = ctx.texture(size, 4)
@@ -81,6 +83,16 @@ def _render_loop(an, size, fps, t_end, np, moderngl):
     params = dict(gl.DEFAULT_PARAMS)
     params.update(holo_on=0.0, bg_mode="pattern", bg_master=0.0, fx_on=[0, 0, 0, 0, 0], strobe_on=1.0, strobe_mode="kick",
                   strobe_max_hz=20.0, strobe_max_s=600.0, strobe_dark=1.0, auto_master=0.0)
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    renderer.draw(fbo, size, quiet, params, 0.0)                # premiere image : les pilotes finissent souvent leur travail au premier rendu
+    fbo.read(components=3)
+    return renderer, fbo, params
+
+
+def _render_loop(an, size, fps, t_end, np, setup, diag=None):
+    """Boucle de rendu a cadence fixe (comme l'ecran) : rend l'etat de l'analyse, lit l'image, releve les eclairs. Rend les instants d'eclair.
+    `setup` : (renderer, fbo, params) de `_render_setup` ; `diag` (dict) recoit la duree de chaque image (rendu + lecture)."""
+    renderer, fbo, params = setup
     flashes: list[float] = []
     was_white = False
     fired = renderer.strobe_fired
@@ -95,6 +107,8 @@ def _render_loop(an, size, fps, t_end, np, moderngl):
         renderer.draw(fbo, size, state, params, now - t0)
         data = fbo.read(components=3)                       # attend la fin du rendu : l'image est vraiment prete
         t_read = time.monotonic()
+        if diag is not None:
+            diag.setdefault("frames_ms", []).append((t_read - now) * 1000.0)
         white = float(np.frombuffer(data, dtype=np.uint8).mean()) > 100.0
         # L'eclair est releve quand le rendu l'a accepte (compteur) : la lecture `fbo.read` ci-dessus a attendu la fin du rendu de cette image, donc
         # c'est bien l'instant ou elle est prete. Se fier a l'image blanche seule rate l'eclair (70 ms) quand le rendu logiciel d'un serveur
@@ -133,9 +147,13 @@ def measure(kicks: int = 12, hardware: bool = False, input_device=None, output_d
         raise RuntimeError("numpy et moderngl sont necessaires (pip install -r requirements-gl.txt)")
     ring = RingBuffer()
     info: dict = {"mode": "materiel" if hardware else "interne", "fps": fps, "bloc": block}
+    t_init = time.monotonic()
+    setup = _render_setup(size, np, moderngl)                 # avant le son et l'analyse (voir _render_setup)
+    info["init_s"] = round(time.monotonic() - t_init, 2)
     onsets: list[float] = []
     stop = threading.Event()
     streams = []
+    diag: dict = {"analyses": [], "feed_late_ms": 0.0}
     t_start = time.monotonic() + 0.3
 
     if hardware:
@@ -174,6 +192,12 @@ def measure(kicks: int = 12, hardware: bool = False, input_device=None, output_d
         t_start = None
     extractor = FeatureExtractor(rate)
     an = AudioAnalyzer(ring, extractor)
+    analyze = an._analyze
+
+    def counted(total, rate_, now):                             # diagnostic : instant de chaque pas d'analyse (trous = fil prive de processeur)
+        diag["analyses"].append(now)
+        return analyze(total, rate_, now)
+    an._analyze = counted
     detections: list[float] = []
     an.start()
     watcher = threading.Thread(target=_watch_detections, args=(an, stop, detections), daemon=True)
@@ -197,6 +221,8 @@ def measure(kicks: int = 12, hardware: bool = False, input_device=None, output_d
                 wait = t0 + idx / rate - time.monotonic()            # le bloc n'est « livre » qu'une fois complet, comme un callback
                 if wait > 0:
                     time.sleep(wait)
+                else:
+                    diag["feed_late_ms"] = max(diag["feed_late_ms"], -wait * 1000.0)
                 ring.write(sig.astype(np.float32))
         feeder = threading.Thread(target=feed, daemon=True)
         feeder.start()
@@ -206,7 +232,7 @@ def measure(kicks: int = 12, hardware: bool = False, input_device=None, output_d
     t_end = time.monotonic() + 0.3 + WARMUP_S + kicks * GAP_S + 0.6
     log(f"Mesure en cours ({kicks} kicks, ~{t_end - time.monotonic():.0f} s)...")
     try:
-        flashes = _render_loop(an, size, fps, t_end, np, moderngl)
+        flashes = _render_loop(an, size, fps, t_end, np, setup, diag)
     finally:
         stop.set()
         an.stop()
@@ -216,6 +242,12 @@ def measure(kicks: int = 12, hardware: bool = False, input_device=None, output_d
             except Exception:
                 pass
     rows = match(sorted(onsets), detections, flashes)
+    steps = diag["analyses"]
+    gaps = [b - a for a, b in zip(steps, steps[1:])]
+    frames = diag.get("frames_ms", [])
+    info["diag"] = {"images": len(frames), "image_ms_mediane": round(summarize(frames).get("median", 0.0), 1),
+                    "image_ms_max": round(max(frames, default=0.0), 1), "analyses": len(steps),
+                    "trou_analyse_ms_max": round(max(gaps, default=0.0) * 1000.0, 1), "retard_son_ms_max": round(diag["feed_late_ms"], 1)}
     result = {"rows": rows, "info": info, "missed": sum(1 for r in rows if r["total_ms"] is None),
               "analyse": summarize([r["analyse_ms"] for r in rows]), "rendu": summarize([r["rendu_ms"] for r in rows]),
               "total": summarize([r["total_ms"] for r in rows])}
