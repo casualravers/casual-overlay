@@ -27,6 +27,7 @@ from core.recording import cover_uv as fit_cover, fit_rect
 from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
 from core.brain import FxEdge
 from core import textfx
+from core import stotex
 from core import routing
 from core.textfx import FillClock, OlaClock, clean_fill, clean_ola, fill_times, tile_batch
 from engine.textfill import TextPattern
@@ -396,6 +397,9 @@ class Renderer:
         self._bg_scroll = 0.0
         self._bg_flip_t = 0.0
         self._sto_flick = 0.0                      # palette stochastique : phase integree du scintillement (aigus)
+        self._sto_sweep = stotex.SweepClock()      # stochastique, pavage interieur (#220) : calendrier de la vague
+        self._sto_phase = 0.0                      # stochastique, onde interieure : phase integree des lignes (mediums)
+        self._sto_dummy = None                     # texture 1 x 1 liee a l'unite 5 quand le pavage est coupe
         self.rd: ReactionDiffusion | None = None   # palette labyrinthe : simulation creee au premier besoin
         self._rd_acc = 0.0                         # reste de l'accumulateur de pas de simulation
         self._rd_zone_t = 0.0                      # temps de derive des zones de formes (integre, tempo compris)
@@ -576,6 +580,46 @@ class Renderer:
         speed = getattr(self, "_text_reach_px", 1.0) / max(front, 0.05)       # vitesse du front, en pixels de la texture du texte par seconde
         self._set(sp, "u_front", (min(max(float(p["text_front_edge"]), 0.0), 30.0), min(max(float(p["text_front_glint"]), 0.0), 1.0), speed, 0.0))
         tile.texture.use(3)
+
+    def _sto_texture(self, sp, p: dict, t: float, dt: float, react: float, au, state: dict, since_down: float) -> None:
+        """Texture de la zone de la tache du stochastique (#220) : onde (lignes d'oscilloscope, `core.stotex.wave_params`) ou pavage de reaction-diffusion
+        (la tuile du remplissage du texte, partagee ; vague et epoques de `core.stotex.SweepClock`). Unite 5 : la tuile, sinon une texture vide. Palette
+        autre, texture « none » ou tuile pas encore prete : `u_sto_tex.x` = 0 (aplat comme avant)."""
+        self._set(sp, "u_sto_tile", 5)
+        if self._sto_dummy is None:
+            self._sto_dummy = self.ctx.texture((1, 1), 2, dtype="f4", data=bytes(8))
+        mode = {"wave": 1.0, "tiling": 2.0}.get(p["bg_sto_tex"], 0.0) if p["bg_palette"] == "stochastique" else 0.0
+        scale = min(max(float(p["bg_sto_tex_scale"]), 0.3), 3.0)
+        tile = None
+        if mode == 2.0:
+            tile = self.text_tile
+            if tile is None:
+                tile = self.text_tile = TextPattern(self.ctx, self.vbo, self.shader_dir)
+                tile.load_cache()
+            if not tile.ready and not tile.failed:                          # preparation de la tuile : quelques pas par image, une seule fois
+                tile.advance(tile_batch(tile.done, bool(self.perf is not None and self.perf.active)))
+            if not tile.ready:
+                tile, mode = None, 0.0
+        if mode != 2.0 and self._sto_sweep.t_start is not None:
+            self._sto_sweep = stotex.SweepClock()                            # la vague repart de zero au prochain retour sur le pavage
+        if mode == 1.0:
+            amp, freq, speed, width = stotex.wave_params(au[0], float(state.get("mid", 0.0)), au[1], au[2], react)
+            self._sto_phase = (self._sto_phase + dt * speed) % 6283.185307
+            self._set(sp, "u_sto_wave", (amp, freq, self._sto_phase, width))
+        prev = 0.0
+        if mode == 2.0:
+            sync = float(p["bg_sto_tex_sync"]) >= 0.5
+            every = min(max(float(p["bg_sto_tex_every"]), stotex.EVERY_MIN), stotex.EVERY_MAX)
+            age, epoch = self._sto_sweep.update(t, since_down, every, sync, int(p["bg_sto_tex_bars"]))
+            front, growth = stotex.front_times(self._sto_sweep.interval if sync else every)
+            cur, old = stotex.epoch_offset(epoch), stotex.epoch_offset(epoch - 1)
+            prev = 1.0 if epoch > 0 else 0.0
+            self._set(sp, "u_sto_sweep", (age, front, growth, 0.5 / scale / float(tile.size)))
+            self._set(sp, "u_sto_off", (cur[0], cur[1], old[0], old[1]))
+            tile.texture.use(5)
+        else:
+            self._sto_dummy.use(5)
+        self._set(sp, "u_sto_tex", (mode, scale, min(max(float(p["bg_sto_tex_contrast"]), 0.0), 1.0), prev))
 
     def _set_text_rank(self, rank, reach=None) -> None:
         """Texture de la carte du rang (R) et de la portee du front de colonisation (G) des lettres (RG8, sans filtrage : un bord de lettre ne melange pas deux
@@ -1378,6 +1422,7 @@ class Renderer:
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
         self._set(sp, "u_sto_soft", float(p["bg_sto_soft"]))
         self._set(sp, "u_sto_levels", {"2": 2.0, "3": 3.0}.get(p["bg_sto_levels"], 0.0))
+        self._sto_texture(sp, p, t, dt, react, bg_au, state, since_down)
         self._set(sp, "u_sto_border", (*hex_to_rgb(p["bg_sto_border_color"], DEFAULT_PARAMS["bg_sto_border_color"]), float(p["bg_sto_border"])))
         self._set(sp, "u_sto_au", (react * float(bg_sc[0]), react * float(bg_fl[2]),
                                    float(state.get("beats", 0)) if kicks_on else 0.0, 0.0))
