@@ -66,7 +66,10 @@ les basses).
   vignettes absentes = texte seul. Full Randomizer : parmi les 8. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
   `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ), `bg_sto_soft` (« Douceur », #223 :
   rayon x `smoothstep(rang - l, rang + l, champ)`, `l` = 0,15 x douceur, uniform `u_sto_soft` ; les points naissent et meurent en grossissant au lieu
-  de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720) ; `bg_hue` et `bg_speed`
+  de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720),
+  `bg_sto_border` / `bg_sto_border_color` (« Taille de bordure » 0..12 px pour 720 px de haut et « Couleur de bordure », #219 : uniform `u_sto_border`,
+  anneau trace DANS le point retenu, `smoothstep(rayon - bordure +- 0,5 px)`, le point garde sa taille et la grille ne change pas ; bordure >= rayon =
+  disque plein de la couleur de bordure ; 0 = image d'origine ; le Randomizer la tire une fois sur deux, 1 a 4 px, blanc / noir / couleur 2) ; `bg_hue` et `bg_speed`
   s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
   kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
   change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,
@@ -118,11 +121,25 @@ les basses).
   si mix > 0 ou void > 0 ; a 0 partout : bit pour bit l'ancien comportement. **Valeurs neutres** (mix 0, layers 0, sym none, void 0) = simulation et
   image identiques bit pour bit a la version d'avant. Automations actives par defaut : forme, ecart, variete, epaisseur, liberte, vide (0,15 a 0,6,
   periode 107 s ; pas derive ni symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0.
+  **Apparitions** (issue #187 ; design et plan : `docs/plans/2026-11-26-labyrinthe-apparitions-187-*.md`) : en cours de route les nouvelles
+  taches ne viennent QUE des germes des kicks. `bg_rd_spawn` (curseur « Apparitions », 1 par defaut) = part des kicks qui sement
+  (`core.reaction.kick_spawns`, tirage deterministe par kick ; 0 = le motif grandit seul depuis ses bords). `bg_rd_bud` (case « Seulement contre
+  le motif », 0 par defaut) = bourgeons : `rd_step.frag` (`u_bud`, `touches_matter`) ne pose un germe que si l'une de 8 lectures de V sur un cercle
+  de 2 x rayon + 2 cellules depasse `BUD_LEVEL` 0,1 (grille en boucle comprise) ; `BUD_SEEDS` 4 candidats par kick au lieu de 3 (une partie tombe
+  dans le vide et est jetee). Germes initiaux, relance de symetrie et garde-fou (`watch`, jamais d'ecran vide) : inchanges. Les taches qui se
+  divisent ne sont pas des germes (croissance du motif). Defauts = simulation et image identiques. Full Randomizer : apparitions 0,4 a 1, bourgeons
+  une fois sur trois (tires apres les autres reglages). **Non verifie** : ressenti au videoprojecteur avec de la vraie musique.
   **Taille du motif** (`bg_rd_scale`, 0,3 a 2) : automatisable (courbe 0,6 a 1,6, periode 127 s, **coupee par defaut** : chaque changement de
   taille floute un peu le motif). `ReactionDiffusion.ensure(scale, now)` recopie l'etat sur le GPU (passe de recopie bilineaire, ~0,1 ms ; l'ancien
   numpy coutait ~12 ms) et, avec `now`, ne change la taille de la grille qu'une fois par `RESIZE_MIN_S` (0,4 s). Echelle 0,3 = grille de 1280 x 720 :
   les pas par image sont plafonnes par cellules x pas (`MAX_CELL_STEPS` 5 millions, mesure a 0,85 ns par cellule et par pas : ~4 ms), donc ~5 pas par
   image a 0,3 (le motif y evolue deux fois moins vite), 15 a 0,5, 24 a 1. `core.reaction.step_load` entre dans l'estimation de la securite GPU.
+  **Demi-precision sans symetrie (#225)** : quand `bg_rd_sym` = `none`, l'etat est en **RG16F** (`ReactionDiffusion.half`, `reset(half=)`, reallocation
+  au changement de symetrie) : il y stocke **W = 1 - U** (shader `u_w` : `W' = W + lap(W) + U V^2 - F W`, le chemin RG32F reste identique bit pour bit,
+  verifie par empreinte) et le shader arrondit **stochastiquement** (bruit de +-1/2 ulp avant l'ecriture : V varie de ~1e-4 par pas, sous l'ulp 2,4e-4,
+  sans cela le motif se figeait). La Liberte (bruit de V) exige 32 bits : avec une symetrie l'etat reste en RG32F. Plafond `MAX_CELL_STEPS_HALF`
+  (9,5 millions : 10 pas a 0,3, 24 a 0,5) et `HALF_STEP_COST` (0,55) dans `step_load` / securite GPU. Carte (F, K) toujours en RG32F. Mesure (AMD) :
+  echelle 0,3 +5,7 -> +5,0 ms avec 2 fois plus de pas ; echelle 0,5 +3,9 -> +2,5 ms. Le motif n'est plus identique au pixel pres (meme nature).
   `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
   `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, relance a la symetrie, rafale, epaisseur).
   **Fluidite** (issue #189 ; spec : `docs/plans/2026-11-19-labyrinthe-fluide-189.md`) : le motif « claquait » a la naissance d'une tache, a la

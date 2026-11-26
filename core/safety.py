@@ -44,7 +44,7 @@ def background_cost(values: dict, render_size: tuple[int, int] | None = None) ->
         zoned = float(values.get("bg_rd_mix", 0.0) or 0.0) > 0.0 or float(values.get("bg_rd_void", 0.0) or 0.0) > 0.0
         zones = BG_RD_ZONE_COST_MS if zoned else 0.0
         from core import reaction                      # une grille fine coute plus : 0,4 de fixe (lectures du rendu) + 0,6 x la charge de la simulation
-        load = reaction.step_load(float(values.get("bg_rd_scale", 1.0) or 1.0))
+        load = reaction.step_load(float(values.get("bg_rd_scale", 1.0) or 1.0), half=values.get("bg_rd_sym", "none") == "none")      # sans symetrie : etat en demi-precision (#225)
         return BG_RD_COST_MS * _scale(render_size) * (0.4 + 0.6 * load) + zones
     if values.get("bg_palette") != "stochastique":
         return 0.0

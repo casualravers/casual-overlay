@@ -154,6 +154,10 @@ def install(c):
     param_slider(sz, "Douceur", "bg_sto_soft", 0.0, 1.0, 0.05,
                  "Les points naissent et meurent en grossissant / retrecissant (0 = allumage sec ; plus haut = moins de gresillement aux bords des zones).")
     param_slider(sz, "Arc-en-ciel", "bg_sto_rainbow", 0.0, 1.0, 0.05, "0 = points de la couleur 1 ; plus haut = leur teinte suit le champ.")
+    param_slider(sz, "Taille de bordure", "bg_sto_border", 0.0, 12.0, 0.5,
+                 "Contour de chaque point, en pixels pour une image de 720 px de haut, trace dans le point (0 = aucun ; "
+                 "au moins le rayon = point entierement de la couleur de bordure).")
+    color_row(sz, "Couleur de bordure", "bg_sto_border_color")
     sto_inv_var = tk.IntVar(value=int(float(params["bg_sto_invert"]) >= 0.5))
     bind_param("bg_sto_invert", sto_inv_var, float)
     tk.Checkbutton(sto_box, text="Inverser (couleur 2 sur couleur 1)", variable=sto_inv_var).grid(
@@ -169,6 +173,12 @@ def install(c):
     param_slider(rz, "Ecart des couches", "bg_rd_offset", 0.0, 0.05, 0.002, "Decalage entre les 3 couleurs.")
     param_slider(rz, "Variete", "bg_rd_mix", 0.0, 1.0, 0.05, "Points, lignes et taches melanges par zones.")
     param_slider(rz, "Vide", "bg_rd_void", 0.0, 1.0, 0.05, "Zones sans matiere (et zones denses) qui derivent.")
+    param_slider(rz, "Apparitions", "bg_rd_spawn", 0.0, 1.0, 0.05,
+                 "Part des kicks qui font naitre de nouvelles taches (100 % = chaque kick, 0 % = aucune : le motif grandit seul depuis ses bords).")
+    rd_bud_var = tk.IntVar(value=int(float(params["bg_rd_bud"]) >= 0.5))
+    bind_param("bg_rd_bud", rd_bud_var, float)
+    tk.Checkbutton(rd_box, text="Seulement contre le motif", variable=rd_bud_var).grid(
+        row=rz.next_row(), column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     param_slider(rz, "Derive", "bg_rd_drift", 0.0, 1.0, 0.05, "Vitesse de deplacement des zones (formes et vides).")
     param_slider(rz, "Epaisseur des couches", "bg_rd_layers", 0.0, 1.0, 0.05, "Couche 1 large dessous, couche 3 fine dessus.")
     param_slider(rz, "Fluidite", "bg_rd_smooth", 0.0, 1.0, 0.05,

@@ -43,6 +43,8 @@ class ReactionDiffusion:
         self.seed = 0
         self.steps = 0                                     # pas faits depuis la creation : graine du bruit de Liberte
         self._watch_t: float | None = None
+        self.half = False                                  # format voulu pour l'etat : True = RG16F (W = 1 - U, issue #225), False = RG32F ; voir `reset(half=)`
+        self.dtype = "f4"                                  # format reel de l'etat : "f4" (U, V) ou "f2" (W = 1 - U, V)
 
     @property
     def texture(self):
@@ -101,9 +103,10 @@ class ReactionDiffusion:
         self.disp_tex, self.disp_fbo, self._disp_ok = [], [], False
         self.tex, self.fbo = [], []
         self.zone_tex = self.zone_fbo = None
-        # RG32F d'abord : en RG16F un increment F x (1 - U) plus petit que le demi-ulp pres de 1 est perdu et le motif se fige en un
-        # point fixe d'arrondi apres ~15 s (mesure). La grille est petite (384 x 216 x 8 octets) : le cout est negligeable. Repli RG16F.
-        for dtype in ("f4", "f2"):
+        # RG32F : U et V. RG16F : W = 1 - U et V (issue #225) : en RG16F un increment F x (1 - U) plus petit que le demi-ulp pres de 1 etait perdu et le
+        # motif se figeait en un point fixe d'arrondi apres ~15 s ; W est petit la ou le motif est vide (precis), l'increment F x W n'est plus perdu.
+        # `half` = format voulu (RG16F : un pas ~2 fois moins cher aux grilles fines) ; l'autre sert de repli (RG32F absent : RG16F, donc W).
+        for dtype in (("f2", "f4") if self.half else ("f4", "f2")):
             try:
                 tex = [self.ctx.texture(size, 2, dtype=dtype) for _ in range(2)]
                 fbo = [self.ctx.framebuffer(color_attachments=[t]) for t in tex]
@@ -115,7 +118,10 @@ class ReactionDiffusion:
             t.filter = (moderngl.LINEAR, moderngl.LINEAR)
             t.repeat_x = t.repeat_y = True
         if self.tex:
-            self.zone_tex = self.ctx.texture(size, 2, dtype=self.dtype)
+            try:                                           # carte (F, K) en RG32F meme quand l'etat est en RG16F : la precision de F et de K compte (bande utile etroite)
+                self.zone_tex = self.ctx.texture(size, 2, dtype="f4")
+            except Exception:
+                self.zone_tex = self.ctx.texture(size, 2, dtype=self.dtype)
             self.zone_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
             self.zone_fbo = self.ctx.framebuffer(color_attachments=[self.zone_tex])
         self.size, self.cur = size, 0
@@ -154,9 +160,14 @@ class ReactionDiffusion:
         if prev is not None:
             prev.use()
 
-    def reset(self, seed: int, zone: rc.Zone | None = None) -> None:
+    def reset(self, seed: int, zone: rc.Zone | None = None, half: bool | None = None) -> None:
         """Etat initial : U = 1, V = 0, et des disques de V = 1 aux germes de la graine (positions deterministes). Avec une symetrie
-        (`zone.sym`), les germes sont repetes en orbite (moins de germes de base : ~40 au total)."""
+        (`zone.sym`), les germes sont repetes en orbite (moins de germes de base : ~40 au total). `half` (issue #225) : format voulu de l'etat
+        (True = RG16F, False = RG32F) ; s'il change, la grille est reallouee a la meme taille (le motif repart de toute facon)."""
+        if half is not None:
+            self.half = bool(half)
+            if self.tex and (self.dtype == "f2") != self.half:
+                self._alloc(self.size)
         self.seed = seed
         w, h = self.size
         zone = zone or rc.Zone()
@@ -172,24 +183,28 @@ class ReactionDiffusion:
         self.write(np.ones((h, w), np.float32), v)
 
     def write(self, u, v) -> None:
-        """Ecrit l'etat (U, V : tableaux (h, w), haut en premier) dans la texture courante."""
-        data = np.stack([u, v], axis=2)[::-1].astype(np.float16 if self.dtype == "f2" else np.float32)
+        """Ecrit l'etat (U, V : tableaux (h, w), haut en premier) dans la texture courante (en RG16F : W = 1 - U)."""
+        first = 1.0 - np.asarray(u, np.float32) if self.dtype == "f2" else u
+        data = np.stack([first, v], axis=2)[::-1].astype(np.float16 if self.dtype == "f2" else np.float32)
         self.tex[self.cur].write(np.ascontiguousarray(data).tobytes())
 
     def _read(self):
+        """(U, V) en float32, forme (h, w), haut en premier (en RG16F, U = 1 - W)."""
         w, h = self.size
         raw = np.frombuffer(self.tex[self.cur].read(), dtype=np.float16 if self.dtype == "f2" else np.float32)
         a = raw.reshape(h, w, 2)[::-1].astype(np.float32)
-        return a[:, :, 0].copy(), a[:, :, 1].copy()
+        first = 1.0 - a[:, :, 0] if self.dtype == "f2" else a[:, :, 0].copy()
+        return first, a[:, :, 1].copy()
 
     def read_v(self):
         """V en float32, forme (h, w), haut en premier."""
         return self._read()[1]
 
-    def step(self, n: int, shape: float, seeds=(), zone: rc.Zone | None = None) -> list:
+    def step(self, n: int, shape: float, seeds=(), zone: rc.Zone | None = None, bud: bool = False) -> list:
         """`n` pas Gray-Scott a la forme `shape` (axe 0..2 : points, lignes, taches). Germes : (x, y) ou (x, y, rayon), positions normalisees
         origine haut gauche, poses 4 par pas sur les pas successifs (le shader n'en prend que 4). `zone` : carte de forme qui derive et
-        symetrie (None = forme uniforme). Rend les germes qui n'ont pas pu etre poses (moins de pas que de paquets de 4)."""
+        symetrie (None = forme uniforme). `bud` (#187) : un germe ne prend que s'il touche de la matiere (sinon il est jete).
+        Rend les germes qui n'ont pas pu etre poses (moins de pas que de paquets de 4)."""
         if n <= 0 or not self.tex:
             return list(seeds)
         prev = self.ctx.fbo
@@ -219,7 +234,8 @@ class ReactionDiffusion:
             self.zone_tex.use(1)
         free_noise = rc.FREE_NOISE if self.dtype == "f4" else 0.0          # en 16 bits un increment de 1e-3 serait perdu
         for name, value in (("u_zoned", int(zoned)), ("u_zone", 1), ("u_sym", sym), ("u_free", float(zone.free)),
-                            ("u_free_noise", free_noise)):
+                            ("u_free_noise", free_noise), ("u_bud", int(bool(bud))), ("u_bud_level", rc.BUD_LEVEL),
+                            ("u_w", int(self.dtype == "f2"))):
             if name in prog:
                 prog[name].value = value
         queue = [(s[0], s[1], s[2] if len(s) > 2 else rc.SEED_RADIUS) for s in seeds]

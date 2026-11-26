@@ -652,7 +652,8 @@ def check_gui() -> None:
             out["rd_tips"] = (len(rd_labels), shown, [], len(rd_ctrl))
             out["rd_written"] = params["bg_rd_scale"]
             out["rd_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False))
-                              for lb in ("Variete", "Vide", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
+                              for lb in ("Variete", "Vide", "Apparitions", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
+            out["rd_bud_cb"] = any(w.winfo_class() == "Checkbutton" and w.cget("text") == "Seulement contre le motif" for w in _walk(c["rd_box"]))
             for w in gg.row_of_label(c["rd_box"], "Variete", panels=False):
                 for x in gg.leaves(w):
                     if x.winfo_class() == "Scale":
@@ -1683,10 +1684,11 @@ def check_gui() -> None:
     check(n_tip >= 9 and n_shown == n_tip, "palette labyrinthe: chaque ligne a une info-bulle qui s'affiche au survol du libelle", str(out.get("rd_tips")))
     check(n_ctrl >= 9, "palette labyrinthe: les curseurs et choix portent aussi l'info-bulle (survol du controle)", str(out.get("rd_tips")))
     check(out.get("rd_written") == 1.5,"palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
-    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 7 and out.get("rd_mix_written") == 0.4
-          and out.get("rd_sym_written") == "rot",
-          "palette labyrinthe: variete, vide, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
-          str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"))))
+    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 8 and out.get("rd_mix_written") == 0.4
+          and out.get("rd_sym_written") == "rot" and out.get("rd_bud_cb") is True,
+          "palette labyrinthe: variete, vide, apparitions (+ case contre le motif), derive, epaisseur, symetrie, branches et liberte dans la fenetre ; "
+          "curseur et choix ecrivent les reglages",
+          str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"), out.get("rd_bud_cb"))))
     check(out.get("rd_branch_mirror") == off and out.get("rd_branch_rot") == on
           and all(v == on for v in (out.get("rd_others_none") or {"x": off}).values()),
           "palette labyrinthe: Branches grise hors rotation, et lui seul (variete, symetrie, forme restent actives)",
@@ -3459,6 +3461,24 @@ def check_bg_stochastic() -> None:
           f"{d0:.3f} -> {d1:.3f}")
     check(gl.coerce_params({"bg_sto_soft": 4})["bg_sto_soft"] == 1.0 and gl.DEFAULT_PARAMS["bg_sto_soft"] == 0.0
           and "bg_sto_soft" in gl.BG_KEYS, "stochastique: douceur bornee 0..1, 0 par defaut, reglage du fond (scenes, presets de fond)")
+    # Bordure (#219) : anneau de la couleur de bordure a l'interieur de chaque point (le point garde sa taille). En 640 x 360,
+    # les points (20 px pour 720) ont un rayon de 5 px et la bordure (px pour 720) est divisee par deux.
+    check(abs(render(bg_sto_border=0.0, bg_sto_border_color="#00ff00") - a).max() == 0,
+          "stochastique: bordure 0 = image d'origine (meme avec une couleur de bordure)")
+    green = lambda img: float((img[:, :, 1] > 128).mean())
+    foot = lambda img: float((img[:, :, 2] < 128).mean())           # pixels couverts par un point, bordure comprise (fond bleu)
+    rings = {bw: render(bg_sto_border=bw, bg_sto_border_color="#00ff00") for bw in (2.0, 4.0, 8.0)}
+    gs = [green(rings[bw]) for bw in (2.0, 4.0, 8.0)]
+    check(0.0 < gs[0] < gs[1] < gs[2], "stochastique: la bordure s'epaissit avec le curseur", " ".join(f"{x:.3f}" for x in gs))
+    check(abs(foot(rings[8.0]) - foot(a)) < 0.01, "stochastique: la bordure est dans le point (meme surface couverte)",
+          f"{foot(a):.3f} -> {foot(rings[8.0]):.3f}")
+    hollow = render(bg_sto_border=12.0, bg_sto_border_color="#00ff00")
+    check(hollow[:, :, 0].max() < 60 and green(hollow) > 0.8 * foot(a),
+          "stochastique: bordure au moins egale au rayon = disque plein de la couleur de bordure", f"rouge max {hollow[:, :, 0].max()}")
+    check(gl.coerce_params({"bg_sto_border": 40})["bg_sto_border"] == 12.0 and gl.DEFAULT_PARAMS["bg_sto_border"] == 0.0
+          and {"bg_sto_border", "bg_sto_border_color"} <= set(gl.BG_KEYS)
+          and gl.DEFAULT_PARAMS["bg_sto_border_color"] == "#ffffff",
+          "stochastique: bordure bornee 0..12 px, 0 par defaut, couleur blanche, reglages du fond")
 
     # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
@@ -11269,12 +11289,19 @@ def check_randomizer() -> None:
               and (v["bg_rd_sym"] != "rot" or v["bg_rd_free"] >= 0.2) for v in lb) and 0.25 <= sym_share <= 0.45,
           "fond aleatoire: zones, couches et symetrie du labyrinthe tirees dans leurs plages (symetrie une fois sur trois environ)",
           f"part avec symetrie {sym_share:.2f}")
+    bud_share = sum(1 for v in lb if v.get("bg_rd_bud") == 1.0) / max(len(lb), 1)
+    check(all(0.4 <= v.get("bg_rd_spawn", -1) <= 1.0 and v.get("bg_rd_bud") in (0.0, 1.0) for v in lb) and 0.15 <= bud_share <= 0.5,
+          "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
     st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
     from core import sto_fields as sf2
     seen_fields = {v["bg_sto_field"] for v in st_}
     check(len(st_) >= 40 and seen_fields <= set(sf2.VALUES) and len(seen_fields) >= 6,
           "fond aleatoire: le champ du stochastique est tire parmi les 8 (#229)", f"{len(st_)} tirages, champs vus {sorted(seen_fields)}")
+    bord_share = sum(1 for v in st_ if v.get("bg_sto_border") == 0.0) / max(len(st_), 1)
+    check(all(v.get("bg_sto_border") == 0.0 or 1.0 <= v.get("bg_sto_border", -1) <= 4.0 for v in st_)
+          and all(gl.coerce_params(v)["bg_sto_border_color"] == v.get("bg_sto_border_color") for v in st_) and 0.3 <= bord_share <= 0.7,
+          "fond aleatoire: bordure du stochastique une fois sur deux (1 a 4 px), avec sa couleur", f"part sans bordure {bord_share:.2f}")
     check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
@@ -13026,7 +13053,8 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 8 and all(k in gl.BG_KEYS for k in sto), "stochastique: 8 reglages (douceur comprise, #223), tous du fond (presets de fond, scenes)")
+    check(len(sto) == 10 and all(k in gl.BG_KEYS for k in sto),
+          "stochastique: 10 reglages (douceur #223 et bordure #219 comprises), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
@@ -13038,15 +13066,18 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 15 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 17 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+          and d["bg_rd_spawn"] == 1.0 and d["bg_rd_bud"] == 0.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
           and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0 and d["bg_rd_smooth"] == 0.5,
-          "labyrinthe: 15 reglages du fond (zones, vides, couches, symetrie, fluidite), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+          "labyrinthe: 17 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+    sp = gl.coerce_params({"bg_rd_spawn": 3, "bg_rd_bud": -2})
+    check(sp["bg_rd_spawn"] == 1.0 and sp["bg_rd_bud"] == 0.0, "labyrinthe: apparitions et bourgeons bornes 0..1", str((sp["bg_rd_spawn"], sp["bg_rd_bud"])))
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
-    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void")
+    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud")
     old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
     for k in new_rd:
         old_scene.get("fond", {}).pop(k, None)
@@ -13133,6 +13164,38 @@ def check_reaction_sim() -> None:
           f"couverture {blobs.mean():.2f}, aire moyenne {np.mean(bsizes):.0f}")
     path = {s: float((sim(s, 3000).read_v() > 0.25).mean()) for s in (1.2, 1.4, 1.6, 1.8)}
     check(all(0.05 < x < 0.9 for x in path.values()), "chemin lignes -> taches vivant a chaque etape", str(path))
+    # Apparitions (#187) : « seulement contre le motif » = un germe ne prend que s'il touche de la matiere (rd_step.frag, u_bud)
+    def with_spot(cx=None, cy=0.5, rad=6):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(1.0)
+        w, h = r.size
+        v = np.zeros((h, w), np.float32)
+        if cx is not None:
+            yy, xx = np.mgrid[0:h, 0:w]
+            v[(xx + 0.5 - cx * w) ** 2 + (yy + 0.5 - cy * h) ** 2 <= rad ** 2] = 0.3
+        r.write(np.ones((h, w), np.float32) - v, v)
+        return r
+
+    def v_at(r, x, y):
+        w, h = r.size
+        return float(r.read_v()[int(y * h), int(x * w)])
+    gw = rc.grid_size(1.0)[0]
+    empty = with_spot()
+    empty.step(1, 0.6, [(0.5, 0.5)], bud=True)
+    check(float(empty.read_v().max()) == 0.0, "bourgeons: un germe tombe dans le vide ne prend pas")
+    near_x = 0.5 + 12 / gw                                          # 12 cellules du centre de la tache : 6 du bord, le cercle de lecture la touche
+    near = with_spot(0.5)
+    near.step(1, 0.6, [(near_x, 0.5)], bud=True)
+    far = with_spot(0.5)
+    far.step(1, 0.6, [(0.5 + 60 / gw, 0.5)], bud=True)
+    free_ = with_spot()
+    free_.step(1, 0.6, [(0.5, 0.5)])
+    check(v_at(near, near_x, 0.5) > 0.3 and v_at(far, 0.5 + 60 / gw, 0.5) < 0.01 and v_at(free_, 0.5, 0.5) > 0.3,
+          "bourgeons: un germe contre une tache prend, loin d'elle non ; sans l'option il prend partout (comme avant)",
+          str((v_at(near, near_x, 0.5), v_at(far, 0.5 + 60 / gw, 0.5), v_at(free_, 0.5, 0.5))))
+    wrap = with_spot(2 / gw)
+    wrap.step(1, 0.6, [(1.0 - 8 / gw, 0.5)], bud=True)
+    check(v_at(wrap, 1.0 - 8 / gw, 0.5) > 0.3, "bourgeons: grille en boucle, un germe au bord droit touche une tache au bord gauche")
     still_alive = {}
     for s in (0.0, 0.6, 1.0):                    # le motif vit en continu : il ne se fige pas en un point fixe (piege du demi-flottant)
         r_ = sim(s, 10000)
@@ -13142,6 +13205,59 @@ def check_reaction_sim() -> None:
         still_alive[s] = int(((r_.read_v() > 0.25) != m0).sum())
     check(all(n_ > 300 for n_ in still_alive.values()), "le motif se reorganise encore apres 10000 pas (il ne se fige pas)",
           f"cellules changees entre 10000 et 12000 pas : {still_alive}")
+    # Demi-precision (#225) : l'etat en RG16F stocke W = 1 - U (l'increment F x (1 - U) pres de U = 1 n'y est plus perdu) ; meme nature qu'en RG32F
+    def sim_h(shape, steps, half, seed=0, scale=1.0):
+        r_ = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r_.half = half
+        r_.ensure(scale)
+        r_.reset(seed)
+        for _ in range(steps // 20):
+            r_.step(20, shape)
+        return r_
+    h0, f0 = sim_h(0.6, 0, True), sim_h(0.6, 0, False)
+    check(h0.dtype == "f2" and f0.dtype == "f4" and np.array_equal(h0.read_v(), f0.read_v()),
+          "demi-precision: l'etat est en RG16F quand on le demande (RG32F sinon), memes germes au depart")
+    uu, vv = np.full((216, 384), 0.9876, np.float32), np.full((216, 384), 0.31, np.float32)
+    h0.write(uu, vv)
+    ru, rv = h0._read()
+    check(abs(ru - uu).max() < 1e-4 and abs(rv - vv).max() < 3e-4,
+          "demi-precision: ecrire (U, V) puis relire rend (U, V) (U est stocke en W = 1 - U, precis pres de 1)", f"{abs(ru - uu).max():.1e} / {abs(rv - vv).max():.1e}")
+    cov = {}
+    for s in (0.0, 0.5, 1.0):
+        cov[s] = [float((sim_h(s, 2000, h).read_v() > 0.25).mean()) for h in (False, True)]
+    check(all(abs(a - b) < 0.07 and 0.05 < b < 0.7 for a, b in cov.values()),
+          "demi-precision: meme couverture qu'en RG32F sur les trois formes (taches, milieu, labyrinthe)", str(cov))
+    spots_h = sim_h(0.0, 6000, True).read_v() > 0.25
+    lab_h, sizes_h = rd_components(spots_h)
+    near_h = False
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            other = np.roll(np.roll(lab_h, dy, axis=0), dx, axis=1)
+            near_h = near_h or bool(((lab_h > 0) & (other > 0) & (lab_h != other)).any())
+    check(len(sizes_h) >= 30 and max(sizes_h) < 4 * float(np.median(sizes_h)) and not near_h,
+          "demi-precision: forme 0 = taches nombreuses, regulieres, qui ne se touchent jamais (comme en RG32F)",
+          f"{len(sizes_h)} taches, plus grande {max(sizes_h)}, mediane {np.median(sizes_h):.0f}, trop proches {near_h}")
+    alive_h = {}
+    for s in (0.0, 0.6, 1.0):                    # le piege du demi-flottant : le motif se figeait apres ~15 s (U ne bougeait plus)
+        r_ = sim_h(s, 10000, True)
+        m0 = r_.read_v() > 0.25
+        for _ in range(100):
+            r_.step(20, s)
+        alive_h[s] = int(((r_.read_v() > 0.25) != m0).sum())
+    check(all(n_ > 300 for n_ in alive_h.values()), "demi-precision: le motif se reorganise encore apres 10000 pas (il ne se fige pas)",
+          f"cellules changees entre 10000 et 12000 pas : {alive_h}")
+    sw = sim_h(0.6, 200, True, seed=5)
+    sw.reset(7, half=False)
+    fresh = sim_h(0.6, 0, False, seed=7)
+    check(sw.dtype == "f4" and sw.size == fresh.size and np.array_equal(sw.read_v(), fresh.read_v()),
+          "demi-precision: reset(half=False) rebascule en RG32F (meme taille, germes de la graine)")
+    sw.reset(7, half=True)
+    check(sw.dtype == "f2" and np.array_equal(sw.read_v(), fresh.read_v()), "demi-precision: reset(half=True) repasse en RG16F")
+    big = sim_h(0.6, 600, True)
+    big.ensure(1.5)
+    for _ in range(25):
+        big.step(20, 0.6)
+    check(big.dtype == "f2" and 0.05 < float((big.read_v() > 0.25).mean()) < 0.7, "demi-precision: changer la taille du motif recopie l'etat, toujours vivant")
     frozen = sim(0.6, 400)
     v0 = frozen.read_v().copy()
     frozen.step(0, 0.6)
@@ -13367,6 +13483,14 @@ def check_bg_labyrinthe() -> None:
     _r, big = run(size=(1280, 720))
     small_ = big.reshape(360, 2, 640, 2, 3).mean(axis=(1, 3))
     check(abs(small_ - a).mean() < 6, "labyrinthe: meme dessin quelle que soit la taille de la fenetre", f"ecart {abs(small_ - a).mean():.1f}")
+    rh, _ih = run(frames=2)                      # demi-precision (#225) : sans symetrie l'etat est en RG16F, avec une symetrie il repasse en RG32F
+    quad_r, _iq = run(frames=2, bg_rd_sym="quad")
+    check(rh.rd.dtype == "f2" and quad_r.rd.dtype == "f4", "labyrinthe: etat en RG16F sans symetrie, en RG32F avec une symetrie",
+          f"{rh.rd.dtype} / {quad_r.rd.dtype}")
+    st0 = rh.rd.steps
+    run(rr=rh, frames=1, bg_rd_scale=0.3)
+    check(rh.rd.steps - st0 >= 10 or rh.rd.size[0] * rh.rd.size[1] > 0 and rh.rd.steps - st0 >= 5,
+          "labyrinthe: grille fine en demi-precision, au moins 5 pas par image", str(rh.rd.steps - st0))
     rt, t1 = run(tempo=0.0)
     _rt, t2 = run(rr=rt, frames=20, tempo=0.0)
     check(abs(t2 - t1).max() == 0 and abs(run(rr=r1, frames=20)[1] - a).mean() > 1,
@@ -13374,6 +13498,23 @@ def check_bg_labyrinthe() -> None:
     rk0, k1 = run(tempo=0.0, bg_react=1.0)
     _rk0, k2 = run(rr=rk0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_react=1.0)
     check(abs(k2 - k1).max() == 0, "labyrinthe: tempo a 0 = fige meme quand des kicks arrivent (les germes attendent)")
+    # Apparitions (#187) : 0 % = aucun germe de kick (orbites comprises) ; changer en cours de route garde les germes deja en file
+    kicks = lambda i: dict(quiet, beats=1 + i // 4)
+    rs0, _ = run(frames=20, state=kicks, tempo=0.0, bg_react=1.0, bg_rd_sym="quad", bg_rd_spawn=0.0)
+    rs1, _ = run(frames=20, state=kicks, tempo=0.0, bg_react=1.0, bg_rd_sym="quad")
+    queued = len(rs1._rd_pending)
+    try:
+        run(rr=rs1, frames=4, state=lambda i: dict(quiet, beats=6 + i), tempo=0.0, bg_react=1.0, bg_rd_sym="quad", bg_rd_spawn=0.0)
+        kept = len(rs1._rd_pending) == queued
+    except Exception as exc:          # noqa: BLE001
+        kept = False
+        print("   ", exc)
+    check(rs0._rd_pending == [] and queued > 0 and kept,
+          "apparitions: 0 % = aucun germe de kick (symetrie comprise) ; passer a 0 garde les germes deja en attente", str((rs0._rd_pending[:2], queued)))
+    rb, _ = run(frames=8, state=kicks, tempo=0.0, bg_react=1.0, bg_rd_bud=1.0)
+    check(len(rb._rd_pending) == 4, "apparitions: contre le motif = 4 candidats par kick (au plus 4 en attente sans symetrie)", str(len(rb._rd_pending)))
+    _r, dflt = run(bg_rd_spawn=1.0, bg_rd_bud=0.0)
+    check(abs(dflt - a).max() == 0, "apparitions: valeurs par defaut = image d'origine")
     rz0, z1 = run(tempo=0.0, bg_rd_mix=0.8)
     zt = rz0._rd_zone_t
     _rz0, z2 = run(rr=rz0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_rd_mix=0.8)
@@ -13934,6 +14075,30 @@ def check_reaction_pure() -> None:
     k5 = rc.kick_seeds(5)
     check(len(k5) == 3 and k5 == rc.kick_seeds(5) and k5 != rc.kick_seeds(6) and all(0 <= x < 1 and 0 <= y < 1 for x, y in k5),
           "germes du kick: 3, deterministes, differents d'un kick a l'autre")
+    # Demi-precision (#225) : le pas est ~2 fois moins cher aux grilles fines, le plafond de pas monte (le motif fin retrouve sa vitesse)
+    h_fine = rc.steps_for(0.0, 0.1, 4.0, 1.0, 1280 * 720, half=True)[0]
+    h_mid = rc.steps_for(0.0, 0.1, 4.0, 1.0, 768 * 432, half=True)[0]
+    check(h_fine == 10 and h_mid == 24 and rc.steps_for(0.0, 0.1, 4.0, 1.0, 1280 * 720)[0] == 5 and rc.max_steps(10 ** 9, True) == 1,
+          "demi-precision: 10 pas par image a l'echelle 0,3 (5 en RG32F), 24 a 0,5, jamais moins de 1", str((h_fine, h_mid)))
+    check(rc.steps_for(0.0, 1 / 60, 1.0, 0.0, 384 * 216, half=True)[0] == 10 and rc.steps_for(0.0, 1 / 60, 1.0, 0.0, half=True)[0] == 10,
+          "demi-precision: 10 pas par image a 60 images/s, quelle que soit la grille moyenne")
+    full = {s: rc.step_load(s) for s in (1.0, 0.5, 0.3)}
+    half_ = {s: rc.step_load(s, half=True) for s in (1.0, 0.5, 0.3)}
+    check(full[1.0] == 1.0 and half_[1.0] < full[1.0] and half_[0.5] < 0.6 * full[0.5] and half_[0.3] > half_[0.5] > half_[1.0]
+          and abs(half_[0.3] / full[0.3] - 1.1) < 0.1,
+          "demi-precision: la charge estimee (securite GPU) baisse de moitie a 0,5, et monte un peu a 0,3 (10 pas au lieu de 5)", str((full, half_)))
+    check(0.4 < rc.HALF_STEP_COST < 0.7 and rc.MAX_CELL_STEPS_HALF > rc.MAX_CELL_STEPS, "demi-precision: constantes (cout relatif d'un pas, plafond)")
+    # Apparitions (#187) : part des kicks qui sement, et nombre de candidats quand ils ne prennent que contre le motif
+    ks = range(200)
+    check(all(rc.kick_spawns(k, 1.0) for k in ks) and not any(rc.kick_spawns(k, 0.0) for k in ks),
+          "apparitions: 100 % = chaque kick seme (comme avant), 0 % = aucun")
+    half = sum(rc.kick_spawns(k, 0.5) for k in ks)
+    check(80 <= half <= 120 and [rc.kick_spawns(k, 0.5) for k in ks] == [rc.kick_spawns(k, 0.5) for k in ks],
+          "apparitions: 50 % = environ un kick sur deux, toujours les memes (deterministe)", str(half))
+    check(rc.kick_spawns(5, 1.4) and not rc.kick_spawns(5, -1) and rc.kick_spawns(5, float("nan")),
+          "apparitions: valeur hors plage bornee, NaN = 100 %")
+    check(rc.kick_candidates(False) == rc.KICK_SEEDS == 3 and rc.kick_candidates(True) == rc.BUD_SEEDS == 4 and 0.0 < rc.BUD_LEVEL < 0.2,
+          "apparitions: contre le motif = 4 candidats par kick au lieu de 3 (une partie tombe dans le vide)")
     n, acc = rc.steps_for(0.0, 1 / 60, 1.0, 0.0)
     check(n == 10 and abs(acc) < 1e-9 and rc.steps_for(0.5, 0.0, 1.0, 0.0) == (0, 0.5) and rc.steps_for(0.0, 1.0, 0.0, 1.0)[0] == 0,
           "pas par image: 600 par seconde, reste garde, vitesse 0 = fige", str((n, acc)))
@@ -16055,6 +16220,9 @@ def check_safeguards() -> None:
           and all(sf.background_cost(dict(sto_next, bg_sto_field=v), full) > 0.0 for v in gl.params_schema.BY_KEY["bg_sto_field"].choices)
           and sf.background_cost(dict(sto_next, bg_sto_field="inconnu"), full) == sf.background_cost(sto_next, full),
           "securite GPU: cout du fond stochastique compte pour chacun des 8 champs (#229 : champ precalcule), nul hors du fond genere")
+    fine = dict(bg_mode="pattern", bg_palette="labyrinthe", bg_rd_scale=0.5)
+    check(sf.background_cost(dict(fine, bg_rd_sym="none"), full) < sf.background_cost(dict(fine, bg_rd_sym="quad"), full),
+          "securite GPU: labyrinthe sans symetrie (demi-precision, #225) compte moins qu'avec une symetrie (RG32F) a l'echelle 0,5")
     check(sf.background_cost(dict(bg_mode="pattern", bg_palette="labyrinthe"), full) > 0.0
           and sf.background_cost(dict(bg_mode="live", bg_palette="labyrinthe"), full) == 0.0,
           "securite GPU: cout du fond labyrinthe compte, nul hors du fond genere")
@@ -16613,13 +16781,22 @@ ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui val
 
 # Groupes de la suite complete (integration continue : un job par groupe, en parallele). Tout `check_*` de SUITE qui n'est dans aucun groupe liste ici
 # va dans GROUPE_PAR_DEFAUT : ajouter une verification ne demande rien, et aucune ne peut etre oubliee. Un nom ne doit etre que dans UN groupe
-# (`check_groupes`). Equilibre vise : ~5 a 8 minutes chacun sur le serveur ; le groupe `gui` garde les verifications dont `check_gui` depend.
+# (`check_groupes`). Equilibre vise : ~5 a 9 minutes chacun sur le serveur ; le groupe `gui` garde les verifications dont `check_gui` depend.
+# Chaque nom de groupe doit aussi etre dans la matrice du workflow (`check_groupes` le verifie). Le groupe `moteur` (33 min, mesure du 2026-11-26) a ete coupe
+# en quatre (#232) selon les durees mesurees en CI (secondes) : check_render 380, check_foudre_render 366, check_bg_stochastic 292, check_doodles 243,
+# check_recording_render 197, check_rd_cover 98, check_kaleidoscope_frame 65, check_native_modes 42, check_drop_render 41, check_holo 32 ; le reste, moins de 30 chacune.
 GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
-    "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
-               "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_routage_rendu", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame"),
+    # ~8 min : le rendu des effets, du logo et des modes
+    "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
+    # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels
+    "rendu": ("check_foudre_render", "check_native_modes", "check_drop_render", "check_mosaic", "check_qr_projection", "check_bg_video", "check_audio_layers",
+              "check_routage_rendu", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
+    # ~8 min : fond genere (le labyrinthe a son propre groupe), cadre vertical
+    "fond": ("check_bg_stochastic", "check_rd_cover", "check_kaleidoscope_frame"),
+    # ~8 min : doodles, enregistrement, extraits
+    "medias": ("check_doodles", "check_recording_render", "check_recorder", "check_highlights_audio", "check_clips", "check_bestof_engine"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel"),
@@ -16704,6 +16881,15 @@ def check_groupes() -> None:
     union = sorted(n for g in (*GROUPES, GROUPE_PAR_DEFAUT) for n in SUITE if group_of(n) == g)
     check(union == sorted(SUITE) and group_of("check_inconnu") == GROUPE_PAR_DEFAUT,
           "groupes : leur reunion est la suite complete, un nom absent des groupes va dans le groupe par defaut")
+    # Un groupe defini ici mais absent de la matrice du workflow ne tournerait JAMAIS en CI : les deux listes doivent etre identiques (#232).
+    wf = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "check.yml"
+    if wf.is_file():
+        import re
+        m = re.search(r"groupe:\s*\[([^\]]*)\]", wf.read_text(encoding="utf-8"))
+        in_ci = sorted(x.strip() for x in m.group(1).split(",") if x.strip()) if m else []
+        check(in_ci == sorted((*GROUPES, GROUPE_PAR_DEFAUT)),
+              "groupes : la matrice du workflow (.github/workflows/check.yml) liste exactement les groupes de GROUPES et le groupe par defaut",
+              f"workflow {in_ci} / groupes {sorted((*GROUPES, GROUPE_PAR_DEFAUT))}")
     opts0 = parse_options([])
     check(selected_checks(opts0) == list(SUITE), "options : sans option, toute la suite dans l'ordre de SUITE")
     check(selected_checks(dict(opts0, groupe="moteur")) == [n for n in SUITE if n in GROUPES["moteur"]],

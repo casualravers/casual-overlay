@@ -254,6 +254,8 @@ def random_background_params(rng: random.Random) -> dict:
                        "bg_sto_density": round(rng.uniform(0.3, 0.7), 2), "bg_sto_invert": float(rng.random() < 0.5),
                        "bg_sto_rainbow": 0.0 if rng.random() < 0.5 else round(rng.uniform(0.0, 0.6), 2)})
         values["bg_sto_soft"] = round(rng.uniform(0.0, 0.8), 2)          # douceur (#223) : tiree apres les autres reglages du stochastique
+        values["bg_sto_border"] = 0.0 if rng.random() < 0.5 else round(rng.uniform(1.0, 4.0), 1)     # bordure (#219), tiree apres la douceur
+        values["bg_sto_border_color"] = rng.choice(("#ffffff", "#000000", values["bg_color2"]))
     if palette == "labyrinthe":
         h = rng.random()
         hues = (h, (h + rng.uniform(0.2, 0.4)) % 1.0, (h + rng.uniform(0.6, 0.8)) % 1.0)      # trois teintes espacees d'au moins 0,2
@@ -265,6 +267,9 @@ def random_background_params(rng: random.Random) -> dict:
         for key, hue in zip(("bg_rd_color1", "bg_rd_color2", "bg_rd_color3"), hues):
             values[key] = _hex(colorsys.hsv_to_rgb(hue, rng.uniform(0.6, 1.0), rng.uniform(0.8, 1.0)))
         values["bg_rd_ground"] = _hex(colorsys.hsv_to_rgb(rng.random(), rng.uniform(0.2, 0.6), rng.uniform(0.03, 0.12)))
+        # apparitions (#187) : tirees APRES les autres (les tirages existants ne bougent pas)
+        values["bg_rd_spawn"] = round(rng.uniform(0.4, 1.0), 2)
+        values["bg_rd_bud"] = float(rng.random() < 1 / 3)
     return values
 
 
