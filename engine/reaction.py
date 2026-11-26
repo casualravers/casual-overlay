@@ -186,10 +186,11 @@ class ReactionDiffusion:
         """V en float32, forme (h, w), haut en premier."""
         return self._read()[1]
 
-    def step(self, n: int, shape: float, seeds=(), zone: rc.Zone | None = None) -> list:
+    def step(self, n: int, shape: float, seeds=(), zone: rc.Zone | None = None, bud: bool = False) -> list:
         """`n` pas Gray-Scott a la forme `shape` (axe 0..2 : points, lignes, taches). Germes : (x, y) ou (x, y, rayon), positions normalisees
         origine haut gauche, poses 4 par pas sur les pas successifs (le shader n'en prend que 4). `zone` : carte de forme qui derive et
-        symetrie (None = forme uniforme). Rend les germes qui n'ont pas pu etre poses (moins de pas que de paquets de 4)."""
+        symetrie (None = forme uniforme). `bud` (#187) : un germe ne prend que s'il touche de la matiere (sinon il est jete).
+        Rend les germes qui n'ont pas pu etre poses (moins de pas que de paquets de 4)."""
         if n <= 0 or not self.tex:
             return list(seeds)
         prev = self.ctx.fbo
@@ -219,7 +220,7 @@ class ReactionDiffusion:
             self.zone_tex.use(1)
         free_noise = rc.FREE_NOISE if self.dtype == "f4" else 0.0          # en 16 bits un increment de 1e-3 serait perdu
         for name, value in (("u_zoned", int(zoned)), ("u_zone", 1), ("u_sym", sym), ("u_free", float(zone.free)),
-                            ("u_free_noise", free_noise)):
+                            ("u_free_noise", free_noise), ("u_bud", int(bool(bud))), ("u_bud_level", rc.BUD_LEVEL)):
             if name in prog:
                 prog[name].value = value
         queue = [(s[0], s[1], s[2] if len(s) > 2 else rc.SEED_RADIUS) for s in seeds]

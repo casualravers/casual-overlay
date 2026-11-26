@@ -15,6 +15,20 @@ uniform int u_sym;             // 0 aucune, 1 miroir gauche-droite, 2 miroir hau
 uniform float u_free;          // liberte 0..1
 uniform float u_free_noise;    // amplitude du bruit de V a liberte 1 (0 si l'etat est en 16 bits : il serait perdu)
 uniform int u_step;            // compteur de pas : le bruit de V change a chaque pas
+uniform int u_bud;             // 1 = un germe ne prend que s'il touche de la matiere (apparitions « contre le motif », issue #187)
+uniform float u_bud_level;     // V au-dessus duquel une lecture compte comme matiere (core.reaction.BUD_LEVEL)
+
+bool touches_matter(vec2 seed, float rad) {                 // 8 lectures sur un cercle de 2 x rayon + 2 cellules autour du germe (meme decision pour tout le germe)
+    vec2 c = vec2(seed.x, 1.0 - seed.y);                    // germe : origine HAUT gauche ; texture : origine bas gauche (grille en boucle : REPEAT)
+    float reach = 2.0 * rad + 2.0;
+    for (int k = 0; k < 8; k++) {
+        float a = 0.7853982 * float(k);
+        if (texture(u_state, c + vec2(cos(a), sin(a)) * reach * u_texel).g > u_bud_level) {
+            return true;
+        }
+    }
+    return false;
+}
 
 in vec2 v_uv;
 out vec4 f_color;
@@ -54,7 +68,7 @@ void main() {
         d = (d - floor(d + 0.5)) * u_grid;                  // ecart le plus court sur la grille en boucle, en cellules
         float r = length(d);
         float rad = u_seeds[i].z;
-        if (rad > 0.0 && r <= 2.0 * rad) {                  // germe doux (issue #189) : gaussien, 0,4 au centre, moitie au rayon (core.reaction.seed_value)
+        if (rad > 0.0 && r <= 2.0 * rad && (u_bud == 0 || touches_matter(u_seeds[i].xy, rad))) {      // germe doux (issue #189) : gaussien, 0,4 au centre, moitie au rayon (core.reaction.seed_value)
             v = max(v, 0.4 * exp(-0.6931472 * (r / rad) * (r / rad)));
         }
     }

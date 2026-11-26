@@ -1024,10 +1024,12 @@ class Renderer:
             else:
                 self._rd_want = None
             bass = react * float(bg_au[0])
+            bud = float(p["bg_rd_bud"]) >= 0.5
             if kicks_on and self._rd_beats is not None:
                 new = []
-                for k in range(self._rd_beats + 1, beats + 1):
-                    new += reaction.colonize(reaction.kick_seeds(k), sym, branches, free, gw / gh, salt=k)
+                for k in range(self._rd_beats + 1, beats + 1):        # apparitions (#187) : seule une part des kicks seme ; contre le motif, plus de candidats
+                    if reaction.kick_spawns(k, p["bg_rd_spawn"]):
+                        new += reaction.colonize(reaction.kick_seeds(k, reaction.kick_candidates(bud)), sym, branches, free, gw / gh, salt=k)
                 # sans symetrie : au plus 4 germes en attente comme avant (comportement d'origine) ; avec : file bornee des orbites
                 self._rd_pending = reaction.queue_seeds(self._rd_pending, new)[-(4 if sym == "none" else reaction.MAX_PENDING_SEEDS):]
             self._rd_beats = beats
@@ -1035,7 +1037,7 @@ class Renderer:
             if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes et les zones attendent
                 self._rd_zone_t += dt * reaction.ZONE_SPEED * float(p["bg_rd_drift"])
                 zone = zone._replace(t=self._rd_zone_t)
-                self._rd_pending = self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending, zone)
+                self._rd_pending = self.rd.step(n, min(max(float(p["bg_rd_shape"]) + 0.4 * bass, 0.0), 1.0), self._rd_pending, zone, bud)
             self.rd.watch(t, zone)
             self.rd_note = "" if self.rd.dtype == "f4" or sym == "none" else "Liberte sans effet : etat de la simulation en 16 bits"
             smooth = float(p.get("bg_rd_smooth", 0.0))

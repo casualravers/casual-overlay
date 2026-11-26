@@ -263,6 +263,9 @@ def random_background_params(rng: random.Random) -> dict:
         for key, hue in zip(("bg_rd_color1", "bg_rd_color2", "bg_rd_color3"), hues):
             values[key] = _hex(colorsys.hsv_to_rgb(hue, rng.uniform(0.6, 1.0), rng.uniform(0.8, 1.0)))
         values["bg_rd_ground"] = _hex(colorsys.hsv_to_rgb(rng.random(), rng.uniform(0.2, 0.6), rng.uniform(0.03, 0.12)))
+        # apparitions (#187) : tirees APRES les autres (les tirages existants ne bougent pas)
+        values["bg_rd_spawn"] = round(rng.uniform(0.4, 1.0), 2)
+        values["bg_rd_bud"] = float(rng.random() < 1 / 3)
     return values
 
 
