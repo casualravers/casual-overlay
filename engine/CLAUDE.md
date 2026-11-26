@@ -3,7 +3,7 @@
 Avant de modifier un module, lis sa fiche :
 
 - `projection.py`, `window.py`, `app.py`, `render.py` (PerfGuard) : [docs/fonctions/projection.md](../docs/fonctions/projection.md)
-- `render.py` (logo, halo, fonte, cellules, mosaique, texte), `textfill.py` (remplissage des lettres, #199) : [docs/fonctions/logo.md](../docs/fonctions/logo.md) ; (strobe, foudre) : [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md)
+- `render.py` (logo, halo, fonte, cellules, texte), `textfill.py` (remplissage des lettres, #199) : [docs/fonctions/logo.md](../docs/fonctions/logo.md) ; (strobe, foudre) : [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md)
 - `audio.py` : [docs/fonctions/audio.md](../docs/fonctions/audio.md) et [docs/fonctions/synchro.md](../docs/fonctions/synchro.md)
 - `video.py`, `reaction.py` : [docs/fonctions/fond.md](../docs/fonctions/fond.md) ; `video.py` (ProducerManager) : [docs/fonctions/gui.md](../docs/fonctions/gui.md)
 - `native_modes.py`, `sphere_mode.py` : [docs/fonctions/gui.md](../docs/fonctions/gui.md)

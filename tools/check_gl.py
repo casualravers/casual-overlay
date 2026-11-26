@@ -589,16 +589,12 @@ def check_gui() -> None:
             tab_m, tab_c = c["tabs"][4], c["tabs"][5]
             c["melt_var"].set(0)
             c["cell_var"].set(0)
-            c["mosaic_var"].set(0)
             out["g_fx_off"] = (scales(tab_m), scales(tab_c))
-            c["cell_var"].set(1)                                            # cellules seules : les curseurs de la mosaique restent gris
-            out["g_cell_only"] = scales(tab_c)
+            c["cell_var"].set(1)
             c["melt_var"].set(1)
-            c["mosaic_var"].set(1)
             out["g_fx_on"] = (scales(tab_m), scales(tab_c))
             c["melt_var"].set(0)
             c["cell_var"].set(0)
-            c["mosaic_var"].set(0)
             def text_states(*labels):
                 return {str(x.cget("state")) for lb in labels for w in gg.row_of_label(c["text_box"], lb, panels=False)
                         for x in gg.leaves(w) if x.winfo_class() == "Scale"}
@@ -1652,7 +1648,6 @@ def check_gui() -> None:
     check(gto == (off, off, 0.0, 0.0) and gta == (on, off, 1.0) and gtn == (on, on, 1.0),
           "texte: curseurs de la vague et du remplissage gris tant que leur case est decochee, actifs une fois cochee (chacune la sienne)",
           f"{gto} {gta} {gtn}")
-    check(out.get("g_cell_only") == {"normal", "disabled"}, "mosaique coupee, cellules cochees: seuls les curseurs de la mosaique restent grises", str(out.get("g_cell_only")))
     check(out.get("g_fx_off") == (off, off) and out.get("g_fx_on") == (on, on),
           "fonte et cellules coupees: leurs curseurs sont grises, actifs une fois cochees", f"{out.get('g_fx_off')} {out.get('g_fx_on')}")
     gp = out.get("g_pal", {})
@@ -2350,7 +2345,7 @@ def check_render() -> None:
         quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 10.0, "beats": 0}
 
         def logo_gap(**over) -> float:
-            base = dict(gl.DEFAULT_PARAMS, fx_link=0.0, fx_on=[0] * 5, fxl_on=[0] * 4, holo_on=0.0, melt_on=0.0, cell_on=0.0, mosaic_on=0.0,
+            base = dict(gl.DEFAULT_PARAMS, fx_link=0.0, fx_on=[0] * 5, fxl_on=[0] * 4, holo_on=0.0, melt_on=0.0, cell_on=0.0,
                         noise_amount=0.0, breath_pulse=0.0, logo_x=0.5, logo_y=0.5, logo_scale=0.4, bg_mode="live")
             shots = []
             for st in (quiet, dict(loud, since_beat=0.05, beat=1.0, beats=4)):
@@ -9485,73 +9480,6 @@ def check_vj_flash() -> None:
     check(gl.Renderer.__init__ is not None and r.flash_t < 0 or True, "flash: etat")
 
 
-def check_mosaic() -> None:
-    print("Mosaique de doodles du logo")
-    from engine import render as eng_render
-    d = gl.DEFAULT_PARAMS
-    check(d["mosaic_on"] == 0.0 and 0.0 < d["mosaic_amount"] <= 1.0, "par defaut: coupee")
-    pr = dict(d, mosaic_on=1.0)
-    check("mosaic_on" in gl.capture_overlay(pr) and "mosaic_on" not in gl.capture_background(pr) and gl.PANIC_RESET.get("mosaic_on") == 0.0,
-          "reglage de look (presets overlay et scenes), coupe par la panique")
-    # vignette : boite de l'alpha, puis carre centre
-    wide = np.zeros((40, 100, 4), np.uint8)
-    wide[10:30, 20:80] = (255, 0, 0, 255)                                   # 60 x 20 rouge, marge transparente
-    tile = eng_render.mosaic_tile(wide)
-    check(tile.shape == (eng_render.MOSAIC_TILE, eng_render.MOSAIC_TILE, 4) and (tile[:, :, 3] > 250).all() and tile[:, :, 0].min() > 250 and tile[:, :, 1].max() < 5,
-          "vignette: marge transparente retiree, recadree en carre, couleurs gardees")
-    check(eng_render.mosaic_tile(np.zeros((10, 10, 4), np.uint8)) is None, "vignette: image entierement transparente = ignoree")
-    try:
-        ctx = gl.moderngl.create_standalone_context()
-    except Exception as exc:
-        check(False, "contexte OpenGL standalone", str(exc))
-        return
-    size = (640, 360)
-    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
-    r = gl.Renderer(ctx, size, None)
-    r.video_tex.write(bytes([20, 20, 20]) * (size[0] * size[1]))
-    logo = np.zeros((64, 64, 4), np.uint8)
-    logo[:, :32] = (255, 255, 255, 255)                                      # moitie gauche blanche, moitie droite transparente
-    r.set_logo(logo, "x")
-    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
-    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.5, logo_opacity=1.0, logo_glow=0.0,
-                logo_pulse=0.0, logo_jitter=0.0, bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_on=0.0)
-
-    def render(t=1.0, **kw):
-        r.draw(fbo, size, quiet, dict(base, **kw), t)
-        return read_target(ctx, fbo, size).astype(int)
-
-    off = render(mosaic_on=0.0)
-    check(np.array_equal(render(mosaic_on=1.0), off), "aucun doodle recu: le logo reste intact")
-    for rgb in ((255, 0, 0), (0, 255, 0), (0, 0, 255)):                      # trois doodles unis (pose directement : pas de doodle a l'ecran)
-        r.mosaic_tiles.append(eng_render.mosaic_tile(np.full((30, 30, 4), (*rgb, 255), np.uint8)))
-    r._mosaic_dirty = True
-    check(np.array_equal(render(mosaic_on=0.0), off) and np.array_equal(render(mosaic_on=1.0, mosaic_amount=0.0), off),
-          "coupee ou part a 0: logo d'origine")
-    on = render(mosaic_on=1.0)
-    cover = np.abs(on - render(mosaic_on=0.0, logo_opacity=0.0)).max(axis=2) > 25
-    shape = np.abs(off - render(mosaic_on=0.0, logo_opacity=0.0)).max(axis=2) > 25
-    ys, xs = np.nonzero(shape)
-    check(np.array_equal(cover, shape), "la forme du logo est gardee (la moitie transparente reste vide)")
-    inside = on[shape]
-    pure = lambda c: (np.abs(inside - np.array(c)).max(axis=1) < 40).sum()
-    check(pure((255, 0, 0)) > 200 and pure((0, 255, 0)) > 200 and pure((0, 0, 255)) > 200,
-          "le logo est rempli par les vignettes (rouge, vert et bleu presents)", f"{pure((255, 0, 0))} {pure((0, 255, 0))} {pure((0, 0, 255))}")
-    box = np.zeros(size[::-1], bool)
-    box[max(ys.min() - 3, 0):ys.max() + 4, max(xs.min() - 3, 0):xs.max() + 4] = True       # marge de 3 px : le bord anti-aliase du logo depend du pilote
-    outside = np.abs(on - off).max(axis=2) > 0
-    outside[box] = False
-    check(not outside.any(), "rien ne deborde du logo",
-          f"{int(outside.sum())} px hors de la boite {box.sum()} ; ecart max {int(np.abs(on - off).max())} ; premiers {np.argwhere(outside)[:3].tolist()}")
-    later = render(t=12.0, mosaic_on=1.0)
-    check(np.abs(later - on)[shape].max() > 100, "les cases changent de vignette avec le temps")
-    check(np.abs(render(t=12.0, mosaic_on=1.0, mosaic_size=2.5) - later)[shape].max() > 100, "la taille des vignettes se regle")
-    # le pool garde les 64 dernieres vignettes
-    for i in range(70):
-        r.add_doodle(np.full((20, 20, 4), (i, 0, 0, 255), np.uint8), gl.time.monotonic())
-    check(len(r.mosaic_tiles) == eng_render.MOSAIC_MAX, "64 vignettes au plus (les plus anciennes partent)", str(len(r.mosaic_tiles)))
-    r.wall.items.clear()
-
-
 def check_cells() -> None:
     print("Cellules organiques du logo")
     d = gl.DEFAULT_PARAMS
@@ -11201,6 +11129,9 @@ def check_params() -> None:
     core_params.BRAIN_UI_PATH = core_params.PARAMS_PATH.parent / "brain_ui.json"     # jamais l'etat du cerveau de l'utilisateur
     try:
         check(gl.load_params() == gl.DEFAULT_PARAMS, "sans fichier: valeurs par defaut")
+        old = gl.coerce_params({"mosaic_on": 1.0, "mosaic_amount": 0.5, "mosaic_size": 2.0, "logo_scale": 0.4})
+        check(not any(k.startswith("mosaic_") for k in old) and old["logo_scale"] == 0.4 and not any(k.startswith("mosaic_") for k in gl.DEFAULT_PARAMS),
+              "mosaique supprimee (#217): les anciennes cles mosaic_* d'un reglage sauvegarde sont ignorees, sans erreur")
         params = gl.load_params()
         params["fx_on"][3] = 0
         params["master"] = 1.4
@@ -16997,7 +16928,7 @@ PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_bg_stochastic_tex",
     "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
-    "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
+    "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
@@ -17023,7 +16954,7 @@ GROUPES = {
     # ~8 min : le rendu des effets, du logo et des modes
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
     # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels
-    "rendu": ("check_foudre_render", "check_native_modes", "check_drop_render", "check_mosaic", "check_qr_projection", "check_bg_video", "check_audio_layers",
+    "rendu": ("check_foudre_render", "check_native_modes", "check_drop_render", "check_qr_projection", "check_bg_video", "check_audio_layers",
               "check_routage_rendu", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
     # ~8 min : fond genere (le labyrinthe a son propre groupe), cadre vertical
     "fond": ("check_bg_stochastic", "check_bg_stochastic_tex", "check_rd_cover", "check_kaleidoscope_frame"),

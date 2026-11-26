@@ -1435,9 +1435,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     master_var = gui_effects_ctl.master_var
     melt_row = gui_effects_ctl.melt_row
     melt_var = gui_effects_ctl.melt_var
-    mosaic_row = gui_effects_ctl.mosaic_row
-    mosaic_var = gui_effects_ctl.mosaic_var
-    mosaic_label = gui_effects_ctl.mosaic_label
     noise_bars = gui_effects_ctl.noise_bars
     noise_fx_vars = gui_effects_ctl.noise_fx_vars
     noise_meter = gui_effects_ctl.noise_meter
@@ -1514,9 +1511,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     gates = gui_gates.Gates(a2w.GUI_MUTED_FG)
     gates.add([holo_box], lambda: holo_var.get() == 1)
     gates.add(gui_gates.rows_after(tab_melt, melt_row), lambda: melt_var.get() == 1)
-    mosaic_at = int(gui_gates.top_child(tab_cell, mosaic_row).grid_info()["row"])        # la mosaique a sa propre section sous les cellules
-    gates.add([w for w in gui_gates.rows_after(tab_cell, cell_row) if int(w.grid_info()["row"]) < mosaic_at - 1], lambda: cell_var.get() == 1)
-    gates.add(gui_gates.rows_after(tab_cell, mosaic_row), lambda: mosaic_var.get() == 1)
+    gates.add(gui_gates.rows_after(tab_cell, cell_row), lambda: cell_var.get() == 1)
     palette_var = synced["bg_palette"]
     pal_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(pattern_box, lb, panels=False)]
     sto_field_var = synced["bg_sto_field"]
@@ -1536,7 +1531,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     text_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(text_box, lb, panels=False)]
     gates.add(text_rows("Duree du balayage", "Periode", "Fondu d'une lettre"), lambda: gui_logo_ctl.ola_var.get() == 1)           # vague et remplissage (#199)
     gates.add(text_rows("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Ligne du front", "Scintillement", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
-    for var in (holo_var, melt_var, cell_var, mosaic_var, palette_var, sto_field_var, sto_tex_var, sto_sync_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
+    for var in (holo_var, melt_var, cell_var, palette_var, sto_field_var, sto_tex_var, sto_sync_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 
@@ -1584,7 +1579,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         holo_var.set(int(float(params["holo_on"]) >= 0.5))
         melt_var.set(int(float(params["melt_on"]) >= 0.5))
         cell_var.set(int(float(params["cell_on"]) >= 0.5))
-        mosaic_var.set(int(float(params["mosaic_on"]) >= 0.5))
         logo_var.set(params["logo_path"])
         video_var.set(params["logo_video"])
         bgv_var.set(params["bg_video"])
@@ -2452,8 +2446,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             link_var.set(int(float(params["fx_link"]) >= 0.5))
         if cell_var.get() != int(float(params["cell_on"]) >= 0.5):
             cell_var.set(int(float(params["cell_on"]) >= 0.5))
-        if mosaic_var.get() != int(float(params["mosaic_on"]) >= 0.5):
-            mosaic_var.set(int(float(params["mosaic_on"]) >= 0.5))
         if melt_var.get() != int(float(params["melt_on"]) >= 0.5):
             melt_var.set(int(float(params["melt_on"]) >= 0.5))
         if holo_var.get() != int(float(params["holo_on"]) >= 0.5):
@@ -2487,9 +2479,6 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                                                  params.get("sync_lead_est") if s.status.get("lead_parts") else None, s.status.get("lead_parts")))
         lead_gate(lead_auto)
         bgv_status.set(s.status.get("bgvideo", ""))
-        n_mosaic = int(s.status.get("mosaic", 0))
-        mosaic_label.config(text=(f"{n_mosaic} doodle{'s' if n_mosaic > 1 else ''} dans la mosaique" if n_mosaic
-                                  else "aucun doodle recu pour l'instant"))
         nz_swell, nz_hit = s.status.get("noise", (0.0, 0.0))
         for name, level in (("houle", nz_swell), ("coup", nz_hit)):
             item = noise_bars[name]
@@ -2661,7 +2650,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
             "root": root, "live_host": panel["frame"], "switch": request_mode, "restart_event": restart_event, "live_status": live_status, "close": on_close, "panel": panel, "projection": {"toggle": toggle_projection, "button": lambda: proj_ui["btn"], "send": send},
             "logo_var": logo_var, "video_var": video_var, "apply_logo_path": apply_logo_path, "color_var": color_var, "x_var": x_var,
             "fx_on_vars": fx_on_vars, "fxl_on_vars": fxl_on_vars, "fxl_int_vars": fxl_int_vars,
-            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "routing": routing_ui, "aff_toggle": toggle_aff, "aff_frame": aff_outer, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "mosaic_var": mosaic_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
+            "link_var": link_var, "logo_fx_box": logo_fx_box, "holo_var": holo_var, "holo_box": holo_box, "notebook": notebook, "routing": routing_ui, "aff_toggle": toggle_aff, "aff_frame": aff_outer, "tabs": (tab_fond, tab_fx, tab_logo, tab_aura, tab_melt, tab_cell, tab_aff, tab_noise), "noise_fx_vars": noise_fx_vars, "melt_var": melt_var, "cell_var": cell_var, "gates": gates, "palette_var": palette_var, "layout": layout, "page_bar": page_bar, "right_bar": right_bar, "right_cv": right_cv, "page_canvas": page_canvas,
             "live_wrap": live_wrap, "right_panel": right_wrap, "overlay_var": overlay_var,
             "load_overlay_preset": load_overlay_preset, "save_name_var": save_name_var,
             "save_overlay_preset": save_overlay_preset, "update_overlay_preset": update_overlay_preset,

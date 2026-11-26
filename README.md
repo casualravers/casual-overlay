@@ -237,12 +237,6 @@ Sous les presets, le reste de la partie OVERLAY est range en **onglets** pour qu
   cellules separees), rayon des cellules (petit = bulles isolees, grand = elles se touchent), taille des
   cellules, vitesse, aplat (couleurs d'origine ou couleur du centre de la cellule), couleur du contour, reaction
   audio. Coupee par defaut et non audioreactive. Limite : les cellules restent dans le rectangle du logo.
-- **Mosaique de doodles** (onglet *Cellules*, section du bas) : le logo garde sa forme mais est **reconstruit avec les medias
-  deposes par le public** (les 64 derniers recus, y compris ceux qui ne sont plus a l'ecran) ; chaque case de la grille change
-  de vignette de temps en temps, a son rythme. Demande la case « Recuperer les medias » (onglet *Affichage*) : sans doodle recu, le logo
-  reste intact (l'onglet indique le nombre de doodles disponibles). Reglages : part de mosaique, taille des vignettes. Coupee par defaut,
-  coupee par la PANIQUE. Limites : la liste repart de zero a chaque ouverture de la projection, et un logo a traits fins (comme celui du
-  depot) montre des fragments de couleur plutot que des images reconnaissables : un texte epais ou un logo plein donne un meilleur rendu.
 - **Logo / texte** : source *Image* (PNG) ou *Texte* (tape directement dans la fenetre, plusieurs lignes, police, couleur, alignement, taille), puis position X/Y, opacite, pulsation au kick, tremblement, contour
   lumineux (intensite, rayon, couleur). Effet immediat.
 - **Analyse audio et affichage** : entree d'analyse, plein ecran, sauver les reglages
