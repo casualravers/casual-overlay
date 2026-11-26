@@ -1375,6 +1375,7 @@ class Renderer:
         self._set(sp, "u_sto2", ({"waves": 1.0, "gradient": 2.0}.get(p["bg_sto_field"], 0.0), float(p["bg_sto_invert"]),
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
         self._set(sp, "u_sto_soft", float(p["bg_sto_soft"]))
+        self._set(sp, "u_sto_border", (*hex_to_rgb(p["bg_sto_border_color"], DEFAULT_PARAMS["bg_sto_border_color"]), float(p["bg_sto_border"])))
         self._set(sp, "u_sto_au", (react * float(bg_sc[0]), react * float(bg_fl[2]),
                                    float(state.get("beats", 0)) if kicks_on else 0.0, 0.0))
         lab_au = (bg_sc[0], bg_sp[1], bg_fl[2], bg_fl[3])                # labyrinthe : derive = defilement, pulsation = flash (par defaut = bg_au)

@@ -111,6 +111,10 @@ def install(c):
     param_slider(sz, "Douceur", "bg_sto_soft", 0.0, 1.0, 0.05,
                  "Les points naissent et meurent en grossissant / retrecissant (0 = allumage sec ; plus haut = moins de gresillement aux bords des zones).")
     param_slider(sz, "Arc-en-ciel", "bg_sto_rainbow", 0.0, 1.0, 0.05, "0 = points de la couleur 1 ; plus haut = leur teinte suit le champ.")
+    param_slider(sz, "Taille de bordure", "bg_sto_border", 0.0, 12.0, 0.5,
+                 "Contour de chaque point, en pixels pour une image de 720 px de haut, trace dans le point (0 = aucun ; "
+                 "au moins le rayon = point entierement de la couleur de bordure).")
+    color_row(sz, "Couleur de bordure", "bg_sto_border_color")
     sto_inv_var = tk.IntVar(value=int(float(params["bg_sto_invert"]) >= 0.5))
     bind_param("bg_sto_invert", sto_inv_var, float)
     tk.Checkbutton(sto_box, text="Inverser (couleur 2 sur couleur 1)", variable=sto_inv_var).grid(

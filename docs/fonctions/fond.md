@@ -55,7 +55,10 @@ les basses).
   comme Duo) ; ils derivent avec `_bg_scroll`. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
   `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ), `bg_sto_soft` (« Douceur », #223 :
   rayon x `smoothstep(rang - l, rang + l, champ)`, `l` = 0,15 x douceur, uniform `u_sto_soft` ; les points naissent et meurent en grossissant au lieu
-  de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720) ; `bg_hue` et `bg_speed`
+  de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720),
+  `bg_sto_border` / `bg_sto_border_color` (« Taille de bordure » 0..12 px pour 720 px de haut et « Couleur de bordure », #219 : uniform `u_sto_border`,
+  anneau trace DANS le point retenu, `smoothstep(rayon - bordure +- 0,5 px)`, le point garde sa taille et la grille ne change pas ; bordure >= rayon =
+  disque plein de la couleur de bordure ; 0 = image d'origine ; le Randomizer la tire une fois sur deux, 1 a 4 px, blanc / noir / couleur 2) ; `bg_hue` et `bg_speed`
   s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
   kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
   change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,

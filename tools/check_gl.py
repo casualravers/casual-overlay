@@ -3431,6 +3431,24 @@ def check_bg_stochastic() -> None:
           f"{d0:.3f} -> {d1:.3f}")
     check(gl.coerce_params({"bg_sto_soft": 4})["bg_sto_soft"] == 1.0 and gl.DEFAULT_PARAMS["bg_sto_soft"] == 0.0
           and "bg_sto_soft" in gl.BG_KEYS, "stochastique: douceur bornee 0..1, 0 par defaut, reglage du fond (scenes, presets de fond)")
+    # Bordure (#219) : anneau de la couleur de bordure a l'interieur de chaque point (le point garde sa taille). En 640 x 360,
+    # les points (20 px pour 720) ont un rayon de 5 px et la bordure (px pour 720) est divisee par deux.
+    check(abs(render(bg_sto_border=0.0, bg_sto_border_color="#00ff00") - a).max() == 0,
+          "stochastique: bordure 0 = image d'origine (meme avec une couleur de bordure)")
+    green = lambda img: float((img[:, :, 1] > 128).mean())
+    foot = lambda img: float((img[:, :, 2] < 128).mean())           # pixels couverts par un point, bordure comprise (fond bleu)
+    rings = {bw: render(bg_sto_border=bw, bg_sto_border_color="#00ff00") for bw in (2.0, 4.0, 8.0)}
+    gs = [green(rings[bw]) for bw in (2.0, 4.0, 8.0)]
+    check(0.0 < gs[0] < gs[1] < gs[2], "stochastique: la bordure s'epaissit avec le curseur", " ".join(f"{x:.3f}" for x in gs))
+    check(abs(foot(rings[8.0]) - foot(a)) < 0.01, "stochastique: la bordure est dans le point (meme surface couverte)",
+          f"{foot(a):.3f} -> {foot(rings[8.0]):.3f}")
+    hollow = render(bg_sto_border=12.0, bg_sto_border_color="#00ff00")
+    check(hollow[:, :, 0].max() < 60 and green(hollow) > 0.8 * foot(a),
+          "stochastique: bordure au moins egale au rayon = disque plein de la couleur de bordure", f"rouge max {hollow[:, :, 0].max()}")
+    check(gl.coerce_params({"bg_sto_border": 40})["bg_sto_border"] == 12.0 and gl.DEFAULT_PARAMS["bg_sto_border"] == 0.0
+          and {"bg_sto_border", "bg_sto_border_color"} <= set(gl.BG_KEYS)
+          and gl.DEFAULT_PARAMS["bg_sto_border_color"] == "#ffffff",
+          "stochastique: bordure bornee 0..12 px, 0 par defaut, couleur blanche, reglages du fond")
 
     # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
@@ -11210,6 +11228,10 @@ def check_randomizer() -> None:
           "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
     st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
+    bord_share = sum(1 for v in st_ if v.get("bg_sto_border") == 0.0) / max(len(st_), 1)
+    check(all(v.get("bg_sto_border") == 0.0 or 1.0 <= v.get("bg_sto_border", -1) <= 4.0 for v in st_)
+          and all(gl.coerce_params(v)["bg_sto_border_color"] == v.get("bg_sto_border_color") for v in st_) and 0.3 <= bord_share <= 0.7,
+          "fond aleatoire: bordure du stochastique une fois sur deux (1 a 4 px), avec sa couleur", f"part sans bordure {bord_share:.2f}")
     check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
@@ -12961,7 +12983,8 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 8 and all(k in gl.BG_KEYS for k in sto), "stochastique: 8 reglages (douceur comprise, #223), tous du fond (presets de fond, scenes)")
+    check(len(sto) == 10 and all(k in gl.BG_KEYS for k in sto),
+          "stochastique: 10 reglages (douceur #223 et bordure #219 comprises), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
