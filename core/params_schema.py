@@ -77,6 +77,7 @@ TABLE: tuple[Param, ...] = (
     _p("breath_period", 8.0, 1.0, 60.0, scope="room", doc="Periode de la respiration, en secondes."),
     _p("breath_beats", 0.0, 0.0, 64.0, scope="room", doc="Respiration lente sur la pulsation : un cycle dure ce nombre de temps (avec une pulsation calee ou libre) ; 0 = breath_period en secondes."),
     _p("breath_pulse", 0.0, 0.0, 1.0, scope="room", doc="Respiration sur la pulsation : la presence de l'overlay, la luminosite et la derive du fond suivent la phase de la pulsation (courbe douce, creux entre les temps) et l'enveloppe des basses ; un seul reglage d'amplitude, 0 = coupe."),
+    _p("scene_auto_folder", 1.0, 0.0, 1.0, scope="room", doc="Rangement auto (#241) : une NOUVELLE scene enregistree prend le dossier de son type de fond (snap, ridge, stochastique, video...) ; 0 = elle reste a la racine. N'agit que sur les nouvelles scenes."),
     _p("auto_phase", 1.0, 0.0, 1.0, scope="room", doc="Phases auto : le visuel suit les phases du morceau (ambiance, groove, montee, cassure, pic) tout seul."),
     _p("one_auto", 1.0, 0.0, 1.0, scope="room", doc="Temps 1 auto : sans appui, le « 1 » se pose seul a la reprise des kicks et au drop ; une grille posee a la main n'est jamais deplacee."),
     _p("cycle_accent", 1.0, 0.0, 1.0, scope="room", doc="Renfort des fins de cycles (groove, pic, effets auto) : glitch et aberration plus forts sur le dernier temps d'un 8, les 2 derniers d'un 16, les 4 derniers d'un 32 ; 0 = aucun."),

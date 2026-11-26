@@ -37,6 +37,7 @@ def install(c):
     brain_panel = c.brain_panel                                     # place a droite l'espace de controle global ou le cerveau
     media_clear = c.media_clear
     panel_state = c.panel_state
+    params = c.params
     random_bank = c.random_bank
     random_draw_now = c.random_draw_now
     random_keep = c.random_keep
@@ -400,6 +401,25 @@ def install(c):
         search = tk.Entry(box, textvariable=filter_var)
         search.pack(fill="x", padx=6, pady=(2, 0))
         Tooltip(search, "Tape une partie du nom pour filtrer la bibliotheque (les dossiers s'ouvrent).")
+        auto_row = tk.Frame(box, bg=a2w.GUI_PANEL_BG)               # rangement automatique par type de fond (#241) : largeur fixe, rien ne bouge
+        auto_row.pack(fill="x", padx=6, pady=(2, 0))
+        auto_var = tk.IntVar(value=int(float(params.get("scene_auto_folder", 1.0)) >= 0.5))
+        auto_cb = tk.Checkbutton(auto_row, text="Ranger auto", variable=auto_var, bg=a2w.GUI_PANEL_BG, fg=a2w.GUI_FG, selectcolor=a2w.GUI_BG,
+                                 activebackground=a2w.GUI_PANEL_BG, font=("Segoe UI", 8),
+                                 command=lambda: params.__setitem__("scene_auto_folder", float(auto_var.get())))
+        auto_cb.pack(side="left")
+        Tooltip(auto_cb, "Coche : une NOUVELLE scene enregistree est rangee seule dans le dossier de son type de fond (snap, ridge, sphere, live, "
+                         "stochastique, labyrinthe, duo, test, video). Decoche : elle reste a la racine. Les scenes existantes ne bougent pas.")
+
+        def organize_now() -> None:
+            moved, kept = scene_book.organize()
+            scene_msg.set(f"{moved} scene(s) rangee(s)" + (f", {kept} laissee(s) : nom deja pris" if kept else "") if moved or kept else "Rien a ranger")
+            refresh_scene_bar()
+        organize_btn = tk.Button(auto_row, text="Ranger par type", command=organize_now, bg=a2w.GUI_BG, fg=a2w.GUI_FG, relief="flat",
+                                 activebackground=a2w.GUI_PANEL_BG, font=("Segoe UI", 8), width=14)
+        organize_btn.pack(side="right")
+        Tooltip(organize_btn, "Range maintenant les scenes qui sont a la racine dans le dossier de leur type de fond. Tes propres dossiers ne sont jamais touches ; "
+                              "si le nom range existe deja, la scene reste a la racine. Marche meme si « Ranger auto » est decoche.")
         style = ttk.Style(root)
         style.configure("Lib.Treeview", background=a2w.GUI_BG, fieldbackground=a2w.GUI_BG, foreground=a2w.GUI_FG, rowheight=LIB_THUMB[1] + 4, borderwidth=0)
         style.map("Lib.Treeview", background=[("selected", SCENE_COLOR)], foreground=[("selected", BANNER_FG)])
@@ -548,6 +568,7 @@ def install(c):
 
         tv.bind("<Delete>", delete_selected)
         lib["star"], lib["move"], lib["delete"] = star_now, move_dialog, delete_selected
+        lib["organize"], lib["auto_cb"] = organize_now, auto_cb
 
     def build_selbar(parent) -> tk.Frame:
         """Barre des actions sur les lignes cochees (retirer, VJ off / on, duree, dupliquer, copier vers un autre set) et de la bibliotheque."""

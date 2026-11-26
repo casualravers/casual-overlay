@@ -591,6 +591,21 @@ class SceneBook:
         self._save(data)
         return True
 
+    def organize(self) -> tuple[int, int]:
+        """Range par type de fond (#241) les scenes SANS dossier (`fond_folder`) ; les dossiers de l'utilisateur ne sont jamais touches. Une scene dont
+        le nom range existe deja reste a la racine. Rend (rangees, laissees faute de place). Les sets suivent (`rename_scene`)."""
+        moved = kept = 0
+        for scene in self.list():
+            name = scene["name"]
+            if scene_folder(name)[0]:
+                continue
+            target = auto_name(name, scene)
+            if self.rename_scene(name, target):
+                moved += 1
+            else:
+                kept += 1
+        return moved, kept
+
     def rename_preset(self, kind: str, old: str, new: str) -> int:
         """Les scenes qui citent le preset `old` (`kind` : "overlay" ou "fond") citent desormais `new`. Rend le nombre de scenes changees."""
         data = self._load()
@@ -658,6 +673,30 @@ def scene_folder(name: str) -> tuple[str, str]:
     """`club/neon` -> (`club`, `neon`) ; un nom sans `/` est a la racine (dossier vide). Un seul niveau."""
     folder, sep, leaf = name.partition(FOLDER_SEP)
     return (folder.strip(), leaf.strip()) if sep and folder.strip() and leaf.strip() else ("", name)
+
+
+FOND_PALETTES = ("duo", "test", "stochastique", "labyrinthe")     # palettes du fond genere qui ont leur dossier (core.params : bg_palette)
+LIVE_MODES = ("live", "snap", "ridge", "sphere")                   # modes d'audio2wave (comme gui.py_modes.MODES, copie : core/ n'importe pas la GUI)
+
+
+def fond_folder(scene: dict) -> str:
+    """Dossier automatique d'une scene (#241), d'apres son fond : palette du fond genere (`stochastique`...), `video`, ou mode d'audio2wave
+    (`snap`, `ridge`, `sphere`, `live`). Un cas inconnu ne leve rien : `fond` (fond genere d'une palette inconnue) ou `live`."""
+    bg = scene.get("bg")
+    if bg == "pattern":
+        fond = scene.get("fond")
+        palette = fond.get("bg_palette") if isinstance(fond, dict) else None
+        return palette if palette in FOND_PALETTES else "fond"
+    if bg == "video":
+        return "video"
+    mode = scene.get("mode")
+    return mode if mode in LIVE_MODES else "live"
+
+
+def auto_name(name: str, scene: dict) -> str:
+    """`name` rangee dans le dossier de son type de fond (`neon` -> `snap/neon`) ; un nom qui a deja un dossier est rendu tel quel."""
+    name = name.strip()
+    return name if scene_folder(name)[0] else f"{fond_folder(scene)}{FOLDER_SEP}{name}"
 
 
 def library_tree(library: list[dict], needle: str = "") -> dict:
