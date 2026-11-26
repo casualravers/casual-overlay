@@ -22,15 +22,13 @@ DOSE_MIN, DOSE_MAX = 0.0, 2.0
 Route = namedtuple("Route", "id zone layer label kind")       # kind : fx (vecteur shader), vec (vecteur de couche), info (lecture seule)
 
 ROUTES: tuple[Route, ...] = (
-    Route("bg_wobble", "fond", "bg", "Ondulation", "fx"),
-    Route("bg_ripple", "fond", "bg", "Onde de choc", "fx"),
+    Route("bg_wobble", "fond", "bg", "Ondulation", "fx"),          # pas de ligne pour l'onde de choc : son menu « Onde de choc sur » (mesure / kick) suffit
     Route("bg_glitch", "fond", "bg", "Glitch", "fx"),
     Route("bg_chroma", "fond", "bg", "Aberration", "fx"),
     Route("bg_flash", "fond", "bg", "Flash du motif", "vec"),
     Route("bg_scroll", "fond", "bg", "Defilement et damier", "vec"),
     Route("bg_sparkle", "fond", "bg", "Scintillement du motif", "vec"),
     Route("lg_wobble", "logo", "logo", "Ondulation", "fx"),
-    Route("lg_ripple", "logo", "logo", "Onde de choc", "fx"),
     Route("lg_glitch", "logo", "logo", "Glitch", "fx"),
     Route("lg_chroma", "logo", "logo", "Aberration", "fx"),
     Route("lg_pulse", "logo", "logo", "Pulsation", "vec"),
@@ -47,8 +45,44 @@ ROUTES: tuple[Route, ...] = (
 )
 BY_ID = {r.id: r for r in ROUTES}
 
-# Les 8 effets du shader : id -> (couche, indice dans audio_layers.EFFECTS = indice du vecteur u_au_*[i])
-FX_LINES = {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS)}
+# Les effets du shader routables : id -> (couche, indice dans audio_layers.EFFECTS = indice du vecteur u_au_*[i])
+FX_LINES = {r.id: (r.layer, al.EFFECTS.index(r.id[3:])) for r in ROUTES if r.kind == "fx"}
+
+# Composante(s) du vecteur (0 basses, 1 aigus, 2 kick) que LIT chaque ligne (shader post.frag et engine/render.py). La teinte n'y est pas :
+# elle lit le rapport aigus / graves. Voir `_fit`.
+READS = {"bg_wobble": (0,), "bg_glitch": (2,), "bg_chroma": (2,), "bg_flash": (2,), "bg_scroll": (0,), "bg_sparkle": (1,),
+         "lg_wobble": (0,), "lg_glitch": (2,), "lg_chroma": (2,), "lg_pulse": (2,), "lg_jitter": (1,), "lg_glow": (0,),
+         "lg_holo": (0,), "lg_melt": (0,), "lg_cells": (0,), "breath": (0,)}
+_PROBE = {"bass": 1.0, "mid": 1.0, "high": 1.0, "beat": 1.0, "since_beat": 0.0, "hit": 1.0, "since_hit": 0.0, "snare": 1.0, "since_snare": 0.0,
+          "bands": [1.0] * 8, "band_rise": [1e6] * 8, "pulse_since": {g: 0.0 for g in (*al.PULSE_GRIDS, *al.END_GRIDS)}}
+_PROVIDES: dict[str, frozenset] = {}
+
+
+def provides(source: str) -> frozenset:
+    """Composantes qu'une source remplit (sondee une fois avec un son ou tout sonne : reste juste si audio_layers change)."""
+    got = _PROVIDES.get(source)
+    if got is None:
+        vec = al.layer_levels(_PROBE, source)
+        got = _PROVIDES[source] = frozenset(c for c in range(3) if vec[c] > 0.0)
+    return got
+
+
+def _fit(rid: str, source: str, vec: tuple) -> tuple:
+    """Une source choisie pour une ligne doit faire reagir CETTE ligne : si elle ne remplit pas la composante que la ligne lit (aberration sur les
+    mediums : pas d'enveloppe de kick ; ondulation sur le kick : pas de basses), cette composante recoit le niveau de la source (sa plus forte
+    composante). Une source qui la remplit deja n'est pas touchee (`tout` = comme avant)."""
+    reads = READS.get(rid)
+    if not reads:
+        return vec
+    have = provides(source)
+    missing = [c for c in reads if c not in have]
+    if not missing:
+        return vec
+    drive = max(vec[0], vec[1], vec[2])
+    out = list(vec)
+    for c in missing:
+        out[c] = drive
+    return tuple(out)
 
 # Familles du menu de source (une ligne de separation entre deux familles)
 SOURCE_FAMILIES = (
@@ -240,7 +274,7 @@ class RouteBank:
         mixer = self._mix.setdefault(rid, al.SourceMixer())
         filt = self._filt.setdefault(rid, al.LayerFilter())
         raw = mixer.levels(now, state, resolved, layer, src == "auto")
-        out = _scaled(filt.step(now, raw, lag, smooth), dose)
+        out = _scaled(_fit(rid, resolved, filt.step(now, raw, lag, smooth)), dose)
         self._info[rid] = (resolved, max(out[0], out[1], out[2]))
         return out
 
