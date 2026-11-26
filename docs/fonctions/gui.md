@@ -104,7 +104,7 @@ Moteur et reglages : `docs/fonctions/audio.md` (section Routage audio par effet)
 - **Variables partagees** : `Routing.vars(rid)` reprend la variable deja liee dans `synced` (sinon la cree et la lie avec `bind_param`) : pastille et tableau editent la meme variable, et l'application d'une scene (qui ecrit `synced`) met les deux a jour.
 - **Logo lie** : ses 4 effets du shader affichent « Suit le fond » (le moteur lit la ligne du fond) ; pastille et curseur de dosage desactives (`routing.follows_bg`) ; ses reactions (pulsation...) gardent leur ligne. Le grisage et « Suit le fond » suivent `fx_link`, `fx_on`, `bg_mode` (motif seulement pour flash / defilement / scintillement) au rafraichissement (250 ms).
 - **Mini-spectre** : la source montree est celle que le moteur ecoute : la source resolue publiee (`routes_now`) pour une ligne en Auto, sinon la source de la ligne, ou celle de la couche (lie : celle du fond pour tout le logo ; globales : le son entier).
-`check_gl.py` : `check_routage_gui` (fenetre Tk isolee, `gui_routing.stub_context`) ; `check_gui` (onglets, pastilles des 6 effets liees au tableau : pas de pastille pour l'onde de choc, son menu « Onde de choc sur » suffit). **Non verifie** : lisibilite au videoprojecteur / en soiree.
+`check_gl.py` : `check_routage_gui` (fenetre Tk isolee, `gui_routing.stub_context`) ; `check_gui` (onglets, pastilles des 8 effets liees au tableau ; l'onde de choc n'a plus de menu « Onde de choc sur » : sa pastille le remplace). **Non verifie** : lisibilite au videoprojecteur / en soiree.
 
 ### GUI (`--gui`, [gl_gui.py](../../gui/gl_gui.py))
 
