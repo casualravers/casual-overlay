@@ -11350,6 +11350,12 @@ def check_randomizer() -> None:
     seen_fields = {v["bg_sto_field"] for v in st_}
     check(len(st_) >= 40 and seen_fields <= set(sf2.VALUES) and len(seen_fields) >= 6,
           "fond aleatoire: le champ du stochastique est tire parmi les 8 (#229)", f"{len(st_)} tirages, champs vus {sorted(seen_fields)}")
+    tx_share = sum(1 for v in st_ if v.get("bg_sto_tex") == "none") / max(len(st_), 1)
+    check(all(v.get("bg_sto_tex") in ("none", "wave", "tiling") and ("bg_sto_tex_scale" in v) == (v["bg_sto_tex"] != "none")
+              and (v["bg_sto_tex"] == "none" or (0.6 <= v["bg_sto_tex_scale"] <= 1.8 and 0.4 <= v["bg_sto_tex_contrast"] <= 0.9
+                                                  and 4.0 <= v["bg_sto_tex_every"] <= 16.0 and v["bg_sto_tex_bars"] in ("1", "2", "4", "8")))
+              for v in st_) and 0.35 <= tx_share <= 0.65,
+          "fond aleatoire: texture de la tache (aucune une fois sur deux, sinon onde ou pavage) et ses reglages dans leur plage", f"part sans texture {tx_share:.2f}")
     lv_share = sum(1 for v in st_ if v.get("bg_sto_levels") == "continuous") / max(len(st_), 1)
     check(all(v.get("bg_sto_levels") in ("continuous", "2", "3") for v in st_) and 0.4 <= lv_share <= 0.75,
           "fond aleatoire: paliers du stochastique (continu une fois sur deux environ, sinon 2 ou 3)", f"part continue {lv_share:.2f}")
@@ -13108,8 +13114,8 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 11 and all(k in gl.BG_KEYS for k in sto),
-          "stochastique: 11 reglages (douceur #223, bordure #219 et paliers #222 compris), tous du fond (presets de fond, scenes)")
+    check(len(sto) == 17 and all(k in gl.BG_KEYS for k in sto),
+          "stochastique: 17 reglages (douceur #223, bordure #219, paliers #222 et texture #220 compris), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
@@ -13838,6 +13844,177 @@ def check_foudre_render() -> None:
     check(rr.bolt.empty and im.max() == 0, "foudre: la panique donnee en mode Strobe vide aussi le reseau (rien ne reapparait au retour)")
     rr, im, _, _ = drive(dict(fp, strobe_on=1.0, strobe_mode="manual", comp_trail=0.97), beats=lambda i: 0, frames=80)
     check(im.max() <= 231, "foudre: avec une trainee forte la lumiere ne tend jamais vers le blanc (plafond 0,9)", f"{im.max()}")
+
+
+def check_bg_stochastic_tex() -> None:
+    """Stochastique, texture de la zone de la tache (#220), en pixels : onde (lignes d'oscilloscope) et pavage de reaction-diffusion balaye."""
+    print("Fond genere : stochastique, texture interieure (onde, pavage)")
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    import shutil
+    import tempfile
+    from core import textfx as tfx
+    from engine import textfill as tfm
+    tmp = Path(tempfile.mkdtemp(prefix="sto_tex_"))
+    keep = (tfx.TILE_SIZE, tfx.TILE_STEPS, tfm.tile_cache_path)
+    tfx.TILE_SIZE, tfx.TILE_STEPS = 128, 800                                         # tuile de test : quelques dizaines d'images de preparation
+    tfm.tile_cache_path = lambda: tmp / "tile.npz"
+    try:
+        size = (640, 360)
+        fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+        quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+        base = dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="stochastique", bg_color1="#ff0000", bg_color2="#0000ff", bg_speed=0.0,
+                    bg_react=0.0, bg_hue=0.0, bg_angle=0.0, fx_on=[0] * 5, holo_on=0.0, auto_master=0.0, bg_sto_size=20.0, bg_sto_density=0.8)
+
+        def render(state=quiet, t=1.0, rr=None, **kw):
+            p = dict(base, **kw)
+            if rr is None:
+                rr = gl.Renderer(ctx, size, None)
+                rr.draw(fbo, size, state, p, 0.0)
+            rr.draw(fbo, size, state, p, t)
+            return read_target(ctx, fbo, size).astype(int)
+
+        zone = lambda img: img[:, :, 0] > img[:, :, 2]                               # tache : rouge (couleur 1, eclaircie ou non) plutot que bleu (fond)
+        light = lambda img, region: float((img[:, :, 1] > 60)[region].mean()) if region.any() else 0.0      # part de la region qui est eclaircie
+        plain = render()
+        z0 = zone(plain)
+        check(abs(render(bg_sto_tex="none") - plain).max() == 0, "stochastique texture: 'none' = image d'origine")
+        # ---- onde : lignes d'oscilloscope dans la tache, la zone elle-meme ne change pas
+        w = render(bg_sto_tex="wave")
+        bare = plain[:, :, 0] == 0                                                   # pur fond (aucun point) : la texture ne le touche jamais
+        check(abs(w - plain)[bare].max() <= 1, "stochastique texture onde: hors de la tache rien ne change (le fond reste tel quel)")
+        lw = light(w, z0)
+        check(0.1 < lw < 0.9 and light(plain, z0) == 0.0, "stochastique texture onde: des lignes eclaircies traversent la tache (ni aplat, ni tout clair)", f"{lw:.2f}")
+        rows = np.array([float((w[y, :, 1] > 60)[z0[y]].mean()) if z0[y].any() else np.nan for y in range(size[1])])
+        rows = rows[~np.isnan(rows)]
+        check(float(rows.std()) > 0.15, "stochastique texture onde: au repos les lignes sont horizontales (une rangee est tout eclaircie ou presque rien)", f"ecart {rows.std():.2f}")
+        check(abs(render(bg_sto_tex="wave", bg_sto_tex_contrast=0.0) - plain).max() == 0, "stochastique texture onde: contraste 0 = aplat")
+        fine, coarse = render(bg_sto_tex="wave", bg_sto_tex_scale=0.5), render(bg_sto_tex="wave", bg_sto_tex_scale=2.0)
+        cross = lambda img: int((np.diff((img[:, :, 1] > 60)[:, size[0] // 2].astype(int)) != 0).sum())     # nombre de lignes coupees par une colonne
+        check(cross(fine) > cross(coarse) + 4, "stochastique texture onde: la finesse regle l'espacement des lignes", f"{cross(coarse)} -> {cross(fine)}")
+        calm = render(bg_sto_tex="wave", bg_react=1.0)
+        loud = dict(quiet, bass=1.0, mid=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
+        check(abs(render(loud, bg_sto_tex="wave", bg_react=1.0) - calm).mean() > 1.0, "stochastique texture onde: le son fait bouger et onduler les lignes")
+        check(abs(render(loud, bg_sto_tex="wave", bg_react=0.0) - render(bg_sto_tex="wave", bg_react=0.0)).max() == 0,
+              "stochastique texture onde: reaction du fond 0 = les lignes ne reagissent pas")
+        # ---- pavage : tuile de reaction-diffusion, vague de gauche a droite (angle 0), nouvelle vague a l'intervalle
+        rr = gl.Renderer(ctx, size, None)
+        clock = [100.0]
+
+        def frames(n, dt=1 / 30, **kw):
+            out = None
+            for _ in range(n):
+                clock[0] += dt
+                rr.draw(fbo, size, quiet, dict(base, bg_sto_tex="tiling", bg_sto_tex_every=4.0, **kw), clock[0])
+                out = read_target(ctx, fbo, size).astype(int)
+            return out
+        first = frames(1)
+        tile = rr.text_tile
+        check(tile is not None and not tile.ready and abs(first - plain).max() == 0, "stochastique texture pavage: tuile pas prete = aplat, comme avant")
+        for _ in range(200):
+            if tile.ready:
+                break
+            frames(1)
+        check(tile.ready, "stochastique texture pavage: la tuile se prepare par petites tranches puis est prete (celle du texte, partagee)")
+        half = size[0] // 2
+        left, right = z0.copy(), z0.copy()
+        left[:, half:] = False
+        right[:, :half] = False
+        epoch0 = None
+        for _ in range(400):                                   # attendre une nouvelle vague : age tout petit
+            img = frames(1)
+            if rr._sto_sweep.epoch > 0:
+                epoch0 = rr._sto_sweep.epoch
+                break
+        check(epoch0 is not None, "stochastique texture pavage: la vague repart a l'intervalle (4 s)")
+        early = frames(8)                                      # ~0,3 s apres le depart : le front n'a traverse que le bord gauche
+        check(light(early, left) < 0.5 * max(light(early, right), 1e-9) + 0.5 or light(early, right) > 0.02, "stochastique texture pavage: la vague demarre par la gauche")
+        late = frames(150)                                     # le front a tout traverse (1,6 s) et le motif a fini de pousser
+        check(abs(late - plain)[bare].max() <= 1, "stochastique texture pavage: hors de la tache rien ne change (le fond reste tel quel)")
+        lt = light(late, z0)
+        check(0.05 < lt < 0.7, "stochastique texture pavage: un pavage eclairci remplit l'interieur de la tache", f"{lt:.2f}")
+        check(light(plain, z0) == 0.0 and light(late, ~z0) < 0.02, "stochastique texture pavage: rien en dehors de la tache")
+        quiet_a = frames(1)
+        for _ in range(200):                                   # attendre la vague suivante, puis qu'elle ait fini de passer
+            frames(1)
+            if rr._sto_sweep.epoch > epoch0:
+                break
+        later = frames(150)
+        check(abs(later - quiet_a).mean() > 3, "stochastique texture pavage: la vague suivante dessine un autre pavage")
+    finally:
+        tfx.TILE_SIZE, tfx.TILE_STEPS, tfm.tile_cache_path = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_stotex() -> None:
+    """Stochastique, texture interieure (#220), calendrier pur : vague du pavage (secondes ou mesures), parametres de l'onde, table des reglages."""
+    print("Stochastique : texture interieure (calendrier pur)")
+    from core.audio_layers import NO_KICK
+    try:
+        from core import stotex as sx
+    except ImportError as exc:
+        check(False, "stochastique texture: core/stotex.py existe", str(exc))
+        return
+    # ---- secondes : une vague neuve toutes les `every` s, l'epoque compte les departs
+    c = sx.SweepClock()
+    check(c.update(10.0, NO_KICK, 8.0, False, 4) == (0.0, 0), "texture: premier appel = vague au depart, epoque 0")
+    a, e = c.update(17.9, NO_KICK, 8.0, False, 4)
+    check(abs(a - 7.9) < 1e-9 and e == 0, "texture: avant l'intervalle, la vague continue (age 7,9 s, meme epoque)")
+    a, e = c.update(18.0, NO_KICK, 8.0, False, 4)
+    check(a == 0.0 and e == 1 and abs(c.interval - 8.0) < 1e-9, "texture: a l'intervalle, nouvelle epoque, age 0, intervalle mesure 8 s")
+    c2 = sx.SweepClock()
+    c2.update(0.0, NO_KICK, 8.0, False, 4)
+    check(c2.update(6.0, NO_KICK, 5.0, False, 4)[1] == 1, "texture: l'intervalle est relu a chaque appel (curseur change en cours de route)")
+    check(sx.SweepClock().update(5.0, NO_KICK, 0.0, False, 4) == (0.0, 0), "texture: intervalle nul borne a 2 s (jamais de remise a zero a chaque image)")
+    # ---- mesures : la vague repart sur le temps 1 tous les `bars` premiers temps
+    m = sx.SweepClock()
+    m.update(0.0, 0.5, 8.0, True, 2)
+    for now, since in ((0.5, 1.0), (1.0, 1.5), (2.0, 0.0), (3.0, 1.0)):      # un premier 1 : une mesure comptee sur deux
+        a, e = m.update(now, since, 8.0, True, 2)
+    check(e == 0, "texture: une mesure sur deux comptees = pas encore de nouvelle vague")
+    a, e = m.update(4.0, 0.0, 8.0, True, 2)
+    check(e == 1 and a == 0.0, "texture: deuxieme mesure atteinte = nouvelle vague sur le temps 1", f"{(a, e)}")
+    a, e = m.update(4.3, 0.3, 8.0, True, 2)
+    check(e == 1 and abs(a - 0.3) < 1e-9, "texture: l'age se compte depuis le temps 1 (pas depuis l'image)", f"{(a, e)}")
+    s = sx.SweepClock()
+    s.update(0.0, NO_KICK, 8.0, True, 4)
+    check(s.update(7.9, NO_KICK, 8.0, True, 4)[1] == 0 and s.update(8.0, NO_KICK, 8.0, True, 4)[1] == 1,
+          "texture: mode mesure sans temps 1 connu = repli sur l'intervalle en secondes")
+    g = sx.SweepClock()
+    g.update(0.0, 0.2, 8.0, True, 4)
+    for k in range(1, 40):                         # silence : le temps depuis le dernier 1 ne fait que croitre, plus aucun temps 1 compte
+        g.update(0.2 + 0.1 * k, 0.4 + 0.1 * k, 8.0, True, 4)
+    check(g.update(16.1, 16.3, 8.0, True, 4)[1] >= 1, "texture: mode mesure, plus aucun temps 1 (silence) = nouvelle vague quand meme (jamais figee)")
+    # ---- calendrier de la vague, decalage de lecture, front
+    f, gr = sx.front_times(8.0)
+    check(1.0 <= f <= 6.0 and 0.5 <= gr <= 1.5 and sx.front_times(100.0)[0] == 6.0 and sx.front_times(1.0)[0] == 1.0,
+          "texture: duree du front et de la croissance bornees (front 1 a 6 s, croissance 0,5 a 1,5 s)", f"{f} {gr}")
+    check(sx.sweep_tau(3.0, 0.5, 4.0) == 1.0 and sx.sweep_tau(1.0, 1.0, 4.0) < 0, "texture: temps local d'un pixel = age - position x duree du front")
+    o0, o1 = sx.epoch_offset(0), sx.epoch_offset(1)
+    check(o0 == sx.epoch_offset(0) and o0 != o1 and all(0.0 <= v < 1.0 for v in o0 + o1),
+          "texture: decalage de lecture de la tuile, fixe pour une epoque, different d'une epoque a l'autre")
+    # ---- onde : bornes et sens
+    w0 = sx.wave_params(0.0, 0.0, 0.0, 0.0, 1.0)
+    wb = sx.wave_params(1.0, 0.0, 0.0, 0.0, 1.0)
+    wh, wm, wk = sx.wave_params(0.0, 0.0, 1.0, 0.0, 1.0), sx.wave_params(0.0, 1.0, 0.0, 0.0, 1.0), sx.wave_params(0.0, 0.0, 0.0, 1.0, 1.0)
+    check(w0[0] == 0.0 and wb[0] > w0[0] and wh[1] > w0[1] and wm[2] > w0[2] and wk[3] > w0[3],
+          "texture onde: silence = lignes droites ; basses = amplitude, aigus = frequence, mediums = vitesse, kick = epaisseur", f"{w0} {wb} {wh} {wm} {wk}")
+    check(sx.wave_params(1.0, 1.0, 1.0, 1.0, 0.0)[0] == 0.0 and sx.wave_params(9.0, 9.0, 9.0, 9.0, 9.0) == sx.wave_params(1.5, 1.5, 1.5, 1.5, 1.0)
+          and all(v == v and abs(v) < 100 for v in sx.wave_params(-1.0, 9.0, 0.0, 0.0, 1.0)),
+          "texture onde: reaction 0 = pas d'amplitude ; niveaux et reaction bornes (jamais de valeur folle)")
+    # ---- table des reglages
+    import audio2wave_gl as gl_
+    dp = gl_.DEFAULT_PARAMS
+    check(dp["bg_sto_tex"] == "none" and dp["bg_sto_tex_scale"] == 1.0 and dp["bg_sto_tex_contrast"] == 0.6 and dp["bg_sto_tex_every"] == 8.0
+          and dp["bg_sto_tex_sync"] == 0.0 and dp["bg_sto_tex_bars"] == "4"
+          and all(k in gl_.BG_KEYS for k in dp if k.startswith("bg_sto_tex")),
+          "stochastique texture: 6 reglages, 'none' par defaut, tous du fond (presets de fond, scenes)")
+    cp = gl_.coerce_params({"bg_sto_tex": "x", "bg_sto_tex_scale": 99, "bg_sto_tex_every": 0, "bg_sto_tex_bars": "3", "bg_sto_tex_contrast": -1})
+    check(cp["bg_sto_tex"] == "none" and cp["bg_sto_tex_scale"] == 3.0 and cp["bg_sto_tex_every"] == 2.0 and cp["bg_sto_tex_bars"] == "4"
+          and cp["bg_sto_tex_contrast"] == 0.0, "stochastique texture: valeurs hors plage ramenees (texture inconnue = none, mesures 1 / 2 / 4 / 8, 2 a 30 s)")
 
 
 def check_textfx() -> None:
@@ -16814,12 +16991,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
-    "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_bg_stochastic_tex",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_mosaic", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
@@ -16849,7 +17026,7 @@ GROUPES = {
     "rendu": ("check_foudre_render", "check_native_modes", "check_drop_render", "check_mosaic", "check_qr_projection", "check_bg_video", "check_audio_layers",
               "check_routage_rendu", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
     # ~8 min : fond genere (le labyrinthe a son propre groupe), cadre vertical
-    "fond": ("check_bg_stochastic", "check_rd_cover", "check_kaleidoscope_frame"),
+    "fond": ("check_bg_stochastic", "check_bg_stochastic_tex", "check_rd_cover", "check_kaleidoscope_frame"),
     # ~8 min : doodles, enregistrement, extraits
     "medias": ("check_doodles", "check_recording_render", "check_recorder", "check_highlights_audio", "check_clips", "check_bestof_engine"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",

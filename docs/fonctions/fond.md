@@ -73,7 +73,18 @@ les basses).
   `bg_sto_levels` (« Paliers de taille », #222 : `continuous` / `2` / `3`, uniform `u_sto_levels` ; en paliers le rayon vaut
   `0,5 x s x (palier + 1) / n` avec `palier = min(floor(champ x n), n - 1)` : taille fixe selon le champ, facon trame d'imprimerie ; remplace
   la variation de taille et la croissance aux basses, mais les basses haussent le champ donc des points passent au palier suivant ; se combine avec
-  douceur et bordure ; `continuous` = image d'origine ; le Randomizer tire continu une fois sur deux, sinon 2 ou 3) ; `bg_hue` et `bg_speed`
+  douceur et bordure ; `continuous` = image d'origine ; le Randomizer tire continu une fois sur deux, sinon 2 ou 3),
+  **texture de la tache** (`bg_sto_tex` = `none` / `wave` / `tiling`, #220 ; spec : [docs/plans/2026-11-26-stochastique-texture-220-design.md](../plans/2026-11-26-stochastique-texture-220-design.md) ; la tache = l'union
+  des points, la texture est un masque `sto_texture(p)` en coordonnees ecran, continu a travers tous les points, qui eclaircit la couleur du point
+  (assombrie si elle est deja claire : `bg_sto_tex_contrast`), la bordure restant par-dessus ; `none` = image d'origine). **Onde** : lignes horizontales
+  d'espacement 12 px x `bg_sto_tex_scale` (pour 720 px de haut), cisaillees par un sinus continu (jamais de recouvrement) ; `core.stotex.wave_params` : basses =
+  amplitude, aigus = frequence, mediums = vitesse de la phase (integree : `_sto_phase`), kick = epaisseur, `bg_react` = 0 : lignes droites. **Pavage** : la tuile
+  de Gray-Scott du remplissage du texte (`Renderer.text_tile`, **partagee**, meme cache disque ; tant qu'elle n'est pas prete : aplat) lue deux fois, vague
+  courante et precedente (decalages `core.stotex.epoch_offset`), front le long de `bg_angle` (`sweep_tau`, `front_times`) : derriere le front le motif pousse
+  (formule de `textfx.fill_reveal`), devant lui l'ancien reste puis est efface. `core.stotex.SweepClock` : une vague toutes les `bg_sto_tex_every` s, ou toutes
+  les `bg_sto_tex_bars` mesures sur le temps 1 (`DownbeatGate`, `since_down`) avec `bg_sto_tex_sync`, repli en secondes sans temps 1 connu et garde-fou en
+  silence (`max(4 x mesures, 8)` s). Unites de texture : la tuile (ou une texture vide) sur l'**unite 5** de la passe de scene. Cout : un masque par pixel
+  couvert (onde : un `sin` ; pavage : deux lectures de tuile) ; le Randomizer tire aucune une fois sur deux) ; `bg_hue` et `bg_speed`
   s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
   kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
   change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,
