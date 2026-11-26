@@ -586,7 +586,6 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         s.status["strobe_info"] = renderer.strobe_info
         s.status["rd"] = renderer.rd_note                                              # palette labyrinthe : liberte sans effet en 16 bits
         s.status["foudre"] = renderer.bolt.stats()                      # voyant du mode Foudre : segments, pointes, pouls
-        s.status["mosaic"] = len(renderer.mosaic_tiles)                               # voyant de l'interface : doodles disponibles pour la mosaique
         if args.screenshot and not shot_done and now - t0 >= args.max_seconds - 0.2:
             # Lecture AVANT swap_buffers: apres, le tampon arriere est indefini.
             data = ctx.screen.read(viewport=(0, 0, size[0], size[1]), components=3)
