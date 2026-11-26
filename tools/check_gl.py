@@ -679,8 +679,8 @@ def check_gui() -> None:
             c["bg_var"].set("live")
             out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
             ru = c["routing"]
-            fx_ids = ("bg_wobble", "bg_glitch", "bg_chroma", "lg_wobble", "lg_glitch", "lg_chroma")
-            out["route_pills"] = (all(len(ru.pills.get(rid, [])) == 2 for rid in fx_ids) and not ru.pills.get("bg_ripple"),   # effet + tableau ; pas d'onde de choc
+            fx_ids = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma")
+            out["route_pills"] = (all(len(ru.pills.get(rid, [])) == 2 for rid in fx_ids),          # la pastille de l'effet + celle du tableau
                                   all(str(root.nametowidget(p.cget("menu")).entrycget(0, "variable")) == str(ru.vars(rid)[0])
                                       for rid in fx_ids for p in ru.pills[rid]),
                                   all(len(ru.pills.get(rid, [])) == 2 for rid in ("lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells"))
@@ -1745,7 +1745,7 @@ def check_gui() -> None:
           and out.get("logo_pulse_cb") == ((0, 0), (1, 1)) and out.get("logo_pulse_int") is True,
           "effets du logo (delies): la section a aussi « Logo (pulse/contour) » et son curseur, qui partagent l'etat de ceux du fond (#197)",
           str((out.get("logo_pulse_row"), out.get("logo_pulse_cb"), out.get("logo_pulse_int"))))
-    check(out.get("route_pills") == (True, True, True), "routage (#198): pastilles a cote des 6 effets (sans l'onde de choc) et des 6 reactions du logo, meme variable que le "
+    check(out.get("route_pills") == (True, True, True), "routage (#198): pastilles a cote des 8 effets et des 6 reactions du logo, meme variable que le "
           "tableau de l'onglet Routage (motif du fond et globales : seulement dans l'onglet)",
           str(out.get("route_pills")))
     check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Routage"],
@@ -2100,7 +2100,7 @@ def check_render() -> None:
 
     # Effets en plein kick: l'image doit changer sans etre noire ni saturee.
     loud = {"bass": 1.0, "mid": 0.6, "high": 0.9, "rms": 0.8, "beat": 1.0, "since_beat": 0.05}
-    params = {"fx_on": [1] * 5, "fx_int": [1.0] * 5, "master": 1.0, "sensitivity": 1.0, "ripple_beat": "kick"}   # chaque kick (etats sans compteur de kicks)
+    params = {"fx_on": [1] * 5, "fx_int": [1.0] * 5, "master": 1.0, "sensitivity": 1.0, "rt_bg_ripple": "kick"}   # onde a chaque kick (etats sans compteur de kicks)
     r.draw(fbo, size, loud, params, 1.0)
     out2 = read_target(ctx, fbo, size)
     change = np.abs(out2.astype(int) - video.astype(int)).mean()
@@ -2114,8 +2114,8 @@ def check_render() -> None:
         r.draw(fbo, size, state, p, 1.0)
         d = np.abs(read_target(ctx, fbo, size).astype(int) - video.astype(int)).mean()
         check(d > 0.3, f"effet {name} visible isolement", f"ecart moyen {d:.2f}")
-    # Onde de choc sur le 1er temps (`ripple_beat` = mesure, le defaut) : elle part sur le 1er kick entendu (un 1), pas sur le 2e.
-    p = dict(params, fx_on=[0, 1, 0, 0, 0], ripple_beat="mesure")
+    # Onde de choc sur le 1er temps (ligne a « comme la couche », le defaut) : elle part sur le 1er kick entendu (un 1), pas sur le 2e.
+    p = dict(params, fx_on=[0, 1, 0, 0, 0], rt_bg_ripple="herite")
     rd = gl.Renderer(ctx, size, None)
     rd.video_tex.write(frame, alignment=1)
     rd.draw(fbo, size, dict(loud, beats=0, since_beat=10.0, beat=0.0), p, 0.7)
@@ -2133,7 +2133,7 @@ def check_render() -> None:
     flat = np.full((size[1], size[0], 3), 200, np.uint8)
     rf = gl.Renderer(ctx, size, None)
     rf.video_tex.write(flat.tobytes(), alignment=1)
-    pr = dict(params, fx_on=[0, 1, 0, 0, 0], fx_int=[1.0] * 5, ripple_beat="kick")
+    pr = dict(params, fx_on=[0, 1, 0, 0, 0], fx_int=[1.0] * 5)
 
     def shock(p_, since):
         rf.draw(fbo, size, dict(loud, since_beat=since, beat=0.2), p_, 1.0)
@@ -5755,8 +5755,11 @@ def check_ripple_downbeat() -> None:
     from core import audio_layers as al
     from core import params_schema as ps
     NK = al.NO_KICK
-    check(ps.BY_KEY["ripple_beat"].default == "mesure" and ps.BY_KEY["ripple_beat"].choices == ("mesure", "kick") and ps.BY_KEY["ripple_beat"].scope == "look",
-          "schema: onde de choc au 1er temps par defaut (reglage de look : presets overlay et scenes)")
+    from core import routing as rt
+    from core.params import coerce_params as _cp
+    check("ripple_beat" not in ps.BY_KEY and "bg_ripple" in rt.FX_LINES and "lg_ripple" in rt.FX_LINES
+          and "ripple_beat" not in _cp({"ripple_beat": "kick"}),
+          "onde de choc: plus de menu « Onde de choc sur » (ancien ripple_beat ignore) ; sa cadence passe par sa ligne de routage")
     # --- pulsation calee : la grille « mesure » (1 temps sur 4, calee sur Temps 1, deja en avance) fait foi
     g = al.DownbeatGate()
     check(g.update(10.0, {"beats": 3, "pulse_since": {"mesure": 0.25}}) == 0.25, "pulsation calee: l'instant du dernier 1 vient de la grille de la pulsation")
@@ -9662,8 +9665,8 @@ def check_onsets() -> None:
           "kick par couche: la couche a sensibilite haute rattrape des kicks que le kick commun rate", f"bg {len(e2['bg'])} commun {len(b2)}")
 
 
-ROUTE_IDS = ("bg_wobble", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
-             "lg_wobble", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
+ROUTE_IDS = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
+             "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
              "breath", "hue", "strobe", "foudre", "noise")
 
 
@@ -9677,12 +9680,12 @@ def check_routage() -> None:
     check(all(r.zone in rt.ZONES and r.layer in (*al.LAYERS, None) and r.kind in ("fx", "vec", "info") and r.label for r in rt.ROUTES),
           "routage: zone, couche, nature et libelle de chaque ligne")
     fx = [r.id for r in rt.ROUTES if r.kind == "fx"]
-    check(fx == ["bg_wobble", "bg_glitch", "bg_chroma", "lg_wobble", "lg_glitch", "lg_chroma"],
-          "routage: les effets du shader sauf l'onde de choc (son menu « Onde de choc sur » mesure / kick suffit)", str(fx))
-    check(rt.FX_LINES == {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS) if e != "ripple"},
-          "routage: FX_LINES = (couche, indice dans EFFECTS), sans l'onde de choc")
+    check(fx == ["bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma"],
+          "routage: les 8 effets du shader (onde de choc comprise : elle remplace le menu « Onde de choc sur »)", str(fx))
+    check(rt.FX_LINES == {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS)},
+          "routage: FX_LINES = (couche, indice dans EFFECTS)")
     from core.params import coerce_params as _cp
-    check(rt.is_default(_cp({"rt_bg_ripple": "kick"})) and "rt_bg_ripple" not in _cp({"rt_bg_ripple": "kick"}),"routage: une ancienne route de l'onde de choc (scene, preset) est ignoree")
+    check(_cp({"rt_bg_ripple": "kick"}).get("rt_bg_ripple") == "kick", "routage: la route de l'onde de choc (scene, preset) est gardee au chargement")
     check([r.id for r in rt.ROUTES if r.kind == "info"] == ["strobe", "foudre", "noise"], "routage: strobe, foudre, noise en lecture seule")
     check(rt.ROUTE_SOURCES[0] == "herite" and set(rt.ROUTE_SOURCES[1:]) == set(al.SOURCES) and len(rt.ROUTE_SOURCES) == len(al.SOURCES) + 1,
           "routage: sources = herite + toutes celles des couches")
@@ -9899,7 +9902,7 @@ def check_routage_gui() -> None:
         ui.vars("bg_chroma")[0].set("kick")
         texts2 = [ui.spectrum.itemcget(i, "text") for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "text"]
         ui.reset(["bg_chroma"])
-        check("bg_ripple" not in ui.rows and "lg_ripple" not in ui.rows, "routage gui: pas de ligne pour l'onde de choc (son menu mesure / kick suffit)")
+        check("bg_ripple" in ui.rows and "lg_ripple" in ui.rows, "routage gui: une ligne pour l'onde de choc (elle remplace le menu « Onde de choc sur »)")
         check(any("Glitch" in t for t in texts) and any("evenement" in t for t in texts2), "routage gui: le spectre nomme la ligne survolee, ou dit evenement",
               str((texts, texts2)))
 

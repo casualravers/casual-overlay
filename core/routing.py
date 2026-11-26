@@ -22,13 +22,15 @@ DOSE_MIN, DOSE_MAX = 0.0, 2.0
 Route = namedtuple("Route", "id zone layer label kind")       # kind : fx (vecteur shader), vec (vecteur de couche), info (lecture seule)
 
 ROUTES: tuple[Route, ...] = (
-    Route("bg_wobble", "fond", "bg", "Ondulation", "fx"),          # pas de ligne pour l'onde de choc : son menu « Onde de choc sur » (mesure / kick) suffit
+    Route("bg_wobble", "fond", "bg", "Ondulation", "fx"),
+    Route("bg_ripple", "fond", "bg", "Onde de choc", "fx"),        # comme la couche = au 1er temps de la mesure ; une source (kick...) = a chacune de ses attaques
     Route("bg_glitch", "fond", "bg", "Glitch", "fx"),
     Route("bg_chroma", "fond", "bg", "Aberration", "fx"),
     Route("bg_flash", "fond", "bg", "Flash du motif", "vec"),
     Route("bg_scroll", "fond", "bg", "Defilement et damier", "vec"),
     Route("bg_sparkle", "fond", "bg", "Scintillement du motif", "vec"),
     Route("lg_wobble", "logo", "logo", "Ondulation", "fx"),
+    Route("lg_ripple", "logo", "logo", "Onde de choc", "fx"),
     Route("lg_glitch", "logo", "logo", "Glitch", "fx"),
     Route("lg_chroma", "logo", "logo", "Aberration", "fx"),
     Route("lg_pulse", "logo", "logo", "Pulsation", "vec"),
@@ -49,8 +51,9 @@ BY_ID = {r.id: r for r in ROUTES}
 FX_LINES = {r.id: (r.layer, al.EFFECTS.index(r.id[3:])) for r in ROUTES if r.kind == "fx"}
 
 # Composante(s) du vecteur (0 basses, 1 aigus, 2 kick) que LIT chaque ligne (shader post.frag et engine/render.py). La teinte n'y est pas :
-# elle lit le rapport aigus / graves. Voir `_fit`.
-READS = {"bg_wobble": (0,), "bg_glitch": (2,), "bg_chroma": (2,), "bg_flash": (2,), "bg_scroll": (0,), "bg_sparkle": (1,),
+# elle lit le rapport aigus / graves. L'onde de choc ne lit aucun niveau (amplitude fixe) : seulement l'instant de la derniere attaque
+# (4e composante), qu'une source continue (mediums, aigus...) ne donne pas ; rien a completer (`()`). Voir `_fit`.
+READS = {"bg_wobble": (0,), "bg_ripple": (), "lg_ripple": (), "bg_glitch": (2,), "bg_chroma": (2,), "bg_flash": (2,), "bg_scroll": (0,), "bg_sparkle": (1,),
          "lg_wobble": (0,), "lg_glitch": (2,), "lg_chroma": (2,), "lg_pulse": (2,), "lg_jitter": (1,), "lg_glow": (0,),
          "lg_holo": (0,), "lg_melt": (0,), "lg_cells": (0,), "breath": (0,)}
 _PROBE = {"bass": 1.0, "mid": 1.0, "high": 1.0, "beat": 1.0, "since_beat": 0.0, "hit": 1.0, "since_hit": 0.0, "snare": 1.0, "since_snare": 0.0,

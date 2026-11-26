@@ -430,7 +430,7 @@ class Renderer:
         self._brain_health_at: float | None = None                                   # derniere publication de la sante (au plus une par BRAIN_HEALTH_S)
         self._brain_frames = 0                                                        # images dessinees depuis
         self.cycle_boost = 1.0                                                        # renfort de fin de cycle de l'image en cours (#164)
-        self._downbeat = DownbeatGate()                                            # onde de choc sur le 1er temps de la mesure (`ripple_beat`)
+        self._downbeat = DownbeatGate()                                            # onde de choc sur le 1er temps de la mesure (ligne bg_ripple a « comme la couche »)
         self._fx_bank = EffectBank()                                                   # reactivite par effet (mode auto) : un vecteur audio par effet et par couche
         self._fx_filters = {layer: [LayerFilter() for _ in EFFECTS] for layer in ("bg", "logo")}
         self._fx_t = None
@@ -1168,8 +1168,8 @@ class Renderer:
             au_logo_fx = [self._fx_filters["logo"][i].step(t, raw[i], p["lag_" + lk], p["smooth_" + lk]) for i in range(4)]
             self.fx_now["logo"] = self._fx_bank.active("logo")
         since_down = self._downbeat.update(t, state)                                   # appele a chaque image : le compte des kicks reste juste
-        if p.get("ripple_beat", "mesure") == "mesure":                                 # l'onde de choc ne part que sur le « 1 » de la mesure
-            au_bg_fx, au_logo_fx = ripple_on_downbeat(au_bg_fx, since_down), ripple_on_downbeat(au_logo_fx, since_down)
+        # l'onde de choc ne part que sur le « 1 » de la mesure ; pour une autre cadence (chaque kick...), sa ligne de routage (bg_ripple / lg_ripple)
+        au_bg_fx, au_logo_fx = ripple_on_downbeat(au_bg_fx, since_down), ripple_on_downbeat(au_logo_fx, since_down)
         # Renforts de fin de cycle (#164) : groove et pic en mode auto par effet, glitch et aberration plus forts sur les derniers temps d'un 8 / 16 / 32
         self.cycle_boost = phrase_boost(state.get("phrase_pos"), float(p.get("cycle_accent", 1.0))) if phase_name in ("groove", "peak") else 1.0
         if self.cycle_boost != 1.0:
