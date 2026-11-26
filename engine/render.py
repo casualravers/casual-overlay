@@ -1004,21 +1004,23 @@ class Renderer:
         if active:
             if self.rd is None:
                 self.rd = ReactionDiffusion(self.ctx, self.vbo, self.shader_dir)
+                self.rd.half = str(p["bg_rd_sym"]) == "none"      # demi-precision sans symetrie (#225) ; la Liberte demande 32 bits
             self.rd.ensure(float(p["bg_rd_scale"]), t)
             gw, gh = self.rd.size
             sym, branches, free = str(p["bg_rd_sym"]), int(p["bg_rd_branches"]), float(p["bg_rd_free"])
+            want_half = sym == "none"
             zone = reaction.Zone(mix=float(p["bg_rd_mix"]), t=self._rd_zone_t, sym=sym, branches=branches, free=free, aspect=gw / gh,
                                  void=float(p["bg_rd_void"]))
             sig = (sym, branches if sym == "rot" else 0)
             if not self._rd_active:                    # activation : repart d'un etat seme propre (germes en orbite si symetrie)
-                self.rd.reset(self.rd.seed, zone)
+                self.rd.reset(self.rd.seed, zone, half=want_half)
                 self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
                 self._rd_sig, self._rd_want = sig, None
             elif sig != self._rd_sig:                  # un motif deja installe ne prend pas la symetrie : il repart des germes
                 if self._rd_want is None or self._rd_want[0] != sig:      # (apres un delai : un curseur en mouvement ne relance pas a chaque cran)
                     self._rd_want = (sig, t)
                 elif t - self._rd_want[1] >= reaction.RESEED_DELAY_S:
-                    self.rd.reset(self.rd.seed, zone)
+                    self.rd.reset(self.rd.seed, zone, half=want_half)
                     self._rd_acc, self._rd_beats, self._rd_pending = 0.0, beats, []
                     self._rd_sig, self._rd_want = sig, None
             else:
@@ -1033,7 +1035,7 @@ class Renderer:
                 # sans symetrie : au plus 4 germes en attente comme avant (comportement d'origine) ; avec : file bornee des orbites
                 self._rd_pending = reaction.queue_seeds(self._rd_pending, new)[-(4 if sym == "none" else reaction.MAX_PENDING_SEEDS):]
             self._rd_beats = beats
-            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass, gw * gh)
+            n, self._rd_acc = reaction.steps_for(self._rd_acc, dt, float(p["bg_speed"]), bass, gw * gh, half=self.rd.dtype == "f2")
             if n > 0:                                  # tempo 0 ou vitesse 0 = motif fige : les germes et les zones attendent
                 self._rd_zone_t += dt * reaction.ZONE_SPEED * float(p["bg_rd_drift"])
                 zone = zone._replace(t=self._rd_zone_t)

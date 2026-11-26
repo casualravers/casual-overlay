@@ -13135,6 +13135,59 @@ def check_reaction_sim() -> None:
         still_alive[s] = int(((r_.read_v() > 0.25) != m0).sum())
     check(all(n_ > 300 for n_ in still_alive.values()), "le motif se reorganise encore apres 10000 pas (il ne se fige pas)",
           f"cellules changees entre 10000 et 12000 pas : {still_alive}")
+    # Demi-precision (#225) : l'etat en RG16F stocke W = 1 - U (l'increment F x (1 - U) pres de U = 1 n'y est plus perdu) ; meme nature qu'en RG32F
+    def sim_h(shape, steps, half, seed=0, scale=1.0):
+        r_ = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r_.half = half
+        r_.ensure(scale)
+        r_.reset(seed)
+        for _ in range(steps // 20):
+            r_.step(20, shape)
+        return r_
+    h0, f0 = sim_h(0.6, 0, True), sim_h(0.6, 0, False)
+    check(h0.dtype == "f2" and f0.dtype == "f4" and np.array_equal(h0.read_v(), f0.read_v()),
+          "demi-precision: l'etat est en RG16F quand on le demande (RG32F sinon), memes germes au depart")
+    uu, vv = np.full((216, 384), 0.9876, np.float32), np.full((216, 384), 0.31, np.float32)
+    h0.write(uu, vv)
+    ru, rv = h0._read()
+    check(abs(ru - uu).max() < 1e-4 and abs(rv - vv).max() < 3e-4,
+          "demi-precision: ecrire (U, V) puis relire rend (U, V) (U est stocke en W = 1 - U, precis pres de 1)", f"{abs(ru - uu).max():.1e} / {abs(rv - vv).max():.1e}")
+    cov = {}
+    for s in (0.0, 0.5, 1.0):
+        cov[s] = [float((sim_h(s, 2000, h).read_v() > 0.25).mean()) for h in (False, True)]
+    check(all(abs(a - b) < 0.07 and 0.05 < b < 0.7 for a, b in cov.values()),
+          "demi-precision: meme couverture qu'en RG32F sur les trois formes (taches, milieu, labyrinthe)", str(cov))
+    spots_h = sim_h(0.0, 6000, True).read_v() > 0.25
+    lab_h, sizes_h = rd_components(spots_h)
+    near_h = False
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            other = np.roll(np.roll(lab_h, dy, axis=0), dx, axis=1)
+            near_h = near_h or bool(((lab_h > 0) & (other > 0) & (lab_h != other)).any())
+    check(len(sizes_h) >= 30 and max(sizes_h) < 4 * float(np.median(sizes_h)) and not near_h,
+          "demi-precision: forme 0 = taches nombreuses, regulieres, qui ne se touchent jamais (comme en RG32F)",
+          f"{len(sizes_h)} taches, plus grande {max(sizes_h)}, mediane {np.median(sizes_h):.0f}, trop proches {near_h}")
+    alive_h = {}
+    for s in (0.0, 0.6, 1.0):                    # le piege du demi-flottant : le motif se figeait apres ~15 s (U ne bougeait plus)
+        r_ = sim_h(s, 10000, True)
+        m0 = r_.read_v() > 0.25
+        for _ in range(100):
+            r_.step(20, s)
+        alive_h[s] = int(((r_.read_v() > 0.25) != m0).sum())
+    check(all(n_ > 300 for n_ in alive_h.values()), "demi-precision: le motif se reorganise encore apres 10000 pas (il ne se fige pas)",
+          f"cellules changees entre 10000 et 12000 pas : {alive_h}")
+    sw = sim_h(0.6, 200, True, seed=5)
+    sw.reset(7, half=False)
+    fresh = sim_h(0.6, 0, False, seed=7)
+    check(sw.dtype == "f4" and sw.size == fresh.size and np.array_equal(sw.read_v(), fresh.read_v()),
+          "demi-precision: reset(half=False) rebascule en RG32F (meme taille, germes de la graine)")
+    sw.reset(7, half=True)
+    check(sw.dtype == "f2" and np.array_equal(sw.read_v(), fresh.read_v()), "demi-precision: reset(half=True) repasse en RG16F")
+    big = sim_h(0.6, 600, True)
+    big.ensure(1.5)
+    for _ in range(25):
+        big.step(20, 0.6)
+    check(big.dtype == "f2" and 0.05 < float((big.read_v() > 0.25).mean()) < 0.7, "demi-precision: changer la taille du motif recopie l'etat, toujours vivant")
     frozen = sim(0.6, 400)
     v0 = frozen.read_v().copy()
     frozen.step(0, 0.6)
@@ -13360,6 +13413,14 @@ def check_bg_labyrinthe() -> None:
     _r, big = run(size=(1280, 720))
     small_ = big.reshape(360, 2, 640, 2, 3).mean(axis=(1, 3))
     check(abs(small_ - a).mean() < 6, "labyrinthe: meme dessin quelle que soit la taille de la fenetre", f"ecart {abs(small_ - a).mean():.1f}")
+    rh, _ih = run(frames=2)                      # demi-precision (#225) : sans symetrie l'etat est en RG16F, avec une symetrie il repasse en RG32F
+    quad_r, _iq = run(frames=2, bg_rd_sym="quad")
+    check(rh.rd.dtype == "f2" and quad_r.rd.dtype == "f4", "labyrinthe: etat en RG16F sans symetrie, en RG32F avec une symetrie",
+          f"{rh.rd.dtype} / {quad_r.rd.dtype}")
+    st0 = rh.rd.steps
+    run(rr=rh, frames=1, bg_rd_scale=0.3)
+    check(rh.rd.steps - st0 >= 10 or rh.rd.size[0] * rh.rd.size[1] > 0 and rh.rd.steps - st0 >= 5,
+          "labyrinthe: grille fine en demi-precision, au moins 5 pas par image", str(rh.rd.steps - st0))
     rt, t1 = run(tempo=0.0)
     _rt, t2 = run(rr=rt, frames=20, tempo=0.0)
     check(abs(t2 - t1).max() == 0 and abs(run(rr=r1, frames=20)[1] - a).mean() > 1,
@@ -13944,6 +14005,19 @@ def check_reaction_pure() -> None:
     k5 = rc.kick_seeds(5)
     check(len(k5) == 3 and k5 == rc.kick_seeds(5) and k5 != rc.kick_seeds(6) and all(0 <= x < 1 and 0 <= y < 1 for x, y in k5),
           "germes du kick: 3, deterministes, differents d'un kick a l'autre")
+    # Demi-precision (#225) : le pas est ~2 fois moins cher aux grilles fines, le plafond de pas monte (le motif fin retrouve sa vitesse)
+    h_fine = rc.steps_for(0.0, 0.1, 4.0, 1.0, 1280 * 720, half=True)[0]
+    h_mid = rc.steps_for(0.0, 0.1, 4.0, 1.0, 768 * 432, half=True)[0]
+    check(h_fine == 10 and h_mid == 24 and rc.steps_for(0.0, 0.1, 4.0, 1.0, 1280 * 720)[0] == 5 and rc.max_steps(10 ** 9, True) == 1,
+          "demi-precision: 10 pas par image a l'echelle 0,3 (5 en RG32F), 24 a 0,5, jamais moins de 1", str((h_fine, h_mid)))
+    check(rc.steps_for(0.0, 1 / 60, 1.0, 0.0, 384 * 216, half=True)[0] == 10 and rc.steps_for(0.0, 1 / 60, 1.0, 0.0, half=True)[0] == 10,
+          "demi-precision: 10 pas par image a 60 images/s, quelle que soit la grille moyenne")
+    full = {s: rc.step_load(s) for s in (1.0, 0.5, 0.3)}
+    half_ = {s: rc.step_load(s, half=True) for s in (1.0, 0.5, 0.3)}
+    check(full[1.0] == 1.0 and half_[1.0] < full[1.0] and half_[0.5] < 0.6 * full[0.5] and half_[0.3] > half_[0.5] > half_[1.0]
+          and abs(half_[0.3] / full[0.3] - 1.1) < 0.1,
+          "demi-precision: la charge estimee (securite GPU) baisse de moitie a 0,5, et monte un peu a 0,3 (10 pas au lieu de 5)", str((full, half_)))
+    check(0.4 < rc.HALF_STEP_COST < 0.7 and rc.MAX_CELL_STEPS_HALF > rc.MAX_CELL_STEPS, "demi-precision: constantes (cout relatif d'un pas, plafond)")
     # Apparitions (#187) : part des kicks qui sement, et nombre de candidats quand ils ne prennent que contre le motif
     ks = range(200)
     check(all(rc.kick_spawns(k, 1.0) for k in ks) and not any(rc.kick_spawns(k, 0.0) for k in ks),
@@ -16075,6 +16149,9 @@ def check_safeguards() -> None:
     check(sf.background_cost({}, full) == 0.0 and sf.background_cost(dict(bg_mode="live", bg_palette="stochastique"), full) == 0.0
           and sf.background_cost(sto_next, full) > sf.background_cost(dict(sto_next, bg_sto_field="waves"), full) > 0.0,
           "securite GPU: cout du fond stochastique (bruit > vagues), nul hors du fond genere")
+    fine = dict(bg_mode="pattern", bg_palette="labyrinthe", bg_rd_scale=0.5)
+    check(sf.background_cost(dict(fine, bg_rd_sym="none"), full) < sf.background_cost(dict(fine, bg_rd_sym="quad"), full),
+          "securite GPU: labyrinthe sans symetrie (demi-precision, #225) compte moins qu'avec une symetrie (RG32F) a l'echelle 0,5")
     check(sf.background_cost(dict(bg_mode="pattern", bg_palette="labyrinthe"), full) > 0.0
           and sf.background_cost(dict(bg_mode="live", bg_palette="labyrinthe"), full) == 0.0,
           "securite GPU: cout du fond labyrinthe compte, nul hors du fond genere")

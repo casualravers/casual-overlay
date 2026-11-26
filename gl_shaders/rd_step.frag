@@ -15,6 +15,7 @@ uniform int u_sym;             // 0 aucune, 1 miroir gauche-droite, 2 miroir hau
 uniform float u_free;          // liberte 0..1
 uniform float u_free_noise;    // amplitude du bruit de V a liberte 1 (0 si l'etat est en 16 bits : il serait perdu)
 uniform int u_step;            // compteur de pas : le bruit de V change a chaque pas
+uniform int u_w;               // 1 = l'etat stocke W = 1 - U (demi-precision RG16F, issue #225) ; 0 = U (RG32F : chemin d'origine, bit pour bit)
 uniform int u_bud;             // 1 = un germe ne prend que s'il touche de la matiere (apparitions « contre le motif », issue #187)
 uniform float u_bud_level;     // V au-dessus duquel une lecture compte comme matiere (core.reaction.BUD_LEVEL)
 
@@ -53,9 +54,17 @@ void main() {
                  + texture(u_state, v_uv + vec2(u_texel.x, -u_texel.y)).rg + texture(u_state, v_uv + vec2(-u_texel.x, u_texel.y)).rg);
     float u = c.r;
     float v = c.g;
-    float uvv = u * v * v;
-    u += 1.0 * lap.r - uvv + fk.x * (1.0 - u);
-    v += 0.5 * lap.g + uvv - (fk.x + fk.y) * v;
+    if (u_w > 0) {
+        // `u` est ici W = 1 - U : W' = W + lap(W) + U V^2 - F W (meme pas, ecrit en W ; en demi-precision l'increment F x W reste representable
+        // la ou le motif est vide, alors que F x (1 - U) pres de U = 1 y etait perdu et figeait le motif)
+        float uvv = (1.0 - u) * v * v;
+        u += lap.r + uvv - fk.x * u;
+        v += 0.5 * lap.g + uvv - (fk.x + fk.y) * v;
+    } else {
+        float uvv = u * v * v;
+        u += 1.0 * lap.r - uvv + fk.x * (1.0 - u);
+        v += 0.5 * lap.g + uvv - (fk.x + fk.y) * v;
+    }
     if (u_sym > 0 && u_free > 0.0) {                          // sans lui, un etat symetrique le resterait : motif strictement en miroir
         v += u_free * u_free_noise * (zhash(gl_FragCoord.xy + vec2(17.0, 31.0) * float(u_step % 4096)) - 0.5);
     }
@@ -72,5 +81,16 @@ void main() {
             v = max(v, 0.4 * exp(-0.6931472 * (r / rad) * (r / rad)));
         }
     }
-    f_color = vec4(clamp(u, 0.0, 1.0), clamp(v, 0.0, 1.0), 0.0, 1.0);
+    u = clamp(u, 0.0, 1.0);
+    v = clamp(v, 0.0, 1.0);
+    if (u_w > 0) {
+        // Arrondi stochastique : un increment plus petit que l'ulp du demi-flottant (V varie de ~1e-4 par pas, l'ulp vaut 2,4e-4 vers 0,3)
+        // serait arrondi a zero et le motif se figerait ; un bruit de +-1/2 ulp avant l'ecriture le conserve en moyenne.
+        float ulp_u = exp2(floor(log2(max(u, 6.2e-5))) - 10.0);
+        float ulp_v = exp2(floor(log2(max(v, 6.2e-5))) - 10.0);
+        vec2 hp = gl_FragCoord.xy + vec2(7.0, 13.0) * float(u_step % 4096);
+        u += (zhash(hp) - 0.5) * ulp_u;
+        v += (zhash(hp + vec2(101.0, 53.0)) - 0.5) * ulp_v;
+    }
+    f_color = vec4(u, v, 0.0, 1.0);
 }
