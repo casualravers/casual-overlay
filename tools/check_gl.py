@@ -3409,6 +3409,26 @@ def check_bg_stochastic() -> None:
     for i in range(1, 30):                       # dt est plafonne a 0,1 s par image : 1,5 s = 30 images
         moved = render(rr=rr, t=0.05 * i, bg_speed=1.0)
     check(abs(moved - still).mean() > 2, "stochastique: le champ derive au cours du temps", f"ecart {abs(moved - still).mean():.1f}")
+    # Douceur (#223) : un point nait et meurt en fondu de rayon autour de son rang (plus de saut quand le champ derive)
+    check(abs(render(bg_sto_soft=0.0) - a).max() == 0, "stochastique: douceur 0 = image d'origine (allumage sec)")
+
+    def pops(soft):               # cellules (20 x 20 px = un point) dont la couverture saute de plus de 0,3 d'une image a la suivante
+        r_ = gl.Renderer(ctx, (640, 360), None)
+        prev, n = None, 0
+        for i in range(40):
+            cur = blocks(render(rr=r_, t=0.1 * i, bg_speed=4.0, bg_sto_soft=soft), 20)
+            if prev is not None:
+                n += int((np.abs(cur - prev) > 0.25).sum())
+            prev = cur
+        return n
+    p0, p1 = pops(0.0), pops(1.0)
+    check(p0 > 0 and p1 < 0.5 * p0, "stochastique: douceur 1 = les points grossissent et retrecissent au lieu d'apparaitre d'un coup (moins de sauts)",
+          f"sauts {p0} -> {p1}")
+    d0, d1 = lit(render(bg_sto_field="gradient")), lit(render(bg_sto_field="gradient", bg_sto_soft=1.0))
+    check(abs(d1 - d0) < 0.08, "stochastique: douceur = densite moyenne proche (les points du seuil sont plus petits, pas plus nombreux)",
+          f"{d0:.3f} -> {d1:.3f}")
+    check(gl.coerce_params({"bg_sto_soft": 4})["bg_sto_soft"] == 1.0 and gl.DEFAULT_PARAMS["bg_sto_soft"] == 0.0
+          and "bg_sto_soft" in gl.BG_KEYS, "stochastique: douceur bornee 0..1, 0 par defaut, reglage du fond (scenes, presets de fond)")
 
     # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
@@ -11137,6 +11157,8 @@ def check_randomizer() -> None:
               and (v["bg_rd_sym"] != "rot" or v["bg_rd_free"] >= 0.2) for v in lb) and 0.25 <= sym_share <= 0.45,
           "fond aleatoire: zones, couches et symetrie du labyrinthe tirees dans leurs plages (symetrie une fois sur trois environ)",
           f"part avec symetrie {sym_share:.2f}")
+    st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
+    check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
     check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
@@ -12888,7 +12910,7 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 7 and all(k in gl.BG_KEYS for k in sto), "stochastique: 7 reglages, tous du fond (presets de fond, scenes)")
+    check(len(sto) == 8 and all(k in gl.BG_KEYS for k in sto), "stochastique: 8 reglages (douceur comprise, #223), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
