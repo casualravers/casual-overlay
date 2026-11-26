@@ -15200,8 +15200,8 @@ def check_brain_gui() -> None:
                 bp.view_name, bp._sched_at = name, -1e9
                 bp.scheduled_tick()
                 bp.scheduled_tick()                             # aussitot : trop tot pour les deux
-                time.sleep(0.06)
-                bp.scheduled_tick()                             # 60 ms plus tard : assez pour 20 Hz, pas pour 10 Hz
+                bp._sched_at -= 0.06                            # 60 ms plus tard (horloge simulee : un vrai sleep depassait 90 ms sur un serveur charge)
+                bp.scheduled_tick()                             # assez pour 20 Hz, pas pour 10 Hz
         finally:
             del bp.tick
             bp.view_name = saved_view
