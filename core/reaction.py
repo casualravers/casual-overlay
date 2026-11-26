@@ -25,6 +25,9 @@ RESIZE_MIN_S = 0.4              # echelle automatisee : au plus un changement de
 SEED_COUNT = 40                 # germes de l'etat initial
 SEED_RADIUS = 3.0               # rayon d'un germe, en cellules
 KICK_SEEDS = 3                  # germes semes par kick
+# Apparitions (#187) : bg_rd_spawn = part des kicks qui sement ; bg_rd_bud = un germe ne prend que s'il touche de la matiere (rd_step.frag)
+BUD_SEEDS = 4                   # candidats par kick contre le motif (une partie tombe dans le vide et est jetee)
+BUD_LEVEL = 0.1                 # V au-dessus duquel une lecture autour du germe compte comme matiere (la matiere visible est au-dessus de 0,2)
 DEAD_LEVEL = 0.002              # moyenne de V sous laquelle le motif est considere eteint
 WATCH_S = 2.0                   # periode du garde-fou anti-extinction
 RESEED_DELAY_S = 0.4            # symetrie ou branches changees : le motif repart des germes apres ce delai sans nouveau changement
@@ -172,6 +175,25 @@ def kick_seeds(kick_index: int, count: int = KICK_SEEDS) -> list[tuple[float, fl
     """Positions normalisees (0..1) des germes semes par le kick numero `kick_index` (deterministes)."""
     rng = random.Random(kick_index * 7919 + 17)
     return [(rng.random(), rng.random()) for _ in range(count)]
+
+
+def kick_spawns(kick_index: int, rate: float) -> bool:
+    """Le kick numero `kick_index` seme-t-il ? `rate` = part des kicks (bornee 0..1, invalide = 1) ; tirage deterministe par kick : a 100 %
+    tous les kicks sement (comme avant), a 0 % aucun."""
+    try:
+        rate = float(rate)
+    except (TypeError, ValueError):
+        rate = 1.0
+    if not math.isfinite(rate) or rate >= 1.0:
+        return True
+    if rate <= 0.0:
+        return False
+    return random.Random(kick_index * 104729 + 3).random() < rate
+
+
+def kick_candidates(bud: bool) -> int:
+    """Germes tires par kick : plus de candidats quand ils ne prennent que contre le motif."""
+    return BUD_SEEDS if bud else KICK_SEEDS
 
 
 def steps_for(acc: float, dt: float, speed: float, energy: float, cells: int | None = None) -> tuple[int, float]:

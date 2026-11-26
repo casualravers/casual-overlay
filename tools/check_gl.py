@@ -642,7 +642,8 @@ def check_gui() -> None:
             out["rd_tips"] = (len(rd_labels), shown, [], len(rd_ctrl))
             out["rd_written"] = params["bg_rd_scale"]
             out["rd_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False))
-                              for lb in ("Variete", "Vide", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
+                              for lb in ("Variete", "Vide", "Apparitions", "Derive", "Epaisseur des couches", "Symetrie", "Branches", "Liberte")}
+            out["rd_bud_cb"] = any(w.winfo_class() == "Checkbutton" and w.cget("text") == "Seulement contre le motif" for w in _walk(c["rd_box"]))
             for w in gg.row_of_label(c["rd_box"], "Variete", panels=False):
                 for x in gg.leaves(w):
                     if x.winfo_class() == "Scale":
@@ -1668,10 +1669,11 @@ def check_gui() -> None:
     check(n_tip >= 9 and n_shown == n_tip, "palette labyrinthe: chaque ligne a une info-bulle qui s'affiche au survol du libelle", str(out.get("rd_tips")))
     check(n_ctrl >= 9, "palette labyrinthe: les curseurs et choix portent aussi l'info-bulle (survol du controle)", str(out.get("rd_tips")))
     check(out.get("rd_written") == 1.5,"palette labyrinthe: le curseur de taille du motif ecrit le reglage", str(out.get("rd_written")))
-    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 7 and out.get("rd_mix_written") == 0.4
-          and out.get("rd_sym_written") == "rot",
-          "palette labyrinthe: variete, vide, derive, epaisseur, symetrie, branches et liberte dans la fenetre ; curseur et choix ecrivent les reglages",
-          str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"))))
+    check(all((out.get("rd_rows") or {}).values()) and len(out.get("rd_rows") or {}) == 8 and out.get("rd_mix_written") == 0.4
+          and out.get("rd_sym_written") == "rot" and out.get("rd_bud_cb") is True,
+          "palette labyrinthe: variete, vide, apparitions (+ case contre le motif), derive, epaisseur, symetrie, branches et liberte dans la fenetre ; "
+          "curseur et choix ecrivent les reglages",
+          str((out.get("rd_rows"), out.get("rd_mix_written"), out.get("rd_sym_written"), out.get("rd_bud_cb"))))
     check(out.get("rd_branch_mirror") == off and out.get("rd_branch_rot") == on
           and all(v == on for v in (out.get("rd_others_none") or {"x": off}).values()),
           "palette labyrinthe: Branches grise hors rotation, et lui seul (variete, symetrie, forme restent actives)",
@@ -11099,6 +11101,9 @@ def check_randomizer() -> None:
               and (v["bg_rd_sym"] != "rot" or v["bg_rd_free"] >= 0.2) for v in lb) and 0.25 <= sym_share <= 0.45,
           "fond aleatoire: zones, couches et symetrie du labyrinthe tirees dans leurs plages (symetrie une fois sur trois environ)",
           f"part avec symetrie {sym_share:.2f}")
+    bud_share = sum(1 for v in lb if v.get("bg_rd_bud") == 1.0) / max(len(lb), 1)
+    check(all(0.4 <= v.get("bg_rd_spawn", -1) <= 1.0 and v.get("bg_rd_bud") in (0.0, 1.0) for v in lb) and 0.15 <= bud_share <= 0.5,
+          "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
     check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
@@ -12862,15 +12867,18 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 15 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 17 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+          and d["bg_rd_spawn"] == 1.0 and d["bg_rd_bud"] == 0.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
           and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0 and d["bg_rd_smooth"] == 0.5,
-          "labyrinthe: 15 reglages du fond (zones, vides, couches, symetrie, fluidite), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+          "labyrinthe: 17 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+    sp = gl.coerce_params({"bg_rd_spawn": 3, "bg_rd_bud": -2})
+    check(sp["bg_rd_spawn"] == 1.0 and sp["bg_rd_bud"] == 0.0, "labyrinthe: apparitions et bourgeons bornes 0..1", str((sp["bg_rd_spawn"], sp["bg_rd_bud"])))
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
-    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void")
+    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud")
     old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
     for k in new_rd:
         old_scene.get("fond", {}).pop(k, None)
@@ -12957,6 +12965,38 @@ def check_reaction_sim() -> None:
           f"couverture {blobs.mean():.2f}, aire moyenne {np.mean(bsizes):.0f}")
     path = {s: float((sim(s, 3000).read_v() > 0.25).mean()) for s in (1.2, 1.4, 1.6, 1.8)}
     check(all(0.05 < x < 0.9 for x in path.values()), "chemin lignes -> taches vivant a chaque etape", str(path))
+    # Apparitions (#187) : « seulement contre le motif » = un germe ne prend que s'il touche de la matiere (rd_step.frag, u_bud)
+    def with_spot(cx=None, cy=0.5, rad=6):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(1.0)
+        w, h = r.size
+        v = np.zeros((h, w), np.float32)
+        if cx is not None:
+            yy, xx = np.mgrid[0:h, 0:w]
+            v[(xx + 0.5 - cx * w) ** 2 + (yy + 0.5 - cy * h) ** 2 <= rad ** 2] = 0.3
+        r.write(np.ones((h, w), np.float32) - v, v)
+        return r
+
+    def v_at(r, x, y):
+        w, h = r.size
+        return float(r.read_v()[int(y * h), int(x * w)])
+    gw = rc.grid_size(1.0)[0]
+    empty = with_spot()
+    empty.step(1, 0.6, [(0.5, 0.5)], bud=True)
+    check(float(empty.read_v().max()) == 0.0, "bourgeons: un germe tombe dans le vide ne prend pas")
+    near_x = 0.5 + 12 / gw                                          # 12 cellules du centre de la tache : 6 du bord, le cercle de lecture la touche
+    near = with_spot(0.5)
+    near.step(1, 0.6, [(near_x, 0.5)], bud=True)
+    far = with_spot(0.5)
+    far.step(1, 0.6, [(0.5 + 60 / gw, 0.5)], bud=True)
+    free_ = with_spot()
+    free_.step(1, 0.6, [(0.5, 0.5)])
+    check(v_at(near, near_x, 0.5) > 0.3 and v_at(far, 0.5 + 60 / gw, 0.5) < 0.01 and v_at(free_, 0.5, 0.5) > 0.3,
+          "bourgeons: un germe contre une tache prend, loin d'elle non ; sans l'option il prend partout (comme avant)",
+          str((v_at(near, near_x, 0.5), v_at(far, 0.5 + 60 / gw, 0.5), v_at(free_, 0.5, 0.5))))
+    wrap = with_spot(2 / gw)
+    wrap.step(1, 0.6, [(1.0 - 8 / gw, 0.5)], bud=True)
+    check(v_at(wrap, 1.0 - 8 / gw, 0.5) > 0.3, "bourgeons: grille en boucle, un germe au bord droit touche une tache au bord gauche")
     still_alive = {}
     for s in (0.0, 0.6, 1.0):                    # le motif vit en continu : il ne se fige pas en un point fixe (piege du demi-flottant)
         r_ = sim(s, 10000)
@@ -13198,6 +13238,23 @@ def check_bg_labyrinthe() -> None:
     rk0, k1 = run(tempo=0.0, bg_react=1.0)
     _rk0, k2 = run(rr=rk0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_react=1.0)
     check(abs(k2 - k1).max() == 0, "labyrinthe: tempo a 0 = fige meme quand des kicks arrivent (les germes attendent)")
+    # Apparitions (#187) : 0 % = aucun germe de kick (orbites comprises) ; changer en cours de route garde les germes deja en file
+    kicks = lambda i: dict(quiet, beats=1 + i // 4)
+    rs0, _ = run(frames=20, state=kicks, tempo=0.0, bg_react=1.0, bg_rd_sym="quad", bg_rd_spawn=0.0)
+    rs1, _ = run(frames=20, state=kicks, tempo=0.0, bg_react=1.0, bg_rd_sym="quad")
+    queued = len(rs1._rd_pending)
+    try:
+        run(rr=rs1, frames=4, state=lambda i: dict(quiet, beats=6 + i), tempo=0.0, bg_react=1.0, bg_rd_sym="quad", bg_rd_spawn=0.0)
+        kept = len(rs1._rd_pending) == queued
+    except Exception as exc:          # noqa: BLE001
+        kept = False
+        print("   ", exc)
+    check(rs0._rd_pending == [] and queued > 0 and kept,
+          "apparitions: 0 % = aucun germe de kick (symetrie comprise) ; passer a 0 garde les germes deja en attente", str((rs0._rd_pending[:2], queued)))
+    rb, _ = run(frames=8, state=kicks, tempo=0.0, bg_react=1.0, bg_rd_bud=1.0)
+    check(len(rb._rd_pending) == 4, "apparitions: contre le motif = 4 candidats par kick (au plus 4 en attente sans symetrie)", str(len(rb._rd_pending)))
+    _r, dflt = run(bg_rd_spawn=1.0, bg_rd_bud=0.0)
+    check(abs(dflt - a).max() == 0, "apparitions: valeurs par defaut = image d'origine")
     rz0, z1 = run(tempo=0.0, bg_rd_mix=0.8)
     zt = rz0._rd_zone_t
     _rz0, z2 = run(rr=rz0, frames=20, state=lambda i: dict(quiet, beats=1 + i // 4), tempo=0.0, bg_rd_mix=0.8)
@@ -13758,6 +13815,17 @@ def check_reaction_pure() -> None:
     k5 = rc.kick_seeds(5)
     check(len(k5) == 3 and k5 == rc.kick_seeds(5) and k5 != rc.kick_seeds(6) and all(0 <= x < 1 and 0 <= y < 1 for x, y in k5),
           "germes du kick: 3, deterministes, differents d'un kick a l'autre")
+    # Apparitions (#187) : part des kicks qui sement, et nombre de candidats quand ils ne prennent que contre le motif
+    ks = range(200)
+    check(all(rc.kick_spawns(k, 1.0) for k in ks) and not any(rc.kick_spawns(k, 0.0) for k in ks),
+          "apparitions: 100 % = chaque kick seme (comme avant), 0 % = aucun")
+    half = sum(rc.kick_spawns(k, 0.5) for k in ks)
+    check(80 <= half <= 120 and [rc.kick_spawns(k, 0.5) for k in ks] == [rc.kick_spawns(k, 0.5) for k in ks],
+          "apparitions: 50 % = environ un kick sur deux, toujours les memes (deterministe)", str(half))
+    check(rc.kick_spawns(5, 1.4) and not rc.kick_spawns(5, -1) and rc.kick_spawns(5, float("nan")),
+          "apparitions: valeur hors plage bornee, NaN = 100 %")
+    check(rc.kick_candidates(False) == rc.KICK_SEEDS == 3 and rc.kick_candidates(True) == rc.BUD_SEEDS == 4 and 0.0 < rc.BUD_LEVEL < 0.2,
+          "apparitions: contre le motif = 4 candidats par kick au lieu de 3 (une partie tombe dans le vide)")
     n, acc = rc.steps_for(0.0, 1 / 60, 1.0, 0.0)
     check(n == 10 and abs(acc) < 1e-9 and rc.steps_for(0.5, 0.0, 1.0, 0.0) == (0, 0.5) and rc.steps_for(0.0, 1.0, 0.0, 1.0)[0] == 0,
           "pas par image: 600 par seconde, reste garde, vitesse 0 = fige", str((n, acc)))

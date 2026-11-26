@@ -105,6 +105,14 @@ les basses).
   si mix > 0 ou void > 0 ; a 0 partout : bit pour bit l'ancien comportement. **Valeurs neutres** (mix 0, layers 0, sym none, void 0) = simulation et
   image identiques bit pour bit a la version d'avant. Automations actives par defaut : forme, ecart, variete, epaisseur, liberte, vide (0,15 a 0,6,
   periode 107 s ; pas derive ni symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0.
+  **Apparitions** (issue #187 ; design et plan : `docs/plans/2026-11-26-labyrinthe-apparitions-187-*.md`) : en cours de route les nouvelles
+  taches ne viennent QUE des germes des kicks. `bg_rd_spawn` (curseur « Apparitions », 1 par defaut) = part des kicks qui sement
+  (`core.reaction.kick_spawns`, tirage deterministe par kick ; 0 = le motif grandit seul depuis ses bords). `bg_rd_bud` (case « Seulement contre
+  le motif », 0 par defaut) = bourgeons : `rd_step.frag` (`u_bud`, `touches_matter`) ne pose un germe que si l'une de 8 lectures de V sur un cercle
+  de 2 x rayon + 2 cellules depasse `BUD_LEVEL` 0,1 (grille en boucle comprise) ; `BUD_SEEDS` 4 candidats par kick au lieu de 3 (une partie tombe
+  dans le vide et est jetee). Germes initiaux, relance de symetrie et garde-fou (`watch`, jamais d'ecran vide) : inchanges. Les taches qui se
+  divisent ne sont pas des germes (croissance du motif). Defauts = simulation et image identiques. Full Randomizer : apparitions 0,4 a 1, bourgeons
+  une fois sur trois (tires apres les autres reglages). **Non verifie** : ressenti au videoprojecteur avec de la vraie musique.
   **Taille du motif** (`bg_rd_scale`, 0,3 a 2) : automatisable (courbe 0,6 a 1,6, periode 127 s, **coupee par defaut** : chaque changement de
   taille floute un peu le motif). `ReactionDiffusion.ensure(scale, now)` recopie l'etat sur le GPU (passe de recopie bilineaire, ~0,1 ms ; l'ancien
   numpy coutait ~12 ms) et, avec `now`, ne change la taille de la grille qu'une fois par `RESIZE_MIN_S` (0,4 s). Echelle 0,3 = grille de 1280 x 720 :
