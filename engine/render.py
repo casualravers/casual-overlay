@@ -21,7 +21,7 @@ from core.strobe_auto import StrobeBrain
 from core.automation import FX_EFFECTS
 from core.foudre import MAX_PULSES, MAX_SEGMENTS, W_TRUNK, Lightning, phase_ceiling
 from core.controls import STROBE_COOLDOWN_S, STROBE_FLASH_S, StrobeLimiter, _unit, build_flash_s, build_strobe_hz, effective_tempo, spectral_hue
-from core.params import DEFAULT_PARAMS
+from core.params import DEFAULT_PARAMS, FX_NAMES
 from core import reaction
 from core.recording import cover_uv as fit_cover, fit_rect
 from core.drop import NEUTRAL as DROP_NEUTRAL, DropFx
@@ -796,8 +796,9 @@ class Renderer:
             fx_now = self.fx_now or {}
             for i, name in enumerate(EFFECTS):
                 best, layer = 0.0, None
+                k = FX_NAMES.index(name)                                # vecteurs audio dans l'ordre d'EFFECTS, interrupteurs dans celui de fx_on
                 for lay, on, vecs in (("bg", fx_bg, au_bg_fx), ("logo", fx_logo, au_logo_fx)):
-                    if float(on[i]) <= 0.0:
+                    if float(on[k]) <= 0.0:
                         continue                                        # effet coupe sur cette couche : il ne reagit a rien
                     v = max(float(x) for x in tuple(vecs[i])[:3])       # (basses, aigus, kick) ; la 4e composante est une duree
                     if v > best:

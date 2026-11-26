@@ -14488,6 +14488,15 @@ def check_brain_engine() -> None:
     r2.draw(fbo, size, loud, dict(p, fx_on=[0] * 5), 1.0)
     check(not any(e.family in ("wobble", "ripple", "glitch", "chroma", "logo") for e in lg2.events()),
           "cerveau: effets coupes -> aucun effet publie", str([e.family for e in lg2.events()]))
+    # interrupteurs dans l'ordre de fx_on (wobble, onde, aberration, glitch), vecteurs audio dans l'ordre d'EFFECTS (wobble, ripple, glitch,
+    # chroma) : chaque effet du cerveau est gate par SON interrupteur (comme layer_fx dans post.frag), pas par celui de meme indice
+    for off, gone, kept in ((2, "chroma", "glitch"), (3, "glitch", "chroma")):
+        rx = gl.Renderer(ctx, size, logo)
+        lgx = br.BrainLog()
+        rx.brain = lgx
+        rx.draw(fbo, size, loud, dict(p, fx_on=[0 if k == off else 1 for k in range(5)]), 1.0)
+        fx_ev = [e.family for e in lgx.events()]
+        check(gone not in fx_ev and kept in fx_ev, f"cerveau: interrupteur {off} coupe -> {gone} absent, {kept} publie", str(fx_ev))
     r1.brain = Boom()
     try:
         r1.draw(fbo, size, loud, dict(p, strobe_hits=2), 2.5)
