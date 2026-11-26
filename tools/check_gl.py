@@ -590,6 +590,7 @@ def check_gui() -> None:
             c["melt_var"].set(0)
             c["cell_var"].set(0)
             out["g_fx_off"] = (scales(tab_m), scales(tab_c))
+            c["cell_var"].set(1)
             c["melt_var"].set(1)
             out["g_fx_on"] = (scales(tab_m), scales(tab_c))
             c["melt_var"].set(0)
