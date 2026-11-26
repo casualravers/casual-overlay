@@ -7,5 +7,6 @@ Avant de modifier un module, lis sa fiche (la mise en page, le skin et l'integra
 - `gui_brain.py` (panneau du visualizer du cerveau, issue #192 : bascule VJ / brain, fenetre detachee, vues, budget) : [docs/fonctions/cerveau.md](../docs/fonctions/cerveau.md)
 - `gui_vj.py` (onglet Live : strobe, foudre) : [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md)
 - `gui_audio.py` (onglet Affichage : avance, analyse) : [docs/fonctions/synchro.md](../docs/fonctions/synchro.md)
+- `gui_routing.py` (onglet Routage et pastilles de source, #198) : [docs/fonctions/gui.md](../docs/fonctions/gui.md) ; moteur : [docs/fonctions/audio.md](../docs/fonctions/audio.md)
 - `gui_palette.py`, `gui_stage.py` : [docs/fonctions/exploitation.md](../docs/fonctions/exploitation.md)
 - `gui_remote.py`, `remote/`, onglet Rec de `gui_vj.py` : [docs/fonctions/medias-externes.md](../docs/fonctions/medias-externes.md)

@@ -678,6 +678,13 @@ def check_gui() -> None:
             c["palette_var"].set("classic")
             c["bg_var"].set("live")
             out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
+            ru = c["routing"]
+            fx_ids = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma")
+            out["route_pills"] = (all(len(ru.pills.get(rid, [])) == 2 for rid in fx_ids),          # la pastille de l'effet + celle du tableau
+                                  all(str(root.nametowidget(p.cget("menu")).entrycget(0, "variable")) == str(ru.vars(rid)[0])
+                                      for rid in fx_ids for p in ru.pills[rid]),
+                                  all(len(ru.pills.get(rid, [])) == 2 for rid in ("lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells"))
+                                  and all(len(ru.pills.get(rid, [])) == 1 for rid in ("bg_flash", "bg_scroll", "bg_sparkle", "breath", "hue")))
             c["bg_var"].set("pattern")                   # pire cas: bloc motif ouvert + effets du logo delies
             c["link_var"].set(0)
             root.update_idletasks()
@@ -1738,7 +1745,10 @@ def check_gui() -> None:
           and out.get("logo_pulse_cb") == ((0, 0), (1, 1)) and out.get("logo_pulse_int") is True,
           "effets du logo (delies): la section a aussi « Logo (pulse/contour) » et son curseur, qui partagent l'etat de ceux du fond (#197)",
           str((out.get("logo_pulse_row"), out.get("logo_pulse_cb"), out.get("logo_pulse_int"))))
-    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise"],
+    check(out.get("route_pills") == (True, True, True), "routage (#198): pastilles a cote des 8 effets et des 6 reactions du logo, meme variable que le "
+          "tableau de l'onglet Routage (motif du fond et globales : seulement dans l'onglet)",
+          str(out.get("route_pills")))
+    check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Routage"],
           "partie OVERLAY rangee en onglets (Affichage et analyse n'est plus un onglet d'effets)", str(out.get("tabs")))
     check(out.get("win_height", 9999) <= 700, "GUI compacte: fenetre sous 700 px de haut (dans le pire cas: motif + effets du logo delies)",
           str(out.get("win_height")) + " " + str(out.get("win_dbg")))
@@ -9758,9 +9768,147 @@ def check_routage() -> None:
     bk4.vector(61.0, st, pr, "bg_ripple", base, "tout", 0.0, 0.0)
     bk4.prune({"bg_ripple"})
     check(bk4.info("bg_ripple") is not None, "routage: prune garde les lignes encore calculees")
+    # --- aides de l'interface (lot 2)
+    check(rt.source_label("snare") == "Caisse claire" and rt.source_label("herite") == "Comme la couche" and rt.source_label("phrase16") == "Phrase 16"
+          and all(rt.source_label(s) for s in rt.ROUTE_SOURCES) and rt.source_label("inconnue") == "Comme la couche",
+          "routage: libelles courts de toutes les sources")
+    check(all(rt.menu_label(s) for s in rt.ROUTE_SOURCES) and rt.menu_label("mesure") == al.LABELS["mesure"], "routage: libelles longs du menu")
+    check(rt.pill_text("herite", 1.0, "bg") == "Comme le fond" and rt.pill_text("herite", 0.6, "logo") == "Comme le logo 60 %"
+          and rt.pill_text("basses", 0.8, "bg") == "Basses 80 %" and rt.pill_text("kick", 1.0, "bg") == "Kick"
+          and rt.pill_text("aigus", 1.0, None) == "Aigus" and rt.pill_text("herite", 1.0, None) == "Tout le son", "routage: texte de la pastille")
+    check(rt.PILL_CHARS >= max(len(rt.pill_text(s, 1.55, "logo")) for s in rt.ROUTE_SOURCES), "routage: largeur fixe de la pastille = le texte le plus long")
+    check(rt.auto_hint("groove", "bg") == "Auto : groove -> Basses" and rt.auto_hint("groove", "logo", since_hit=1.0) == "Auto : groove -> Frappes"
+          and rt.auto_hint(None, "bg") == "Auto : phase inconnue -> Tout", "routage: texte d'Auto (phase -> source)")
+    check(rt.source_range_hz("sub") == (20.0, 60.0) and rt.source_range_hz("basses") == (20.0, 150.0) and rt.source_range_hz("aigus") == (2000.0, 10000.0)
+          and rt.source_range_hz("kick") is None and rt.source_range_hz("mesure") is None and rt.source_range_hz("herite") is None,
+          "routage: plage du spectre d'une source (None pour un evenement)")
+    on = dict(DEFAULT_PARAMS, fx_on=[1, 1, 0, 1, 1], fx_link=1.0)
+    check(rt.line_enabled(on, "bg_glitch") and not rt.line_enabled(on, "bg_chroma") and rt.line_enabled(on, "bg_wobble"),
+          "routage: une ligne d'effet est grisee quand l'effet est coupe (ordre de fx_on : aberration = 2, glitch = 3)")
+    check(not rt.line_enabled(on, "lg_wobble") and rt.line_enabled(dict(on, fx_link=0.0, fxl_on=[1, 1, 1, 1]), "lg_wobble")
+          and not rt.line_enabled(dict(on, fx_link=0.0, fxl_on=[1, 1, 1, 0]), "lg_glitch"),
+          "routage: lies, les effets du logo suivent le fond (ligne grisee) ; delies, leur interrupteur fait foi")
+    check(rt.line_enabled(dict(on, holo_on=1.0, holo_react=0.5), "lg_holo") and not rt.line_enabled(dict(on, holo_on=1.0, holo_react=0.0), "lg_holo")
+          and not rt.line_enabled(dict(on, breath_pulse=0.0), "breath") and rt.line_enabled(on, "strobe"),
+          "routage: les autres lignes sont grisees tant que leur reaction audio est a 0")
     nan = float("nan")
     check(rt.route_of({"rg_bg_wobble": nan}, "bg_wobble")[1] == 1.0 and rt.route_of({"rg_bg_wobble": float("inf")}, "bg_wobble")[1] == 1.0
           and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
+
+
+def check_routage_gui() -> None:
+    """Routage (#198) : pastille et tableau de l'onglet partagent la meme donnee ; largeur fixe ; temoins ; grisage ; scene appliquee."""
+    print("-- routage audio : pastille et onglet")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"  (ignore: pas d'affichage tkinter disponible: {exc})")
+        return
+    import gui_routing
+    from core import routing as rt
+    try:
+        root.withdraw()
+        params = dict(gl.DEFAULT_PARAMS, fx_on=[1, 1, 0, 1, 1], fx_link=1.0)
+        status: dict = {}
+        c = gui_routing.stub_context(params, status)
+        ui = gui_routing.install(c)
+        side = tk.Frame(root)
+        side.pack()
+        pill = ui.pill(side, "bg_wobble")
+        pill.pack()
+        tab = tk.Frame(root)
+        tab.pack()
+
+        class Z:
+            def __init__(self):
+                self.r = -1
+
+            def next_row(self):
+                self.r += 1
+                return self.r
+        titles = []
+        ui.build_tab(tab, Z(), lambda z, title=None: titles.append(title),
+                     lambda parent, lo, hi, step, var, length=120: tk.Scale(parent, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var, length=length))
+        root.update_idletasks()
+        routable = [r.id for r in rt.ROUTES if r.kind != "info"]
+        check(titles == ["Fond", "Logo", "Global"] and all(rid in ui.rows for rid in rt.BY_ID) and all("pill" in ui.rows[rid] for rid in routable)
+              and not any("pill" in ui.rows[r.id] for r in rt.ROUTES if r.kind == "info"),
+              "routage gui: l'onglet a une ligne par entree de la table (Fond / Logo / Global), sans menu pour les lignes informatives")
+        tab_pill = ui.rows["bg_wobble"]["pill"]
+        w0 = (pill.winfo_reqwidth(), tab_pill.winfo_reqwidth())
+        menu = root.nametowidget(pill.cget("menu"))
+        idx = [i for i in range(menu.index("end") + 1) if menu.type(i) == "radiobutton" and menu.entrycget(i, "label") == rt.menu_label("basses")]
+        menu.invoke(idx[0])
+        root.update_idletasks()
+        check(params["rt_bg_wobble"] == "basses" and tab_pill.cget("text") == "Basses" and pill.cget("text") == "Basses",
+              "routage gui: choisir Basses par la pastille ecrit le reglage et met a jour la ligne de l'onglet", str((params["rt_bg_wobble"], tab_pill.cget("text"))))
+        ui.vars("bg_wobble")[1].set(0.5)                       # le curseur de l'onglet
+        root.update_idletasks()
+        check(pill.cget("text") == "Basses 50 %" and params["rg_bg_wobble"] == 0.5, "routage gui: le dosage de l'onglet se lit sur la pastille", pill.cget("text"))
+        c.synced["rt_bg_wobble"].set("snare")                   # ce que fait l'application d'une scene (sync des variables liees)
+        c.synced["rg_bg_wobble"].set(1.5)
+        root.update_idletasks()
+        check(pill.cget("text") == "Caisse claire 150 %" and tab_pill.cget("text") == "Caisse claire 150 %", "routage gui: une scene appliquee met a jour pastille et onglet")
+        check((pill.winfo_reqwidth(), tab_pill.winfo_reqwidth()) == w0, "routage gui: la pastille garde sa largeur quand son texte change (rien ne bouge)", str((w0, pill.winfo_reqwidth())))
+        check(pill.cget("bg") == theme_overlay() and ui.rows["bg_ripple"]["pill"].cget("bg") != theme_overlay(), "routage gui: ligne reglee a l'accent, ligne par defaut neutre")
+        resets = sorted((w for w in tab.grid_slaves() if w.winfo_class() == "Button" and w.cget("text") == "Tout remettre"),
+                        key=lambda w: int(w.grid_info()["row"]))
+        resets[0].invoke()                                         # le bouton de la zone Fond (le premier pose)
+        root.update_idletasks()
+        check(len(resets) == 3 and rt.is_default(params) and pill.cget("text") == "Comme le fond", "routage gui: le bouton Tout remettre = routes par defaut", pill.cget("text"))
+        ui.refresh()
+        check(ui.rows["bg_chroma"]["label"].cget("fg") != ui.rows["bg_wobble"]["label"].cget("fg"), "routage gui: effet coupe = ligne grisee (aberration coupee)")
+        check(ui.rows["lg_wobble"]["pill"].cget("text") == "Suit le fond" and ui.rows["lg_pulse"]["pill"].cget("text") == "Comme le logo",
+              "routage gui: logo lie, ses effets du shader disent « Suit le fond » (pas ses reactions)")
+        params["fx_link"] = 0.0
+        ui.refresh()
+        check(ui.rows["lg_wobble"]["pill"].cget("text") == "Comme le logo", "routage gui: logo delie, ses effets ont leur propre ligne")
+        params["fx_link"] = 1.0
+        status["routes_now"] = {"bg_glitch": ("aigus", 0.5)}
+        ui.refresh()
+        x1 = ui.rows["bg_glitch"]["level"].coords(ui.rows["bg_glitch"]["bar"])[2]
+        check(abs(x1 - gui_routing.LEVEL_W * 0.5) < 1.0, "routage gui: le temoin suit le niveau publie par le rendu", str(x1))
+        ui.set_hover("bg_glitch")
+        texts = [ui.spectrum.itemcget(i, "text") for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "text"]
+        ui.set_hover("bg_ripple")
+        ui.vars("bg_ripple")[0].set("kick")
+        texts2 = [ui.spectrum.itemcget(i, "text") for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "text"]
+        check(any("Glitch" in t for t in texts) and any("evenement" in t for t in texts2), "routage gui: le spectre nomme la ligne survolee, ou dit evenement",
+              str((texts, texts2)))
+
+        def band():
+            rects = [ui.spectrum.coords(i) for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "rectangle"]
+            return rects[0] if rects else None
+        params.update(src_bg="basses", src_logo="aigus", fx_link=1.0)
+        ui.set_hover(None)
+        ui.set_hover("bg_glitch")
+        x_bass = band()
+        ui.set_hover("lg_pulse")
+        check(x_bass is not None and band() == x_bass, "routage gui: logo lie, la pulsation ecoute la source du fond (meme plage au spectre)", str((x_bass, band())))
+        ui.vars("bg_glitch")[0].set("air")
+        ui.set_hover("bg_ripple")
+        ui.set_hover("bg_glitch")
+        check(band() is not None and band()[0] > x_bass[2], "routage gui: une ligne sur l'air surligne les aigus du spectre", str(band()))
+        ui.reset(["bg_glitch"])
+        ui.refresh()
+        lg = ui.rows["lg_wobble"]["pill"]
+        check(str(lg.cget("state")) == "disabled" and str(ui.rows["lg_pulse"]["pill"].cget("state")) == "normal",
+              "routage gui: logo lie, la pastille « Suit le fond » est desactivee (reglage ignore), pas celle des reactions")
+        params["bg_mode"] = "live"
+        ui.refresh()
+        flash_fg = ui.rows["bg_flash"]["label"].cget("fg")
+        params["bg_mode"] = "pattern"
+        ui.refresh()
+        check(flash_fg != ui.rows["bg_flash"]["label"].cget("fg"), "routage gui: flash du motif grise quand le fond est la video (pas le motif)")
+        params.update(src_bg="tout", src_logo="tout")
+    finally:
+        root.destroy()
+
+
+def theme_overlay() -> str:
+    import theme
+    return theme.OVERLAY
 
 
 def check_effets_auto() -> None:
@@ -9899,6 +10047,65 @@ def check_routage_rendu() -> None:
     # ligne a la main a cote d'effets en auto : elle seule change de source
     groove = dict(bass_only, phase={"name": "groove"})
     a = render(groove, src_bg="auto", **wob)
+    # --- lot 3 : lignes hors shader (motif, reactions du logo, globales) : chaque ligne ne change que sa reaction
+    clock = [10.0]
+
+    def step(state, **kw):
+        """Deux images a 0,1 s d'ecart : rend (avance du defilement, du halo, des cellules) entre elles."""
+        q = dict(base, **kw)
+        r.draw(fbo, size, state, q, clock[0])
+        a0 = (r._bg_scroll, r._holo_t, r._cell_t)
+        clock[0] += 0.1
+        r.draw(fbo, size, state, q, clock[0])
+        clock[0] += 0.1
+        return tuple(b - a for a, b in zip(a0, (r._bg_scroll, r._holo_t, r._cell_t)))
+
+    def uniform(name):
+        return r.scene_prog[name].value if name in r.scene_prog else None
+    pat = dict(bg_mode="pattern", bg_react=1.0, bg_speed=1.0)
+    step(hit, **pat)
+    check(uniform("u_beat") == 1.0, "routage: flash du motif par defaut = kick du fond (comme avant)", str(uniform("u_beat")))
+    step(hit, rt_bg_flash="aigus", **pat)
+    b_aigus = uniform("u_beat")
+    step(dict(hit, hit=0.9, since_hit=0.05), rt_bg_flash="frappes", **pat)
+    check(b_aigus == 0.0 and abs(uniform("u_beat") - 0.9) < 1e-6 and r.routes_now.get("bg_flash", ("",))[0] == "frappes",
+          "routage: flash du motif sur les aigus = plus de flash au kick ; sur les frappes = flash a la frappe", str((b_aigus, uniform("u_beat"))))
+    d_def, d_rien = step(bass_only, **pat)[0], step(bass_only, rt_bg_scroll="rien", **pat)[0]
+    check(d_def > d_rien * 2.0 > 0.0, "routage: defilement sur rien = les basses ne l'accelerent plus", str((d_def, d_rien)))
+    holo = dict(holo_on=1.0, holo_react=1.0, holo_speed=0.5, cell_on=1.0, cell_react=1.0, cell_speed=1.0)
+    d0 = step(bass_only, **holo)
+    d1 = step(bass_only, rt_lg_holo="rien", **holo)
+    check(d0[1] > d1[1] * 2.0 > 0.0 and abs(d0[2] - d1[2]) < 1e-9, "routage: halo sur rien = les basses ne l'accelerent plus, les cellules si (lignes independantes)",
+          str((d0, d1)))
+    rect = lambda **kw: (step(hit, **{"logo_pulse": 0.5, **kw}), tuple(uniform("u_logo_rect")))[1]
+    big, still_rect, tiny = rect(), rect(rt_lg_pulse="aigus"), rect(logo_pulse=0.0)
+    check(big != tiny and still_rect == tiny, "routage: pulsation du logo sur les aigus = plus de pulsation au kick", str((big, still_rect, tiny)))
+    step(bass_only, breath_pulse=1.0)
+    sw_def = r._bp_swell
+    step(bass_only, breath_pulse=1.0, rt_breath="rien")
+    check(sw_def == 1.0 and r._bp_swell == 0.0 and "breath" in r.routes_now, "routage: respiration sur rien = elle ne suit plus les basses", str((sw_def, r._bp_swell)))
+    both = dict(bass_only, high=1.0)                                  # graves et aigus : teinte a mi-chemin sur le son entier
+    r._hue_spec = 0.0
+    for _ in range(20):
+        step(both, hue_spectrum=1.0)
+    h_def = r._hue_spec
+    r._hue_spec = 0.0
+    for _ in range(20):
+        step(both, hue_spectrum=1.0, rt_hue="basses")
+    check(h_def > 10.0 and r._hue_spec < 1.0, "routage: teinte spectrale sur les basses = teinte chaude, alors que le son entier (graves + aigus) la refroidit",
+          str((h_def, r._hue_spec)))
+    step(bass_only)
+    check(r.routes_now == {} and r._routes.info("breath") is None, "routage: toutes les lignes remises par defaut = plus aucun calcul ni memoire")
+    beats = dict(hit, beats=7)
+    step(beats, **pat)
+    flips_on = r.scene_prog["u_sto_au"].value[2] if "u_sto_au" in r.scene_prog else None
+    step(beats, rg_bg_scroll=0.0, **pat)
+    flips_off = r.scene_prog["u_sto_au"].value[2] if "u_sto_au" in r.scene_prog else None
+    check(flips_on == 7.0 and flips_off == 0.0, "routage: defilement et damier a 0 % = le damier ne bascule plus aux kicks", str((flips_on, flips_off)))
+    r._hue_spec = 0.0
+    for _ in range(20):
+        step(both, hue_spectrum=1.0, rg_hue=0.5)
+    check(abs(r._hue_spec - h_def * 0.5) < 2.0, "routage: teinte spectrale a 50 % = moitie de la rotation (le dosage agit sur l'amplitude)", str((h_def, r._hue_spec)))
     check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None
           and ("wobble", "rien", 1.0) in r.fx_now["bg"] and ("wobble", "basses", 0.6) not in r.fx_now["bg"],
           "routage: une ligne a la main sort d'auto pour CET effet (le voyant le dit), la couche reste en auto par effet", str(r.fx_now["bg"]))
@@ -16209,7 +16416,7 @@ SUITE = (
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
     "check_randomizer", "check_diagnostics", "check_skin", "check_scrollbar", "check_menu_style", "check_dialogs", "check_audio2wave_api",
     "check_projection", "check_bar_gap", "check_line_resolution", "check_contract", "check_vj_flash", "check_gates", "check_layers",
-    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu", "check_automation", "check_params", "check_manager",
+    "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_audio_layers", "check_routage_rendu", "check_routage_gui", "check_automation", "check_params", "check_manager",
     "check_native_modes", "check_sphere_mode", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel", "check_render", "check_drop_render", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse",
     "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame", "check_highlights_audio", "check_clips", "check_claude_md", "check_bugreport", "check_bugreport_cli", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_curve_modes", "check_recorder", "check_recording_render", "check_latence", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server",
     "check_remote_page", "check_qrcode", "check_phase", "check_schedule", "check_palette", "check_stage_layout",

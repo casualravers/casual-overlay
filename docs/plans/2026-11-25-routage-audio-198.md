@@ -101,6 +101,15 @@ Une scene ancienne n'a pas ces cles : defauts appliques, rendu identique. Le tab
 - **Reglages par la table** : `routing.route_specs()` rend des tuples que `params_schema` transforme en `_p` (pas d'import de `params_schema` dans `routing` : import circulaire).
 - **Cout mesure** : +0,05 a +0,14 ms CPU par image avec 8 lignes routees (poste de dev, 1280x720, mediane) ; 0 avec les routes par defaut.
 
+## Decisions prises a l'execution (PR 2 et 3)
+
+- **Pastilles** : a cote des 8 effets du shader et des 6 reactions du logo. Le motif du fond (colonne LIVE, fenetre deja a 692 px sur 700 dans le pire cas) et les globales (grille des masters VJ) n'ont leur reglage que dans l'onglet Routage.
+- **Menu de la pastille** : sources par familles + sous-menu Dosage (0 a 200 % par crans) ; le curseur continu est dans l'onglet.
+- **Logo lie** : ses 4 effets du shader affichent « Suit le fond ».
+- **Globales sans couche** (respiration, teinte) : par defaut « Tout le son » (elles lisaient le son entier, pas la couche du fond), ni retard ni lissage.
+- **Composantes** : chaque ligne hors shader garde la composante qu'elle lisait (flash = kick, defilement = basses + compte des kicks pour le damier, scintillement = aigus...), detail dans `docs/fonctions/audio.md`.
+- **Strobe, foudre, noise** : une ligne de texte fixe (ou se reglent-ils) plutot que le voyant dynamique : ils ont deja leurs voyants dans leurs onglets.
+
 ## Documentation
 
 Section « Routage audio par effet » dans `docs/fonctions/audio.md` (modele, resolution, zero perte) et dans `docs/fonctions/gui.md` (onglet, pastille) ; ligne dans l'index de `CLAUDE.md` seulement si une nouvelle fiche est creee (non prevu).

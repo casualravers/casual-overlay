@@ -39,8 +39,8 @@ ROUTES: tuple[Route, ...] = (
     Route("lg_holo", "logo", "logo", "Halo holographique", "vec"),
     Route("lg_melt", "logo", "logo", "Fonte acide", "vec"),
     Route("lg_cells", "logo", "logo", "Cellules", "vec"),
-    Route("breath", "global", "bg", "Respiration (pulsation)", "vec"),
-    Route("hue", "global", "bg", "Teinte spectrale", "vec"),
+    Route("breath", "global", None, "Respiration (pulsation)", "vec"),      # sans couche : lisent le son entier (state), pas une couche
+    Route("hue", "global", None, "Teinte spectrale", "vec"),
     Route("strobe", "global", None, "Strobe", "info"),
     Route("foudre", "global", None, "Foudre", "info"),
     Route("noise", "global", None, "Noise", "info"),
@@ -105,6 +105,97 @@ def is_default(params: dict, rid: str | None = None) -> bool:
 def routed_ids(params: dict) -> list[str]:
     """Les lignes modifiees, dans l'ordre de la table."""
     return [r.id for r in routable() if not is_default(params, r.id)]
+
+
+# --- Aides de l'interface (onglet Routage, pastilles) ------------------------------------------------------------------------------------------
+SHORT_LABELS = {INHERIT: "Comme la couche", "tout": "Tout", "basses": "Basses", "mediums": "Mediums", "aigus": "Aigus", "kick": "Kick",
+                "frappes": "Frappes", "snare": "Caisse claire", "rien": "Rien", "auto": "Auto", "sub": "Sub", "corps": "Corps",
+                "presence": "Presence", "air": "Air", "elan": "Elan", "pouls": "Pouls", "croches": "Croches", "doubles": "Doubles",
+                "mesure": "Mesure", "phrase8": "Phrase 8", "phrase16": "Phrase 16", "phrase32": "Phrase 32", "fin8": "Fin 8", "fin16": "Fin 16",
+                "fin32": "Fin 32"}
+LAYER_NAMES = {"bg": "le fond", "logo": "le logo"}
+# Plages (Hz) que le mini-spectre surligne ; un evenement (kick, frappes, grilles...) n'a pas de plage. Bandes de engine/audio.py (BANDS, BANDS8).
+RANGES_HZ = {"tout": (20.0, 12000.0), "basses": (20.0, 150.0), "mediums": (150.0, 2000.0), "aigus": (2000.0, 10000.0),
+             "sub": (20.0, 60.0), "corps": (150.0, 1000.0), "presence": (1000.0, 5000.0), "air": (5000.0, 12000.0)}
+SPECTRUM_HZ = (20.0, 20000.0)
+
+
+def source_label(src: str) -> str:
+    """Libelle court (pastille, tableau) ; source inconnue = comme la couche."""
+    return SHORT_LABELS.get(src, SHORT_LABELS[INHERIT])
+
+
+def menu_label(src: str) -> str:
+    """Libelle long (entree du menu) : celui des menus de couche, sinon le court."""
+    return al.LABELS.get(src, source_label(src))
+
+
+def pill_text(src: str, dose: float, layer: str | None) -> str:
+    """« Basses 80 % », « Comme le fond » ; le dosage n'est ecrit que s'il n'est pas de 100 %."""
+    if src == INHERIT:
+        name = f"Comme {LAYER_NAMES[layer]}" if layer in LAYER_NAMES else "Tout le son"      # ligne globale : le son entier, comme avant
+    else:
+        name = source_label(src)
+    pct = int(round(float(dose) * 100))
+    return name if pct == 100 else f"{name} {pct} %"
+
+
+PILL_CHARS = max(len(pill_text(s, 1.55, layer)) for s in ROUTE_SOURCES for layer in (*LAYER_NAMES, None))     # largeur fixe (en caracteres)
+
+
+def auto_hint(phase, layer: str, since_hit=None) -> str:
+    """Ce qu'Auto donne pour une couche : « Auto : groove -> Basses »."""
+    bg, logo = al.auto_sources(phase, since_hit)
+    return f"Auto : {phase if phase in al.AUTO_TABLE else 'phase inconnue'} -> {source_label(bg if layer == 'bg' else logo)}"
+
+
+def source_range_hz(src: str) -> tuple[float, float] | None:
+    return RANGES_HZ.get(src)
+
+
+def _on(params: dict, key: str, i: int) -> bool:
+    try:
+        return float(params[key][i]) > 0.0
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
+def _pos(params: dict, *keys: str) -> bool:
+    try:
+        return all(float(params.get(k, 0.0)) > 0.0 for k in keys)
+    except (TypeError, ValueError):
+        return False
+
+
+FX_ON_INDEX = {"wobble": 0, "ripple": 1, "chroma": 2, "glitch": 3}      # ordre des interrupteurs fx_on / fxl_on (different de EFFECTS)
+VEC_GATES = {"bg_flash": ("bg_react",), "bg_scroll": ("bg_react",), "bg_sparkle": ("bg_react",), "lg_jitter": ("logo_jitter",),
+             "lg_glow": ("logo_glow",), "lg_holo": ("holo_on", "holo_react"), "lg_melt": ("melt_on", "melt_react"),
+             "lg_cells": ("cell_on", "cell_react"), "breath": ("breath_pulse",), "hue": ("hue_spectrum",)}
+
+
+def line_enabled(params: dict, rid: str) -> bool:
+    """La ligne agit-elle en ce moment ? (grisee sinon) : effet coupe, reaction audio a 0, effet du logo qui suit le fond (lies)."""
+    r = BY_ID[rid]
+    if r.kind == "info":
+        return True
+    linked = float(params.get("fx_link", 1.0)) >= 0.5
+    if rid in FX_LINES:
+        effect = al.EFFECTS[FX_LINES[rid][1]]
+        if r.layer == "bg":
+            return _on(params, "fx_on", FX_ON_INDEX[effect])
+        return not linked and _on(params, "fxl_on", FX_ON_INDEX[effect])
+    if rid == "lg_pulse":
+        return _on(params, "fx_on", 4) and _pos(params, "logo_pulse")
+    if rid in ("lg_jitter", "lg_glow"):
+        return _on(params, "fx_on", 4) and _pos(params, *VEC_GATES[rid])
+    if r.zone == "fond":                                    # flash, defilement, scintillement : seulement avec le motif genere (pas la video)
+        return params.get("bg_mode") == "pattern" and _pos(params, *VEC_GATES[rid])
+    return _pos(params, *VEC_GATES[rid])
+
+
+def follows_bg(params: dict, rid: str) -> bool:
+    """Vrai si la ligne est ignoree parce que le logo est lie (ses effets du shader suivent la ligne du fond)."""
+    return fx_route_id(rid, float(params.get("fx_link", 1.0)) >= 0.5) != rid
 
 
 def fx_route_id(rid: str, linked: bool) -> str:
