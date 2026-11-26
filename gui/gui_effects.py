@@ -8,6 +8,7 @@ from __future__ import annotations
 import audio2wave_gl as gl
 import tkinter as tk
 from core import audio_layers
+from core import routing as rt
 
 
 def install(c):
@@ -101,10 +102,12 @@ def install(c):
     ROUTE_OF_FX = ("wobble", "ripple", "chroma", "glitch")   # ordre des interrupteurs fx_on (different de audio_layers.EFFECTS)
 
     def route_pill(parent, row, prefix, i):
-        if routing is not None and i < len(ROUTE_OF_FX):
-            routing.pill(parent, f"{prefix}_{ROUTE_OF_FX[i]}").grid(row=row, column=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        rid = f"{prefix}_{ROUTE_OF_FX[i]}" if i < len(ROUTE_OF_FX) else None
+        if routing is not None and rid in rt.FX_LINES:
+            routing.pill(parent, rid).grid(row=row, column=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     fx_tips = ("Ondulation de l'image, amplitude = basses.",
-               "Onde de choc depuis le centre : sur le 1er temps de chaque mesure ou a chaque kick (menu « Onde de choc sur » juste dessous).",
+               "Onde de choc depuis le centre : sur le 1er temps de chaque mesure (le « 1 » se cale sur la grille Temps 1, onglet Masters, touche "
+               "virgule). Pour une autre cadence (chaque kick, frappes...) : sa pastille de source, a droite.",
                "Canaux R/V/B decales depuis le centre au kick.",
                "Bandes horizontales decalees sur les gros kicks / aigus.",
                "Interrupteur des reactions du logo (pulsation, tremblement, contour).")
@@ -122,17 +125,6 @@ def install(c):
         compact_scale(tab_fx, 0, 2, 0.05, int_var, 110).grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         add_auto(zone_fx, r, f"fx_int{i}", int_var)
         route_pill(tab_fx, r, "bg", i)
-
-    r = zone_fx.next_row()                         # quand part l'onde de choc : 1er temps de la mesure (defaut) ou chaque kick
-    tk.Label(tab_fx, text="Onde de choc sur").grid(row=r, column=0, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    ripple_var = tk.StringVar(value=params.get("ripple_beat", "mesure"))
-    c.bind_param("ripple_beat", ripple_var, str)
-    ripple_menu = tk.OptionMenu(tab_fx, ripple_var, "mesure", "kick")
-    ripple_menu.config(width=8)                    # largeur fixe : rien ne bouge quand le choix change
-    ripple_menu.grid(row=r, column=1, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    Tooltip(ripple_menu, "mesure = l'onde de choc ne part que sur le 1er temps de chaque mesure (un temps sur quatre) : moins de saturation. "
-                         "Le « 1 » se cale sur la grille Temps 1 (onglet Masters, touche virgule) ; sans grille, il est pris au hasard parmi les kicks. "
-                         "kick = a chaque kick, comme avant.")
 
     accent_var = tk.DoubleVar(value=params.get("cycle_accent", 1.0))       # renforts de fin de cycle (#164)
     bind_param("cycle_accent", accent_var)
