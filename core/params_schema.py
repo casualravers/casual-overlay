@@ -229,6 +229,8 @@ TABLE: tuple[Param, ...] = (
     _p("bg_sto_regular", 1.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : 1 = bruit bleu (sans amas), 0 = aleatoire brut (grain)."),
     _p("bg_sto_vary", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : la taille des points suit le champ (0 = taille constante)."),
     _p("bg_sto_density", 0.5, 0.0, 1.0, scope="bg", doc="Palette stochastique : niveau moyen du champ (part de points allumes)."),
+    _p("bg_sto_soft", 0.0, 0.0, 1.0, scope="bg",
+       doc="Palette stochastique : douceur, les points naissent et meurent en grossissant / retrecissant (0 = allumage sec, comme avant)."),
     _p("bg_sto_invert", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : 1 = echange la couleur des points et celle du fond."),
     _p("bg_sto_rainbow", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : la teinte des points suit le champ (0 = couleur 1 seule)."),
     _p("bg_rd_shape", 0.6, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : 0 = taches qui se repoussent, 1 = lignes sinueuses (labyrinthe)."),

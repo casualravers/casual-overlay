@@ -53,7 +53,9 @@ les basses).
   points etaient coupes a plat), et **une voisine hors de portee du pixel ne calcule pas le champ** (-40 % de temps GPU, image identique).
   Champs (`bg_sto_field`) : `noise` (2 octaves de bruit de valeur, hachage sans `sin`), `waves` (bandes vers `bg_angle`), `gradient` (aller-retour
   comme Duo) ; ils derivent avec `_bg_scroll`. Reglages propres : `bg_sto_vary` (le rayon suit le champ), `bg_sto_density` (decale le champ),
-  `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ) ; `bg_hue` et `bg_speed`
+  `bg_sto_invert` (echange couleur 1 = points et couleur 2 = fond), `bg_sto_rainbow` (teinte des points = champ), `bg_sto_soft` (« Douceur », #223 :
+  rayon x `smoothstep(rang - l, rang + l, champ)`, `l` = 0,15 x douceur, uniform `u_sto_soft` ; les points naissent et meurent en grossissant au lieu
+  de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720) ; `bg_hue` et `bg_speed`
   s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
   kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
   change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,
