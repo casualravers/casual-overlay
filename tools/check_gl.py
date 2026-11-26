@@ -3467,13 +3467,31 @@ def check_bg_stochastic() -> None:
     check(0.0 < gs[0] < gs[1] < gs[2], "stochastique: la bordure s'epaissit avec le curseur", " ".join(f"{x:.3f}" for x in gs))
     check(abs(foot(rings[8.0]) - foot(a)) < 0.01, "stochastique: la bordure est dans le point (meme surface couverte)",
           f"{foot(a):.3f} -> {foot(rings[8.0]):.3f}")
-    hollow = render(bg_sto_border=12.0, bg_sto_border_color="#00ff00")
-    check(hollow[:, :, 0].max() < 60 and green(hollow) > 0.8 * foot(a),
-          "stochastique: bordure au moins egale au rayon = disque plein de la couleur de bordure", f"rouge max {hollow[:, :, 0].max()}")
+    sparse = render(bg_sto_density=0.25)                           # points isoles : un point seul dont le rayon <= la bordure est plein (un groupe garde son interieur)
+    hollow = render(bg_sto_density=0.25, bg_sto_border=12.0, bg_sto_border_color="#00ff00")
+    red_left = float((hollow[:, :, 0] > 60).mean())                # (quelques pixels de couture entre deux points qui se chevauchent restent plus profonds que la bordure)
+    check(red_left < 0.001 and green(hollow) > 0.8 * foot(sparse),
+          "stochastique: bordure au moins egale au rayon = disque plein de la couleur de bordure", f"part rouge restante {red_left:.5f}")
     check(gl.coerce_params({"bg_sto_border": 40})["bg_sto_border"] == 12.0 and gl.DEFAULT_PARAMS["bg_sto_border"] == 0.0
           and {"bg_sto_border", "bg_sto_border_color"} <= set(gl.BG_KEYS)
           and gl.DEFAULT_PARAMS["bg_sto_border_color"] == "#ffffff",
           "stochastique: bordure bornee 0..12 px, 0 par defaut, couleur blanche, reglages du fond")
+    # Bordure de groupe : des points qui se chevauchent ou se touchent n'ont qu'UNE bordure, autour du groupe (jamais a l'interieur d'un autre
+    # point). Test : sur un champ dense de gros points, chaque pixel de bordure est pres du fond (distance <= epaisseur + 3 px) ; sous 2 %
+    # d'exceptions : les fentes de moins de 2 px entre deux points ne laissent jamais un pixel de fond pur (avant : 58 % de bordure a l'interieur).
+    dense = render(bg_sto_size=20.0, bg_sto_vary=1.0, bg_sto_density=0.55, bg_sto_regular=1.0, bg_sto_border=6.0, bg_sto_border_color="#00ff00")
+    is_border = (dense[:, :, 1] > 200) & (dense[:, :, 0] < 60) & (dense[:, :, 2] < 60)
+    is_ground = (dense[:, :, 2] > 200) & (dense[:, :, 0] < 60) & (dense[:, :, 1] < 60)
+    near_ground = is_ground.copy()
+    reach_px = 3 + 3                                                  # bordure 6 (pour 720) = 3 px en 360 de haut, + marge d'anti-crenelage
+    for dy in range(-reach_px, reach_px + 1):
+        for dx in range(-reach_px, reach_px + 1):
+            near_ground |= np.roll(np.roll(is_ground, dy, axis=0), dx, axis=1)
+    inner = int((is_border & ~near_ground).sum())
+    touching = int((((dense[:, :, 0] > 60) | (dense[:, :, 1] > 60)) & ~is_ground).sum())
+    check(is_border.sum() > 200 and 0.3 < touching / dense[:, :, 0].size < 0.9 and inner < 0.02 * is_border.sum(),
+          "stochastique: des points qui se touchent n'ont qu'une bordure autour du groupe (aucune bordure a l'interieur d'un autre point)",
+          f"{int(is_border.sum())} pixels de bordure, dont {inner} loin du fond")
     # Paliers (#222) : chaque point prend l'une de 2 ou 3 tailles fixes selon le champ (trame d'imprimerie) ; « continuous » = image d'origine
     check(abs(render(bg_sto_levels="continuous") - a).max() == 0, "stochastique: paliers « continuous » = image d'origine")
 
@@ -16383,6 +16401,9 @@ def check_safeguards() -> None:
           and all(sf.background_cost(dict(sto_next, bg_sto_field=v), full) > 0.0 for v in gl.params_schema.BY_KEY["bg_sto_field"].choices)
           and sf.background_cost(dict(sto_next, bg_sto_field="inconnu"), full) == sf.background_cost(sto_next, full),
           "securite GPU: cout du fond stochastique compte pour chacun des 8 champs (#229 : champ precalcule), nul hors du fond genere")
+    check(sf.background_cost(dict(sto_next, bg_sto_border=4.0), full) > sf.background_cost(dict(sto_next, bg_sto_border=0.0), full)
+          and sf.background_cost(dict(sto_next, bg_sto_border=12.0), full) > sf.background_cost(dict(sto_next, bg_sto_border=2.0), full),
+          "securite GPU: la bordure des points du stochastique compte, et plus encore quand elle est epaisse")
     fine = dict(bg_mode="pattern", bg_palette="labyrinthe", bg_rd_scale=0.5)
     check(sf.background_cost(dict(fine, bg_rd_sym="none"), full) < sf.background_cost(dict(fine, bg_rd_sym="quad"), full),
           "securite GPU: labyrinthe sans symetrie (demi-precision, #225) compte moins qu'avec une symetrie (RG32F) a l'echelle 0,5")

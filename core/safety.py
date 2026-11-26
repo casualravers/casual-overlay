@@ -14,6 +14,9 @@ EFFECT_COST_MS = (("cell_on", "cellules", 6.7), ("holo_on", "halo", 3.3), ("melt
 # scene) : tous les champs coutent pareil, la boucle des 9 points voisins domine. Mesure a 1280 x 720 (meme session, par rapport au duo) :
 # +1,5 a +2,2 ms selon le champ (taches : +2,9 avant #229), x 2,25 pour 1080p -> 4,5. Le fond n'est jamais coupe : il compte seulement dans l'estimation.
 BG_STO_COST_MS = {v: 4.5 for v in ("noise", "organic", "cells", "network", "veins", "marble", "waves", "gradient")}
+# Bordure de groupe des points (bg_sto_border > 0) : 12 echantillons autour de chaque pixel proche d'un bord. Mesure a 1080p (AMD, par rapport a
+# sans bordure) : +1,4 ms a 2 px, +2,8 ms a 4 px, +5,2 ms a 12 px -> 1,0 + 0,35 ms par pixel d'epaisseur.
+BG_STO_BORDER_BASE_MS, BG_STO_BORDER_PER_PX_MS = 1.0, 0.35
 # Palette labyrinthe (reaction-diffusion) : mesure +0,6 ms a 1280 x 720 (simulation a grille fixe, quasi independante de la taille,
 # + trois lectures par pixel) ; 1,0 ms a 1080p par prudence.
 BG_RD_COST_MS = 1.0
@@ -22,7 +25,7 @@ BG_RD_COST_MS = 1.0
 BG_RD_ZONE_COST_MS = 1.5
 REF_PIXELS = 1920 * 1080
 HIGH = 0.90                                    # part du budget d'une image qu'on accepte de remplir (comme PerfGuard.HIGH)
-BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field", "bg_rd_mix", "bg_rd_void")
+BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field", "bg_sto_border", "bg_rd_mix", "bg_rd_void")
 
 
 def _scale(render_size: tuple[int, int] | None) -> float:
@@ -48,7 +51,9 @@ def background_cost(values: dict, render_size: tuple[int, int] | None = None) ->
         return BG_RD_COST_MS * _scale(render_size) * (0.4 + 0.6 * load) + zones
     if values.get("bg_palette") != "stochastique":
         return 0.0
-    return BG_STO_COST_MS.get(values.get("bg_sto_field", "noise"), BG_STO_COST_MS["noise"]) * _scale(render_size)
+    border = max(0.0, min(float(values.get("bg_sto_border", 0.0) or 0.0), 12.0))
+    extra = BG_STO_BORDER_BASE_MS + BG_STO_BORDER_PER_PX_MS * border if border > 0.0 else 0.0
+    return (BG_STO_COST_MS.get(values.get("bg_sto_field", "noise"), BG_STO_COST_MS["noise"]) + extra) * _scale(render_size)
 
 
 def cap_values(values: dict, current: dict, gpu_ms: float, budget_ms: float, render_size: tuple[int, int] | None = None) -> tuple[dict, list[str]]:
