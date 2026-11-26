@@ -8,6 +8,7 @@ from __future__ import annotations
 import audio2wave_gl as gl
 import tkinter as tk
 from core import audio_layers
+from core import routing as rt
 
 
 def install(c):
@@ -101,8 +102,9 @@ def install(c):
     ROUTE_OF_FX = ("wobble", "ripple", "chroma", "glitch")   # ordre des interrupteurs fx_on (different de audio_layers.EFFECTS)
 
     def route_pill(parent, row, prefix, i):
-        if routing is not None and i < len(ROUTE_OF_FX):
-            routing.pill(parent, f"{prefix}_{ROUTE_OF_FX[i]}").grid(row=row, column=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+        rid = f"{prefix}_{ROUTE_OF_FX[i]}" if i < len(ROUTE_OF_FX) else None
+        if routing is not None and rid in rt.FX_LINES:     # pas de pastille pour l'onde de choc : son menu « Onde de choc sur » suffit
+            routing.pill(parent, rid).grid(row=row, column=3, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
     fx_tips = ("Ondulation de l'image, amplitude = basses.",
                "Onde de choc depuis le centre : sur le 1er temps de chaque mesure ou a chaque kick (menu « Onde de choc sur » juste dessous).",
                "Canaux R/V/B decales depuis le centre au kick.",

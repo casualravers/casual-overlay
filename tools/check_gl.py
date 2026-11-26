@@ -679,8 +679,8 @@ def check_gui() -> None:
             c["bg_var"].set("live")
             out["tabs"] = [c["notebook"].tab(i, "text") for i in range(c["notebook"].index("end"))]
             ru = c["routing"]
-            fx_ids = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma")
-            out["route_pills"] = (all(len(ru.pills.get(rid, [])) == 2 for rid in fx_ids),          # la pastille de l'effet + celle du tableau
+            fx_ids = ("bg_wobble", "bg_glitch", "bg_chroma", "lg_wobble", "lg_glitch", "lg_chroma")
+            out["route_pills"] = (all(len(ru.pills.get(rid, [])) == 2 for rid in fx_ids) and not ru.pills.get("bg_ripple"),   # effet + tableau ; pas d'onde de choc
                                   all(str(root.nametowidget(p.cget("menu")).entrycget(0, "variable")) == str(ru.vars(rid)[0])
                                       for rid in fx_ids for p in ru.pills[rid]),
                                   all(len(ru.pills.get(rid, [])) == 2 for rid in ("lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells"))
@@ -1745,7 +1745,7 @@ def check_gui() -> None:
           and out.get("logo_pulse_cb") == ((0, 0), (1, 1)) and out.get("logo_pulse_int") is True,
           "effets du logo (delies): la section a aussi « Logo (pulse/contour) » et son curseur, qui partagent l'etat de ceux du fond (#197)",
           str((out.get("logo_pulse_row"), out.get("logo_pulse_cb"), out.get("logo_pulse_int"))))
-    check(out.get("route_pills") == (True, True, True), "routage (#198): pastilles a cote des 8 effets et des 6 reactions du logo, meme variable que le "
+    check(out.get("route_pills") == (True, True, True), "routage (#198): pastilles a cote des 6 effets (sans l'onde de choc) et des 6 reactions du logo, meme variable que le "
           "tableau de l'onglet Routage (motif du fond et globales : seulement dans l'onglet)",
           str(out.get("route_pills")))
     check(out.get("tabs") == ["Effets", "Logo", "Aura du logo", "Fonte du logo", "Cellules", "Noise", "Routage"],
@@ -9662,8 +9662,8 @@ def check_onsets() -> None:
           "kick par couche: la couche a sensibilite haute rattrape des kicks que le kick commun rate", f"bg {len(e2['bg'])} commun {len(b2)}")
 
 
-ROUTE_IDS = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
-             "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
+ROUTE_IDS = ("bg_wobble", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
+             "lg_wobble", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
              "breath", "hue", "strobe", "foudre", "noise")
 
 
@@ -9677,9 +9677,12 @@ def check_routage() -> None:
     check(all(r.zone in rt.ZONES and r.layer in (*al.LAYERS, None) and r.kind in ("fx", "vec", "info") and r.label for r in rt.ROUTES),
           "routage: zone, couche, nature et libelle de chaque ligne")
     fx = [r.id for r in rt.ROUTES if r.kind == "fx"]
-    check(fx == ["bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma"], "routage: les 8 effets du shader", str(fx))
-    check(rt.FX_LINES == {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS)},
-          "routage: FX_LINES = (couche, indice dans EFFECTS)")
+    check(fx == ["bg_wobble", "bg_glitch", "bg_chroma", "lg_wobble", "lg_glitch", "lg_chroma"],
+          "routage: les effets du shader sauf l'onde de choc (son menu « Onde de choc sur » mesure / kick suffit)", str(fx))
+    check(rt.FX_LINES == {f"{pre}_{e}": (layer, i) for pre, layer in (("bg", "bg"), ("lg", "logo")) for i, e in enumerate(al.EFFECTS) if e != "ripple"},
+          "routage: FX_LINES = (couche, indice dans EFFECTS), sans l'onde de choc")
+    from core.params import coerce_params as _cp
+    check(rt.is_default(_cp({"rt_bg_ripple": "kick"})) and "rt_bg_ripple" not in _cp({"rt_bg_ripple": "kick"}),"routage: une ancienne route de l'onde de choc (scene, preset) est ignoree")
     check([r.id for r in rt.ROUTES if r.kind == "info"] == ["strobe", "foudre", "noise"], "routage: strobe, foudre, noise en lecture seule")
     check(rt.ROUTE_SOURCES[0] == "herite" and set(rt.ROUTE_SOURCES[1:]) == set(al.SOURCES) and len(rt.ROUTE_SOURCES) == len(al.SOURCES) + 1,
           "routage: sources = herite + toutes celles des couches")
@@ -9722,19 +9725,40 @@ def check_routage() -> None:
     check(bank.info("lg_chroma") == ("kick", 0.9), "routage: info = source resolue et niveau", str(bank.info("lg_chroma")))
     p2 = {"rt_bg_wobble": "basses", "rt_bg_glitch": "aigus"}
     a, b = bank.vector(0.0, st, p2, "bg_wobble", base, "tout", 0.0, 0.0), bank.vector(0.0, st, p2, "bg_glitch", base, "tout", 0.0, 0.0)
-    check(a == (0.8, 0.0, 0.9, 0.2) and b == (0.6, 0.6, 0.0, al.NO_KICK), "routage: deux lignes d'une couche sur deux sources, independantes", str((a, b)))
+    check(a == (0.8, 0.0, 0.9, 0.2) and b == (0.6, 0.6, 0.6, al.NO_KICK), "routage: deux lignes d'une couche sur deux sources, independantes "
+          "(glitch sur les aigus : leur niveau dans la composante qu'il lit)", str((a, b)))
     v = bank.vector(0.0, st, {"rt_bg_wobble": "basses", "rg_bg_wobble": 0.0}, "bg_wobble", base, "tout", 0.0, 0.0)
     check(v == (0.0, 0.0, 0.0, al.NO_KICK), "routage: dosage 0 = vecteur nul, since = NO_KICK", str(v))
     # auto : la source de la couche dans le tableau des phases, avec fondu
     bk = rt.RouteBank()
-    pa = {"rt_bg_ripple": "auto"}
-    check(bk.vector(0.0, st, pa, "bg_ripple", base, "basses", 0.0, 0.0) == (0.8, 0.0, 0.9, 0.2), "routage: auto = source du tableau pour la couche")
-    bk.vector(0.5, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)            # la phase change : debut du fondu
-    mid = bk.vector(1.25, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)
-    end = bk.vector(2.5, st, pa, "bg_ripple", base, "aigus", 0.0, 0.0)
+    pa = {"rt_bg_wobble": "auto"}
+    check(bk.vector(0.0, st, pa, "bg_wobble", base, "basses", 0.0, 0.0) == (0.8, 0.0, 0.9, 0.2), "routage: auto = source du tableau pour la couche")
+    bk.vector(0.5, st, pa, "bg_wobble", base, "aigus", 0.0, 0.0)            # la phase change : debut du fondu
+    mid = bk.vector(1.25, st, pa, "bg_wobble", base, "aigus", 0.0, 0.0)
+    end = bk.vector(2.5, st, pa, "bg_wobble", base, "aigus", 0.0, 0.0)
     check(0.6 < mid[0] < 0.8 and 0.0 < mid[1] < 0.6 and end == (0.6, 0.6, 0.0, al.NO_KICK), "routage: auto qui change de source = fondu (pas de saut)", str((mid, end)))
     bk2 = rt.RouteBank()
-    check(bk2.vector(0.0, st, {"rt_bg_ripple": "auto"}, "bg_ripple", base, "tout", 0.0, 0.0)[:3] == (0.8, 0.6, 0.9), "routage: auto sans phase (tout) = tout")
+    check(bk2.vector(0.0, st, {"rt_bg_wobble": "auto"}, "bg_wobble", base, "tout", 0.0, 0.0)[:3] == (0.8, 0.6, 0.9), "routage: auto sans phase (tout) = tout")
+    # --- chaque ligne se declenche sur CHAQUE source : la composante qu'elle lit recoit le niveau de la source (retour de test : aberration
+    # routee sur les mediums immobile, elle lisait l'enveloppe du kick que les mediums n'ont pas)
+    loud = {"bass": 0.8, "mid": 0.7, "high": 0.6, "rms": 0.5, "beat": 0.9, "since_beat": 0.1, "beat_bg": 0.9, "since_bg": 0.1, "beat_logo": 0.9,
+            "since_logo": 0.1, "hit": 0.7, "since_hit": 0.1, "snare": 0.8, "since_snare": 0.1, "bands": [0.6] * 8, "band_rise": [5.0] * 8,
+            "pulse_since": {g: 0.05 for g in (*al.PULSE_GRIDS, *al.END_GRIDS)}}
+    dead = [(rid, s) for rid in rt.READS for s in rt.ROUTE_SOURCES if s not in ("herite", "rien")
+            for c in rt.READS[rid] if rt.RouteBank().vector(0.0, loud, {rt.source_key(rid): s}, rid, base, "mediums", 0.0, 0.0)[c] <= 0.0]
+    check(not dead, "routage: chaque ligne reagit a chaque source quand elle sonne (aucune combinaison muette)", str(dead[:12]))
+    check(set(rt.READS) == {r.id for r in rt.routable()} - {"hue"}, "routage: la composante lue est connue pour chaque ligne (sauf la teinte, un rapport)",
+          str(set(rt.READS) ^ ({r.id for r in rt.routable()} - {"hue"})))
+    v = rt.RouteBank().vector(0.0, dict(loud, beat=0.0, beat_bg=0.0), {"rt_bg_chroma": "mediums"}, "bg_chroma", base, "tout", 0.0, 0.0)
+    check(abs(v[2] - 0.7) < 1e-9, "routage: aberration sur les mediums = le niveau des mediums dans l'enveloppe qu'elle lit", str(v))
+    v = rt.RouteBank().vector(0.0, dict(loud, beat=0.0, beat_bg=0.0), {"rt_bg_chroma": "auto"}, "bg_chroma", base, "mediums", 0.0, 0.0)
+    check(abs(v[2] - 0.7) < 1e-9, "routage: aberration sur auto (tableau -> mediums) = idem", str(v))
+    v = rt.RouteBank().vector(0.0, dict(loud, bass=0.0), {"rt_bg_wobble": "kick"}, "bg_wobble", base, "tout", 0.0, 0.0)
+    check(abs(v[0] - 0.9) < 1e-9 and v[2] == 0.9, "routage: ondulation sur le kick = l'enveloppe du kick dans les basses qu'elle lit", str(v))
+    v = rt.RouteBank().vector(0.0, loud, {"rt_bg_chroma": "tout"}, "bg_chroma", base, "tout", 0.0, 0.0)
+    check(v == (0.8, 0.6, 0.9, 0.1), "routage: une source qui fournit deja la composante lue n'est pas modifiee (tout = comme avant)", str(v))
+    v = rt.RouteBank().vector(0.0, loud, {"rt_bg_chroma": "mediums", "rg_bg_chroma": 0.5}, "bg_chroma", base, "tout", 0.0, 0.0)
+    check(abs(v[2] - 0.35) < 1e-9, "routage: le dosage s'applique apres (mediums 50 %)", str(v))
     # retard : silence pendant `lag` puis le signal ; retard change a chaud sans valeur aberrante
     bk3, pl, out = rt.RouteBank(), {"rt_bg_wobble": "basses"}, []
     for k in range(40):
@@ -9757,17 +9781,17 @@ def check_routage() -> None:
     v = rt.RouteBank().vector(0.0, st, {"rt_bg_wobble": "aigus", "rt_lg_wobble": "kick"}, "lg_wobble", base, "tout", 0.0, 0.0, like="bg_wobble")
     check(v == (0.6, 0.6, 0.0, al.NO_KICK), "routage: like = reglages d'une autre ligne", str(v))
     # une ligne remise par defaut puis reroutee ne rejoue pas sa vieille memoire (retard, lissage) : prune
-    bk4, pr = rt.RouteBank(), {"rt_bg_ripple": "kick"}
+    bk4, pr = rt.RouteBank(), {"rt_bg_chroma": "kick"}
     for k in range(60):
-        bk4.vector(k / 60.0, st, pr, "bg_ripple", base, "tout", 0.2, 0.5)
+        bk4.vector(k / 60.0, st, pr, "bg_chroma", base, "tout", 0.2, 0.5)
     bk4.prune(())                                               # la ligne n'est plus calculee (remise par defaut, ou toutes par defaut)
     silent = {"bass": 0.0, "high": 0.0, "beat": 0.0, "since_beat": 30.0}
-    ghost = [bk4.vector(60.0 + k * 0.01, silent, pr, "bg_ripple", base, "tout", 0.2, 0.5) for k in range(25)]
-    check(all(g[2] == 0.0 for g in ghost) and bk4.info("bg_ripple")[1] == 0.0, "routage: ligne reroutee apres un retour au defaut = pas d'onde fantome (memoire videe)",
+    ghost = [bk4.vector(60.0 + k * 0.01, silent, pr, "bg_chroma", base, "tout", 0.2, 0.5) for k in range(25)]
+    check(all(g[2] == 0.0 for g in ghost) and bk4.info("bg_chroma")[1] == 0.0, "routage: ligne reroutee apres un retour au defaut = pas d'eclat fantome (memoire videe)",
           str(ghost[:3]))
-    bk4.vector(61.0, st, pr, "bg_ripple", base, "tout", 0.0, 0.0)
-    bk4.prune({"bg_ripple"})
-    check(bk4.info("bg_ripple") is not None, "routage: prune garde les lignes encore calculees")
+    bk4.vector(61.0, st, pr, "bg_chroma", base, "tout", 0.0, 0.0)
+    bk4.prune({"bg_chroma"})
+    check(bk4.info("bg_chroma") is not None, "routage: prune garde les lignes encore calculees")
     # --- aides de l'interface (lot 2)
     check(rt.source_label("snare") == "Caisse claire" and rt.source_label("herite") == "Comme la couche" and rt.source_label("phrase16") == "Phrase 16"
           and all(rt.source_label(s) for s in rt.ROUTE_SOURCES) and rt.source_label("inconnue") == "Comme la couche",
@@ -9851,7 +9875,7 @@ def check_routage_gui() -> None:
         root.update_idletasks()
         check(pill.cget("text") == "Caisse claire 150 %" and tab_pill.cget("text") == "Caisse claire 150 %", "routage gui: une scene appliquee met a jour pastille et onglet")
         check((pill.winfo_reqwidth(), tab_pill.winfo_reqwidth()) == w0, "routage gui: la pastille garde sa largeur quand son texte change (rien ne bouge)", str((w0, pill.winfo_reqwidth())))
-        check(pill.cget("bg") == theme_overlay() and ui.rows["bg_ripple"]["pill"].cget("bg") != theme_overlay(), "routage gui: ligne reglee a l'accent, ligne par defaut neutre")
+        check(pill.cget("bg") == theme_overlay() and ui.rows["bg_chroma"]["pill"].cget("bg") != theme_overlay(), "routage gui: ligne reglee a l'accent, ligne par defaut neutre")
         resets = sorted((w for w in tab.grid_slaves() if w.winfo_class() == "Button" and w.cget("text") == "Tout remettre"),
                         key=lambda w: int(w.grid_info()["row"]))
         resets[0].invoke()                                         # le bouton de la zone Fond (le premier pose)
@@ -9871,9 +9895,11 @@ def check_routage_gui() -> None:
         check(abs(x1 - gui_routing.LEVEL_W * 0.5) < 1.0, "routage gui: le temoin suit le niveau publie par le rendu", str(x1))
         ui.set_hover("bg_glitch")
         texts = [ui.spectrum.itemcget(i, "text") for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "text"]
-        ui.set_hover("bg_ripple")
-        ui.vars("bg_ripple")[0].set("kick")
+        ui.set_hover("bg_chroma")
+        ui.vars("bg_chroma")[0].set("kick")
         texts2 = [ui.spectrum.itemcget(i, "text") for i in ui.spectrum.find_all() if ui.spectrum.type(i) == "text"]
+        ui.reset(["bg_chroma"])
+        check("bg_ripple" not in ui.rows and "lg_ripple" not in ui.rows, "routage gui: pas de ligne pour l'onde de choc (son menu mesure / kick suffit)")
         check(any("Glitch" in t for t in texts) and any("evenement" in t for t in texts2), "routage gui: le spectre nomme la ligne survolee, ou dit evenement",
               str((texts, texts2)))
 
@@ -9887,7 +9913,7 @@ def check_routage_gui() -> None:
         ui.set_hover("lg_pulse")
         check(x_bass is not None and band() == x_bass, "routage gui: logo lie, la pulsation ecoute la source du fond (meme plage au spectre)", str((x_bass, band())))
         ui.vars("bg_glitch")[0].set("air")
-        ui.set_hover("bg_ripple")
+        ui.set_hover("bg_chroma")
         ui.set_hover("bg_glitch")
         check(band() is not None and band()[0] > x_bass[2], "routage gui: une ligne sur l'air surligne les aigus du spectre", str(band()))
         ui.reset(["bg_glitch"])
@@ -10109,6 +10135,15 @@ def check_routage_rendu() -> None:
     check(changed(render(groove, src_bg="auto", rt_bg_wobble="rien", **wob), a) > 0 and r.fx_now["bg"] is not None
           and ("wobble", "rien", 1.0) in r.fx_now["bg"] and ("wobble", "basses", 0.6) not in r.fx_now["bg"],
           "routage: une ligne a la main sort d'auto pour CET effet (le voyant le dit), la couche reste en auto par effet", str(r.fx_now["bg"]))
+    # retour de test : fond en auto, aberration routee sur les mediums, des mediums seuls = l'aberration bouge (elle restait immobile)
+    mids = dict(bass_only, bass=0.0, mid=1.0, phase={"name": "groove"})
+    chroma = dict(src_bg="auto", fx_on=[0, 0, 1, 0, 1], fx_int=[1, 1, 2.0, 1, 1])
+    calm = render(mids, rt_bg_chroma="rien", **chroma)
+    check(changed(render(mids, rt_bg_chroma="mediums", **chroma), calm) > 50 and r.routes_now.get("bg_chroma", ("",))[0] == "mediums",
+          "routage: fond en auto, aberration sur les mediums = elle reagit aux mediums", str(r.routes_now))
+    check(changed(render(dict(mids, high=1.0, mid=0.0), rt_bg_wobble="aigus", fx_on=[1, 0, 0, 0, 1], fx_int=[2.0, 1, 1, 1, 1], src_bg="auto"),
+                  render(dict(mids, mid=0.0), fx_on=[1, 0, 0, 0, 1], fx_int=[2.0, 1, 1, 1, 1], src_bg="auto", rt_bg_wobble="rien")) > 2000,
+          "routage: ondulation sur les aigus = elle ondule aux aigus")
 
 
 def check_audio_layers() -> None:
