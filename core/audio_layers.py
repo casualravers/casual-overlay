@@ -125,7 +125,7 @@ def _fx(wobble=REST, ripple=REST, glitch=REST, chroma=REST) -> dict:
 
 # phase -> couche -> effet -> (source, dosage). Le fond porte les basses / le kick, le logo les frappes / aigus : ils ne battent pas a l'unisson.
 # Hors du pic, deux effets au plus par couche ; au pic les quatre effets sont actifs mais repartis entre les deux couches. A regler a l'oeil.
-# #164 : en groove et au pic, chaque impact a son temps : l'onde de choc sur le 1 (`ripple_beat` = mesure), l'aberration du logo sur la caisse
+# #164 : en groove et au pic, chaque impact a son temps : l'onde de choc sur le 1 (`ripple_on_downbeat`), l'aberration du logo sur la caisse
 # claire (2 et 4, voir `auto_fx`), le glitch sur les charleys / l'air.
 FX_TABLE = {
     "silence": {"bg": _fx(wobble=("basses", DERIVE)), "logo": _fx(chroma=("rien", DERIVE))},
@@ -316,10 +316,10 @@ class LayerFilter:
         return (self.sm[0], self.sm[1], self.sm[2], out[3])
 
 
-# --- Onde de choc sur le 1er temps de la mesure (reglage `ripple_beat`) ---------------------------------------------------------------------
-# L'onde de choc est l'effet le plus fort : a chaque kick elle sature l'image. En mode « mesure », elle ne part que sur le « 1 » de chaque
-# mesure (un temps sur quatre). Le « 1 » se cale sur la grille Temps 1 (onglet Masters, touche virgule) ; sans grille, il est arbitraire.
-RIPPLE_BEATS = ("mesure", "kick")
+# --- Onde de choc sur le 1er temps de la mesure ---------------------------------------------------------------------------------------------
+# L'onde de choc est l'effet le plus fort : a chaque kick elle sature l'image. Elle ne part que sur le « 1 » de chaque mesure (un temps sur
+# quatre). Le « 1 » se cale sur la grille Temps 1 (onglet Masters, touche virgule) ; sans grille, il est arbitraire. Une autre cadence (chaque
+# kick, les frappes...) passe par sa ligne de routage (`bg_ripple` / `lg_ripple`), appliquee apres (core/routing.py).
 RIPPLE_FX = 1                            # indice de l'onde de choc dans les vecteurs par effet (wobble, onde de choc, glitch, aberration)
 BEATS_PER_BAR = 4
 
