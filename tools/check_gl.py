@@ -16610,13 +16610,22 @@ ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui val
 
 # Groupes de la suite complete (integration continue : un job par groupe, en parallele). Tout `check_*` de SUITE qui n'est dans aucun groupe liste ici
 # va dans GROUPE_PAR_DEFAUT : ajouter une verification ne demande rien, et aucune ne peut etre oubliee. Un nom ne doit etre que dans UN groupe
-# (`check_groupes`). Equilibre vise : ~5 a 8 minutes chacun sur le serveur ; le groupe `gui` garde les verifications dont `check_gui` depend.
+# (`check_groupes`). Equilibre vise : ~5 a 9 minutes chacun sur le serveur ; le groupe `gui` garde les verifications dont `check_gui` depend.
+# Chaque nom de groupe doit aussi etre dans la matrice du workflow (`check_groupes` le verifie). Le groupe `moteur` (33 min, mesure du 2026-11-26) a ete coupe
+# en quatre (#232) selon les durees mesurees en CI (secondes) : check_render 380, check_foudre_render 366, check_bg_stochastic 292, check_doodles 243,
+# check_recording_render 197, check_rd_cover 98, check_kaleidoscope_frame 65, check_native_modes 42, check_drop_render 41, check_holo 32 ; le reste, moins de 30 chacune.
 GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
-    "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_foudre_render", "check_cells", "check_noise",
-               "check_doodles", "check_mosaic", "check_qr_projection", "check_bg_video", "check_layers", "check_audio_layers", "check_routage_rendu", "check_native_modes",
-               "check_sphere_mode", "check_render", "check_drop_render", "check_vj_flash", "check_bar_gap", "check_line_resolution", "check_recorder", "check_recording_render", "check_highlights_audio", "check_clips", "check_bestof_engine", "check_rd_cover", "check_kaleidoscope_frame"),
+    # ~8 min : le rendu des effets, du logo et des modes
+    "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
+    # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels
+    "rendu": ("check_foudre_render", "check_native_modes", "check_drop_render", "check_mosaic", "check_qr_projection", "check_bg_video", "check_audio_layers",
+              "check_routage_rendu", "check_vj_flash", "check_bar_gap", "check_line_resolution"),
+    # ~8 min : fond genere (le labyrinthe a son propre groupe), cadre vertical
+    "fond": ("check_bg_stochastic", "check_rd_cover", "check_kaleidoscope_frame"),
+    # ~8 min : doodles, enregistrement, extraits
+    "medias": ("check_doodles", "check_recording_render", "check_recorder", "check_highlights_audio", "check_clips", "check_bestof_engine"),
     "gui": ("check_icons", "check_masters", "check_safeguards", "check_randomizer", "check_fond_saveable", "check_skin", "check_scrollbar",
             "check_menu_style", "check_dialogs", "check_audio2wave_api", "check_projection", "check_gates", "check_automation", "check_params",
             "check_manager", "check_gui", "check_brain_gui", "check_brain_iso", "check_brain_sismo", "check_brain_mandala", "check_brain_tunnel"),
@@ -16701,6 +16710,15 @@ def check_groupes() -> None:
     union = sorted(n for g in (*GROUPES, GROUPE_PAR_DEFAUT) for n in SUITE if group_of(n) == g)
     check(union == sorted(SUITE) and group_of("check_inconnu") == GROUPE_PAR_DEFAUT,
           "groupes : leur reunion est la suite complete, un nom absent des groupes va dans le groupe par defaut")
+    # Un groupe defini ici mais absent de la matrice du workflow ne tournerait JAMAIS en CI : les deux listes doivent etre identiques (#232).
+    wf = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "check.yml"
+    if wf.is_file():
+        import re
+        m = re.search(r"groupe:\s*\[([^\]]*)\]", wf.read_text(encoding="utf-8"))
+        in_ci = sorted(x.strip() for x in m.group(1).split(",") if x.strip()) if m else []
+        check(in_ci == sorted((*GROUPES, GROUPE_PAR_DEFAUT)),
+              "groupes : la matrice du workflow (.github/workflows/check.yml) liste exactement les groupes de GROUPES et le groupe par defaut",
+              f"workflow {in_ci} / groupes {sorted((*GROUPES, GROUPE_PAR_DEFAUT))}")
     opts0 = parse_options([])
     check(selected_checks(opts0) == list(SUITE), "options : sans option, toute la suite dans l'ordre de SUITE")
     check(selected_checks(dict(opts0, groupe="moteur")) == [n for n in SUITE if n in GROUPES["moteur"]],
