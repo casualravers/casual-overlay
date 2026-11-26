@@ -3411,6 +3411,26 @@ def check_bg_stochastic() -> None:
     for i in range(1, 30):                       # dt est plafonne a 0,1 s par image : 1,5 s = 30 images
         moved = render(rr=rr, t=0.05 * i, bg_speed=1.0)
     check(abs(moved - still).mean() > 2, "stochastique: le champ derive au cours du temps", f"ecart {abs(moved - still).mean():.1f}")
+    # Douceur (#223) : un point nait et meurt en fondu de rayon autour de son rang (plus de saut quand le champ derive)
+    check(abs(render(bg_sto_soft=0.0) - a).max() == 0, "stochastique: douceur 0 = image d'origine (allumage sec)")
+
+    def pops(soft):               # cellules (20 x 20 px = un point) dont la couverture saute de plus de 0,3 d'une image a la suivante
+        r_ = gl.Renderer(ctx, (640, 360), None)
+        prev, n = None, 0
+        for i in range(40):
+            cur = blocks(render(rr=r_, t=0.1 * i, bg_speed=4.0, bg_sto_soft=soft), 20)
+            if prev is not None:
+                n += int((np.abs(cur - prev) > 0.25).sum())
+            prev = cur
+        return n
+    p0, p1 = pops(0.0), pops(1.0)
+    check(p0 > 0 and p1 < 0.5 * p0, "stochastique: douceur 1 = les points grossissent et retrecissent au lieu d'apparaitre d'un coup (moins de sauts)",
+          f"sauts {p0} -> {p1}")
+    d0, d1 = lit(render(bg_sto_field="gradient")), lit(render(bg_sto_field="gradient", bg_sto_soft=1.0))
+    check(abs(d1 - d0) < 0.08, "stochastique: douceur = densite moyenne proche (les points du seuil sont plus petits, pas plus nombreux)",
+          f"{d0:.3f} -> {d1:.3f}")
+    check(gl.coerce_params({"bg_sto_soft": 4})["bg_sto_soft"] == 1.0 and gl.DEFAULT_PARAMS["bg_sto_soft"] == 0.0
+          and "bg_sto_soft" in gl.BG_KEYS, "stochastique: douceur bornee 0..1, 0 par defaut, reglage du fond (scenes, presets de fond)")
 
     # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
@@ -3590,6 +3610,37 @@ def measure_latency_isolated(kicks: int, timeout: float = 120.0) -> dict:
     import json
     import subprocess
     out = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mesure_latence.py"), "--json", "--kicks", str(kicks)],
+                         capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    text = out.stdout
+    if "{" not in text:
+        raise RuntimeError(f"mesure impossible (code {out.returncode}) : {(out.stderr or text).strip()[-300:]}")
+    return json.loads(text[text.index("{"):])
+
+
+# Creation du Renderer qui garde le verrou de Python `hold` s (PyDLL : comme la compilation des shaders par Mesa llvmpipe sur le serveur
+# d'integration continue), puis une mesure de 4 kicks ; imprime le resultat en JSON. Windows seulement (kernel32.Sleep).
+SLOW_INIT_PROBE = """
+import ctypes, json, sys
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import audio2wave_gl as gl
+import mesure_latence as ml
+Base, hold = gl.Renderer, float(sys.argv[3])
+class Slow(Base):
+    def __init__(self, *a, **k):
+        ctypes.PyDLL("kernel32").Sleep(int(hold * 1000))
+        super().__init__(*a, **k)
+gl.Renderer = Slow
+print(json.dumps(ml.measure(kicks=4, log=lambda *_a: None)))
+"""
+
+
+def measure_latency_slow_init(hold: float, tool_dir: Path | None = None, timeout: float = 120.0) -> dict:
+    """Mesure de latence (processus neuf) dont la creation du rendu bloque le verrou de Python `hold` s ; `tool_dir` : dossier de
+    mesure_latence.py (tools/ par defaut). Voir SLOW_INIT_PROBE."""
+    import json
+    import subprocess
+    here = Path(__file__).resolve().parent
+    out = subprocess.run([sys.executable, "-c", SLOW_INIT_PROBE, str(here.parent), str(tool_dir or here), str(hold)],
                          capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
     text = out.stdout
     if "{" not in text:
@@ -6086,11 +6137,26 @@ def check_latence() -> None:
         tot = res["total"]
         if tot and res["missed"] <= max_missed and 0 < tot["median"] < bound:
             break
-        print(f"  (information) latence, essai {n}/{tries} insuffisant : {tot} manques={res['missed']} lignes={res['rows']}")
+        print(f"  (information) latence, essai {n}/{tries} insuffisant : {tot} manques={res['missed']} lignes={res['rows']} "
+              f"demarrage={res.get('info', {}).get('init_s')} s diagnostic={res.get('info', {}).get('diag')}")
     check(tot and res["missed"] <= max_missed and 0 < tot["median"] < bound,
           f"latence: la chaine reelle (analyse + rendu) detecte les kicks et montre l'eclair, en moins de {bound} ms",
-          f"{tot} manques={res['missed']}")
-    print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms")
+          f"{tot} manques={res['missed']} demarrage={res.get('info', {}).get('init_s')} s diagnostic={res.get('info', {}).get('diag')}")
+    print(f"  (information) latence logicielle audio -> image : mediane {tot.get('median', 0):.0f} ms, max {tot.get('max', 0):.0f} ms ; "
+          f"demarrage du rendu {res.get('info', {}).get('init_s')} s ; {res.get('info', {}).get('diag')}")
+    # Cause des echecs du serveur d'integration continue (4 kicks sur 4 manques) : le rendu etait cree PENDANT la mesure, et la compilation des
+    # shaders par Mesa llvmpipe garde le verrou de Python des secondes : le son et l'analyse etaient bloques, les kicks tombaient dans ce trou.
+    # Reproduit ici sans Mesa : une creation du rendu qui bloque le verrou 5 s ne doit plus rien changer a la mesure (elle est faite avant).
+    if sys.platform == "win32":
+        try:
+            slow = measure_latency_slow_init(5.0)
+        except Exception as exc:
+            check(False, "latence: mesure avec un demarrage du rendu lent", str(exc))
+            return
+        st = slow["total"]
+        check(st and slow["missed"] <= max_missed and 0 < st["median"] < bound and slow["info"].get("init_s", 0) >= 5.0,
+              "latence: un demarrage du rendu lent qui bloque Python (compilation des shaders sous llvmpipe) ne fait plus manquer les kicks",
+              f"{st} manques={slow['missed']} demarrage={slow['info'].get('init_s')} s")
 
 
 def check_stage_layout() -> None:
@@ -11142,6 +11208,8 @@ def check_randomizer() -> None:
     bud_share = sum(1 for v in lb if v.get("bg_rd_bud") == 1.0) / max(len(lb), 1)
     check(all(0.4 <= v.get("bg_rd_spawn", -1) <= 1.0 and v.get("bg_rd_bud") in (0.0, 1.0) for v in lb) and 0.15 <= bud_share <= 0.5,
           "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
+    st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
+    check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
     check(all(not any(k.startswith("bg_rd_") for k in v) for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: les reglages du labyrinthe ne sont tires que pour cette palette")
     fxs = [rz.random_effects(rng) for _ in range(600)]
@@ -12893,7 +12961,7 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 7 and all(k in gl.BG_KEYS for k in sto), "stochastique: 7 reglages, tous du fond (presets de fond, scenes)")
+    check(len(sto) == 8 and all(k in gl.BG_KEYS for k in sto), "stochastique: 8 reglages (douceur comprise, #223), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")

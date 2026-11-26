@@ -108,6 +108,8 @@ def install(c):
     param_slider(sz, "Variation de taille", "bg_sto_vary", 0.0, 1.0, 0.05,
                  "0 = tous les points ont la meme taille ; 1 = gros la ou le champ est fort, fins la ou il est faible.")
     param_slider(sz, "Densite", "bg_sto_density", 0.0, 1.0, 0.02, "Part de points allumes au repos (0 = aucun, 1 = presque tous).")
+    param_slider(sz, "Douceur", "bg_sto_soft", 0.0, 1.0, 0.05,
+                 "Les points naissent et meurent en grossissant / retrecissant (0 = allumage sec ; plus haut = moins de gresillement aux bords des zones).")
     param_slider(sz, "Arc-en-ciel", "bg_sto_rainbow", 0.0, 1.0, 0.05, "0 = points de la couleur 1 ; plus haut = leur teinte suit le champ.")
     sto_inv_var = tk.IntVar(value=int(float(params["bg_sto_invert"]) >= 0.5))
     bind_param("bg_sto_invert", sto_inv_var, float)

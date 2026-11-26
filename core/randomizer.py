@@ -251,6 +251,7 @@ def random_background_params(rng: random.Random) -> dict:
                        "bg_sto_regular": round(rng.uniform(0.4, 1.0), 2), "bg_sto_vary": round(rng.uniform(0.0, 0.8), 2),
                        "bg_sto_density": round(rng.uniform(0.3, 0.7), 2), "bg_sto_invert": float(rng.random() < 0.5),
                        "bg_sto_rainbow": 0.0 if rng.random() < 0.5 else round(rng.uniform(0.0, 0.6), 2)})
+        values["bg_sto_soft"] = round(rng.uniform(0.0, 0.8), 2)          # douceur (#223) : tiree apres les autres reglages du stochastique
     if palette == "labyrinthe":
         h = rng.random()
         hues = (h, (h + rng.uniform(0.2, 0.4)) % 1.0, (h + rng.uniform(0.6, 0.8)) % 1.0)      # trois teintes espacees d'au moins 0,2
