@@ -120,6 +120,12 @@ les basses).
   numpy coutait ~12 ms) et, avec `now`, ne change la taille de la grille qu'une fois par `RESIZE_MIN_S` (0,4 s). Echelle 0,3 = grille de 1280 x 720 :
   les pas par image sont plafonnes par cellules x pas (`MAX_CELL_STEPS` 5 millions, mesure a 0,85 ns par cellule et par pas : ~4 ms), donc ~5 pas par
   image a 0,3 (le motif y evolue deux fois moins vite), 15 a 0,5, 24 a 1. `core.reaction.step_load` entre dans l'estimation de la securite GPU.
+  **Demi-precision sans symetrie (#225)** : quand `bg_rd_sym` = `none`, l'etat est en **RG16F** (`ReactionDiffusion.half`, `reset(half=)`, reallocation
+  au changement de symetrie) : il y stocke **W = 1 - U** (shader `u_w` : `W' = W + lap(W) + U V^2 - F W`, le chemin RG32F reste identique bit pour bit,
+  verifie par empreinte) et le shader arrondit **stochastiquement** (bruit de +-1/2 ulp avant l'ecriture : V varie de ~1e-4 par pas, sous l'ulp 2,4e-4,
+  sans cela le motif se figeait). La Liberte (bruit de V) exige 32 bits : avec une symetrie l'etat reste en RG32F. Plafond `MAX_CELL_STEPS_HALF`
+  (9,5 millions : 10 pas a 0,3, 24 a 0,5) et `HALF_STEP_COST` (0,55) dans `step_load` / securite GPU. Carte (F, K) toujours en RG32F. Mesure (AMD) :
+  echelle 0,3 +5,7 -> +5,0 ms avec 2 fois plus de pas ; echelle 0,5 +3,9 -> +2,5 ms. Le motif n'est plus identique au pixel pres (meme nature).
   `check_gl.py` : `check_reaction_pure` (chemin, orbites, file), `check_reaction_sim` (regime taches, chemin vivant), `check_rd_zones`,
   `check_rd_symmetry`, `check_bg_labyrinthe` (tempo 0, relance a la symetrie, rafale, epaisseur).
   **Fluidite** (issue #189 ; spec : `docs/plans/2026-11-19-labyrinthe-fluide-189.md`) : le motif « claquait » a la naissance d'une tache, a la
