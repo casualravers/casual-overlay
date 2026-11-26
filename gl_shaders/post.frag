@@ -207,7 +207,11 @@ void holo(vec2 uv, out vec2 disp, out vec3 light) {
     float hue = v * 1.4 + u_holo_phase * 1.5 + toward.x * 0.22 + toward.y * 0.12;
     vec3 irid = holo_palette(hue);
     float fringe = pow(0.5 + 0.5 * sin(v * 30.0 - ph * 3.0), 3.0);
-    light = irid * (0.32 * env + 1.5 * fringe * env * env) * u_holo_light * u_holo * open_;
+    // Plafond de la lumiere lointaine (#240, core.holo.light_gain) : jusqu'a l'intensite 1 rien ne change ; au-dela, le surplus ne s'applique que pres
+    // du sujet (v >= 0,85), la lumiere de la portee reste a celle de l'intensite 1 : la forme du sujet reste lisible meme a forte intensite et au kick.
+    float inten = u_holo_light * u_holo;
+    float gain = min(inten, 1.0) + (inten - min(inten, 1.0)) * smoothstep(0.0, 0.85, v);
+    light = irid * (0.32 * env + 1.5 * fringe * env * env) * gain * open_;
 
     // Poussiere d'etoiles : deux couches (fine et large) qui derivent le long des lignes de champ,
     // allongees en traine, plus denses pres du logo.

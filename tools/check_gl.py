@@ -3117,6 +3117,165 @@ def check_logo_video() -> None:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_holo_champ() -> None:
+    """Halo holographique (#240), partie pure : portee, arrondi progressif, courbe de v, plafond de la lumiere lointaine, passes du jump flooding."""
+    print("Halo holographique : champ de distance au contour (formules pures)")
+    try:
+        from core import holo as hf
+    except ImportError as exc:
+        check(False, "halo: core/holo.py existe", str(exc))
+        return
+    # ---- portee : proportionnelle a holo_reach et a la taille du logo, bornee
+    check(abs(hf.halo_range(1.0, 0.2, 0.2) - 0.9 * 0.2) < 1e-9, "halo: portee d'un logo carre de 0,2 hauteur a holo_reach 1 = 0,9 x sa taille")
+    check(hf.halo_range(2.0, 0.2, 0.2) > hf.halo_range(1.0, 0.2, 0.2) > hf.halo_range(0.4, 0.2, 0.2), "halo: la portee grandit avec holo_reach")
+    check(hf.halo_range(0.3, 0.01, 0.01) == hf.RANGE_MIN and hf.halo_range(3.0, 3.0, 1.0) == hf.RANGE_MAX,
+          "halo: portee bornee (0,10 a 0,60 hauteur d'ecran) : un tout petit sujet ou un tres grand ne donne ni point ni ecran entier")
+    check(hf.halo_range(1.3, 1.2, 0.1) < 2.0 * hf.halo_range(1.3, 0.35, 0.35), "halo: un texte tres large n'a pas une portee proportionnelle a sa largeur (racine de l'aire)")
+    # ---- arrondi progressif
+    dm = 0.2
+    check(hf.round_blend(0.0, dm) == 0.0 and hf.round_blend(0.2 * dm, dm) == 0.0 and hf.round_blend(2.7 * dm, dm) == 1.0 and hf.round_blend(9.0, dm) == 1.0,
+          "halo: arrondi nul jusqu'a 0,2 x portee, total a 2,7 x portee")
+    ws = [hf.round_blend(0.01 * k, dm) for k in range(0, 80)]
+    check(all(b >= a for a, b in zip(ws, ws[1:])) and 0.0 < hf.round_blend(1.4 * dm, dm) < 1.0, "halo: l'arrondi croit sans a-coup entre les deux")
+    check(hf.ring_distance(0.01, 5.0, dm) == 0.01 and hf.ring_distance(0.01, 0.0, dm) == 0.01,
+          "halo: pres du sujet l'anneau est la distance exacte au contour (copie du contour)")
+    far = hf.ring_distance(0.8, 0.7, dm)
+    check(abs(far - 0.9 * 0.7) < 1e-9, "halo: loin du sujet la distance tend vers la distance au cercle (x 0,9)", str(far))
+    # ---- v : 1 contre le sujet, 0 a la portee, monotone
+    vs = [hf.halo_v(0.01 * k, dm) for k in range(0, 30)]
+    check(hf.halo_v(0.0, dm) == 1.0 and hf.halo_v(dm, dm) == 0.0 and hf.halo_v(5.0, dm) == 0.0 and all(b <= a + 1e-12 for a, b in zip(vs, vs[1:])) and all(0.0 <= v <= 1.0 for v in vs),
+          "halo: v vaut 1 contre le sujet, 0 a la portee et au-dela, decroissant, dans 0..1")
+    # ---- plafond de la lumiere lointaine
+    check(all(abs(hf.light_gain(i, v) - i) < 1e-9 for i in (0.0, 0.3, 1.0) for v in (0.0, 0.4, 1.0)), "halo: a l'intensite 1 ou moins, aucun plafond (rien ne change)")
+    check(abs(hf.light_gain(3.0, 0.0) - 1.0) < 1e-9 and abs(hf.light_gain(3.0, 1.0) - 3.0) < 1e-9 and abs(hf.light_gain(3.0, hf.CAP_NEAR) - 3.0) < 1e-9,
+          "halo: a l'intensite 3 la lumiere de la portee reste a celle de 1, les anneaux proches montent a 3")
+    gs = [hf.light_gain(2.5, 0.01 * k) for k in range(0, 101)]
+    check(all(b >= a - 1e-12 for a, b in zip(gs, gs[1:])), "halo: le gain de lumiere est continu et croit quand on se rapproche du sujet")
+    # ---- jump flooding : pas decroissants jusqu'a 1, une passe de plus
+    st = hf.jfa_steps(480, 270)
+    check(st[0] == 256 and st[-2] == 1 and st[-1] == 1 and st[:-1] == sorted(st[:-1], reverse=True) and len(st) == 10,
+          "halo: passes du jump flooding en 480 x 270 : 256, 128 ... 1 puis une passe de correction a 1", str(st))
+    check(hf.jfa_steps(1, 1) == [1] and hf.jfa_steps(16, 9)[0] == 8, "halo: jump flooding sur une toute petite texture (jamais de liste vide)")
+    check(hf.halo_range(1.3, 1.7, 0.5) == hf.halo_range(1.3, 1.5, 0.5) and hf.halo_range(1.3, 0.5, 0.5) < hf.halo_range(1.3, 1.5, 0.5),
+          "halo: le rapport largeur / hauteur du sujet ne compte plus au-dela de 3 (une ligne de texte plein cadre garde une portee raisonnable)")
+
+
+def check_holo_contour() -> None:
+    """Halo holographique (#240), en pixels : le champ est la distance au contour du sujet (anneaux = copies du contour), la lumiere lointaine est
+    plafonnee a forte intensite. On lit aussi le champ lui-meme (`holo_tex`, v en r, direction en gb)."""
+    print("Halo holographique : contour du sujet, plafond de la lumiere lointaine")
+    from core import holo as hf
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    size = (640, 360)
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture(size, 4)])
+    quiet = {"bass": 0.0, "mid": 0.0, "high": 0.0, "rms": 0.0, "beat": 0.0, "since_beat": 9.0, "beats": 0}
+    base = dict(gl.DEFAULT_PARAMS, logo_x=0.5, logo_y=0.5, logo_scale=0.25, logo_opacity=1.0, logo_glow=0.0, logo_pulse=0.0, logo_jitter=0.0,
+                bg_mode="live", fx_on=[0, 0, 0, 0, 1], holo_dust=0.0, holo_warp=0.0)
+
+    def renderer(logo):
+        r = gl.Renderer(ctx, size, None)
+        r.video_tex.write(bytes([40, 40, 60]) * (size[0] * size[1]))
+        r.set_logo(logo, "x")
+        return r
+
+    def shot(r, **kw):
+        for i in range(8):
+            r.draw(fbo, size, quiet, dict(base, **kw), 0.05 * (i + 1))
+        return read_target(ctx, fbo, size).astype(int)
+
+    def field(r):
+        raw = np.frombuffer(r.holo_tex.read(), dtype=np.float16).astype(np.float32)
+        return raw.reshape(r.holo_tex.size[1], r.holo_tex.size[0], 4)[::-1]            # haut en premier, comme read_target
+
+    def rect_px(img_off, img_on):
+        m = (img_off[:, :, 0] > 240) & (img_off[:, :, 1] > 240) & (img_off[:, :, 2] > 240)
+        ys, xs = np.nonzero(m)
+        return xs.min(), xs.max(), ys.min(), ys.max()
+
+    def dist_map(x0, x1, y0, y1):          # distance (hauteurs d'ecran) au rectangle du sujet, pour chaque pixel
+        yy, xx = np.mgrid[0:size[1], 0:size[0]]
+        dx = np.maximum(np.maximum(x0 - xx, xx - x1), 0)
+        dy = np.maximum(np.maximum(y0 - yy, yy - y1), 0)
+        return np.hypot(dx, dy) / size[1]
+
+    square = np.full((64, 64, 4), 255, np.uint8)
+    r = renderer(square)
+    off = shot(r, holo_on=0.0)
+    x0, x1, y0, y1 = rect_px(off, None)
+    dm = hf.halo_range(1.3, (x1 - x0 + 1) / size[1], (y1 - y0 + 1) / size[1])
+    dist = dist_map(x0, x1, y0, y1)
+    # ---- couche vide : aucun halo
+    empty = renderer(np.zeros((64, 64, 4), np.uint8))
+    e_off, e_on = shot(empty, holo_on=0.0), shot(empty, holo_on=1.0)
+    check(np.array_equal(e_off, e_on) and float(field(empty)[:, :, 0].max()) == 0.0, "halo: couche vide = aucune graine, aucun halo (comme coupe)")
+    # ---- le champ est la distance au contour : v = 1 - d / portee tant que l'arrondi n'a pas commence
+    shot(r, holo_on=1.0)
+    f = field(r)
+    h4, w4 = f.shape[:2]
+    ys4, xs4 = np.mgrid[0:h4, 0:w4]
+    cx4, cy4 = (x0 + x1) / 8.0, (y0 + y1) / 8.0
+    hw4, hh4 = (x1 - x0 + 1) / 8.0, (y1 - y0 + 1) / 8.0
+    dd = np.hypot(np.maximum(np.abs(xs4 + 0.5 - cx4) - hw4, 0), np.maximum(np.abs(ys4 + 0.5 - cy4) - hh4, 0)) * 4.0 / size[1]
+    sel = (dd > 0.03) & (dd < 0.18 * dm)
+    expected = 1.0 - dd[sel] / dm
+    err = np.abs(f[:, :, 0][sel] - expected)
+    check(sel.sum() > 200 and float(err.mean()) < 0.05 and float(err.max()) < 0.2, "halo: v = 1 - distance au contour / portee (anneaux = copies du contour)",
+          f"{int(sel.sum())} texels, ecart moyen {float(err.mean()):.3f}, max {float(err.max()):.3f}")
+    # ---- direction : pointe vers le sujet (au-dessus du sujet, vers le bas de l'image ; a droite, vers la gauche)
+    top = f[:max(int(cy4 - hh4 - 4), 1), int(cx4), :]
+    side = f[int(cy4), int(cx4 + hw4 + 3):int(cx4 + hw4 + 12), :]
+    check(top.shape[0] > 0 and np.nanmean(top[-6:, 2]) < -0.5 and np.nanmean(side[:, 1]) < -0.5,
+          "halo: la direction lue pointe vers le sujet (vers le bas au-dessus de lui, vers la gauche a sa droite)",
+          f"haut {np.nanmean(top[-6:, 1:3], axis=0).round(2)} cote {np.nanmean(side[:, 1:3], axis=0).round(2)}")
+    # ---- plafond de la lumiere lointaine : lumiere seule, intensite 1 puis 3
+    lum = lambda a: a.sum(axis=2)
+    l1 = lum(shot(r, holo_on=1.0, holo_intensity=1.0)) - lum(off)
+    l3 = lum(shot(r, holo_on=1.0, holo_intensity=3.0)) - lum(off)
+    near, far = (dist > 0.01) & (dist < 0.3 * dm), (dist > 0.65 * dm) & (dist < 0.95 * dm)
+    near_ratio = float(l3[near].sum() / max(l1[near].sum(), 1.0))
+    far_ratio = float(l3[far].sum() / max(l1[far].sum(), 1.0))
+    check(near_ratio > 2.0 and far_ratio < 1.25, "halo: a l'intensite 3 les anneaux proches montent (x2 au moins), la lumiere de la portee reste proche de celle de 1",
+          f"proches x{near_ratio:.2f}, lointains x{far_ratio:.2f}")
+    l_half = lum(shot(r, holo_on=1.0, holo_intensity=0.5)) - lum(off)
+    check(abs(float(l_half[far].sum()) / max(float(l1[far].sum()), 1.0) - 0.5) < 0.12, "halo: sous l'intensite 1 le plafond ne change rien (la lumiere reste proportionnelle)")
+    # ---- forme allongee (video, bandeau) : les anneaux gardent le rapport du sujet au lieu de devenir un ovale
+    wide = renderer(np.full((64, 256, 4), 255, np.uint8))
+    w_off = shot(wide, holo_on=0.0)
+    wx0, wx1, wy0, wy1 = rect_px(w_off, None)
+    wl = shot(wide, holo_on=1.0, holo_intensity=1.0, holo_reach=1.0)
+    diff = (np.abs(wl - w_off).max(axis=2) > 25)
+    ys, xs = np.nonzero(diff)
+    ext_x = max(wx0 - xs.min(), xs.max() - wx1)
+    ext_y = max(wy0 - ys.min(), ys.max() - wy1)
+    check(ext_x > 4 and ext_y > 4 and ext_x / ext_y < 1.6, "halo: un sujet 4:1 est entoure d'anneaux qui debordent autant a droite qu'en haut (pas une lentille aplatie)",
+          f"debord horizontal {ext_x} px, vertical {ext_y} px")
+    # ---- deux formes separees : anneaux separes pres de chacune, champ de leur union entre elles
+    two = np.zeros((64, 256, 4), np.uint8)
+    two[:, :64] = 255
+    two[:, 192:] = 255
+    rt = renderer(two)
+    t_off = shot(rt, holo_on=0.0)
+    shot(rt, holo_on=1.0)
+    ft = field(rt)
+    th, tw = ft.shape[:2]
+    mid = ft[int(th / 2), int(tw / 2), 0]
+    tx0, tx1, ty0, ty1 = rect_px(t_off, None)
+    tm = (t_off[:, :, 0] > 240) & (t_off[:, :, 1] > 240)
+    cols = np.nonzero(tm.any(axis=0))[0]
+    gap_l, gap_r = cols[cols < 320].max(), cols[cols > 320].min()
+    gap = (gap_r - gap_l - 1) / size[1]
+    dmt = hf.halo_range(1.3, (tx1 - tx0 + 1) / size[1], (ty1 - ty0 + 1) / size[1])
+    expect = 1.0 - (gap / 2.0) / dmt
+    check(abs(mid - max(expect, 0.0)) < 0.12 and ft[int(th / 2), int((gap_l + 6) / 4), 0] > mid,
+          "halo: entre deux formes, le champ est celui de leur union (distance a la plus proche) : plus fort pres de chacune qu'au milieu",
+          f"milieu {mid:.2f} (attendu {max(expect, 0.0):.2f})")
+    check(np.array_equal(shot(r, holo_on=0.0), off), "halo: coupe = image d'origine")
+
+
 def check_holo() -> None:
     print("Halo holographique")
     d = gl.DEFAULT_PARAMS
@@ -16943,12 +17102,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
-    "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
@@ -16973,7 +17132,7 @@ GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
     "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     # ~8 min : le rendu des effets, du logo et des modes
-    "moteur": ("check_text", "check_logo_video", "check_holo", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
+    "moteur": ("check_text", "check_logo_video", "check_holo", "check_holo_contour", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
     # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels
     "rendu": ("check_foudre_render", "check_native_modes", "check_drop_render", "check_qr_projection", "check_bg_video", "check_audio_layers",
               "check_routage_rendu", "check_vj_flash", "check_bar_gap", "check_line_resolution"),

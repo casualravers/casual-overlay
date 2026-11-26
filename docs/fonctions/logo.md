@@ -48,18 +48,19 @@ traine de la poussiere d'etoiles ; **le logo reste intact**. Il remplace un prem
 du logo + faux studio reflechi, ajoute en lumiere juste autour des traits) juge "completement flou" : il
 etalait de la lumiere sur un logo a traits fins et n'avait qu'une portee de quelques pixels.
 Trois passes, toutes dans le post-traitement :
-1. **Champ** (`holo.frag`, **basse resolution**, 1/4 de l'ecran, `HOLO_DOWNSCALE`, RGBA16F) : alpha de la
-   couche logo flou a 7 echelles par ses **mipmaps** (la couche logo est a la taille de l'ecran et ses
-   mipmaps sont construites chaque image, filtre `LINEAR_MIPMAP_LINEAR` seulement quand c'est le cas, sinon
-   texture incomplete = noire). Aux gros niveaux, 4 prises decalees cassent la structure en blocs des
-   mipmaps. Sortie : `r` = distance **logarithmique** au logo (0 loin .. 1 contre lui), `gb` = son gradient
-   (vers le logo), `a` = densite locale du logo. Calcule a 1/4 de resolution = ~16 fois moins de lectures
-   que dans le post plein ecran (un premier jet plein ecran etait trop cher pour un GPU integre) et bien
-   plus lisse.
-2. **Portee** (`holo_reach`) : homothetie du champ autour du centre du logo (`u_holo_center`), donc
-   monotone ; la faire varier via l'echelle du flou ne l'etait pas (plus de flou = halo plus *petit*).
-   Fondu radial (0,30 -> 0,75 hauteur d'ecran, avant homothetie) + niveaux de flou bornes : sinon les mipmaps
-   tres grossieres laissaient un **plateau** sur l'ecran entier (logo hors centre) et des bords durs.
+1. **Champ** (#240 : `holo_jfa.frag` + `holo.frag`, **basse resolution**, 1/4 de l'ecran, `HOLO_DOWNSCALE`, RGBA16F) : **distance au contour** de la couche
+   logo par **jump flooding** (graines = texels ou l'alpha moyenne sur 4 x 4 pixels depasse `SEED_ALPHA`, deux textures RG16F de ping-pong lues sans filtrage,
+   passes de pas 2^k decroissant puis une passe de correction : `core.holo.jfa_steps`). `holo.frag` en tire `v` (formules pures dans `core/holo.py`, **repliquees**
+   en GLSL) : **portee** `halo_range` = `holo_reach` x 0,9 x racine de l'aire du logo (rapport largeur / hauteur plafonne a 3 : une ligne de texte plein cadre
+   garde une portee raisonnable), bornee a 0,10-0,60 hauteur d'ecran ; **anneaux = copies exactes du contour** pres du sujet, **arrondi progressif** vers un
+   cercle au-dela de 0,2 x portee (total a 2,7 x portee : `round_blend`, `ring_distance`), `v = 1 - distance / portee` (1 contre le sujet, 0 a la portee).
+   Plusieurs formes (deux mots, logo a trous) : le champ est celui de leur union, sans cas particulier ; couche vide = aucune graine = pas de halo. Sortie :
+   `r` = `v`, `gb` = direction unitaire vers le sujet (espace uv), `a` = densite locale du logo (flou ~10 px a 720 p, inchangee). **Pourquoi pas le flou a
+   7 echelles d'avant** : loin du sujet, les gros flous efface sa forme, les lignes d'egale valeur devenaient des cercles / ellipses, et l'intensite (qui
+   multiplie la lumiere des franges) les mettait en avant : a forte intensite le halo « s'ellipsifiait » et perdait la forme du sujet (texte, video, logo).
+   Cout mesure en 1920 x 1080 (Radeon integre) : +3,9 ms, le meme qu'avant (la construction des mipmaps de la couche domine).
+2. **Portee** (`holo_reach`) : multiplie la portee `Dmax` ci-dessus (plus de homothetie du champ, plus de fondu radial fixe : il coupait les formes
+   allongees en ellipse). `u_holo_center` ne sert plus qu'au centre du cercle de l'arrondi lointain et a la derive de la poussiere.
 3. **Application** (`post.frag`, `holo()`) : deformation du fond = deplacement le long du gradient modules par
    une onde `sin(v*24 - phase)` (ondes concentriques qui partent du logo) + dispersion spectrale (rouge
    pousse plus loin que bleu) dans `layer_fx(..., disp)` ; lumiere = palette irisee (franges sur les courbes
@@ -68,6 +69,7 @@ Trois passes, toutes dans le post-traitement :
    l'exterieur, coeur etire le long du rayon (traine). Le logo est pose par-dessus, jamais deforme par ceci.
    `field.a` eteint lumiere, deformation et poussiere **dans** le logo : avec le PNG a traits fins du
    depot, sinon le halo se voyait a travers ses trous et le rendait illisible.
+   **Plafond de la lumiere lointaine** (#240, `core.holo.light_gain`) : l'intensite effective `u_holo_light x u_holo` (donc aussi le kick via `holo_react`) vaut `min(I, 1) + (I - min(I, 1)) x smoothstep(0, 0,85, v)` : jusqu'a 1 rien ne change ; au-dela le surplus ne s'applique que pres du sujet, la lumiere de la portee reste a celle de l'intensite 1 (x2,1 proches contre x1,16 lointains mesure a l'intensite 3). La deformation et la poussiere ne sont pas plafonnees.
 Teinte : palette irisee **tres metallique, peu saturee, un peu terne** (`HOLO_METAL` 0,70 = part de reflet
 d'acier froid qui vire au champagne, `HOLO_SAT` 0,62, `HOLO_DULL` 0,86, constantes en tete de `holo_palette`
 dans post.frag). Poussiere : **fluide de grains minuscules** : trois couches de grains de 3 a 8 px a 720 p

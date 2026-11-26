@@ -4,7 +4,7 @@ Avant de modifier un shader, lis la fiche du theme touche :
 
 - `scene.frag` : fond genere (`background_pattern`, `stochastic_pattern`, `labyrinth_pattern`) [docs/fonctions/fond.md](../docs/fonctions/fond.md) ; logo, fonte, cellules (`logo_at`) [docs/fonctions/logo.md](../docs/fonctions/logo.md)
 - `post.frag` : effets par couche, halo, composition [docs/fonctions/logo.md](../docs/fonctions/logo.md) ; strobe, foudre [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md) ; transitions de scene [docs/fonctions/scenes-vj.md](../docs/fonctions/scenes-vj.md)
-- `holo.frag` : [docs/fonctions/logo.md](../docs/fonctions/logo.md)
+- `holo.frag`, `holo_jfa.frag` (halo : distance au contour par jump flooding, #240) : [docs/fonctions/logo.md](../docs/fonctions/logo.md)
 - `rd_step.frag`, `rd_zone.frag` (labyrinthe), `sto_field.frag` (champ du stochastique precalcule, #229) : [docs/fonctions/fond.md](../docs/fonctions/fond.md)
 - `foudre.vert`, `foudre.frag` : [docs/fonctions/strobe-foudre.md](../docs/fonctions/strobe-foudre.md)
 - `mode_*.vert` / `mode_*.frag` (Snap, Ridge, Sphere dessines en GL) : [docs/fonctions/gui.md](../docs/fonctions/gui.md)
