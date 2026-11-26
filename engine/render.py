@@ -1458,8 +1458,8 @@ class Renderer:
             self.sto_field_fbo.viewport = (0, 0, *self.sto_field_tex.size)
             self.sto_field_fbo.use()
             self.sto_field_vao.render(moderngl.TRIANGLE_STRIP)
-        self.sto_field_tex.use(5)
-        self._set(sp, "u_sto_ftex", 5)
+        self.sto_field_tex.use(7)                  # unite 7 : la 5 est la tuile de la texture du stochastique (#220), la 6 le labyrinthe
+        self._set(sp, "u_sto_ftex", 7)
         (self.mode_tex or self.video_tex).use(0)
         self.logo_tex.use(1)
         # Passe 1a: couche fond. 1b: couche logo seule (videe si pas de logo: le post-traitement
