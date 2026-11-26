@@ -38,7 +38,8 @@ uniform float u_beat;          // enveloppe du kick 1 -> 0
 uniform vec4  u_sto;           // x = taille des points (px pour 720 px de haut), y = regularite, z = variation de taille, w = densite
 uniform vec4  u_sto2;          // x = champ (0 bruit, 1 vagues, 2 degrade), y = inversion, z = arc-en-ciel, w = phase du scintillement
 uniform float u_sto_soft;      // douceur 0..1 (#223) : naissance / mort des points en fondu de rayon
-uniform vec4  u_sto_border;    // xyz = couleur de la bordure, w = epaisseur en px pour 720 px de haut (#219 ; 0 = aucune)
+uniform float u_sto_levels;    // nombre de paliers de taille (#222) : 0 = rayon continu, 2 ou 3 = tailles fixes
+uniform vec4  u_sto_border;   // xyz = couleur de la bordure, w = epaisseur en px pour 720 px de haut (#219 ; 0 = aucune)
 uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (deja multiplies par la reaction)
 // Palette labyrinthe (u_bg_palette = 4) : etat d'une reaction-diffusion (r = U, g = V, grille en boucle, origine BAS gauche) lu trois
 // fois avec un petit decalage chacune : trois couches colorees decalees, posees dans l'ordre sur le fond.
@@ -155,6 +156,9 @@ vec3 stochastic_pattern(vec2 p) {
                 continue;
             }
             float rad = min(0.5 * s * grow * (1.0 + u_sto.z * (f - 0.5) * 2.0), rmax);
+            if (u_sto_levels > 1.5) {                      // paliers (#222) : 2 ou 3 tailles fixes selon le champ (les basses le haussent : palier suivant)
+                rad = min(0.5 * s * (min(floor(f * u_sto_levels), u_sto_levels - 1.0) + 1.0) / u_sto_levels, rmax);
+            }
             if (soft > 0.0) {
                 rad *= smoothstep(rank - soft, rank + soft, f);
             }

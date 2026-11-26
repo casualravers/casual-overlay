@@ -3479,6 +3479,58 @@ def check_bg_stochastic() -> None:
           and {"bg_sto_border", "bg_sto_border_color"} <= set(gl.BG_KEYS)
           and gl.DEFAULT_PARAMS["bg_sto_border_color"] == "#ffffff",
           "stochastique: bordure bornee 0..12 px, 0 par defaut, couleur blanche, reglages du fond")
+    # Paliers (#222) : chaque point prend l'une de 2 ou 3 tailles fixes selon le champ (trame d'imprimerie) ; « continuous » = image d'origine
+    check(abs(render(bg_sto_levels="continuous") - a).max() == 0, "stochastique: paliers « continuous » = image d'origine")
+
+    def dot_radii(img):           # rayons equivalents (px) des taches isolees : la couverture est etiquetee a la main (pas de scipy)
+        m = (img[:, :, 0] > img[:, :, 2])
+        seen = np.zeros_like(m)
+        out = []
+        for y0, x0 in zip(*np.nonzero(m)):
+            if seen[y0, x0]:
+                continue
+            stack, n, touch = [(y0, x0)], 0, False
+            ys, xs = [], []
+            seen[y0, x0] = True
+            while stack:
+                y, x = stack.pop()
+                n += 1
+                ys.append(y)
+                xs.append(x)
+                touch = touch or y in (0, m.shape[0] - 1) or x in (0, m.shape[1] - 1)
+                for yy, xx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                    if 0 <= yy < m.shape[0] and 0 <= xx < m.shape[1] and m[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        stack.append((yy, xx))
+            bh, bw_ = max(ys) - min(ys) + 1, max(xs) - min(xs) + 1       # seulement les taches rondes (un point isole, pas deux qui se touchent)
+            if not touch and n >= 12 and abs(bh - bw_) <= 1 and 0.7 <= n / (bh * bw_) <= 0.86:
+                out.append((n / np.pi) ** 0.5)
+        return np.array(out)
+
+    def near_levels(radii, n, top):   # part des taches dont le rayon est a 12 % d'un palier (top x k / n)
+        lv = np.array([top * (k + 1) / n for k in range(n)])
+        gap = abs(radii[:, None] - lv[None, :])
+        return float((gap.min(axis=1) < 0.12 * lv[gap.argmin(axis=1)]).mean())
+
+    # points de 20 px (s) dans 640 x 360 : rayon maximal 10 px ; degrade = champ qui parcourt toute la plage, densite basse = points isoles
+    sparse = dict(bg_sto_size=40.0, bg_sto_field="gradient", bg_sto_density=0.45, bg_sto_regular=1.0)
+    r_cont = dot_radii(render(bg_sto_vary=1.0, **sparse))
+    r2, r3 = dot_radii(render(bg_sto_levels="2", **sparse)), dot_radii(render(bg_sto_levels="3", **sparse))
+    check(len(r2) > 20 and len(r3) > 20 and near_levels(r2, 2, 10.0) > 0.85 and near_levels(r3, 3, 10.0) > 0.85 > near_levels(r_cont, 3, 10.0),
+          "stochastique: 2 ou 3 paliers = les points n'ont que 2 ou 3 tailles fixes (continu : tailles quelconques)",
+          f"2 paliers {near_levels(r2, 2, 10.0):.2f}, 3 paliers {near_levels(r3, 3, 10.0):.2f}, continu {near_levels(r_cont, 3, 10.0):.2f}")
+    cnt = lambda r, n: [int((np.round(r / 10.0 * n).astype(int) == k).sum()) for k in range(1, n + 1)]
+    check(min(cnt(r3, 3)) >= 3 and min(cnt(r2, 2)) >= 3, "stochastique: 3 paliers = trois tailles presentes (petits, moyens, gros), 2 paliers = deux",
+          f"{cnt(r3, 3)} / {cnt(r2, 2)}")
+    big = lambda r: float((r > 8.5).mean())      # part des gros points : plus le champ est haut, plus ils sont nombreux (palier suivant)
+    gb = dict(sparse, bg_react=1.0)
+    rb0 = dot_radii(render(dict(quiet), bg_sto_levels="3", **gb))
+    rb1 = dot_radii(render(dict(quiet, bass=1.0), bg_sto_levels="3", **gb))
+    check(len(rb0) > 20 and big(rb1) > big(rb0) + 0.05,
+          "stochastique: en paliers, les basses font passer des points au palier suivant (plus de gros points)",
+          f"{big(rb0):.2f} -> {big(rb1):.2f}")
+    check(gl.DEFAULT_PARAMS["bg_sto_levels"] == "continuous" and gl.coerce_params({"bg_sto_levels": "9"})["bg_sto_levels"] == "continuous"
+          and "bg_sto_levels" in gl.BG_KEYS, "stochastique: paliers « continuous » par defaut, valeur inconnue refusee, reglage du fond")
 
     # Son (reaction 1) : basses = plus de points, kick = contraste et saut des vagues, aigus = scintillement, tempo = derive.
     loud = dict(quiet, bass=1.0, high=1.0, beat=1.0, since_beat=0.0, beats=4)
@@ -11298,6 +11350,9 @@ def check_randomizer() -> None:
     seen_fields = {v["bg_sto_field"] for v in st_}
     check(len(st_) >= 40 and seen_fields <= set(sf2.VALUES) and len(seen_fields) >= 6,
           "fond aleatoire: le champ du stochastique est tire parmi les 8 (#229)", f"{len(st_)} tirages, champs vus {sorted(seen_fields)}")
+    lv_share = sum(1 for v in st_ if v.get("bg_sto_levels") == "continuous") / max(len(st_), 1)
+    check(all(v.get("bg_sto_levels") in ("continuous", "2", "3") for v in st_) and 0.4 <= lv_share <= 0.75,
+          "fond aleatoire: paliers du stochastique (continu une fois sur deux environ, sinon 2 ou 3)", f"part continue {lv_share:.2f}")
     bord_share = sum(1 for v in st_ if v.get("bg_sto_border") == 0.0) / max(len(st_), 1)
     check(all(v.get("bg_sto_border") == 0.0 or 1.0 <= v.get("bg_sto_border", -1) <= 4.0 for v in st_)
           and all(gl.coerce_params(v)["bg_sto_border_color"] == v.get("bg_sto_border_color") for v in st_) and 0.3 <= bord_share <= 0.7,
@@ -13053,8 +13108,8 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 10 and all(k in gl.BG_KEYS for k in sto),
-          "stochastique: 10 reglages (douceur #223 et bordure #219 comprises), tous du fond (presets de fond, scenes)")
+    check(len(sto) == 11 and all(k in gl.BG_KEYS for k in sto),
+          "stochastique: 11 reglages (douceur #223, bordure #219 et paliers #222 compris), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")

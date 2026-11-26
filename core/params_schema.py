@@ -236,6 +236,8 @@ TABLE: tuple[Param, ...] = (
     _p("bg_sto_border", 0.0, 0.0, 12.0, scope="bg",
        doc="Palette stochastique : epaisseur de la bordure des points, en pixels pour 720 px de haut, tracee dans le point (0 = aucune)."),
     _p("bg_sto_border_color", "#ffffff", scope="bg", doc="Palette stochastique : couleur de la bordure des points."),
+    _p("bg_sto_levels", "continuous", choices=("continuous", "2", "3"), scope="bg",
+       doc="Palette stochastique : paliers de taille des points (continuous = rayon continu ; 2 ou 3 = tailles fixes selon le champ, facon trame)."),
     _p("bg_rd_shape", 0.6, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : 0 = taches qui se repoussent, 1 = lignes sinueuses (labyrinthe)."),
     _p("bg_rd_scale", 1.0, 0.3, 2.0, scope="bg", doc="Palette labyrinthe : taille du motif (plus grand = lignes et taches plus epaisses)."),
     _p("bg_rd_offset", 0.012, 0.0, 0.05, scope="bg", doc="Palette labyrinthe : ecart entre les trois couches colorees (fraction de la hauteur)."),

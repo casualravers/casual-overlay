@@ -69,7 +69,11 @@ les basses).
   de s'allumer d'un coup, plus de gresillement aux bords des zones quand le champ derive ; 0 = image d'origine ; cout mesure +0,1 ms en 1280 x 720),
   `bg_sto_border` / `bg_sto_border_color` (« Taille de bordure » 0..12 px pour 720 px de haut et « Couleur de bordure », #219 : uniform `u_sto_border`,
   anneau trace DANS le point retenu, `smoothstep(rayon - bordure +- 0,5 px)`, le point garde sa taille et la grille ne change pas ; bordure >= rayon =
-  disque plein de la couleur de bordure ; 0 = image d'origine ; le Randomizer la tire une fois sur deux, 1 a 4 px, blanc / noir / couleur 2) ; `bg_hue` et `bg_speed`
+  disque plein de la couleur de bordure ; 0 = image d'origine ; le Randomizer la tire une fois sur deux, 1 a 4 px, blanc / noir / couleur 2),
+  `bg_sto_levels` (« Paliers de taille », #222 : `continuous` / `2` / `3`, uniform `u_sto_levels` ; en paliers le rayon vaut
+  `0,5 x s x (palier + 1) / n` avec `palier = min(floor(champ x n), n - 1)` : taille fixe selon le champ, facon trame d'imprimerie ; remplace
+  la variation de taille et la croissance aux basses, mais les basses haussent le champ donc des points passent au palier suivant ; se combine avec
+  douceur et bordure ; `continuous` = image d'origine ; le Randomizer tire continu une fois sur deux, sinon 2 ou 3) ; `bg_hue` et `bg_speed`
   s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
   kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
   change de rang a son tour, `fract(rang + epoque x 0,618)`, donc aussi en bruit bleu). Reglages de la GUI dans `sto_box` (bloc « Fond genere »,
