@@ -62,9 +62,32 @@ def light_gain(intensity: float, v: float) -> float:
     return base + (float(intensity) - base) * _smoothstep(0.0, CAP_NEAR, v)
 
 
+# Irregularites des anneaux (#256) : bruit 3D (position, v, temps) ajoute a v dans holo.frag. Memes constantes que le shader.
+WOBBLE_AMP = 0.11          # decalage de v a l'irregularite 1 (environ 40 % de la periode des anneaux : 2 pi / 24 = 0,26)
+WOBBLE_FREQ = 4.0         # ondulations par hauteur d'ecran (basse frequence : pas de grain)
+WOBBLE_RING_K = 9.0        # v sur le 3e axe du bruit : chaque anneau voit une tranche differente, donc sa propre irregularite
+WOBBLE_TIME = 0.35         # unites de bruit par seconde a la vitesse 1 (temps integre cote CPU : Renderer._holo_wt)
+WOBBLE_FAR = 0.12          # le masque monte de 0 (portee) a 1 a v = WOBBLE_FAR
+WOBBLE_NEAR = (0.80, 0.97)  # puis redescend vers 0 pres du sujet : son contour reste fidele (#240)
+
+
+def wobble_mask(v: float) -> float:
+    """Part de l'irregularite appliquee a `v` : nulle a la portee (pas de bord franc) et contre le sujet (contour intact), pleine entre les deux."""
+    return _smoothstep(0.0, WOBBLE_FAR, v) * (1.0 - _smoothstep(WOBBLE_NEAR[0], WOBBLE_NEAR[1], v))
+
+
+def wobble_v(v: float, amount: float, noise: float) -> float:
+    """`v` avec ses irregularites : `v` + `amount` (0..1) x WOBBLE_AMP x masque x `noise` (-1..1), dans 0..1.
+    `amount` a 0, negatif ou NaN, ou `noise` NaN : `v` tel quel (rendu d'avant)."""
+    v, amount, noise = float(v), float(amount), float(noise)
+    if not (math.isfinite(amount) and math.isfinite(noise)) or amount <= 0.0:
+        return v
+    return _clamp(v + min(amount, 1.0) * WOBBLE_AMP * wobble_mask(v) * _clamp(noise, -1.0, 1.0), 0.0, 1.0)
+
+
 # Reaction audio par reglage (#247) : facteur K de chaque reglage et borne haute (plage du curseur ; None = la vitesse n'est pas bornee).
-REACT_K = {"holo_intensity": 1.0, "holo_reach": 0.5, "holo_warp": 1.0, "holo_dust": 1.0, "holo_speed": 3.0}
-REACT_MAX = {"holo_intensity": 3.0, "holo_reach": 3.0, "holo_warp": 3.0, "holo_dust": 3.0, "holo_speed": None}
+REACT_K = {"holo_intensity": 1.0, "holo_reach": 0.5, "holo_warp": 1.0, "holo_dust": 1.0, "holo_speed": 3.0, "holo_wobble": 1.0}
+REACT_MAX = {"holo_intensity": 3.0, "holo_reach": 3.0, "holo_warp": 3.0, "holo_dust": 3.0, "holo_speed": None, "holo_wobble": 1.0}
 REACT_KEYS = tuple(REACT_K)
 
 

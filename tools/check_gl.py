@@ -492,6 +492,8 @@ def check_gui() -> None:
                                  if w.winfo_class() == "Entry" and int(w.cget("width")) == 6)
             out["presets"] = any(w.winfo_class() == "Label" and w.cget("text").startswith("PRESETS LIVE")
                                  for w in walk(root))
+            label_texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
+            out["halo_wobble_ui"] = tuple(t in label_texts for t in ("Irregularite", "Vitesse irregul.", "Irregularite au son"))      # (#256)
             out["scrollbars"] = (sum(1 for w in walk(root) if w.winfo_class() == "Scrollbar"),
                                  sum(1 for w in walk(root) if w.winfo_class() == "TScrollbar"
                                      and str(w.cget("style")) == "Casual.Vertical.TScrollbar"))
@@ -1807,6 +1809,8 @@ def check_gui() -> None:
     check(al[0] == ["pas_une_cle"] and al[1] and al[2] and al[3],
           "GuiController.apply_state (live): cles inconnues rendues, etat pris, producteur relance, capture_state le relit", str(al))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
+    check(out.get("halo_wobble_ui") == (True, True, True),
+          "halo (#256) : curseurs Irregularite, Vitesse irregul. et reaction « Irregularite au son » dans l'onglet du halo", str(out.get("halo_wobble_ui")))
     check(out.get("presets") and out.get("automation", 0) >= 1,
           "presets et automations d'audio2wave presents", f"{out.get('automation')} curseurs automatables")
     check(out.get("burst") == 1, "rafale de reglages live: un seul redemarrage (anti-rebond d'audio2wave)",
@@ -3240,6 +3244,25 @@ def check_holo_champ() -> None:
           "halo (#247): niveau ou reaction negatifs / NaN = rien (jamais d'uniform invalide)")
     ls = [rv("holo_dust", 1.0, 1.0, 0.1 * k) for k in range(0, 11)]
     check(all(b >= a for a, b in zip(ls, ls[1:])), "halo (#247): la valeur croit avec le niveau du son")
+    # ---- irregularites des anneaux (#256) : bruit ajoute a v, masque pres du sujet et a la portee, reaction au son plafonnee a 1
+    if not hasattr(hf, "wobble_v"):
+        check(False, "halo (#256): core.holo.wobble_v existe")
+        return
+    vgrid = [0.01 * k for k in range(0, 101)]
+    check(hf.wobble_mask(0.0) == 0.0 and hf.wobble_mask(1.0) == 0.0 and hf.wobble_mask(0.5) == 1.0 and all(0.0 <= hf.wobble_mask(v) <= 1.0 for v in vgrid),
+          "halo (#256): le masque des irregularites est nul a la portee (v = 0) et contre le sujet (v = 1), plein entre les deux")
+    check(all(hf.wobble_v(v, 0.0, n) == v for v in vgrid for n in (-1.0, 0.0, 1.0)),
+          "halo (#256): irregularite 0 = v inchange (rendu actuel)")
+    check(abs(hf.wobble_v(0.5, 1.0, 1.0) - (0.5 + hf.WOBBLE_AMP)) < 1e-9 and abs(hf.wobble_v(0.5, 0.5, -1.0) - (0.5 - 0.5 * hf.WOBBLE_AMP)) < 1e-9,
+          "halo (#256): v' = v + irregularite x amplitude x bruit")
+    check(all(0.0 <= hf.wobble_v(v, a, n) <= 1.0 for v in vgrid for a in (0.0, 0.5, 1.0, 9.0) for n in (-1.0, 0.0, 1.0))
+          and hf.wobble_v(0.0, 1.0, 1.0) == 0.0 and hf.wobble_v(1.0, 1.0, -1.0) == 1.0 and hf.wobble_v(0.5, 9.0, 1.0) == hf.wobble_v(0.5, 1.0, 1.0),
+          "halo (#256): v' reste dans 0..1, la portee et le contour du sujet ne bougent pas, l'irregularite est bornee a 1")
+    check(hf.wobble_v(0.5, float("nan"), 1.0) == 0.5 and hf.wobble_v(0.5, 1.0, float("nan")) == 0.5 and hf.wobble_v(0.5, -1.0, 1.0) == 0.5,
+          "halo (#256): irregularite ou bruit negatif / NaN = rien (jamais d'uniform invalide)")
+    check("holo_wobble" in hf.REACT_KEYS and abs(rv("holo_wobble", 0.4, 1.0, 0.5) - 0.6) < 1e-9 and rv("holo_wobble", 0.9, 2.0, 1.0) == 1.0
+          and rv("holo_wobble", 0.0, 2.0, 1.0) == 0.0 and rv("holo_wobble", 0.4, 0.0, 1.0) == 0.4,
+          "halo (#256): l'irregularite reagit au son (x (1 + r x n), plafonnee a 1) ; a 0 elle reste a 0")
 
 
 def check_holo_contour() -> None:
@@ -3447,17 +3470,36 @@ def check_holo() -> None:
     shout2 = render(loud, frames=20, holo_on=1.0, holo_react=1.0)
     check(np.abs(shout2 - calm).max() > 30, "holo_react > 0 : reagit au kick et aux basses")
     # reaction par reglage (#247) : 0 = identique ; > 0 = le son fort change l'image, le silence non
-    for hname in ("intensity", "reach", "warp", "dust", "speed"):
-        r._holo_t = 0.0
-        loud0 = render(loud, frames=20, holo_on=1.0)
-        r._holo_t = 0.0
-        loud_r = render(loud, frames=20, holo_on=1.0, **{f"holo_react_{hname}": 1.5})
-        r._holo_t = 0.0
-        calm_r = render(quiet, frames=20, holo_on=1.0, **{f"holo_react_{hname}": 1.5})
-        r._holo_t = 0.0
-        calm0 = render(quiet, frames=20, holo_on=1.0)
+    for hname in ("intensity", "reach", "warp", "dust", "speed", "wobble"):
+        extra = {"holo_wobble": 0.5} if hname == "wobble" else {}          # (#256) la reaction multiplie l'irregularite : a 0 elle reste a 0
+        r._holo_t = r._holo_wt = 0.0
+        loud0 = render(loud, frames=20, holo_on=1.0, **extra)
+        r._holo_t = r._holo_wt = 0.0
+        loud_r = render(loud, frames=20, holo_on=1.0, **extra, **{f"holo_react_{hname}": 1.5})
+        r._holo_t = r._holo_wt = 0.0
+        calm_r = render(quiet, frames=20, holo_on=1.0, **extra, **{f"holo_react_{hname}": 1.5})
+        r._holo_t = r._holo_wt = 0.0
+        calm0 = render(quiet, frames=20, holo_on=1.0, **extra)
         check(np.abs(loud_r.astype(int) - loud0).max() > 8 and np.array_equal(calm_r, calm0),
               f"halo (#247) : holo_react_{hname} > 0 reagit au son fort, silence = image identique")
+    # irregularites des anneaux (#256) : 0 = image actuelle, > 0 = anneaux deformes (logo intact), vitesse 0 = figees, vitesse > 0 = vivantes
+    r._holo_t = r._holo_wt = 0.0
+    w_off = render(quiet, frames=20, holo_on=1.0)
+    r._holo_t = r._holo_wt = 0.0
+    w_zero = render(quiet, frames=20, holo_on=1.0, holo_wobble=0.0, holo_wobble_speed=2.0)
+    r._holo_t = r._holo_wt = 0.0
+    w_on = render(quiet, frames=20, holo_on=1.0, holo_wobble=0.9)
+    check(np.array_equal(w_zero, w_off), "halo (#256) : irregularite 0 = image identique, quelle que soit la vitesse des irregularites")
+    check((np.abs(w_on - w_off).max(axis=2)[~inside] > 8).sum() > 1500 and np.array_equal(w_on[inside], w_off[inside]),
+          "halo (#256) : irregularite > 0 deforme les anneaux autour du logo, le logo reste intact", f"{(np.abs(w_on - w_off).max(axis=2)[~inside] > 8).sum()} px")
+    r._holo_t = r._holo_wt = 0.0
+    f_a = render(quiet, frames=5, holo_on=1.0, holo_speed=0.0, holo_dust=0.0, holo_wobble=0.9, holo_wobble_speed=0.0)    # sans poussiere : ses etoiles scintillent avec l'horloge
+    f_b = render(quiet, frames=40, holo_on=1.0, holo_speed=0.0, holo_dust=0.0, holo_wobble=0.9, holo_wobble_speed=0.0)
+    check(np.array_equal(f_a, f_b), "halo (#256) : vitesse des irregularites 0 = elles sont figees (les autres animations du halo a l'arret)")
+    r._holo_t = r._holo_wt = 0.0
+    l_a = render(quiet, frames=5, holo_on=1.0, holo_speed=0.0, holo_dust=0.0, holo_wobble=0.9, holo_wobble_speed=1.0)
+    l_b = render(quiet, frames=40, holo_on=1.0, holo_speed=0.0, holo_dust=0.0, holo_wobble=0.9, holo_wobble_speed=1.0)
+    check((np.abs(l_b - l_a).max(axis=2)[~inside] > 8).sum() > 500, "halo (#256) : vitesse des irregularites > 0 = elles vivent (elles changent avec le temps)")
     # anime par le temps seulement
     r._holo_t = 0.0
     t0 = render(quiet, frames=1, holo_on=1.0)
@@ -10108,7 +10150,7 @@ def check_onsets() -> None:
 
 ROUTE_IDS = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
              "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo",
-             "lg_holo_intensity", "lg_holo_reach", "lg_holo_warp", "lg_holo_dust", "lg_holo_speed", "lg_melt", "lg_cells",
+             "lg_holo_intensity", "lg_holo_reach", "lg_holo_warp", "lg_holo_dust", "lg_holo_speed", "lg_holo_wobble", "lg_melt", "lg_cells",
              "breath", "hue", "strobe", "foudre", "noise")
 
 
@@ -10272,6 +10314,9 @@ def check_routage() -> None:
     check(all(("holo_react_" + n) in spec and spec["holo_react_" + n].default == 0.0 and (spec["holo_react_" + n].lo, spec["holo_react_" + n].hi) == (0.0, 2.0)
               and ("rt_lg_holo_" + n) in spec and ("rg_lg_holo_" + n) in spec for n in hn),
           "routage (#247): reactions (defaut 0, plage 0..2), source et dosage de chaque reglage du halo dans la table des reglages")
+    check(spec["holo_wobble"].default == 0.0 and (spec["holo_wobble"].lo, spec["holo_wobble"].hi) == (0.0, 1.0)
+          and spec["holo_wobble_speed"].default == 1.0 and (spec["holo_wobble_speed"].lo, spec["holo_wobble_speed"].hi) == (0.0, 2.0),
+          "halo (#256): irregularite (0..1, defaut 0 = rendu actuel) et vitesse des irregularites (0..2, defaut 1) dans la table des reglages")
     nan = float("nan")
     check(rt.route_of({"rg_bg_wobble": nan}, "bg_wobble")[1] == 1.0 and rt.route_of({"rg_bg_wobble": float("inf")}, "bg_wobble")[1] == 1.0
           and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
@@ -11276,7 +11321,7 @@ def check_automation() -> None:
         check(False, "curseur Vitesse : modules audio2wave importables", str(exc))
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
-    check(len(specs) == 41 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178) + 5 du halo (#247), coupees par defaut
+    check(len(specs) == 43 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178) + 5 du halo (#247) + 2 des irregularites du halo (#256), coupees par defaut
           and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto + ("bg_rd_scale",))
           and "bg_rd_scale" in specs and not default["bg_rd_scale"]["enabled"]
           and not any(k in specs for k in ("bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),

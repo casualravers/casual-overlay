@@ -87,6 +87,17 @@ routage `lg_holo_<nom>` (source `rt_`, dosage `rg_`, defaut `herite` = basses de
 plage du curseur sauf la vitesse ; calculee dans `Renderer.draw` sur la copie `p` (apres le master des effets), avant les uniforms. S'ajoute a `holo_react`
 (reaction generale, inchangee). GUI : case repliee « Reactions par reglage » sous les curseurs (curseur de reaction + pastille de source par ligne) ;
 les lignes sont aussi dans l'onglet Routage. Spec : docs/plans/2026-11-27-halo-automation-routage-247-design.md.
+
+**Irregularites des anneaux (#256)** : les anneaux sont les courbes de niveau de `v` (parfaitement lisse : trop « dessin a la regle »). `holo.frag` ajoute a `v`
+un bruit de valeur 3D (position x `WOBBLE_FREQ`, **`v` x `WOBBLE_RING_K` en 3e axe** : chaque anneau voit une tranche differente, donc sa propre
+deformation, sans coupure ; le temps fait deriver la tranche et la position) : `v' = v + irregularite x WOBBLE_AMP x masque(v) x bruit`
+(`core.holo.wobble_v`, memes constantes que le shader). Fait une seule fois a basse resolution (1/4 d'ecran) : deformation, franges, enveloppe et poussiere
+suivent le meme `v'`, `post.frag` ne change pas. Le masque `wobble_mask` s'eteint a la portee (`v` = 0, pas de bord franc) et pres du sujet (`v` > 0,8 :
+son contour reste fidele, #240). Reglages `holo_wobble` (0..1, defaut **0** = anneaux parfaits, scenes existantes inchangees) et `holo_wobble_speed`
+(0..2, defaut 1 ; 0 = figees ; temps propre `Renderer._holo_wt`, independant de `holo_speed`, sans modulo : un saut serait visible). Automatisables (coupes par
+defaut). Reaction au son : `holo_react_wobble` + ligne `lg_holo_wobble` (K = 1, plafonnee a 1 ; **elle multiplie l'irregularite : a 0 elle reste a 0**).
+Amplitude et frequence choisies a l'oeil sur une capture (0,35 = discret, 0,8 = net sans etre brouillon), a revoir sur le projecteur. Spec :
+docs/plans/2026-11-27-halo-irregularite-256-design.md.
 - Additif : la lumiere ne fonce jamais le fond, mais la **deformation** se voit aussi sur un fond sombre.
 - Plus de marge transparente sur les textures du logo (l'ancien `LOGO_PAD`) : elle n'avait de sens que
   pour le chrome, et le logo retrouve exactement son echantillonnage d'avant.
