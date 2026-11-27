@@ -521,6 +521,7 @@ def loop(s: Session, window: Window, ctx, renderer: Renderer) -> None:
         automation.step(params, now)
         analyzer.extractor.sensitivity = params["sensitivity"]
         analyzer.extractor.hit_sens = float(params.get("hit_sensitivity", 1.0))                 # frappes aigues
+        analyzer.phase.calm_react = float(params.get("calm_react", 1.0))                        # reactivite du calme : silence / ambiance (#255)
         from engine.audio import capture_latency_ms
         fallback_ = capture_latency_ms(getattr(s.audio, "src", None))       # sans horodatage du pilote : la latence annoncee par l'entree
         if 0.0 < now - prev_t_lead < 0.5:
