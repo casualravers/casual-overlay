@@ -36,14 +36,39 @@ PROFILES = {
     "peak": {"tempo": 1.1, "react": 1.2, "fx": 1.3, "overlay": 1.0, "bg": 1.0, "hue": 0.0, "breath": 0.0},
 }
 
-def thresholds(mean: float) -> tuple[float, float, float, float]:
+def calm_factor(react: float) -> float:
+    """Facteur de reactivite du calme (reglage `calm_react`, #255), borne a 0,25..4 ; NaN ou invalide = 1 (comme avant)."""
+    try:
+        r = float(react)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(r):
+        return 1.0
+    return min(max(r, 0.25), 4.0)
+
+
+def enter_delay(target: str, factor: float = 1.0) -> float:
+    """Temps pendant lequel une phase doit etre vue avant d'etre adoptee : ENTER_S, divise par la reactivite pour le silence et l'ambiance (le mode IDLE)."""
+    return ENTER_S[target] / factor if target in IDLE_PHASES else ENTER_S[target]
+
+
+def min_dwell(target: str, factor: float = 1.0) -> float:
+    """Duree minimale de la phase precedente avant de passer a `target` : MIN_DWELL_S, divisee par la reactivite pour le silence et l'ambiance."""
+    return MIN_DWELL_S / factor if target in IDLE_PHASES else MIN_DWELL_S
+
+
+def thresholds(mean: float, react: float = 1.0) -> tuple[float, float, float, float]:
     """Planchers (silence, calme, ambiance, montee) : les valeurs absolues d'un micro normal, abaissees en proportion quand le morceau est faible
     (`mean` = energie moyenne pendant les passages a kicks : un telephone pose a cote du micro donne 10 a 30 fois moins qu'une sono). Sans
-    mesure (`mean` <= 0) ou avec un morceau fort, ce sont les valeurs absolues."""
+    mesure (`mean` <= 0) ou avec un morceau fort, ce sont les valeurs absolues. `react` (reactivite du calme, #255) multiplie les seuils de silence
+    et d'ambiance (un micro au bruit de salle a besoin de seuils plus hauts) ; 1 = comme avant, calme et montee ne changent pas."""
+    f = calm_factor(react)
     if mean <= 0.0:
-        return SILENCE_ABS, CALM_ABS, QUIET_ABS, BUILD_MIN
-    return (min(SILENCE_ABS, max(0.0008, 0.15 * mean)), min(CALM_ABS, max(0.003, 0.10 * mean)),
-            min(QUIET_ABS, max(0.003, 0.30 * mean)), min(BUILD_MIN, max(0.004, 0.25 * mean)))
+        sil, calm, quiet, build = SILENCE_ABS, CALM_ABS, QUIET_ABS, BUILD_MIN
+    else:
+        sil, calm, quiet, build = (min(SILENCE_ABS, max(0.0008, 0.15 * mean)), min(CALM_ABS, max(0.003, 0.10 * mean)),
+                                   min(QUIET_ABS, max(0.003, 0.30 * mean)), min(BUILD_MIN, max(0.004, 0.25 * mean)))
+    return sil * f, calm, quiet * f, build
 
 
 WARMUP_S = 3.0                # avant cela on ne sait rien : phase Â« ambient Â»
@@ -73,6 +98,7 @@ LONG_SLOPE = 0.03             # montee lente : x1,8 en 20 s
 LONG_GAIN = 1.8
 MIN_DWELL_S = 4.0             # une phase dure au moins cela
 ENTER_S = {"silence": 2.5, "ambient": 2.5, "groove": 1.5, "build": 1.5, "break": 1.5, "peak": 1.5}
+IDLE_PHASES = ("silence", "ambient")      # le « mode IDLE » : ce que la reactivite du calme (#255) rend plus ou moins prompt
 MULT_TAU_S = 2.5              # glissement des multiplicateurs vers le profil de la phase
 BUILD_MAX_S = 40.0
 BUILD_RAMP_S = 16.0           # la montee gagne en intensite sur ce temps
@@ -137,6 +163,7 @@ class PhaseTracker:
         self._build_t: float | None = None
         self._grooving = False
         self._recent_groove = -1e9          # derniere fois qu'on etait en groove / pic / montee (distingue cassure et ambiance)
+        self.calm_react = 1.0               # reactivite du calme (reglage `calm_react`, #255) : ecrit par la boucle de rendu ; 1 = comme avant
 
     # ---- entree
     def update(self, now: float, levels: dict, beat: bool = False, rhythm_state: str = "idle", bpm: float | None = None) -> str:
@@ -193,7 +220,7 @@ class PhaseTracker:
             self._top_slope, self._top_gain = _trend_of(self._top_trend, TREND_WINDOW_S)
             self._slope_long, _ = _trend_of(self._trend, LONG_WINDOW_S)
             self._top_slope_long, self._top_gain_long = _trend_of(self._top_trend, LONG_WINDOW_S)
-        sil, calm, quiet, build_min = thresholds(self._mean)
+        sil, calm, quiet, build_min = thresholds(self._mean, self.calm_react)
         if self._e < sil:
             if self._silent_since is None:
                 self._silent_since = now
@@ -222,7 +249,7 @@ class PhaseTracker:
     def _classify(self, now: float, kick_rate: float, rhythm_state: str, calm: float = CALM_ABS, quiet: float = QUIET_ABS, build_min: float = BUILD_MIN) -> str:
         if now - (now if self.t0 is None else self.t0) < WARMUP_S:
             return self.phase
-        if self._silent_since is not None and now - self._silent_since >= ENTER_S["silence"]:
+        if self._silent_since is not None and now - self._silent_since >= enter_delay("silence", calm_factor(self.calm_react)):
             return "silence"
         since_kick = now - self._kicks[-1] if self._kicks else 1e9
         kicks_on = self._density >= 0.55 or kick_rate >= 1.2
@@ -260,7 +287,8 @@ class PhaseTracker:
         if self._cand != target:
             self._cand, self._cand_since = target, now
             return
-        if now - self._cand_since >= ENTER_S[target] and now - self.since >= MIN_DWELL_S:
+        f = calm_factor(self.calm_react)
+        if now - self._cand_since >= enter_delay(target, f) and now - self.since >= min_dwell(target, f):
             self.phase, self.since, self._cand = target, now, None
             self._build_t = now if target == "build" else None
 

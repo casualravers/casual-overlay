@@ -138,6 +138,12 @@ def install(c):
     bind_param("sensitivity", sens_var)
     add_slider(zone_fx, "Sensibilite kick", 0.25, 4.0, 0.05, sens_var, length=110,
                tooltip="Plus haut = kicks detectes plus facilement (aussi touches haut/bas dans la fenetre GL).")
+    calm_var = tk.DoubleVar(value=params.get("calm_react", 1.0))             # reactivite du mode IDLE (#255)
+    bind_param("calm_react", calm_var)
+    add_slider(zone_fx, "Reactivite du calme", 0.25, 4.0, 0.05, calm_var, length=110,
+               tooltip="Vitesse a laquelle le visuel passe en ambiance ou en silence quand la musique baisse ou s'arrete (mode IDLE). Plus haut = plus vite, "
+                       "avec des seuils plus hauts : a monter avec un micro (bruit de salle), a laisser a 1 ou baisser avec une carte son. "
+                       "Sans rapport avec la sensibilite du kick.")
 
     # ---- colonne A : EFFETS DE LA COUCHE LOGO (le fond garde les reglages ci-dessus)
     add_separator(zone_fx, "Effets sur le logo")

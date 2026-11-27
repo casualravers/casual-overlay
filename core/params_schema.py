@@ -67,6 +67,8 @@ TABLE: tuple[Param, ...] = (
     _p("noise_fx", [0, 0, 0, 0, 0], 0, 1, doc="Noise : effets sur lesquels il agit (wobble, onde, aberration, glitch, reaction du logo)."),
     _p("master", 1.0, 0.0, 2.0, doc="Intensite globale des effets de deformation."),
     _p("sensitivity", 1.0, 0.25, 4.0, scope="device", keep=True, doc="Sensibilite du detecteur de kick (depend du micro et de la salle)."),
+    _p("calm_react", 1.0, 0.25, 4.0, scope="device", keep=True,
+       doc="Reactivite du calme (mode IDLE) : plus haut = silence et ambiance adoptes plus vite, avec des seuils plus hauts (micro bruyant) ; 1 = comme avant."),
     _p("hit_sensitivity", 1.0, 0.25, 4.0, scope="device", doc="Sensibilite des frappes aigues (charleys, claps) ; sauvee, hors presets et scenes."),
     _p("react_master", 1.0, 0.0, 2.0, scope="room", doc="Master de l'audioreactivite : x tout ce qui vient de l'audio, 0 = aucune reaction."),
     _p("overlay_master", 1.0, 0.0, 1.0, scope="room", doc="Master de la presence de l'overlay : 0 = invisible, 1 = normal."),

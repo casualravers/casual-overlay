@@ -494,6 +494,7 @@ def check_gui() -> None:
                                  for w in walk(root))
             label_texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
             out["halo_wobble_ui"] = tuple(t in label_texts for t in ("Irregularite", "Vitesse irregul.", "Irregularite au son"))      # (#256)
+            out["calm_react_ui"] = "Reactivite du calme" in label_texts                                                                  # (#255)
             out["scrollbars"] = (sum(1 for w in walk(root) if w.winfo_class() == "Scrollbar"),
                                  sum(1 for w in walk(root) if w.winfo_class() == "TScrollbar"
                                      and str(w.cget("style")) == "Casual.Vertical.TScrollbar"))
@@ -1809,6 +1810,7 @@ def check_gui() -> None:
     check(al[0] == ["pas_une_cle"] and al[1] and al[2] and al[3],
           "GuiController.apply_state (live): cles inconnues rendues, etat pris, producteur relance, capture_state le relit", str(al))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
+    check(out.get("calm_react_ui") is True, "phases (#255) : le curseur « Reactivite du calme » est dans l'onglet des effets, a cote de la sensibilite du kick")
     check(out.get("halo_wobble_ui") == (True, True, True),
           "halo (#256) : curseurs Irregularite, Vitesse irregul. et reaction « Irregularite au son » dans l'onglet du halo", str(out.get("halo_wobble_ui")))
     check(out.get("presets") and out.get("automation", 0) >= 1,
@@ -6735,6 +6737,63 @@ def check_phase() -> None:
     ph.apply_to_params(off, pt2.snapshot())
     check(name == "silence" and p["phase_tempo"] < 0.3 and all(off["phase_" + x] == ph.NEUTRAL[x] for x in ph.KEYS) and ph.apply_to_params({}, None) == "neutre",
           "phases: application aux reglages (neutre si desactive ou sans mesure)", name)
+    # ---- reactivite du calme (#255) : delais d'entree et seuils de l'ambiance / du silence, 1 = comme avant
+    if not hasattr(ph, "calm_factor"):
+        check(False, "phases (#255): core.phase.calm_factor existe")
+        return
+    nan = float("nan")
+    check(ph.calm_factor(1.0) == 1.0 and ph.calm_factor(0.0) == 0.25 and ph.calm_factor(99.0) == 4.0 and ph.calm_factor(nan) == 1.0 and ph.calm_factor(-2.0) == 0.25,
+          "phases (#255): facteur de reactivite borne a 0,25..4, NaN = 1")
+    check(ph.thresholds(0.0) == ph.thresholds(0.0, 1.0) == (ph.SILENCE_ABS, ph.CALM_ABS, ph.QUIET_ABS, ph.BUILD_MIN)
+          and ph.thresholds(0.0, 2.0) == (2.0 * ph.SILENCE_ABS, ph.CALM_ABS, 2.0 * ph.QUIET_ABS, ph.BUILD_MIN)
+          and abs(ph.thresholds(0.1, 2.0)[0] - 2.0 * ph.thresholds(0.1)[0]) < 1e-12 and ph.thresholds(0.1, 2.0)[3] == ph.thresholds(0.1)[3],
+          "phases (#255): reactivite 1 = seuils d'avant ; 2 = seuils de silence et d'ambiance doubles, calme et montee inchanges")
+    check(ph.enter_delay("silence", 2.0) == ph.ENTER_S["silence"] / 2.0 and ph.enter_delay("ambient", 4.0) == ph.ENTER_S["ambient"] / 4.0
+          and all(ph.enter_delay(n, 3.0) == ph.ENTER_S[n] for n in ("groove", "build", "break", "peak"))
+          and ph.min_dwell("ambient", 2.0) == ph.MIN_DWELL_S / 2.0 and ph.min_dwell("silence", 4.0) == ph.MIN_DWELL_S / 4.0
+          and ph.min_dwell("peak", 2.0) == ph.MIN_DWELL_S and ph.min_dwell("groove", 3.0) == ph.MIN_DWELL_S,
+          "phases (#255): delais d'entree et duree minimale divises par la reactivite pour le silence et l'ambiance seulement")
+
+    def stop_run(react, noise=0.0005, music=0.10, playing_s=40.0, after_s=40.0):
+        """La musique (kicks a 128 bpm) s'arrete a `playing_s` ; rend (delai avant ambiance ou silence, delai avant silence) en secondes (None = jamais)."""
+        pt_, t_, nxt_, got = ph.PhaseTracker(), 0.0, 0.0, {}
+        pt_.calm_react = react
+        while t_ < playing_s + after_s:
+            on_ = t_ < playing_s
+            beat_ = on_ and t_ >= nxt_
+            if beat_:
+                nxt_ = t_ + k
+            lv = music if on_ else noise
+            nm = pt_.update(t_, {"raw_rms": lv, "raw_bass": lv * 0.5, "raw_mid": lv * 0.3, "raw_high": lv * 0.2}, beat_, "idle", 128.0 if on_ else None)
+            if not on_ and nm in ("silence", "ambient"):
+                got.setdefault("idle", t_ - playing_s)
+            if not on_ and nm == "silence":
+                got.setdefault("silence", t_ - playing_s)
+            t_ += 0.05
+        return got.get("idle"), got.get("silence")
+
+    s1, s3, s05 = stop_run(1.0), stop_run(3.0), stop_run(0.5)
+    check(None not in (*s1, *s3, *s05) and s3[0] < s1[0] - 0.8 and s05[0] > s1[0] + 0.8 and s3[1] < s1[1] - 3.0 and s05[1] > s1[1] + 3.0,
+          "phases (#255): quand la musique s'arrete, le mode IDLE arrive plus tot a reactivite 3 qu'a 1, plus tard a 0,5",
+          f"1 -> {s1}, 3 -> {s3}, 0,5 -> {s05}")
+    mic1, mic3 = stop_run(1.0, noise=0.004), stop_run(3.0, noise=0.004)
+    check(mic1[0] is not None and mic1[1] is None and mic3[1] is not None,
+          "phases (#255): un micro au bruit de salle de 0,004 n'atteint jamais le silence a reactivite 1, l'atteint a 3", f"1 -> {mic1}, 3 -> {mic3}")
+    pg4, tg4, nx4, idle4 = ph.PhaseTracker(), 0.0, 0.0, 0
+    pg4.calm_react = 4.0
+    while tg4 < 60.0:
+        b4 = tg4 >= nx4
+        if b4:
+            nx4 = tg4 + k
+        nm4 = pg4.update(tg4, {"raw_rms": 0.10, "raw_bass": 0.05, "raw_mid": 0.03, "raw_high": 0.02}, b4, "idle", 128.0)
+        if tg4 > 10.0 and nm4 in ("silence", "ambient"):
+            idle4 += 1
+        tg4 += 0.05
+    check(idle4 == 0, "phases (#255): un groove (kicks, 0,10) n'entre jamais en ambiance, meme a reactivite 4", str(idle4))
+    from core import params_schema as _ps255
+    sp255 = _ps255.BY_KEY.get("calm_react")
+    check(sp255 is not None and (sp255.default, sp255.lo, sp255.hi) == (1.0, 0.25, 4.0) and sp255.scope == "device" and sp255.keep,
+          "phases (#255): reglage calm_react (0,25..4, defaut 1), d'appareil et sauve comme la sensibilite du kick")
 
 
 def check_remote_auth() -> None:
