@@ -690,6 +690,25 @@ def check_gui() -> None:
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
+            # front de la vague du pavage (#249) : lignes presentes, grisees selon la texture et la forme
+            front_labels = ("Front de la vague", "Direction du front", "Courbure du front", "Irregularite du front", "Origine du front")
+            sto_states = lambda lb: {str(x.cget("state")) for w in gg.row_of_label(c["sto_box"], lb, panels=False) for x in gg.leaves(w)
+                                     if x.winfo_class() in ("Scale", "Entry", "Radiobutton")}
+            out["front_rows"] = {lb: bool(gg.row_of_label(c["sto_box"], lb, panels=False)) for lb in front_labels}
+            front_seen = {}
+            c["synced"]["bg_sto_field"].set("noise")
+            for key, tex, shape, origin in (("none", "none", "straight", "center"), ("straight", "tiling", "straight", "center"), ("arc", "tiling", "arc", "center"),
+                                            ("org_c", "tiling", "organic", "center"), ("org_s", "tiling", "organic", "side")):
+                c["synced"]["bg_sto_tex"].set(tex)
+                c["synced"]["bg_sto_front"].set(shape)
+                c["synced"]["bg_sto_front_origin"].set(origin)
+                root.update_idletasks()
+                front_seen[key] = {lb: sto_states(lb) for lb in front_labels}
+            out["front_states"] = front_seen
+            out["front_angle_tiling"] = row_states("Angle du degrade")             # le front n'utilise plus l'angle du degrade
+            c["synced"]["bg_sto_tex"].set("none")
+            c["synced"]["bg_sto_front"].set("straight")
+            c["synced"]["bg_sto_front_origin"].set("center")
             c["synced"]["bg_sto_field"].set("noise")
             for w in gg.leaves(c["sto_box"]):
                 if w.winfo_class() == "Scale" and float(w.cget("to")) == 60.0:
@@ -1713,6 +1732,13 @@ def check_gui() -> None:
           "masque RD: ses lignes sont dans la fenetre, grisees sans forme, actives avec une forme", str((out.get("rd_mask_off"), out.get("rd_mask_on"))))
     check(thumb[0] == 1 and thumb[1] >= 96 and thumb[2] >= 54 and thumb[3] and thumb[4] == "circles",
           "masque RD: la vignette (96 x 54) existe et se redessine quand la forme change", str(thumb))
+    fs = out.get("front_states") or {}
+    wanted = {"none": (), "straight": ("Front de la vague", "Direction du front"), "arc": ("Front de la vague", "Direction du front", "Courbure du front"),
+              "org_c": ("Front de la vague", "Irregularite du front", "Origine du front"),
+              "org_s": ("Front de la vague", "Direction du front", "Courbure du front", "Irregularite du front", "Origine du front")}
+    check(all((out.get("front_rows") or {"x": False}).values()) and fs and all(fs.get(k, {}).get(lb) == (on if lb in lbs else off) for k, lbs in wanted.items() for lb in wanted["org_s"]),
+          "front de la vague: ses lignes sont dans la fenetre, grisees sans pavage, puis selon la forme (direction, courbure, irregularite, origine)", str(fs))
+    check(out.get("front_angle_tiling") == off, "front de la vague: avec le champ bruit et le pavage, l'angle du degrade reste grise (il ne sert plus au front)", str(out.get("front_angle_tiling")))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
@@ -11568,6 +11594,13 @@ def check_randomizer() -> None:
                                                   and 4.0 <= v["bg_sto_tex_every"] <= 16.0 and v["bg_sto_tex_bars"] in ("1", "2", "4", "8")))
               for v in st_) and 0.35 <= tx_share <= 0.65,
           "fond aleatoire: texture de la tache (aucune une fois sur deux, sinon onde ou pavage) et ses reglages dans leur plage", f"part sans texture {tx_share:.2f}")
+    tl_ = [v for v in st_ if v.get("bg_sto_tex") == "tiling"]
+    seen_fronts = {v.get("bg_sto_front") for v in tl_}
+    check(len(tl_) >= 15 and seen_fronts == {"straight", "circle", "arc", "organic"}
+          and all(0 <= v["bg_sto_front_angle"] < 360 and 0.2 <= v["bg_sto_front_curve"] <= 1.0 and 0.3 <= v["bg_sto_front_rough"] <= 1.0
+                  and v["bg_sto_front_origin"] in ("center", "side") for v in tl_)
+          and not any("bg_sto_front" in v for v in st_ if v.get("bg_sto_tex") != "tiling"),
+          "fond aleatoire: le front de la vague (forme, direction, courbure, irregularite, origine) n'est tire qu'avec le pavage, dans ses plages", f"{len(tl_)} tirages, formes {sorted(seen_fronts)}")
     lv_share = sum(1 for v in st_ if v.get("bg_sto_levels") == "continuous") / max(len(st_), 1)
     check(all(v.get("bg_sto_levels") in ("continuous", "2", "3") for v in st_) and 0.4 <= lv_share <= 0.75,
           "fond aleatoire: paliers du stochastique (continu une fois sur deux environ, sinon 2 ou 3)", f"part continue {lv_share:.2f}")
@@ -13326,8 +13359,8 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 17 and all(k in gl.BG_KEYS for k in sto),
-          "stochastique: 17 reglages (douceur #223, bordure #219, paliers #222 et texture #220 compris), tous du fond (presets de fond, scenes)")
+    check(len(sto) == 22 and all(k in gl.BG_KEYS for k in sto),
+          "stochastique: 22 reglages (douceur #223, bordure #219, paliers #222, texture #220 et front de la vague #249 compris), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")

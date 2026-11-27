@@ -1517,12 +1517,18 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     sto_field_var = synced["bg_sto_field"]
     gates.add(pal_rows("Couleurs 1 / 2"), lambda: palette_var.get() in ("duo", "stochastique"))
     sto_tex_var, sto_sync_var = synced["bg_sto_tex"], synced["bg_sto_tex_sync"]
-    gates.add(pal_rows("Angle du degrade"),             # stochastique : direction des vagues, du degrade et du pavage (le bruit seul n'en a pas)
-              lambda: palette_var.get() == "duo" or (palette_var.get() == "stochastique" and (sto_field_var.get() != "noise" or sto_tex_var.get() == "tiling")))
+    gates.add(pal_rows("Angle du degrade"),             # stochastique : direction des vagues et du degrade (le bruit seul n'en a pas ; le front du pavage a la sienne, #249)
+              lambda: palette_var.get() == "duo" or (palette_var.get() == "stochastique" and sto_field_var.get() != "noise"))
     sto_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(sto_box, lb, panels=False)]     # lignes du bloc stochastique (sa propre grille)
     gates.add(sto_rows("Finesse de la texture", "Contraste de la texture"), lambda: sto_tex_var.get() != "none")        # texture de la tache (#220)
     gates.add(sto_rows("Intervalle des vagues"), lambda: sto_tex_var.get() == "tiling" and not sto_sync_var.get())
     gates.add(sto_rows("Mesures entre vagues"), lambda: sto_tex_var.get() == "tiling" and bool(sto_sync_var.get()))
+    sto_front_var, sto_origin_var = synced["bg_sto_front"], synced["bg_sto_front_origin"]                # front de la vague du pavage (#249)
+    front_side = lambda: sto_front_var.get() == "arc" or (sto_front_var.get() == "organic" and sto_origin_var.get() == "side")
+    gates.add(sto_rows("Front de la vague"), lambda: sto_tex_var.get() == "tiling")
+    gates.add(sto_rows("Direction du front"), lambda: sto_tex_var.get() == "tiling" and (sto_front_var.get() == "straight" or front_side()))
+    gates.add(sto_rows("Courbure du front"), lambda: sto_tex_var.get() == "tiling" and front_side())
+    gates.add(sto_rows("Irregularite du front", "Origine du front"), lambda: sto_tex_var.get() == "tiling" and sto_front_var.get() == "organic")
     gates.add(pal_rows("Teinte", "Vitesse", "Reaction a l'audio"), lambda: palette_var.get() != "test")
     gates.add(pal_rows("Taille des carreaux", "Contraste du damier", "Cadence du damier"), lambda: palette_var.get() in ("classic", "duo"))
     rd_sym_var = synced["bg_rd_sym"]
@@ -1534,7 +1540,7 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     text_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(text_box, lb, panels=False)]
     gates.add(text_rows("Duree du balayage", "Periode", "Fondu d'une lettre"), lambda: gui_logo_ctl.ola_var.get() == 1)           # vague et remplissage (#199)
     gates.add(text_rows("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Ligne du front", "Scintillement", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
-    for var in (holo_var, melt_var, cell_var, palette_var, sto_field_var, sto_tex_var, sto_sync_var, rd_sym_var, rd_mask_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
+    for var in (holo_var, melt_var, cell_var, palette_var, sto_field_var, sto_tex_var, sto_sync_var, sto_front_var, sto_origin_var, rd_sym_var, rd_mask_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 

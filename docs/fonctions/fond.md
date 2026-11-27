@@ -84,10 +84,22 @@ les basses).
   d'espacement 12 px x `bg_sto_tex_scale` (pour 720 px de haut), cisaillees par un sinus continu (jamais de recouvrement) ; `core.stotex.wave_params` : basses =
   amplitude, aigus = frequence, mediums = vitesse de la phase (integree : `_sto_phase`), kick = epaisseur, `bg_react` = 0 : lignes droites. **Pavage** : la tuile
   de Gray-Scott du remplissage du texte (`Renderer.text_tile`, **partagee**, meme cache disque ; tant qu'elle n'est pas prete : aplat) lue deux fois, vague
-  courante et precedente (decalages `core.stotex.epoch_offset`), front le long de `bg_angle` (`sweep_tau`, `front_times`) : derriere le front le motif pousse
+  courante et precedente (decalages `core.stotex.epoch_offset`), front de forme reglable (voir **Front de la vague** plus bas ; `sweep_tau`, `front_times`) : derriere le front le motif pousse
   (formule de `textfx.fill_reveal`), devant lui l'ancien reste puis est efface. `core.stotex.SweepClock` : une vague toutes les `bg_sto_tex_every` s, ou toutes
   les `bg_sto_tex_bars` mesures sur le temps 1 (`DownbeatGate`, `since_down`) avec `bg_sto_tex_sync`, repli en secondes sans temps 1 connu et garde-fou en
-  silence (`max(4 x mesures, 8)` s). Unites de texture : la tuile (ou une texture vide) sur l'**unite 5** de la passe de scene. Cout : un masque par pixel
+  silence (`max(4 x mesures, 8)` s). **Front de la vague** (issue #249 ; spec et plan : `docs/plans/2026-11-27-front-onde-249-*.md`) : avant, le front
+  suivait `bg_angle` (« Angle du degrade »), dont l'automatisation est active par defaut (sinus 53 s, 20 a 160 degres) : il pivotait tout seul. Il a
+  maintenant ses reglages (`bg_sto_front` droit / cercle / arc / organique, `_angle` direction 0 = de la gauche, `_curve`, `_rough`, `_origin`
+  centre / cote), **aucune automatisation** ; `bg_angle` ne sert plus qu'au degrade et au champ. Seule la facon de calculer `pos` (0 depart, 1 arrivee) change,
+  `tau = age - pos x duree` et toute la synchro (BPM, mesures, croissance) sont intacts. `core.stotex.front_pos` (replique de `scene.frag`, uniforms
+  par `front_uniforms`) : **droit** = projection d'avant ; **cercle** = distance au centre (unites isotropes, hauteur = 1), normalisee sur les quatre coins ;
+  **arc** = distance a un point hors cadre du cote d'ou vient la vague, a `1 / (1/40 + courbure x 39/40)` demi-etendues du centre (courbure 0 = presque droit,
+  1 = origine au bord) ; **organique** = cercle (origine centre) ou arc (origine cote) + `rough x 0,25 x (2 n - 1)`, n = bruit de valeur a deux octaves
+  (cellule 0,35, hachage de `core.reaction._zhash`), decale par epoque (`epoch_offset` x 37 : un autre bord a chaque vague, fixe pendant la vague). Les
+  anneaux restent ronds a l'ecran quel que soit le cadre. **Compatibilite** : defaut `straight`, direction 0 ; une scene enregistree avec un autre
+  angle de degrade voit son front partir de la gauche. Verifie en pixels pendant la PREMIERE vague (seul ce que le front a traverse est eclairci :
+  `check_bg_stochastic_tex`). GUI : lignes « Front de la vague », « Direction du front », « Courbure », « Irregularite », « Origine » (grisees selon la forme,
+  `sto_box`) ; « Angle du degrade » n'est plus actif pour le pavage seul. Randomizer : tire avec le pavage, apres le reste. Unites de texture : la tuile (ou une texture vide) sur l'**unite 5** de la passe de scene. Cout : un masque par pixel
   couvert (onde : un `sin` ; pavage : deux lectures de tuile) ; le Randomizer tire aucune une fois sur deux) ; `bg_hue` et `bg_speed`
   s'appliquent, pas le damier (grise par `gui_gates`). **Son** (`u_sto_au`, niveaux du fond `bg_au` x `bg_react`) : basses = densite + taille,
   kick = coup de contraste du champ + quart d'onde des vagues par kick, aigus = scintillement (`Renderer._sto_flick`, phase integree : chaque point
