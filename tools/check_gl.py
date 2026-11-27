@@ -13261,18 +13261,19 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 17 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 24 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
           and d["bg_rd_spawn"] == 1.0 and d["bg_rd_bud"] == 0.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
           and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0 and d["bg_rd_smooth"] == 0.5,
-          "labyrinthe: 17 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+          "labyrinthe: 24 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions, masque d'expansion), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
     sp = gl.coerce_params({"bg_rd_spawn": 3, "bg_rd_bud": -2})
     check(sp["bg_rd_spawn"] == 1.0 and sp["bg_rd_bud"] == 0.0, "labyrinthe: apparitions et bourgeons bornes 0..1", str((sp["bg_rd_spawn"], sp["bg_rd_bud"])))
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
-    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud")
+    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud",
+              "bg_rd_mask", "bg_rd_mask_count", "bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_invert", "bg_rd_mask_drift")
     old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
     for k in new_rd:
         old_scene.get("fond", {}).pop(k, None)
