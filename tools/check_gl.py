@@ -14311,6 +14311,80 @@ def check_bg_stochastic_tex() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_front_pure() -> None:
+    """Front de la vague du pavage (#249), partie pure : formes droit / cercle / arc / organique, direction, courbure, irregularite, reglages."""
+    print("Stochastique : front de la vague (formules pures)")
+    import math
+    from core import automation as au_
+    try:
+        from core import stotex as st
+    except ImportError as exc:
+        check(False, "front: core/stotex.py", str(exc))
+        return
+    if not hasattr(st, "front_pos"):
+        check(False, "front: core.stotex.front_pos existe")
+        return
+    A = 16 / 9
+
+    def pos(shape, x, y, angle=0.0, curve=0.5, rough=0.0, origin="center", epoch=0, aspect=A):
+        return st.front_pos(shape, origin, angle, curve, rough, epoch, x, y, aspect)
+
+    pts = [((i + 0.5) / 32.0, (j + 0.5) / 18.0) for j in range(18) for i in range(32)]
+    check(st.FRONT_SHAPES == ("straight", "circle", "arc", "organic") and st.FRONT_ORIGINS == ("center", "side"), "front: formes droit / cercle / arc / organique, origines centre / cote")
+    # ---- droit : la formule d'avant (projection sur la direction, en coordonnees de l'image)
+    def old(x, y, deg):
+        a = math.radians(deg)
+        dx, dy = math.cos(a), math.sin(a)
+        return min(max(((x - 0.5) * dx + (y - 0.5) * dy) / max(0.5 * (abs(dx) + abs(dy)), 0.001) * 0.5 + 0.5, 0.0), 1.0)
+
+    check(all(abs(pos("straight", x, y, ang) - old(x, y, ang)) < 1e-9 for x, y in pts[::7] for ang in (0.0, 37.0, 90.0, 200.0)),
+          "front: droit = la formule d'avant (projection sur la direction)")
+    # ---- cercle : distance au centre, 0 au centre, 1 au coin, independant de la direction
+    check(pos("circle", 0.5, 0.5) < 1e-9 and abs(pos("circle", 1.0, 1.0) - 1.0) < 1e-9 and abs(pos("circle", 0.0, 0.0) - 1.0) < 1e-9,
+          "front: cercle = 0 au centre, 1 aux coins")
+    check(all(abs(pos("circle", x, y, 0.0) - pos("circle", x, y, 123.0)) < 1e-12 for x, y in pts[::9]), "front: le cercle ne depend pas de la direction")
+    ring = [pos("circle", 0.5 + 0.2 * math.cos(t) / A, 0.5 + 0.2 * math.sin(t)) for t in (i * 0.4 for i in range(16))]
+    check(max(ring) - min(ring) < 1e-9, "front: les anneaux du cercle sont ronds a l'ecran (pas etires par le rapport largeur / hauteur)")
+    check(abs(pos("circle", 1.0, 1.0, aspect=9 / 16) - 1.0) < 1e-9 and pos("circle", 0.5, 0.5, aspect=9 / 16) < 1e-9, "front: cercle sur un cadre vertical")
+    # ---- arc : vient du cote oppose a la direction, courbe selon la courbure
+    check(pos("arc", 0.02, 0.5, 0.0) < pos("arc", 0.5, 0.5, 0.0) < pos("arc", 0.98, 0.5, 0.0) and pos("arc", 0.02, 0.5, 180.0) > pos("arc", 0.98, 0.5, 180.0),
+          "front: angle 0 = la vague vient de la gauche, 180 = de la droite")
+    check(pos("arc", 0.5, 0.02, 90.0) < pos("arc", 0.5, 0.98, 90.0) and pos("arc", 0.5, 0.02, 270.0) > pos("arc", 0.5, 0.98, 270.0),
+          "front: angle 90 = la vague vient du haut, 270 = du bas")
+    lo, hi = min(pos("arc", x, y, 0.0, 0.5) for x, y in pts), max(pos("arc", x, y, 0.0, 0.5) for x, y in pts)
+    check(lo < 0.03 and hi > 0.97, "front: l'arc couvre tout 0..1 sur l'image", f"{lo:.3f} .. {hi:.3f}")
+    bend = lambda c: abs(pos("arc", 0.5, 0.1, 0.0, c) - pos("arc", 0.5, 0.5, 0.0, c))       # ecart le long d'une ligne verticale : 0 = front droit
+    check(bend(0.0) < 0.03 and bend(1.0) > 0.04 and bend(0.0) < bend(0.5) < bend(1.0),
+          "front: la courbure regle l'arc (0 = presque droit, 1 = tres arrondi)", f"{bend(0.0):.3f} / {bend(0.5):.3f} / {bend(1.0):.3f}")
+    check(all(0.0 <= pos("arc", x, y, ang, c) <= 1.0 for x, y in pts[::5] for ang in (0.0, 45.0, 135.0) for c in (0.0, 1.0)), "front: arc borne a 0..1")
+    # ---- organique : sans irregularite = cercle / arc exact ; avec, un bord irregulier qui change a chaque vague
+    check(all(abs(pos("organic", x, y, 30.0, 0.7, 0.0, "center") - pos("circle", x, y)) < 1e-12 and abs(pos("organic", x, y, 30.0, 0.7, 0.0, "side") - pos("arc", x, y, 30.0, 0.7)) < 1e-12
+              for x, y in pts[::9]), "front: organique sans irregularite = cercle (centre) ou arc (cote)")
+    dev = [abs(pos("organic", x, y, 0.0, 0.5, 1.0, "center") - pos("circle", x, y)) for x, y in pts]
+    check(0.03 < sum(dev) / len(dev) and max(dev) <= 0.26 and all(0.0 <= pos("organic", x, y, 0.0, 0.5, 1.0, "side") <= 1.0 for x, y in pts),
+          "front: l'irregularite deforme le bord (jusqu'a ~25 % de la course), pos reste borne", f"moyenne {sum(dev) / len(dev):.3f}, max {max(dev):.3f}")
+    d2 = [abs(pos("organic", x, y, 0.0, 0.5, 1.0, "center", 0) - pos("organic", x, y, 0.0, 0.5, 1.0, "center", 1)) for x, y in pts]
+    check(sum(d2) / len(d2) > 0.03 and pos("organic", 0.3, 0.4, 0.0, 0.5, 1.0, "center", 5) == pos("organic", 0.3, 0.4, 0.0, 0.5, 1.0, "center", 5),
+          "front: le bruit change a chaque vague (epoque) et reste le meme pendant une vague")
+    cont = max(abs(pos("organic", 0.40, 0.4, 0.0, 0.5, 1.0) - pos("organic", 0.405, 0.4, 0.0, 0.5, 1.0)), 0.0)
+    check(cont < 0.02, "front: le bord organique est continu (pas de marche)", f"{cont:.4f}")
+    # ---- uniformes pour le shader
+    un = st.front_uniforms("organic", "side", 40.0, 0.6, 0.5, 3, A)
+    un0 = st.front_uniforms("straight", "center", 40.0, 0.6, 0.5, 3, A)
+    check(len(un) == 3 and un0[0][0] == 0.0 and un[0][0] == 2.0 and abs(un0[2][0] - math.cos(math.radians(40.0))) < 1e-9
+          and st.front_uniforms("circle", "side", 0.0, 0.5, 0.5, 0, A)[0][0] == 1.0, "front: uniformes (mode 0 droit, 1 radial, 2 organique ; direction)")
+    # ---- reglages
+    import audio2wave_gl as gl_
+    d = gl_.DEFAULT_PARAMS
+    keys = ("bg_sto_front", "bg_sto_front_angle", "bg_sto_front_curve", "bg_sto_front_rough", "bg_sto_front_origin")
+    check(d["bg_sto_front"] == "straight" and d["bg_sto_front_angle"] == 0.0 and d["bg_sto_front_curve"] == 0.5 and d["bg_sto_front_rough"] == 0.5
+          and d["bg_sto_front_origin"] == "center" and all(k in gl_.BG_KEYS for k in keys), "front: 5 reglages du fond (presets, scenes), droit par defaut")
+    cp = gl_.coerce_params({"bg_sto_front": "x", "bg_sto_front_angle": 999, "bg_sto_front_curve": 3, "bg_sto_front_rough": -1, "bg_sto_front_origin": "y"})
+    check(cp["bg_sto_front"] == "straight" and cp["bg_sto_front_angle"] == 360.0 and cp["bg_sto_front_curve"] == 1.0 and cp["bg_sto_front_rough"] == 0.0
+          and cp["bg_sto_front_origin"] == "center", "front: valeurs hors plage ramenees (forme et origine inconnues = defauts)")
+    check(not any(k in au_.AUTOMATION_SPECS for k in keys), "front: aucune automatisation (l'angle du front ne tourne plus tout seul)")
+
+
 def check_stotex() -> None:
     """Stochastique, texture interieure (#220), calendrier pur : vague du pavage (secondes ou mesures), parametres de l'onde, table des reglages."""
     print("Stochastique : texture interieure (calendrier pur)")
@@ -17356,12 +17430,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",

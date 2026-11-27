@@ -244,6 +244,13 @@ TABLE: tuple[Param, ...] = (
     _p("bg_sto_tex_every", 8.0, 2.0, 30.0, scope="bg", doc="Palette stochastique : secondes entre deux vagues du pavage."),
     _p("bg_sto_tex_sync", 0.0, 0.0, 1.0, scope="bg", doc="Palette stochastique : 1 = la vague du pavage repart toutes les N mesures, sur le temps 1."),
     _p("bg_sto_tex_bars", "4", choices=("1", "2", "4", "8"), scope="bg", doc="Palette stochastique : mesures entre deux vagues du pavage (calage sur la mesure)."),
+    # front de la vague du pavage (#249, core/stotex.py : front_pos) : forme et direction propres (le front ne suit plus l'angle du degrade)
+    _p("bg_sto_front", "straight", choices=("straight", "circle", "arc", "organic"), scope="bg",
+       doc="Palette stochastique : forme du front de la vague du pavage (droit, cercle qui grandit du centre, arc venu d'un cote, organique)."),
+    _p("bg_sto_front_angle", 0.0, 0.0, 360.0, scope="bg", doc="Palette stochastique : direction d'ou vient la vague (droit, arc, organique d'origine cote), en degres."),
+    _p("bg_sto_front_curve", 0.5, 0.0, 1.0, scope="bg", doc="Palette stochastique : courbure de l'arc du front (0 = presque droit, 1 = tres arrondi)."),
+    _p("bg_sto_front_rough", 0.5, 0.0, 1.0, scope="bg", doc="Palette stochastique : irregularite du front organique (0 = cercle ou arc net)."),
+    _p("bg_sto_front_origin", "center", choices=("center", "side"), scope="bg", doc="Palette stochastique : origine du front organique (centre ou cote)."),
     _p("bg_rd_shape", 0.6, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : 0 = taches qui se repoussent, 1 = lignes sinueuses (labyrinthe)."),
     _p("bg_rd_scale", 1.0, 0.3, 2.0, scope="bg", doc="Palette labyrinthe : taille du motif (plus grand = lignes et taches plus epaisses)."),
     _p("bg_rd_offset", 0.012, 0.0, 0.05, scope="bg", doc="Palette labyrinthe : ecart entre les trois couches colorees (fraction de la hauteur)."),
