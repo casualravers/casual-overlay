@@ -62,12 +62,32 @@ VOID_EDGE = 0.1                 # demi-largeur de la transition (bords progressi
 DENSE_THR = 0.5                 # sous ce niveau de bruit, zone dense, x Vide (mesure : ~13 % de l'image strictement dense)
 DENSE_PULL = 0.9                # part de la forme tiree vers les taches dans une zone dense, a Vide = 1
 VOID_SPEED = 0.7                # vitesse de derive des vides par rapport a celle des formes
+# Masque d'expansion (#178) : une carte 0..1 (1 = la matiere vit, 0 = eteinte, bord progressif) qui limite ou le motif a le droit d'exister.
+# Meme mecanisme que le Vide (rd_zone.frag : (F, K) glisse vers VOID_FK la ou la carte est basse), formules repliquees en GLSL.
+MASK_SHAPES = ("none", "circles", "bands", "gradient", "noise")
+MASK_SPEED = 0.05               # cycles de derive des zones par seconde a bg_rd_mask_drift = 1 (une zone qui bouge plus vite que le motif ne se remplit pas)
+MASK_EDGE_MIN, MASK_EDGE_SOFT = 0.01, 0.4    # demi-largeur du bord (unites de maille ; unites de valeur pour le degrade) : mini, x douceur
+MASK_NOISE_EDGE_MIN, MASK_NOISE_EDGE_SOFT = 0.01, 0.15
+MASK_SALT = 11.0                # decalage des indices de cellule du bruit du masque (hache(0, 0) = 0 : un reseau de 1 cellule serait plat)
+MASK_NOISE_CENTER = 0.6         # seuil du bruit a taille 0,5 (calibre sur 40 positions de derive a 3 zones : environ la moitie de l'image)
+MASK_NOISE_SPREAD = 0.5       # seuil du bruit = 0,5 + (taille - 0,5) x ceci (la part vivante suit a peu pres `taille`)
 
 
 def feed_kill(shape: float) -> tuple[float, float]:
     """(F, K) du modele : 0 = taches, 1 = labyrinthe, interpolation lineaire (forme bornee a 0..1)."""
     s = min(max(float(shape), 0.0), 1.0)
     return (SPOTS[0] + (MAZE[0] - SPOTS[0]) * s, SPOTS[1] + (MAZE[1] - SPOTS[1]) * s) if 0.0 < s < 1.0 else (SPOTS if s == 0.0 else MAZE)
+
+
+class Mask(NamedTuple):
+    """Masque d'expansion (forme none = aucune limite) pour un pas de simulation ; `t` = temps de derive integre (cycles)."""
+    shape: str = "none"         # MASK_SHAPES
+    count: float = 3.0          # nombre de zones (cellules / bandes / periodes / finesse du bruit)
+    size: float = 0.5           # part de l'image ou la matiere vit
+    angle: float = 0.0          # rotation de la disposition (degres)
+    soft: float = 0.4           # douceur des bords 0..1
+    invert: bool = False        # la matiere vit hors de la forme
+    t: float = 0.0              # derive integree
 
 
 class Zone(NamedTuple):
@@ -79,6 +99,7 @@ class Zone(NamedTuple):
     free: float = 0.0           # liberte de la symetrie
     aspect: float = 16 / 9      # largeur / hauteur de la grille (rotations rondes a l'ecran)
     void: float = 0.0           # zones vides (et denses) : 0 = tout est rempli comme avant
+    mask: Mask = Mask()         # masque d'expansion (#178) : aucun par defaut
 
 
 def shape_feed_kill(s: float) -> tuple[float, float]:
@@ -96,6 +117,98 @@ def void_threshold(void: float) -> float:
     """Seuil du bruit des vides : decroit de VOID_THR_OFF (aucun vide) a VOID_THR_FULL ; `void` borne a 0..1."""
     v = min(max(float(void), 0.0), 1.0)
     return VOID_THR_OFF + (VOID_THR_FULL - VOID_THR_OFF) * v
+
+
+def _zhash(cx: float, cy: float) -> float:
+    """Replique de zhash (rd_zone.frag) : hachage sans sin d'une cellule."""
+    p = [(v * 0.1031) % 1.0 for v in (cx, cy, cx)]
+    d = p[0] * (p[1] + 33.33) + p[1] * (p[2] + 33.33) + p[2] * (p[0] + 33.33)
+    p = [v + d for v in p]
+    return ((p[0] + p[1]) * p[2]) % 1.0
+
+
+def _pnoise(qx: float, qy: float, cx: float, cy: float, salt: float = 0.0) -> float:
+    """Replique de pnoise : bruit de valeur periodique (indices modulo la maille)."""
+    ix, iy = math.floor(qx), math.floor(qy)
+    fx, fy = qx - ix, qy - iy
+    fx, fy = fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy)
+    x0, x1, y0, y1 = ix % cx + salt, (ix + 1) % cx + salt, iy % cy + salt, (iy + 1) % cy + salt   # salt : la cellule (0, 0) ne hache plus a 0
+    a = _zhash(x0, y0) + (_zhash(x1, y0) - _zhash(x0, y0)) * fx
+    b = _zhash(x0, y1) + (_zhash(x1, y1) - _zhash(x0, y1)) * fx
+    return a + (b - a) * fy
+
+
+def _fold(x: float, y: float, sym: str, branches: int, aspect: float) -> tuple[float, float]:
+    """Replique de fold (rd_zone.frag) : coordonnees repliees par la symetrie de colonisation."""
+    if sym in ("mirror_lr", "quad"):
+        x = 0.5 - abs(x - 0.5)
+    if sym in ("mirror_tb", "quad"):
+        y = 0.5 - abs(y - 0.5)
+    if sym == "rot":
+        dx, dy = (x - 0.5) * aspect, y - 0.5
+        sector = 2.0 * math.pi / max(int(branches), 2)
+        a = math.atan2(dy, dx) % sector
+        a = min(a, sector - a)
+        r = math.hypot(dx, dy)
+        x, y = 0.5 + r * math.cos(a) / aspect, 0.5 + r * math.sin(a)
+    return x, y
+
+
+def mask_cells(count: float) -> tuple[int, int]:
+    """Reseau periodique du bruit du masque : 3 zones = VOID_CELLS (3 x 2), 1 -> (2, 2) (un reseau d'une cellule serait plat), 8 -> (8, 5)."""
+    c = min(max(float(count), 1.0), 8.0)
+    return max(2, round(c)), max(2, round(c * 2.0 / 3.0))
+
+
+def mask_uniforms(mask: Mask) -> list[tuple[str, object]]:
+    """Uniforms de rd_zone.frag pour le masque (la meme preparation que mask_value : le shader ne refait que la geometrie)."""
+    shape = MASK_SHAPES.index(mask.shape) if mask.shape in MASK_SHAPES else 0
+    count = min(max(float(mask.count), 1.0), 8.0)
+    size = min(max(float(mask.size), 0.0), 1.0)
+    soft = min(max(float(mask.soft), 0.0), 1.0)
+    a = math.radians(mask.angle)
+    noise = mask.shape == "noise"
+    edge = (MASK_NOISE_EDGE_MIN + MASK_NOISE_EDGE_SOFT * soft) if noise else (MASK_EDGE_MIN + MASK_EDGE_SOFT * soft)
+    return [("u_mask", shape), ("u_mask_count", count), ("u_mask_size", size), ("u_mask_rot", (math.cos(a), math.sin(a))), ("u_mask_edge", edge),
+            ("u_mask_r", min(math.sqrt(size / math.pi), 0.5)), ("u_mask_thr", MASK_NOISE_CENTER + (size - 0.5) * MASK_NOISE_SPREAD),
+            ("u_mask_cells", tuple(float(c) for c in mask_cells(count))), ("u_mask_invert", int(bool(mask.invert))), ("u_mask_t", float(mask.t)),
+            ("u_mask_salt", MASK_SALT)]
+
+
+def mask_value(mask: Mask, x: float, y: float, aspect: float, sym: str = "none", branches: int = 4) -> float:
+    """Masque d'expansion au point (x, y) de l'image (0..1, y vers le haut comme `v_uv` du shader) : 1 = la matiere vit, 0 = eteinte,
+    bord progressif. `none` = 1. Replique de rd_zone.frag (qui en tire la part eteinte, 1 - ceci)."""
+    if mask.shape not in MASK_SHAPES[1:]:
+        return 1.0
+    x, y = _fold(x, y, sym, branches, aspect)
+    px, py = (x - 0.5) * aspect, y - 0.5                     # repere isotrope centre (hauteur = 1)
+    a = math.radians(mask.angle)
+    ca, sa = math.cos(a), math.sin(a)
+    rx, ry = px * ca + py * sa, -px * sa + py * ca
+    count = min(max(float(mask.count), 1.0), 8.0)
+    size = min(max(float(mask.size), 0.0), 1.0)
+    soft = min(max(float(mask.soft), 0.0), 1.0)
+    if mask.shape == "noise":
+        cx, cy = mask_cells(count)
+        ux, uy = rx / aspect + 0.5, ry + 0.5                # retour en coordonnees de l'image (cellules du Vide a 3 zones)
+        qx, qy = ux * cx + mask.t + 3.1, uy * cy - 0.6 * mask.t + 1.3
+        n = 0.7 * _pnoise(qx, qy, cx, cy, MASK_SALT) + 0.3 * _pnoise(qx * 2.0 + 1.7, qy * 2.0 + 1.7, cx * 2.0, cy * 2.0, MASK_SALT)
+        f = (MASK_NOISE_CENTER + (size - 0.5) * MASK_NOISE_SPREAD) - n
+        e = MASK_NOISE_EDGE_MIN + MASK_NOISE_EDGE_SOFT * soft
+    else:
+        qx, qy = rx * count + mask.t, ry * count + 0.6 * mask.t   # unites de maille ; bandes de periode 1 (t = 1 boucle), cercles a t = 5
+        fx, fy = qx - math.floor(qx), qy - math.floor(qy)
+        e = MASK_EDGE_MIN + MASK_EDGE_SOFT * soft
+        if mask.shape == "circles":
+            r = min(math.sqrt(size / math.pi), 0.5)
+            f = r - math.hypot(fx - 0.5, fy - 0.5)
+        elif mask.shape == "bands":
+            f = size * 0.5 - abs(fx - 0.5)
+        else:                                                # gradient : rampe triangulaire
+            f = size - abs(fx * 2.0 - 1.0)
+    t = min(max((f + e) / (2.0 * e), 0.0), 1.0)
+    m = t * t * (3.0 - 2.0 * t)
+    return 1.0 - m if mask.invert else m
 
 
 def orbit_size(sym: str, branches: int) -> int:

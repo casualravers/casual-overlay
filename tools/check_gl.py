@@ -672,6 +672,21 @@ def check_gui() -> None:
             out["rd_branch_rot"] = rd_states("Branches")
             out["rd_sym_written"] = params["bg_rd_sym"]
             c["synced"]["bg_rd_sym"].set("none")
+            # masque d'expansion (#178) : curseurs grises sans forme, vignette 96 x 54 qui se redessine avec la forme
+            mask_labels = ("Apercu du masque", "Zones du masque", "Taille du masque", "Angle du masque", "Douceur du masque", "Derive du masque")
+            out["rd_mask_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False)) for lb in mask_labels}
+            c["synced"]["bg_rd_mask"].set("none")
+            root.update_idletasks()
+            out["rd_mask_off"] = {lb: rd_states(lb) for lb in mask_labels[1:]}
+            thumbs = [w for w in _walk(c["rd_box"]) if w.winfo_class() == "Label" and str(w.cget("image"))]
+            img_none = str(thumbs[0].cget("image")) if thumbs else ""
+            c["synced"]["bg_rd_mask"].set("circles")
+            root.update_idletasks()
+            out["rd_mask_on"] = {lb: rd_states(lb) for lb in mask_labels[1:]}
+            thumbs = [w for w in _walk(c["rd_box"]) if w.winfo_class() == "Label" and str(w.cget("image"))]
+            out["rd_mask_thumb"] = (len(thumbs), thumbs[0].winfo_reqwidth() if thumbs else 0, thumbs[0].winfo_reqheight() if thumbs else 0,
+                                    str(thumbs[0].cget("image")) != img_none if thumbs else False, params["bg_rd_mask"])
+            c["synced"]["bg_rd_mask"].set("none")
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
@@ -1692,6 +1707,12 @@ def check_gui() -> None:
           and all(v == on for v in (out.get("rd_others_none") or {"x": off}).values()),
           "palette labyrinthe: Branches grise hors rotation, et lui seul (variete, symetrie, forme restent actives)",
           str((out.get("rd_branch_mirror"), out.get("rd_branch_rot"), out.get("rd_others_none"))))
+    thumb = out.get("rd_mask_thumb") or (0, 0, 0, False, "")
+    check(all((out.get("rd_mask_rows") or {"x": False}).values()) and all(v == off for v in (out.get("rd_mask_off") or {"x": on}).values())
+          and all(v == on for v in (out.get("rd_mask_on") or {"x": off}).values()),
+          "masque RD: ses lignes sont dans la fenetre, grisees sans forme, actives avec une forme", str((out.get("rd_mask_off"), out.get("rd_mask_on"))))
+    check(thumb[0] == 1 and thumb[1] >= 96 and thumb[2] >= 54 and thumb[3] and thumb[4] == "circles",
+          "masque RD: la vignette (96 x 54) existe et se redessine quand la forme change", str(thumb))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
@@ -11173,7 +11194,7 @@ def check_automation() -> None:
         check(False, "curseur Vitesse : modules audio2wave importables", str(exc))
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
-    check(len(specs) == 30 and all(k in specs and default[k]["enabled"] for k in rd_auto)
+    check(len(specs) == 34 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178), coupees par defaut
           and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto + ("bg_rd_scale",))
           and "bg_rd_scale" in specs and not default["bg_rd_scale"]["enabled"]
           and not any(k in specs for k in ("bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
@@ -11530,6 +11551,11 @@ def check_randomizer() -> None:
     bud_share = sum(1 for v in lb if v.get("bg_rd_bud") == 1.0) / max(len(lb), 1)
     check(all(0.4 <= v.get("bg_rd_spawn", -1) <= 1.0 and v.get("bg_rd_bud") in (0.0, 1.0) for v in lb) and 0.15 <= bud_share <= 0.5,
           "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
+    mask_share = sum(1 for v in lb if v["bg_rd_mask"] != "none") / max(len(lb), 1)
+    check(all(v["bg_rd_mask"] in rc_.MASK_SHAPES and 2 <= v["bg_rd_mask_count"] <= 6 and 0.35 <= v["bg_rd_mask_size"] <= 0.8 and 0 <= v["bg_rd_mask_angle"] <= 360
+              and 0.2 <= v["bg_rd_mask_soft"] <= 0.8 and v["bg_rd_mask_invert"] in (0.0, 1.0) and 0.2 <= v["bg_rd_mask_drift"] <= 0.8 for v in lb)
+          and 0.2 <= mask_share <= 0.5 and not any("bg_rd_mask" in v for v in vals if v["bg_palette"] != "labyrinthe"),
+          "fond aleatoire: masque d'expansion du labyrinthe (une fois sur trois environ) et ses reglages dans leurs plages", f"part avec masque {mask_share:.2f}")
     st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
     from core import sto_fields as sf2
@@ -13313,18 +13339,19 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 17 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 24 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
           and d["bg_rd_spawn"] == 1.0 and d["bg_rd_bud"] == 0.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
           and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0 and d["bg_rd_smooth"] == 0.5,
-          "labyrinthe: 17 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+          "labyrinthe: 24 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions, masque d'expansion), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
     sp = gl.coerce_params({"bg_rd_spawn": 3, "bg_rd_bud": -2})
     check(sp["bg_rd_spawn"] == 1.0 and sp["bg_rd_bud"] == 0.0, "labyrinthe: apparitions et bourgeons bornes 0..1", str((sp["bg_rd_spawn"], sp["bg_rd_bud"])))
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
-    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud")
+    new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud",
+              "bg_rd_mask", "bg_rd_mask_count", "bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_invert", "bg_rd_mask_drift")
     old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
     for k in new_rd:
         old_scene.get("fond", {}).pop(k, None)
@@ -13551,6 +13578,86 @@ def check_reaction_sim() -> None:
           "garde-fou : un motif eteint est ressemee au controle suivant (graine suivante)", str((first, second, dead.seed)))
 
 
+def check_rd_mask_pure() -> None:
+    """Masque d'expansion de la reaction-diffusion (#178), partie pure : formes, taille, nombre, rotation, douceur, inversion, derive, symetrie, reglages."""
+    print("Reaction-diffusion : masque d'expansion (formules pures)")
+    from core import automation as au_
+    from core import params_schema as ps
+    try:
+        from core import reaction as rc
+    except ImportError as exc:
+        check(False, "masque RD: core/reaction.py", str(exc))
+        return
+    if not hasattr(rc, "Mask"):
+        check(False, "masque RD: core.reaction.Mask existe")
+        return
+    M = rc.Mask
+    pts =[((i + 0.5) / 96.0, (j + 0.5) / 54.0) for j in range(54) for i in range(96)]
+
+    def field(m, **kw):
+        return [rc.mask_value(m, x, y, 16 / 9, **kw) for x, y in pts]
+
+    check(rc.MASK_SHAPES == ("none", "circles", "bands", "gradient", "noise") and rc.MASK_SPEED > 0.0, "masque RD: formes none / circles / bands / gradient / noise")
+    check(all(abs(v - 1.0) < 1e-12 for v in field(M())) and all(abs(v - 1.0) < 1e-12 for v in field(M(shape="none", size=0.1, invert=True))),
+          "masque RD: 'none' = 1 partout (rien n'est limite), meme inverse")
+    for shape in ("circles", "bands", "gradient", "noise"):
+        for size in (0.3, 0.5, 0.7):
+            alive = sum(v > 0.5 for v in field(M(shape=shape, count=3.0, size=size, soft=0.2))) / len(pts)
+            check(abs(alive - size) < 0.15, f"masque RD: {shape}, taille {size} = environ {int(size * 100)} % de l'image vivante", f"{alive:.2f}")
+    big = sum(v > 0.5 for v in field(M(shape="circles", count=3.0, size=0.9, soft=0.0))) / len(pts)
+    check(0.6 < big < 0.9, "masque RD: des cercles trop gros plafonnent a la maille (~78 %), sans deborder", f"{big:.2f}")
+    a, b = field(M(shape="bands", count=3.0, size=0.4, soft=0.3)), field(M(shape="bands", count=3.0, size=0.4, soft=0.3, invert=True))
+    check(max(abs(x + y - 1.0) for x, y in zip(a, b)) < 1e-12, "masque RD: l'inversion donne exactement 1 - masque")
+    hard, soft_ = field(M(shape="circles", count=3.0, size=0.5, soft=0.0)), field(M(shape="circles", count=3.0, size=0.5, soft=1.0))
+    mid = lambda f: sum(0.05 < v < 0.95 for v in f) / len(f)
+    check(mid(hard) < 0.05 and mid(soft_) > 0.3, "masque RD: douceur 0 = bord net, douceur 1 = transition large (bords progressifs)", f"{mid(hard):.2f} / {mid(soft_):.2f}")
+    # ---- rotation : des bandes a 0 degre varient le long de x, a 90 degres le long de y
+    b0 = M(shape="bands", count=4.0, size=0.5, soft=0.2, angle=0.0)
+    b90 = M(shape="bands", count=4.0, size=0.5, soft=0.2, angle=90.0)
+    v0 = [rc.mask_value(b0, x, 0.3, 1.0) for x in (0.1, 0.3, 0.55, 0.8)]
+    v0y = [rc.mask_value(b0, 0.37, y, 1.0) for y in (0.1, 0.3, 0.55, 0.8)]
+    v90x = [rc.mask_value(b90, x, 0.37, 1.0) for x in (0.1, 0.3, 0.55, 0.8)]
+    check(max(v0y) - min(v0y) < 1e-9 and max(v0) - min(v0) > 0.5 and max(v90x) - min(v90x) < 1e-9,
+          "masque RD: la rotation tourne les bandes (verticales a 0 degre, horizontales a 90)")
+    def crossings(m):                                  # nombre de passages dedans / dehors le long d'une ligne
+        row = [rc.mask_value(m, (i + 0.5) / 400.0, 0.4, 1.0) > 0.5 for i in range(400)]
+        return sum(a_ != b_ for a_, b_ in zip(row, row[1:]))
+
+    check(crossings(M(shape="bands", count=6.0, size=0.5, soft=0.0)) >= 2.5 * crossings(M(shape="bands", count=2.0, size=0.5, soft=0.0)) - 2,
+          "masque RD: le nombre de zones regle le nombre de bandes")
+    # ---- derive : periodique sur une maille, sans saccade
+    cb0, cb1 = field(M(shape="bands", count=3.0, size=0.5, soft=0.2, t=0.0)), field(M(shape="bands", count=3.0, size=0.5, soft=0.2, t=1.0))
+    cb_half = field(M(shape="bands", count=3.0, size=0.5, soft=0.2, t=0.5))
+    check(max(abs(x - y) for x, y in zip(cb0, cb1)) < 1e-9 and sum(abs(x - y) for x, y in zip(cb0, cb_half)) / len(cb0) > 0.2,
+          "masque RD: la derive deplace les zones et revient a l'identique apres une maille")
+    cc0, cc5 = field(M(shape="circles", count=3.0, size=0.5, soft=0.2, t=0.0)), field(M(shape="circles", count=3.0, size=0.5, soft=0.2, t=5.0))
+    check(max(abs(x - y) for x, y in zip(cc0, cc5)) < 1e-9, "masque RD: les cercles aussi bouclent (decalage entier dans les deux axes)")
+    for shape in ("circles", "bands", "gradient", "noise"):
+        f0, f1 = field(M(shape=shape, count=3.0, size=0.5, soft=0.4, t=1.0)), field(M(shape=shape, count=3.0, size=0.5, soft=0.4, t=1.02))
+        check(sum(abs(x - y) for x, y in zip(f0, f1)) / len(f0) < 0.06, f"masque RD: {shape}, la derive est continue (pas de saccade entre deux instants proches)")
+    # ---- symetrie : replie comme les zones
+    sm = M(shape="noise", count=3.0, size=0.5, soft=0.3, t=2.0)
+    check(all(abs(rc.mask_value(sm, x, y, 16 / 9, sym="mirror_lr") - rc.mask_value(sm, 1.0 - x, y, 16 / 9, sym="mirror_lr")) < 1e-9 for x, y in pts[::40])
+          and all(abs(rc.mask_value(sm, x, y, 16 / 9, sym="mirror_tb") - rc.mask_value(sm, x, 1.0 - y, 16 / 9, sym="mirror_tb")) < 1e-9 for x, y in pts[::40]),
+          "masque RD: avec une symetrie le masque la respecte (miroir parfait)")
+    check(rc.Zone().mask == M() and rc.Zone(mask=M(shape="bands")).mask.shape == "bands", "masque RD: Zone porte le masque (defaut : aucun)")
+    # ---- table des reglages et automations
+    import audio2wave_gl as gl_
+    d = gl_.DEFAULT_PARAMS
+    keys = ("bg_rd_mask", "bg_rd_mask_count", "bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_invert", "bg_rd_mask_drift")
+    check(d["bg_rd_mask"] == "none" and (d["bg_rd_mask_count"], d["bg_rd_mask_size"], d["bg_rd_mask_angle"], d["bg_rd_mask_soft"], d["bg_rd_mask_invert"], d["bg_rd_mask_drift"])
+          == (3.0, 0.5, 0.0, 0.4, 0.0, 0.4) and all(k in gl_.BG_KEYS for k in keys), "masque RD: 7 reglages du fond (presets de fond, scenes), masque coupe par defaut")
+    cp = gl_.coerce_params({"bg_rd_mask": "x", "bg_rd_mask_count": 99, "bg_rd_mask_size": 5, "bg_rd_mask_soft": -1, "bg_rd_mask_drift": 9})
+    check(cp["bg_rd_mask"] == "none" and cp["bg_rd_mask_count"] == 8.0 and cp["bg_rd_mask_size"] == 0.9 and cp["bg_rd_mask_soft"] == 0.0 and cp["bg_rd_mask_drift"] == 2.0,
+          "masque RD: valeurs hors plage ramenees (forme inconnue = none)")
+    specs = au_.AUTOMATION_SPECS
+    check(all(k in specs and specs[k][5] is False for k in ("bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_drift"))
+          and "bg_rd_mask_count" not in specs and set(au_.DEFAULT_RANGES) == set(specs),
+          "masque RD: taille, angle, douceur et derive automatisables (coupes par defaut), pas le nombre ni la forme")
+    check(rc.mask_cells(3) == (3, 2) == rc.VOID_CELLS and rc.mask_cells(1) == (2, 2) and rc.mask_cells(8) == (8, 5),
+          "masque RD: le bruit du masque a la finesse du Vide pour 3 zones")
+
+
 def check_rd_zones() -> None:
     print("Reaction-diffusion : zones de formes (points, lignes, taches dans la meme image)")
     from core import reaction as rc
@@ -13630,6 +13737,75 @@ def check_rd_zones() -> None:
     k_t2 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=2.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
     k_t0 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=0.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
     check(float(np.abs(k_t2 - k_t0).mean()) > 5e-4, "vide : les zones vides derivent avec le temps")
+
+
+def check_rd_mask() -> None:
+    print("Reaction-diffusion : masque d'expansion (carte GPU, matiere dedans / absente dehors)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+    M = rc.Mask
+
+    def sim(shape, steps, zone=None, scale=1.5):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(scale)
+        r.reset(0)
+        for _ in range(max(steps // 20, 1)):
+            r.step(20, shape, zone=zone)
+        return r
+
+    def gone_of(r):                                            # part eteinte lue dans la carte (forme 1 = labyrinthe), ligne 0 = bas (comme v_uv)
+        k = np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 2)[:, :, 1]
+        return (k - rc.MAZE[1]) / (rc.VOID_FK[1] - rc.MAZE[1])
+
+    plain = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0)).read_v()
+    nomask = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0, mask=M(shape="none", size=0.2, invert=True))).read_v()
+    check(np.array_equal(plain, nomask), "masque RD: forme 'none' = simulation identique (bit pour bit, zones actives)")
+    check(np.array_equal(sim(0.6, 1000).read_v(), sim(0.6, 1000, rc.Zone(mask=M())).read_v()), "masque RD: sans masque ni zones = simulation d'origine")
+    # ---- la carte GPU concorde avec la fonction pure
+    for shape in ("circles", "bands", "gradient", "noise"):
+        mk = M(shape=shape, count=3.0, size=0.5, angle=30.0, soft=0.4, t=0.7)
+        g = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=mk)))
+        h_, w_ = g.shape
+        cpu = np.array([[rc.mask_value(mk, (i + 0.5) / w_, (j + 0.5) / h_, w_ / h_) for i in range(0, w_, 5)] for j in range(0, h_, 5)])
+        gpu = g[::5, ::5]
+        err = float(np.abs(cpu - gpu).max())
+        check(err < 0.05, f"masque RD: {shape}, la carte du GPU concorde avec la fonction pure", f"ecart max {err:.3f}")
+    # ---- avec une symetrie, la derive, l'inversion, la douceur
+    mir = gone_of(sim(1.0, 20, rc.Zone(sym="mirror_lr", mask=M(shape="noise", count=4.0, t=1.3))))
+    check(float(np.abs(mir - mir[:, ::-1]).max()) < 1e-4, "masque RD: avec une symetrie le masque de la carte la respecte")
+    a = gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="bands", t=0.0))))
+    b = gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="bands", t=0.4))))
+    check(float(np.abs(a - b).mean()) > 0.05, "masque RD: la derive deplace le masque")
+    m0 = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=0.4))))
+    m1 = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=0.4, invert=True))))
+    check(float(np.abs(m0 + m1 - 1.0).max()) < 0.02, "masque RD: l'inversion donne le complement")
+    hard = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=0.0))))
+    soft_ = 1.0 - gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="circles", soft=1.0))))
+    inter = lambda g_: float(((g_ > 0.05) & (g_ < 0.95)).mean())
+    check(inter(soft_) > 2.5 * inter(hard) and inter(soft_) > 0.3, "masque RD: douceur 1 = bords progressifs, douceur 0 = bords nets", f"{inter(hard):.2f} / {inter(soft_):.2f}")
+    # ---- cohabite avec le Vide : eteint si l'un des deux l'eteint
+    gv = gone_of(sim(1.0, 20, rc.Zone(void=1.0)))
+    gm = gone_of(sim(1.0, 20, rc.Zone(mask=M(shape="bands", size=0.5))))
+    gb = gone_of(sim(1.0, 20, rc.Zone(void=1.0, mask=M(shape="bands", size=0.5))))
+    check(float((gb - np.maximum(gv, gm)).min()) > -0.02 and gb.mean() > max(gv.mean(), gm.mean()) + 0.05,
+          "masque RD: le masque et le Vide cohabitent (la zone eteinte est leur union)", f"{gv.mean():.2f} + {gm.mean():.2f} -> {gb.mean():.2f}")
+    # ---- la matiere vit dedans, absente dehors (simulation)
+    r = sim(1.0, 5000, rc.Zone(mask=M(shape="circles", count=4.0, size=0.5, soft=0.2)))
+    v = r.read_v()[::-1]                                       # read_v : haut en premier ; la carte : bas en premier
+    g = 1.0 - gone_of(r)
+    inside, outside = g > 0.95, g < 0.05
+    vin, vout = float(v[inside].mean()), float(v[outside].mean())
+    check(inside.mean() > 0.2 and outside.mean() > 0.2 and vout < 0.02 and vin > 0.05,
+          "masque RD: la matiere est absente hors de la zone et presente dedans", f"V {vin:.3f} dedans, {vout:.3f} dehors")
+    cov = float((v > 0.25).mean())
+    check(0.03 < cov < 0.6, "masque RD: le motif reste vivant avec un masque", f"couverture {cov:.2f}")
 
 
 def check_rd_symmetry() -> None:
@@ -17180,12 +17356,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
@@ -17208,7 +17384,7 @@ ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui val
 # check_recording_render 197, check_rd_cover 98, check_kaleidoscope_frame 65, check_native_modes 42, check_drop_render 41, check_holo 32 ; le reste, moins de 30 chacune.
 GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
-    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
+    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     # ~8 min : le rendu des effets, du logo et des modes
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_holo_contour", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
     # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels

@@ -5,6 +5,7 @@ arrivent par le contexte `c` (`install(c)`), ceux que le reste de la fenetre uti
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from tkinter import filedialog
 import audio2wave_gl as gl
@@ -12,7 +13,10 @@ import tkinter as tk
 
 import skin
 import theme as T
-from core import sto_fields
+from core import reaction, sto_fields
+
+MASK_PREVIEW = (32, 18)                                  # vignette du masque (#178) : echantillons, agrandis MASK_ZOOM fois (96 x 54 pixels)
+MASK_ZOOM = 3
 
 ICON_ROOT = Path(__file__).resolve().parent.parent      # racine du depot ou du dossier portable (asset/ y est copie)
 STO_MENU_PX = 168                                        # largeur fixe de la liste « Champ » avec vignettes (pixels)
@@ -205,6 +209,62 @@ def install(c):
                 tooltip="Symetrie de la croissance. Changer ce reglage relance le motif.")
     param_slider(rz, "Branches", "bg_rd_branches", 2, 8, 1, "Nombre de branches (actif avec Symetrie = Rotation).")
     param_slider(rz, "Liberte", "bg_rd_free", 0.0, 1.0, 0.05, "0 = symetrie stricte, 1 = motif libre.")
+    # masque d'expansion (#178) : limite ou la matiere vit ; vignette calculee ici par la meme fonction pure que le shader
+    mask_shape_var = param_radio(rz, "Masque", "bg_rd_mask", (("Aucun", "none"), ("Cercles", "circles"), ("Bandes", "bands"), ("Degrade", "gradient"), ("Bruit", "noise")),
+                tooltip="Zone ou le motif a le droit de vivre : il se revele dans des formes qui derivent. Les bords s'amincissent avant de disparaitre.")
+    mask_row = rz.next_row()
+    add_label(rz, "Apercu du masque", mask_row, "Blanc = la matiere vit, noir = eteinte. Suit les curseurs et la derive de la projection.")
+    mask_frame = tk.Frame(rd_box)
+    mask_frame.grid(row=mask_row, column=rz.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    mask_img = tk.Label(mask_frame, width=MASK_PREVIEW[0] * MASK_ZOOM, height=MASK_PREVIEW[1] * MASK_ZOOM, bd=1, relief="sunken", bg="#000000")
+    mask_img.pack(side="left")                                       # width / height en pixels une fois l'image posee (garde la place vide)
+    rd_mask_inv_var = tk.IntVar(value=int(float(params["bg_rd_mask_invert"]) >= 0.5))
+    bind_param("bg_rd_mask_invert", rd_mask_inv_var, float)
+    tk.Checkbutton(mask_frame, text="Inverser", variable=rd_mask_inv_var).pack(side="left", padx=(10, 0))
+    param_slider(rz, "Zones du masque", "bg_rd_mask_count", 1, 8, 1, "Nombre de cercles, de bandes ou de periodes par hauteur d'image (finesse pour le bruit).")
+    param_slider(rz, "Taille du masque", "bg_rd_mask_size", 0.1, 0.9, 0.05, "Part de l'image ou la matiere vit.")
+    param_slider(rz, "Angle du masque", "bg_rd_mask_angle", 0.0, 360.0, 5.0, "Rotation de la disposition (degres).")
+    param_slider(rz, "Douceur du masque", "bg_rd_mask_soft", 0.0, 1.0, 0.05, "Bords nets (0) ou tres progressifs (1) : le motif s'amincit avant de disparaitre.")
+    param_slider(rz, "Derive du masque", "bg_rd_mask_drift", 0.0, 2.0, 0.05, "Vitesse de deplacement des zones (lente : le motif doit pouvoir les suivre).")
+    mask_state = {"key": None, "image": None, "at": 0.0}
+
+    def refresh_mask_preview(t: float, force: bool = False) -> None:
+        """Redessine la vignette du masque (a ~4 Hz, seulement si un reglage ou la derive a change). `t` = derive publiee par le moteur."""
+        now = time.perf_counter()
+        if not force and now - mask_state["at"] < 0.25:
+            return
+        mask_state["at"] = now
+        try:
+            shape = str(mask_shape_var.get())                     # la variable, pas params : Tk lance les rappels les plus recents d'abord (params pas encore a jour)
+            if shape == "none":
+                key = ("none",)
+            else:
+                key = (shape, round(float(params["bg_rd_mask_count"]), 3), round(float(params["bg_rd_mask_size"]), 3), round(float(params["bg_rd_mask_angle"]), 2),
+                       round(float(params["bg_rd_mask_soft"]), 3), float(params["bg_rd_mask_invert"]) >= 0.5, round(t, 3), str(params["bg_rd_sym"]), int(params["bg_rd_branches"]))
+            if key == mask_state["key"]:
+                return
+            mask_state["key"] = key
+            w, h = MASK_PREVIEW
+            if shape == "none":
+                rows = [["#ffffff"] * w for _ in range(h)]
+            else:
+                mk = reaction.Mask(shape=shape, count=key[1], size=key[2], angle=key[3], soft=key[4], invert=key[5], t=t)
+                rows = []
+                for j in range(h):
+                    row = []
+                    for i in range(w):
+                        g = int(round(255 * reaction.mask_value(mk, (i + 0.5) / w, 1.0 - (j + 0.5) / h, 16 / 9, key[7], key[8])))
+                        row.append(f"#{g:02x}{g:02x}{g:02x}")
+                    rows.append(row)
+            img = tk.PhotoImage(master=mask_img, width=w, height=h)
+            img.put(" ".join("{" + " ".join(row) + "}" for row in rows))
+            mask_state["image"] = img.zoom(MASK_ZOOM, MASK_ZOOM)      # gardee : Tk ne retient pas l'image a la place du Label
+            mask_img.config(image=mask_state["image"], width=w * MASK_ZOOM, height=h * MASK_ZOOM)
+        except tk.TclError:
+            pass
+
+    refresh_mask_preview(0.0, force=True)
+    mask_shape_var.trace_add("write", lambda *_a: refresh_mask_preview(0.0, force=True))      # changer de forme redessine tout de suite (la derive suit ensuite)
     for label, key in (("Couche 1", "bg_rd_color1"), ("Couche 2", "bg_rd_color2"), ("Couche 3", "bg_rd_color3"), ("Fond", "bg_rd_ground")):
         color_row(rz, label, key)
 
@@ -281,4 +341,4 @@ def install(c):
     tab_fond.update_idletasks()
 
     import types
-    return types.SimpleNamespace(apply_bgv=apply_bgv, bg_color1_var=bg_color1_var, bg_color2_var=bg_color2_var, bg_presets=bg_presets, bg_var=bg_var, bgv_status=bgv_status, bgv_var=bgv_var, bgvid_box=bgvid_box, load_overlay_preset=load_overlay_preset, pattern_box=pattern_box, rd_box=rd_box, save_overlay_preset=save_overlay_preset, sto_box=sto_box, update_overlay_preset=update_overlay_preset)
+    return types.SimpleNamespace(refresh_mask_preview=refresh_mask_preview, apply_bgv=apply_bgv, bg_color1_var=bg_color1_var, bg_color2_var=bg_color2_var, bg_presets=bg_presets, bg_var=bg_var, bgv_status=bgv_status, bgv_var=bgv_var, bgvid_box=bgvid_box, load_overlay_preset=load_overlay_preset, pattern_box=pattern_box, rd_box=rd_box, save_overlay_preset=save_overlay_preset, sto_box=sto_box, update_overlay_preset=update_overlay_preset)

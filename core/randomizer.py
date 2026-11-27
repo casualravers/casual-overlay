@@ -276,6 +276,12 @@ def random_background_params(rng: random.Random) -> dict:
         # apparitions (#187) : tirees APRES les autres (les tirages existants ne bougent pas)
         values["bg_rd_spawn"] = round(rng.uniform(0.4, 1.0), 2)
         values["bg_rd_bud"] = float(rng.random() < 1 / 3)
+        # masque d'expansion (#178) : une fois sur trois, tire apres tout le reste (les tirages existants ne bougent pas)
+        mask_on, mask_shape = rng.random() < 1 / 3, rng.choice(("circles", "bands", "gradient", "noise"))
+        values.update({"bg_rd_mask": mask_shape if mask_on else "none", "bg_rd_mask_count": float(rng.randint(2, 6)),
+                       "bg_rd_mask_size": round(rng.uniform(0.35, 0.8), 2), "bg_rd_mask_angle": round(rng.uniform(0.0, 360.0), 0),
+                       "bg_rd_mask_soft": round(rng.uniform(0.2, 0.8), 2), "bg_rd_mask_invert": float(rng.random() < 0.15),
+                       "bg_rd_mask_drift": round(rng.uniform(0.2, 0.8), 2)})
     return values
 
 

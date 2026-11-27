@@ -21,6 +21,18 @@ uniform float u_void_edge;     // demi-largeur de la transition
 uniform float u_dense_thr;     // sous ce niveau de bruit, zone dense
 uniform float u_dense_pull;    // part de la forme tiree vers les taches dans une zone dense
 uniform float u_void_t;        // temps de derive des vides
+// Masque d'expansion (#178) : formules de core/reaction.py (mask_value), preparees cote Python (mask_uniforms)
+uniform int u_mask;            // 0 aucun, 1 cercles, 2 bandes, 3 degrade, 4 bruit
+uniform float u_mask_count;    // nombre de zones
+uniform float u_mask_size;     // part de l'image ou la matiere vit
+uniform vec2 u_mask_rot;       // (cos, sin) de l'angle
+uniform float u_mask_edge;     // demi-largeur du bord
+uniform float u_mask_r;        // rayon des cercles (unites de maille)
+uniform float u_mask_thr;      // seuil du bruit
+uniform vec2 u_mask_cells;     // reseau periodique du bruit
+uniform int u_mask_invert;
+uniform float u_mask_t;        // derive
+uniform float u_mask_salt;     // decalage des indices de cellule (hache(0, 0) = 0)
 
 in vec2 v_uv;
 out vec4 f_color;
@@ -40,7 +52,16 @@ float pnoise(vec2 q, vec2 cells) {                          // bruit de valeur p
     return mix(mix(zhash(i0), zhash(vec2(i1.x, i0.y)), f.x), mix(zhash(vec2(i0.x, i1.y)), zhash(i1), f.x), f.y);
 }
 
-float zone_noise(vec2 uv) {                                  // 0..1, deux octaves, derive dans le temps
+float pnoise_salt(vec2 q, vec2 cells, float salt) {         // pnoise dont les cellules sont decalees (le masque : un reseau de 2 cellules n'est pas plat)
+    vec2 i = floor(q);
+    vec2 f = fract(q);
+    f = f * f * (3.0 - 2.0 * f);
+    vec2 i0 = mod(i, cells) + salt;
+    vec2 i1 = mod(i + 1.0, cells) + salt;
+    return mix(mix(zhash(i0), zhash(vec2(i1.x, i0.y)), f.x), mix(zhash(vec2(i0.x, i1.y)), zhash(i1), f.x), f.y);
+}
+
+float zone_noise(vec2 uv) {                                // 0..1, deux octaves, derive dans le temps
     vec2 q = uv * u_zone_cells + vec2(u_zone_t, 0.37 * u_zone_t);
     return 0.65 * pnoise(q, u_zone_cells) + 0.35 * pnoise(q * 2.0 + 5.2, u_zone_cells * 2.0);
 }
@@ -68,6 +89,29 @@ vec2 fold(vec2 uv) {                                         // coordonnees des 
     return uv;
 }
 
+float mask_at(vec2 uv) {                                     // 1 = la matiere vit, 0 = eteinte (bord progressif)
+    vec2 p = vec2((uv.x - 0.5) * u_aspect, uv.y - 0.5);      // repere isotrope centre
+    vec2 r = vec2(p.x * u_mask_rot.x + p.y * u_mask_rot.y, -p.x * u_mask_rot.y + p.y * u_mask_rot.x);
+    float f;
+    if (u_mask == 4) {
+        vec2 q = vec2(r.x / u_aspect + 0.5, r.y + 0.5) * u_mask_cells + vec2(u_mask_t + 3.1, -0.6 * u_mask_t + 1.3);
+        float n = 0.7 * pnoise_salt(q, u_mask_cells, u_mask_salt) + 0.3 * pnoise_salt(q * 2.0 + 1.7, u_mask_cells * 2.0, u_mask_salt);
+        f = u_mask_thr - n;
+    } else {
+        vec2 q = r * u_mask_count + vec2(u_mask_t, 0.6 * u_mask_t);
+        vec2 c = q - floor(q);
+        if (u_mask == 1) {
+            f = u_mask_r - length(c - 0.5);
+        } else if (u_mask == 2) {
+            f = u_mask_size * 0.5 - abs(c.x - 0.5);
+        } else {
+            f = u_mask_size - abs(c.x * 2.0 - 1.0);
+        }
+    }
+    float m = smoothstep(-u_mask_edge, u_mask_edge, f);
+    return u_mask_invert != 0 ? 1.0 - m : m;
+}
+
 void main() {
     float z = 2.0 * zone_noise(fold(v_uv)) - 1.0;
     if (u_sym > 0) {
@@ -83,6 +127,9 @@ void main() {
         gone = smoothstep(u_void_thr - u_void_edge, u_void_thr + u_void_edge, n);
         float dense = 1.0 - smoothstep(u_dense_thr - u_void_edge, u_dense_thr + u_void_edge, n);
         s = mix(s, 2.0, u_dense_pull * dense);
+    }
+    if (u_mask > 0) {
+        gone = 1.0 - (1.0 - gone) * mask_at(fold(v_uv));        // le masque et le Vide cohabitent : une cellule est eteinte si l'un des deux l'eteint
     }
     vec2 fk = s <= 1.0 ? mix(u_fk3[0], u_fk3[1], s) : mix(u_fk3[1], u_fk3[2], s - 1.0);
     fk = mix(fk, u_void_fk, gone);

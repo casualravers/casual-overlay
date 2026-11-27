@@ -139,7 +139,24 @@ les basses).
   zone qui se libere est recolonisee par les bords et les germes des kicks (ceux tombes dans un vide meurent). `u_zoned` (rd_step.frag) = carte lue
   si mix > 0 ou void > 0 ; a 0 partout : bit pour bit l'ancien comportement. **Valeurs neutres** (mix 0, layers 0, sym none, void 0) = simulation et
   image identiques bit pour bit a la version d'avant. Automations actives par defaut : forme, ecart, variete, epaisseur, liberte, vide (0,15 a 0,6,
-  periode 107 s ; pas derive ni symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0.
+  periode 107 s ; pas derive ni symetrie). Securite GPU : `BG_RD_ZONE_COST_MS` 1,5 ms si mix > 0 ou void > 0 ou masque.
+  **Masque d'expansion** (issue #178 ; spec et plan : `docs/plans/2026-11-27-masque-rd-178-*.md`) : limite ou la matiere a le droit de vivre (le motif se
+  revele dans des cercles, bandes, un degrade ou un bruit qui derivent). `bg_rd_mask` (none / circles / bands / gradient / noise, none par defaut),
+  `_count` (1..8 zones), `_size` (0,1..0,9, part de l'image vivante), `_angle`, `_soft` (bord 0 net .. 1 progressif), `_invert`, `_drift` (0..2 x
+  `MASK_SPEED` 0,05 cycle / s) ; automatisables (coupes par defaut) : taille, angle, douceur, derive. **Meme mecanisme que le Vide** : dans `rd_zone.frag`,
+  `mask_at(fold(uv))` donne m (1 = vit) et `gone = 1 - (1 - gone_vide) x m` : (F, K) glisse vers `VOID_FK` ; aucune passe de plus (un germe tombe hors zone
+  meurt tout de suite). Formules pures et repliquees : `core.reaction.mask_value` (Python) / `mask_at` (GLSL), `mask_uniforms` prepare tout cote Python ;
+  GPU = CPU a 0,014 pres (bruit) ou mieux (`check_rd_mask`). Cercles : reseau de `count` cellules par hauteur, rayon `min(sqrt(size / pi), 0,5)` (la part
+  vivante plafonne a ~78 %) ; bandes : periode 1 cellule, part `size` ; degrade : rampe triangulaire ; bruit : `pnoise` a deux octaves a `mask_cells(count)`
+  cellules (3 zones = `VOID_CELLS`, au moins 2 par axe), indices decales de `MASK_SALT` (hache(0, 0) = 0 : un reseau d'une cellule serait plat), seuil
+  `MASK_NOISE_CENTER` + (size - 0,5) x `MASK_NOISE_SPREAD` (calibre : part vivante 0,23 / 0,40 / 0,68 pour size 0,3 / 0,5 / 0,7 a 3 zones). Derive :
+  `Renderer._rd_mask_t` (integre comme `_rd_zone_t`, fige a tempo 0, publie dans `s.status["rd_mask_t"]`) ; les bandes bouclent a t = 1, les cercles a 5.
+  Pas de « Liberte » dans le masque (il reste replie strictement par la symetrie). **Cout mesure** (Radeon integree, grille 1280 x 720) : carte
+  seule 0,63 ms -> avec Vide 1,46 ms ; + cercles +0,08 ms, + bruit +0,4 ms (dans les 1,5 ms de `BG_RD_ZONE_COST_MS`). **GUI** (`gui_fond.py`) : « Masque »
+  (radio), « Apercu du masque » (vignette 96 x 54 calculee en Python par `mask_value` sur le temps de derive publie, redessinee a ~4 Hz seulement si
+  un reglage ou la derive change ; **piege Tk** : les rappels d'une variable partent du plus recent au plus ancien, le rappel de la vignette lit la
+  variable et non `params`, pas encore a jour) + Inverser, curseurs grises sans forme. Randomizer : une fois sur trois (tire apres tout le reste).
+  Un masque qui bouge plus vite que le motif ne le suit pas (la zone reste vide tant qu'aucun germe n'y tombe) : `MASK_SPEED` est lent a dessein.
   **Apparitions** (issue #187 ; design et plan : `docs/plans/2026-11-26-labyrinthe-apparitions-187-*.md`) : en cours de route les nouvelles
   taches ne viennent QUE des germes des kicks. `bg_rd_spawn` (curseur « Apparitions », 1 par defaut) = part des kicks qui sement
   (`core.reaction.kick_spawns`, tirage deterministe par kick ; 0 = le motif grandit seul depuis ses bords). `bg_rd_bud` (case « Seulement contre
