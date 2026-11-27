@@ -3183,6 +3183,21 @@ def check_holo_champ() -> None:
     check(hf.jfa_steps(1, 1) == [1] and hf.jfa_steps(16, 9)[0] == 8, "halo: jump flooding sur une toute petite texture (jamais de liste vide)")
     check(hf.halo_range(1.3, 1.7, 0.5) == hf.halo_range(1.3, 1.5, 0.5) and hf.halo_range(1.3, 0.5, 0.5) < hf.halo_range(1.3, 1.5, 0.5),
           "halo: le rapport largeur / hauteur du sujet ne compte plus au-dela de 3 (une ligne de texte plein cadre garde une portee raisonnable)")
+    # ---- reaction audio par reglage (#247) : base x (1 + reaction x niveau x K), bornee a la plage du curseur (sauf la vitesse)
+    if not hasattr(hf, "react_value"):
+        check(False, "halo (#247): core.holo.react_value existe")
+        return
+    rv = hf.react_value
+    check(all(rv(k, b, 0.0, 1.0) == b and rv(k, b, 2.0, 0.0) == b for k in hf.REACT_KEYS for b in (0.0, 0.5, 1.0)),
+          "halo (#247): reaction 0 ou son nul = valeur du curseur, a l'identique")
+    check(rv("holo_intensity", 1.0, 1.0, 0.5) == 1.5 and abs(rv("holo_reach", 1.0, 1.0, 0.5) - 1.25) < 1e-9 and rv("holo_speed", 0.15, 1.0, 0.5) == 0.15 * 2.5,
+          "halo (#247): intensite x (1 + r x n), portee K = 0,5, vitesse K = 3")
+    check(rv("holo_intensity", 2.5, 2.0, 1.0) == 3.0 and rv("holo_reach", 2.9, 2.0, 1.0) == 3.0 and rv("holo_speed", 1.0, 2.0, 1.0) == 7.0,
+          "halo (#247): bornee a la plage du curseur (3), sauf la vitesse")
+    check(rv("holo_warp", 1.0, 1.0, -5.0) == 1.0 and rv("holo_dust", 1.0, -1.0, 1.0) == 1.0 and rv("holo_dust", 1.0, 1.0, float("nan")) == 1.0,
+          "halo (#247): niveau ou reaction negatifs / NaN = rien (jamais d'uniform invalide)")
+    ls = [rv("holo_dust", 1.0, 1.0, 0.1 * k) for k in range(0, 11)]
+    check(all(b >= a for a, b in zip(ls, ls[1:])), "halo (#247): la valeur croit avec le niveau du son")
 
 
 def check_holo_contour() -> None:
@@ -3389,6 +3404,18 @@ def check_holo() -> None:
     r._holo_t = 0.0
     shout2 = render(loud, frames=20, holo_on=1.0, holo_react=1.0)
     check(np.abs(shout2 - calm).max() > 30, "holo_react > 0 : reagit au kick et aux basses")
+    # reaction par reglage (#247) : 0 = identique ; > 0 = le son fort change l'image, le silence non
+    for hname in ("intensity", "reach", "warp", "dust", "speed"):
+        r._holo_t = 0.0
+        loud0 = render(loud, frames=20, holo_on=1.0)
+        r._holo_t = 0.0
+        loud_r = render(loud, frames=20, holo_on=1.0, **{f"holo_react_{hname}": 1.5})
+        r._holo_t = 0.0
+        calm_r = render(quiet, frames=20, holo_on=1.0, **{f"holo_react_{hname}": 1.5})
+        r._holo_t = 0.0
+        calm0 = render(quiet, frames=20, holo_on=1.0)
+        check(np.abs(loud_r.astype(int) - loud0).max() > 8 and np.array_equal(calm_r, calm0),
+              f"halo (#247) : holo_react_{hname} > 0 reagit au son fort, silence = image identique")
     # anime par le temps seulement
     r._holo_t = 0.0
     t0 = render(quiet, frames=1, holo_on=1.0)
@@ -10038,7 +10065,8 @@ def check_onsets() -> None:
 
 
 ROUTE_IDS = ("bg_wobble", "bg_ripple", "bg_glitch", "bg_chroma", "bg_flash", "bg_scroll", "bg_sparkle",
-             "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo", "lg_melt", "lg_cells",
+             "lg_wobble", "lg_ripple", "lg_glitch", "lg_chroma", "lg_pulse", "lg_jitter", "lg_glow", "lg_holo",
+             "lg_holo_intensity", "lg_holo_reach", "lg_holo_warp", "lg_holo_dust", "lg_holo_speed", "lg_melt", "lg_cells",
              "breath", "hue", "strobe", "foudre", "noise")
 
 
@@ -10190,6 +10218,18 @@ def check_routage() -> None:
     check(rt.line_enabled(dict(on, holo_on=1.0, holo_react=0.5), "lg_holo") and not rt.line_enabled(dict(on, holo_on=1.0, holo_react=0.0), "lg_holo")
           and not rt.line_enabled(dict(on, breath_pulse=0.0), "breath") and rt.line_enabled(on, "strobe"),
           "routage: les autres lignes sont grisees tant que leur reaction audio est a 0")
+    from core import holo as _hf, params_schema as _ps
+    hn = [k[5:] for k in _hf.REACT_KEYS]
+    check(all(rt.BY_ID["lg_holo_" + n].zone == "logo" and rt.BY_ID["lg_holo_" + n].kind == "vec" and rt.READS["lg_holo_" + n] == (0,) for n in hn),
+          "routage (#247): une ligne du logo par reglage du halo, lisant les basses (`_fit` complete une autre source)")
+    check(all(rt.line_enabled(dict(on, holo_on=1.0, **{"holo_react_" + n: 0.5}), "lg_holo_" + n)
+              and not rt.line_enabled(dict(on, holo_on=1.0, **{"holo_react_" + n: 0.0}), "lg_holo_" + n)
+              and not rt.line_enabled(dict(on, holo_on=0.0, **{"holo_react_" + n: 0.5}), "lg_holo_" + n) for n in hn),
+          "routage (#247): la ligne d'un reglage du halo est grisee sans halo ou sans sa reaction")
+    spec = _ps.BY_KEY
+    check(all(("holo_react_" + n) in spec and spec["holo_react_" + n].default == 0.0 and (spec["holo_react_" + n].lo, spec["holo_react_" + n].hi) == (0.0, 2.0)
+              and ("rt_lg_holo_" + n) in spec and ("rg_lg_holo_" + n) in spec for n in hn),
+          "routage (#247): reactions (defaut 0, plage 0..2), source et dosage de chaque reglage du halo dans la table des reglages")
     nan = float("nan")
     check(rt.route_of({"rg_bg_wobble": nan}, "bg_wobble")[1] == 1.0 and rt.route_of({"rg_bg_wobble": float("inf")}, "bg_wobble")[1] == 1.0
           and rt.is_default({"rg_bg_wobble": nan}), "routage: dosage NaN / infini = 1 (jamais d'uniform NaN)")
@@ -11194,7 +11234,7 @@ def check_automation() -> None:
         check(False, "curseur Vitesse : modules audio2wave importables", str(exc))
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
-    check(len(specs) == 34 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178), coupees par defaut
+    check(len(specs) == 39 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178) + 5 du halo (#247), coupees par defaut
           and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto + ("bg_rd_scale",))
           and "bg_rd_scale" in specs and not default["bg_rd_scale"]["enabled"]
           and not any(k in specs for k in ("bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),

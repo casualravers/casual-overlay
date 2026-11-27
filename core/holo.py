@@ -62,6 +62,24 @@ def light_gain(intensity: float, v: float) -> float:
     return base + (float(intensity) - base) * _smoothstep(0.0, CAP_NEAR, v)
 
 
+# Reaction audio par reglage (#247) : facteur K de chaque reglage et borne haute (plage du curseur ; None = la vitesse n'est pas bornee).
+REACT_K = {"holo_intensity": 1.0, "holo_reach": 0.5, "holo_warp": 1.0, "holo_dust": 1.0, "holo_speed": 3.0}
+REACT_MAX = {"holo_intensity": 3.0, "holo_reach": 3.0, "holo_warp": 3.0, "holo_dust": 3.0, "holo_speed": None}
+REACT_KEYS = tuple(REACT_K)
+
+
+def react_value(key: str, base: float, amount: float, level: float) -> float:
+    """Valeur effective d'un reglage du halo : `base` x (1 + `amount` x `level` x K), bornee a la plage du curseur (sauf la vitesse).
+    `amount` = reglage de reaction (0 = aucune : `base` tel quel), `level` = niveau du son de sa ligne de routage. Negatif ou NaN : rien."""
+    base = float(base)
+    amount, level = float(amount), float(level)
+    if not (math.isfinite(amount) and math.isfinite(level)) or amount <= 0.0 or level <= 0.0:
+        return base
+    value = base * (1.0 + amount * level * REACT_K[key])
+    top = REACT_MAX[key]
+    return value if top is None else min(value, max(top, base))
+
+
 def jfa_steps(width: int, height: int) -> list[int]:
     """Pas (en texels) des passes de jump flooding pour une texture `width` x `height` : puissances de deux decroissantes jusqu'a 1, plus une
     passe de correction a 1 (rattrape les erreurs d'un texel du jump flooding classique)."""
