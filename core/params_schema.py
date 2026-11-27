@@ -188,7 +188,7 @@ TABLE: tuple[Param, ...] = (
     _p("holo_reach", 1.3, 0.3, 3.0, doc="Portee : multiplicateur de l'etendue du halo (1 = environ 1,5 x le logo)."),
     _p("holo_warp", 1.0, 0.0, 3.0, doc="Deformation du fond (refraction + ondes)."),
     _p("holo_dust", 1.0, 0.0, 3.0, doc="Quantite de poussiere d'etoiles."),
-    _p("holo_speed", 0.15, 0.0, 1.0, doc="Vitesse de l'animation (ondes, derive des etoiles)."),
+    _p("holo_speed", 0.15, 0.0, 0.5, doc="Vitesse de l'animation (ondes, derive des etoiles). Plage 0..0,5 depuis #260 (les valeurs d'usage ne depassaient pas 0,3)."),
     _p("holo_react", 0.0, 0.0, 2.0, doc="0 = pas audioreactif ; > 0 : intensite au kick, vitesse aux basses."),
     # Irregularites des anneaux (#256) : bruit ajoute au champ du halo (core.holo.wobble_v) ; 0 = anneaux parfaits, comme avant
     _p("holo_wobble", 0.0, 0.0, 1.0, doc="Halo : irregularite des anneaux (0 = parfaits, comme avant ; chaque anneau a sa propre deformation)."),

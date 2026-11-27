@@ -62,7 +62,7 @@ AUTOMATION_SPECS: dict[str, tuple] = {
     "holo_reach":       ("Halo : portee", 0.3, 3.0, "sinus", 113, False),
     "holo_warp":        ("Halo : deformation", 0.0, 3.0, "sinus", 131, False),
     "holo_dust":        ("Halo : poussiere", 0.0, 3.0, "sinus", 137, False),
-    "holo_speed":       ("Halo : vitesse", 0.0, 1.0, "sinus", 139, False),
+    "holo_speed":       ("Halo : vitesse", 0.0, 0.5, "sinus", 139, False),
     "holo_wobble":      ("Halo : irregularite", 0.0, 1.0, "sinus", 149, False),            # (#256)
     "holo_wobble_speed": ("Halo : vitesse des irregularites", 0.0, 2.0, "sinus", 151, False),
     "fx_int0":          ("Intensite wobble", 0.0, 2.0, "sinus", 19, True),
