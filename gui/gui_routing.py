@@ -45,7 +45,7 @@ class Routing:
     def vars(self, rid: str) -> tuple[tk.StringVar, tk.DoubleVar]:
         """(source, dosage) de la ligne : crees et lies une seule fois, puis partages par tous les widgets."""
         c, out = self.c, []
-        for key, make, conv, default in ((rt.source_key(rid), tk.StringVar, str, rt.INHERIT), (rt.dose_key(rid), tk.DoubleVar, float, 1.0)):
+        for key, make, conv, default in ((rt.source_key(rid), tk.StringVar, str, rt.BY_ID[rid].default), (rt.dose_key(rid), tk.DoubleVar, float, 1.0)):
             var = c.synced.get(key)
             if var is None:
                 var = make(value=c.params.get(key, default))
@@ -55,12 +55,12 @@ class Routing:
 
     def route(self, rid: str) -> tuple[str, float]:
         src, dose = self.vars(rid)
-        return rt.route_of({rt.source_key(rid): _get(src, rt.INHERIT), rt.dose_key(rid): _get(dose, 1.0)}, rid)
+        return rt.route_of({rt.source_key(rid): _get(src, rt.BY_ID[rid].default), rt.dose_key(rid): _get(dose, 1.0)}, rid)
 
     def reset(self, rids) -> None:
         for rid in rids:
             src, dose = self.vars(rid)
-            src.set(rt.INHERIT)
+            src.set(rt.BY_ID[rid].default)             # le defaut de la ligne : « Comme la couche », ou « Rien » pour le halo (#259)
             dose.set(1.0)
 
     # --- pastille -----------------------------------------------------------------------------------------------------------------
@@ -117,7 +117,7 @@ class Routing:
 
     def paint(self, rid: str) -> None:
         src, dose = self.route(rid)
-        default = (src, dose) == (rt.INHERIT, 1.0)
+        default = (src, dose) == (rt.BY_ID[rid].default, 1.0)
         enabled = rt.line_enabled(self.c.params, rid)
         text = rt.pill_text(src, dose, rt.BY_ID[rid].layer)
         follows = rt.follows_bg(self.c.params, rid)

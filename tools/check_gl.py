@@ -493,7 +493,12 @@ def check_gui() -> None:
             out["presets"] = any(w.winfo_class() == "Label" and w.cget("text").startswith("PRESETS LIVE")
                                  for w in walk(root))
             label_texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Label"]
-            out["halo_wobble_ui"] = tuple(t in label_texts for t in ("Irregularite", "Vitesse irregul.", "Irregularite au son"))      # (#256)
+            check_texts = [w.cget("text") for w in walk(root) if w.winfo_class() == "Checkbutton"]
+            rien_pills = sum(1 for w in walk(root) if w.winfo_class() == "Menubutton" and w.cget("text") == "Rien")
+            out["halo_wobble_ui"] = ("Irregularite" in label_texts and "Vitesse irregul." in label_texts,                              # (#256)
+                                     not any(t.endswith(" au son") for t in label_texts),                                              # (#259) plus de curseurs « au son »
+                                     not any(t.startswith("Reactions par reglage") for t in check_texts),                              # ... ni de case a cocher
+                                     rien_pills >= 6)                                                                                  # une pastille « Rien » par reglage du halo
             out["calm_react_ui"] = "Reactivite du calme" in label_texts                                                                  # (#255)
             out["scrollbars"] = (sum(1 for w in walk(root) if w.winfo_class() == "Scrollbar"),
                                  sum(1 for w in walk(root) if w.winfo_class() == "TScrollbar"
@@ -1811,8 +1816,9 @@ def check_gui() -> None:
           "GuiController.apply_state (live): cles inconnues rendues, etat pris, producteur relance, capture_state le relit", str(al))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
     check(out.get("calm_react_ui") is True, "phases (#255) : le curseur « Reactivite du calme » est dans l'onglet des effets, a cote de la sensibilite du kick")
-    check(out.get("halo_wobble_ui") == (True, True, True),
-          "halo (#256) : curseurs Irregularite, Vitesse irregul. et reaction « Irregularite au son » dans l'onglet du halo", str(out.get("halo_wobble_ui")))
+    check(out.get("halo_wobble_ui") == (True, True, True, True),
+          "halo (#256, #259) : curseurs Irregularite et Vitesse irregul. ; plus de case « Reactions par reglage » ni de curseur « ... au son » ; une pastille « Rien » par reglage",
+          str(out.get("halo_wobble_ui")))
     check(out.get("presets") and out.get("automation", 0) >= 1,
           "presets et automations d'audio2wave presents", f"{out.get('automation')} curseurs automatables")
     check(out.get("burst") == 1, "rafale de reglages live: un seul redemarrage (anti-rebond d'audio2wave)",
@@ -3231,21 +3237,21 @@ def check_holo_champ() -> None:
     check(hf.jfa_steps(1, 1) == [1] and hf.jfa_steps(16, 9)[0] == 8, "halo: jump flooding sur une toute petite texture (jamais de liste vide)")
     check(hf.halo_range(1.3, 1.7, 0.5) == hf.halo_range(1.3, 1.5, 0.5) and hf.halo_range(1.3, 0.5, 0.5) < hf.halo_range(1.3, 1.5, 0.5),
           "halo: le rapport largeur / hauteur du sujet ne compte plus au-dela de 3 (une ligne de texte plein cadre garde une portee raisonnable)")
-    # ---- reaction audio par reglage (#247) : base x (1 + reaction x niveau x K), bornee a la plage du curseur (sauf la vitesse)
+    # ---- reaction audio par reglage (#247, #259) : base x (1 + niveau x K), le niveau de la ligne comprend son dosage ; bornee a la plage du curseur (sauf la vitesse)
     if not hasattr(hf, "react_value"):
         check(False, "halo (#247): core.holo.react_value existe")
         return
     rv = hf.react_value
-    check(all(rv(k, b, 0.0, 1.0) == b and rv(k, b, 2.0, 0.0) == b for k in hf.REACT_KEYS for b in (0.0, 0.5, 1.0)),
-          "halo (#247): reaction 0 ou son nul = valeur du curseur, a l'identique")
-    check(rv("holo_intensity", 1.0, 1.0, 0.5) == 1.5 and abs(rv("holo_reach", 1.0, 1.0, 0.5) - 1.25) < 1e-9 and rv("holo_speed", 0.15, 1.0, 0.5) == 0.15 * 2.5,
-          "halo (#247): intensite x (1 + r x n), portee K = 0,5, vitesse K = 3")
-    check(rv("holo_intensity", 2.5, 2.0, 1.0) == 3.0 and rv("holo_reach", 2.9, 2.0, 1.0) == 3.0 and rv("holo_speed", 1.0, 2.0, 1.0) == 7.0,
-          "halo (#247): bornee a la plage du curseur (3), sauf la vitesse")
-    check(rv("holo_warp", 1.0, 1.0, -5.0) == 1.0 and rv("holo_dust", 1.0, -1.0, 1.0) == 1.0 and rv("holo_dust", 1.0, 1.0, float("nan")) == 1.0,
-          "halo (#247): niveau ou reaction negatifs / NaN = rien (jamais d'uniform invalide)")
-    ls = [rv("holo_dust", 1.0, 1.0, 0.1 * k) for k in range(0, 11)]
-    check(all(b >= a for a, b in zip(ls, ls[1:])), "halo (#247): la valeur croit avec le niveau du son")
+    check(all(rv(k, b, 0.0) == b for k in hf.REACT_KEYS for b in (0.0, 0.5, 1.0)),
+          "halo (#259): son nul = valeur du curseur, a l'identique")
+    check(rv("holo_intensity", 1.0, 0.5) == 1.5 and abs(rv("holo_reach", 1.0, 0.5) - 1.25) < 1e-9 and rv("holo_speed", 0.15, 0.5) == 0.15 * 2.5,
+          "halo (#259): intensite x (1 + niveau), portee K = 0,5, vitesse K = 3")
+    check(rv("holo_intensity", 2.5, 2.0) == 3.0 and rv("holo_reach", 2.9, 2.0) == 3.0 and rv("holo_speed", 1.0, 2.0) == 7.0,
+          "halo (#259): bornee a la plage du curseur (3), sauf la vitesse")
+    check(rv("holo_warp", 1.0, -5.0) == 1.0 and rv("holo_dust", 1.0, float("nan")) == 1.0,
+          "halo (#259): niveau negatif / NaN = rien (jamais d'uniform invalide)")
+    ls = [rv("holo_dust", 1.0, 0.1 * k) for k in range(0, 11)]
+    check(all(b >= a for a, b in zip(ls, ls[1:])), "halo (#259): la valeur croit avec le niveau du son")
     # ---- irregularites des anneaux (#256) : bruit ajoute a v, masque pres du sujet et a la portee, reaction au son plafonnee a 1
     if not hasattr(hf, "wobble_v"):
         check(False, "halo (#256): core.holo.wobble_v existe")
@@ -3262,9 +3268,9 @@ def check_holo_champ() -> None:
           "halo (#256): v' reste dans 0..1, la portee et le contour du sujet ne bougent pas, l'irregularite est bornee a 1")
     check(hf.wobble_v(0.5, float("nan"), 1.0) == 0.5 and hf.wobble_v(0.5, 1.0, float("nan")) == 0.5 and hf.wobble_v(0.5, -1.0, 1.0) == 0.5,
           "halo (#256): irregularite ou bruit negatif / NaN = rien (jamais d'uniform invalide)")
-    check("holo_wobble" in hf.REACT_KEYS and abs(rv("holo_wobble", 0.4, 1.0, 0.5) - 0.6) < 1e-9 and rv("holo_wobble", 0.9, 2.0, 1.0) == 1.0
-          and rv("holo_wobble", 0.0, 2.0, 1.0) == 0.0 and rv("holo_wobble", 0.4, 0.0, 1.0) == 0.4,
-          "halo (#256): l'irregularite reagit au son (x (1 + r x n), plafonnee a 1) ; a 0 elle reste a 0")
+    check("holo_wobble" in hf.REACT_KEYS and abs(rv("holo_wobble", 0.4, 0.5) - 0.6) < 1e-9 and rv("holo_wobble", 0.9, 2.0) == 1.0
+          and rv("holo_wobble", 0.0, 2.0) == 0.0 and rv("holo_wobble", 0.4, 0.0) == 0.4,
+          "halo (#256): l'irregularite reagit au son (x (1 + niveau), plafonnee a 1) ; a 0 elle reste a 0")
 
 
 def check_holo_contour() -> None:
@@ -3471,19 +3477,26 @@ def check_holo() -> None:
     r._holo_t = 0.0
     shout2 = render(loud, frames=20, holo_on=1.0, holo_react=1.0)
     check(np.abs(shout2 - calm).max() > 30, "holo_react > 0 : reagit au kick et aux basses")
-    # reaction par reglage (#247) : 0 = identique ; > 0 = le son fort change l'image, le silence non
+    # reaction par reglage (#247, #259) : sa ligne de routage (pastille a droite du curseur), « Rien » par defaut = image identique ;
+    # une source (Basses) : le son fort change l'image, le silence non ; dosage 0 ou source Rien : identique
     for hname in ("intensity", "reach", "warp", "dust", "speed", "wobble"):
         extra = {"holo_wobble": 0.5} if hname == "wobble" else {}          # (#256) la reaction multiplie l'irregularite : a 0 elle reste a 0
+        routed = {f"rt_lg_holo_{hname}": "basses", f"rg_lg_holo_{hname}": 1.5}
         r._holo_t = r._holo_wt = 0.0
         loud0 = render(loud, frames=20, holo_on=1.0, **extra)
         r._holo_t = r._holo_wt = 0.0
-        loud_r = render(loud, frames=20, holo_on=1.0, **extra, **{f"holo_react_{hname}": 1.5})
+        loud_r = render(loud, frames=20, holo_on=1.0, **extra, **routed)
         r._holo_t = r._holo_wt = 0.0
-        calm_r = render(quiet, frames=20, holo_on=1.0, **extra, **{f"holo_react_{hname}": 1.5})
+        calm_r = render(quiet, frames=20, holo_on=1.0, **extra, **routed)
         r._holo_t = r._holo_wt = 0.0
         calm0 = render(quiet, frames=20, holo_on=1.0, **extra)
-        check(np.abs(loud_r.astype(int) - loud0).max() > 8 and np.array_equal(calm_r, calm0),
-              f"halo (#247) : holo_react_{hname} > 0 reagit au son fort, silence = image identique")
+        r._holo_t = r._holo_wt = 0.0
+        loud_zero = render(loud, frames=20, holo_on=1.0, **extra, **{f"rt_lg_holo_{hname}": "basses", f"rg_lg_holo_{hname}": 0.0})
+        r._holo_t = r._holo_wt = 0.0
+        loud_none = render(loud, frames=20, holo_on=1.0, **extra, **{f"rt_lg_holo_{hname}": "rien", f"rg_lg_holo_{hname}": 1.5})
+        check(np.abs(loud_r.astype(int) - loud0).max() > 8 and np.array_equal(calm_r, calm0)
+              and np.array_equal(loud_zero, loud0) and np.array_equal(loud_none, loud0),
+              f"halo (#259) : la ligne lg_holo_{hname} (Basses) reagit au son fort ; silence, dosage 0 et « Rien » = image identique")
     # irregularites des anneaux (#256) : 0 = image actuelle, > 0 = anneaux deformes (logo intact), vitesse 0 = figees, vitesse > 0 = vivantes
     r._holo_t = r._holo_wt = 0.0
     w_off = render(quiet, frames=20, holo_on=1.0)
@@ -10250,7 +10263,8 @@ def check_routage() -> None:
     keys = [k for r in rt.ROUTES if r.kind != "info" for k in (rt.source_key(r.id), rt.dose_key(r.id))]
     check(all(k in DEFAULT_PARAMS for k in keys) and not any(rt.source_key(r.id) in DEFAULT_PARAMS for r in rt.ROUTES if r.kind == "info"),
           "routage: deux reglages par ligne routable (aucun pour les lignes informatives)")
-    check(all(DEFAULT_PARAMS[k] == ("herite" if k.startswith("rt_") else 1.0) for k in keys), "routage: defauts herite / 1.0")
+    check(all(DEFAULT_PARAMS[k] == (rt.BY_ID[k[3:]].default if k.startswith("rt_") else 1.0) for k in keys),
+          "routage: defauts herite / 1.0 (« rien » pour les six lignes du halo, #259)")
     check(all(ps.BY_KEY[k].scope == "look" for k in keys), "routage: portee look (presets overlay et scenes)")
     cp = coerce_params({"rt_bg_wobble": "basses", "rg_bg_wobble": 1.5})
     check(cp.get("rt_bg_wobble") == "basses" and cp.get("rg_bg_wobble") == 1.5, "routage: une route valide est gardee", str((cp.get("rt_bg_wobble"), cp.get("rg_bg_wobble"))))
@@ -10365,14 +10379,55 @@ def check_routage() -> None:
     hn = [k[5:] for k in _hf.REACT_KEYS]
     check(all(rt.BY_ID["lg_holo_" + n].zone == "logo" and rt.BY_ID["lg_holo_" + n].kind == "vec" and rt.READS["lg_holo_" + n] == (0,) for n in hn),
           "routage (#247): une ligne du logo par reglage du halo, lisant les basses (`_fit` complete une autre source)")
-    check(all(rt.line_enabled(dict(on, holo_on=1.0, **{"holo_react_" + n: 0.5}), "lg_holo_" + n)
-              and not rt.line_enabled(dict(on, holo_on=1.0, **{"holo_react_" + n: 0.0}), "lg_holo_" + n)
-              and not rt.line_enabled(dict(on, holo_on=0.0, **{"holo_react_" + n: 0.5}), "lg_holo_" + n) for n in hn),
-          "routage (#247): la ligne d'un reglage du halo est grisee sans halo ou sans sa reaction")
+    check(all(rt.line_enabled(dict(on, holo_on=1.0, **{"holo_" + n: 0.5}), "lg_holo_" + n)
+              and not rt.line_enabled(dict(on, holo_on=1.0, **{"holo_" + n: 0.0}), "lg_holo_" + n)
+              and not rt.line_enabled(dict(on, holo_on=0.0, **{"holo_" + n: 0.5}), "lg_holo_" + n) for n in hn),
+          "routage (#259): la ligne d'un reglage du halo est grisee sans halo ou quand son reglage vaut 0 (comme le contour lumineux)")
     spec = _ps.BY_KEY
-    check(all(("holo_react_" + n) in spec and spec["holo_react_" + n].default == 0.0 and (spec["holo_react_" + n].lo, spec["holo_react_" + n].hi) == (0.0, 2.0)
-              and ("rt_lg_holo_" + n) in spec and ("rg_lg_holo_" + n) in spec for n in hn),
-          "routage (#247): reactions (defaut 0, plage 0..2), source et dosage de chaque reglage du halo dans la table des reglages")
+    check(all(("holo_react_" + n) not in spec and ("rt_lg_holo_" + n) in spec and ("rg_lg_holo_" + n) in spec for n in hn),
+          "routage (#259): plus de reglage « reaction » par reglage du halo : source et dosage de sa ligne (la pastille) font foi")
+    # defaut propre a chaque ligne (#259) : « Rien » pour les lignes du halo (aucune reaction tant qu'on n'a pas choisi), « herite » pour les autres
+    halo_ids = ["lg_holo_" + n for n in hn]
+    check(all(rt.BY_ID[i].default == "rien" for i in halo_ids) and all(r.default == rt.INHERIT for r in rt.ROUTES if r.id not in halo_ids)
+          and all(spec["rt_" + i].default == "rien" for i in halo_ids) and spec["rt_lg_holo"].default == rt.INHERIT and spec["rt_bg_wobble"].default == rt.INHERIT,
+          "routage (#259): defaut « Rien » pour les six lignes du halo, « herite » pour toutes les autres (table des reglages comprise)")
+    check(rt.route_of({}, "lg_holo_dust") == ("rien", 1.0) and rt.is_default({}, "lg_holo_dust") and rt.is_default({}) and rt.routed_ids({}) == []
+          and rt.route_of({"rt_lg_holo_dust": "zzz"}, "lg_holo_dust") == ("rien", 1.0) and rt.route_of({}, "bg_wobble") == (rt.INHERIT, 1.0),
+          "routage (#259): une ligne absente ou invalide prend SON defaut (« Rien » pour le halo, « herite » ailleurs)")
+    check(not rt.is_default({"rt_lg_holo_dust": "basses"}, "lg_holo_dust") and not rt.is_default({"rt_lg_holo_dust": rt.INHERIT}, "lg_holo_dust")
+          and not rt.is_default({"rg_lg_holo_dust": 1.5}, "lg_holo_dust") and rt.routed_ids({"rt_lg_holo_dust": "kick"}) == ["lg_holo_dust"]
+          and rt.is_default({"rt_lg_holo": rt.INHERIT, "rg_lg_holo": 1.0}, "lg_holo"),
+          "routage (#259): « Comme la couche » est un choix pour le halo (plus le defaut) ; source ou dosage changes = ligne modifiee")
+    check(rt.pill_text("rien", 1.0, "logo") == "Rien" and rt.pill_text("basses", 1.5, "logo") == "Basses 150 %",
+          "routage (#259): la pastille dit « Rien » par defaut, « Basses 150 % » une fois reglee")
+    # migration des anciennes reactions par reglage (#247) : source de la ligne (sinon « Comme la couche ») et dosage x reaction
+    mig = rt.migrate_halo_reactions
+    v0 = {"holo_react_dust": 0.0, "bg_hue": 0.3}
+    v1 = {"holo_react_dust": 1.0}
+    v2 = {"holo_react_warp": 1.5, "rt_lg_holo_warp": "kick", "rg_lg_holo_warp": 0.5}
+    v3 = {"holo_react_speed": 9.0}
+    v4 = {"holo_react_reach": "x", "holo_react_intensity": float("nan"), "holo_react_wobble": -1.0}
+    v5 = {"bg_hue": 0.3}
+    for v in (v0, v1, v2, v3, v4, v5):
+        mig(v)
+    check(v0 == {"bg_hue": 0.3} and v5 == {"bg_hue": 0.3} and v4 == {},
+          "migration (#259): reaction 0, invalide ou negative = simplement retiree ; une valeur sans reaction n'est pas touchee")
+    check(v1 == {"rt_lg_holo_dust": rt.INHERIT, "rg_lg_holo_dust": 1.0} and v2 == {"rt_lg_holo_warp": "kick", "rg_lg_holo_warp": 0.75}
+          and v3 == {"rt_lg_holo_speed": rt.INHERIT, "rg_lg_holo_speed": 2.0},
+          "migration (#259): reaction > 0 = « Comme la couche » (ou la source deja choisie) a dosage reaction x ancien dosage, borne a 2")
+    before = [dict(v) for v in (v1, v2, v3)]
+    for v in (v1, v2, v3):
+        mig(v)
+    check([v1, v2, v3] == before, "migration (#259): appliquee deux fois = meme resultat")
+    from core.params import coerce_params as _coerce259, overlay_preset_values as _opv259, DEFAULT_PARAMS as _dp259
+    old_saved = {"holo_react_dust": 1.5, "holo_react_warp": 0.0, "bg_hue": 0.3}
+    got = _coerce259(old_saved)
+    check(got["rt_lg_holo_dust"] == rt.INHERIT and got["rg_lg_holo_dust"] == 1.5 and got["rt_lg_holo_warp"] == "rien" and got["rg_lg_holo_warp"] == 1.0
+          and "holo_react_dust" not in got and got["bg_hue"] == 0.3 and "holo_react_dust" in old_saved,
+          "migration (#259): coerce_params (fichier de reglages, presets, scenes, reprise) convertit l'ancienne reaction sans toucher au dictionnaire de l'appelant")
+    pv = _opv259({"holo_react_speed": 1.0, "holo_on": 1.0}, dict(_dp259))
+    check(pv["rt_lg_holo_speed"] == rt.INHERIT and pv["rg_lg_holo_speed"] == 1.0 and rt.route_of(pv, "lg_holo_dust") == ("rien", 1.0),
+          "migration (#259): un ancien preset / une ancienne scene garde sa reaction du halo (source « Comme la couche » a 100 %)")
     check(spec["holo_wobble"].default == 0.0 and (spec["holo_wobble"].lo, spec["holo_wobble"].hi) == (0.0, 1.0)
           and spec["holo_wobble_speed"].default == 1.0 and (spec["holo_wobble_speed"].lo, spec["holo_wobble_speed"].hi) == (0.0, 2.0),
           "halo (#256): irregularite (0..1, defaut 0 = rendu actuel) et vitesse des irregularites (0..2, defaut 1) dans la table des reglages")

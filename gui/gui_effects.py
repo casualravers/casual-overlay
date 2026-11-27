@@ -211,42 +211,31 @@ def install(c):
                         "deforme le FOND (lentille, ondes qui se propagent), l'irise, et y traine de la "
                         "poussiere d'etoiles. Le logo reste intact. Anime par le temps seulement (reaction a "
                         "l'audio = 0 par defaut). Touche C.")
+    # Chaque reglage du halo a sa pastille de source a droite (#259) : la source audio qui le fait reagir (« Rien » par defaut = aucune reaction),
+    # son menu « Dosage » regle la quantite. Meme chose que les effets et le contour lumineux.
+    def halo_pill(name: str) -> None:
+        if routing is not None:
+            routing.pill_after(cz, f"lg_holo_{name}", padx=ROW_PADX, pady=ROW_PADY)
+
     param_slider(cz, "Intensite", "holo_intensity", 0.0, 3.0, 0.05, "Force de la lumiere irisee.")
+    halo_pill("intensity")
     param_slider(cz, "Portee", "holo_reach", 0.3, 3.0, 0.05, "Etendue du halo autour du logo.")
+    halo_pill("reach")
     param_slider(cz, "Deformation", "holo_warp", 0.0, 3.0, 0.05, "Deformation du fond (lentille et ondes). 0 = aucune.")
+    halo_pill("warp")
     param_slider(cz, "Poussiere", "holo_dust", 0.0, 3.0, 0.05, "Quantite de poussiere d'etoiles. 0 = aucune.")
+    halo_pill("dust")
     param_slider(cz, "Vitesse", "holo_speed", 0.0, 1.0, 0.01, "Vitesse des ondes et de la derive des etoiles.")
+    halo_pill("speed")
     param_slider(cz, "Irregularite", "holo_wobble", 0.0, 1.0, 0.01,
                  "Irregularite des anneaux : chaque anneau se deforme un peu, pour casser l'effet trop propre. 0 = anneaux parfaits.")
+    halo_pill("wobble")
     param_slider(cz, "Vitesse irregul.", "holo_wobble_speed", 0.0, 2.0, 0.05,
                  "Vitesse a laquelle les irregularites des anneaux ondulent. 0 = figees.")
     param_slider(cz, "Reaction audio", "holo_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
     if routing is not None:
         routing.pill_after(cz, "lg_holo", padx=ROW_PADX, pady=ROW_PADY)
-    # Reaction audio reglage par reglage (#247), repliee par defaut : un curseur de reaction et une pastille de source pour chaque reglage du halo
-    hr_var = tk.IntVar(value=0)
-    hr_toggle = tk.Checkbutton(holo_box, text="Reactions par reglage (intensite, portee, deformation...)", variable=hr_var)
-    hr_toggle.grid(row=cz.next_row(), column=0, columnspan=4, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
-    Tooltip(hr_toggle, "Chaque reglage du halo peut reagir au son avec sa propre source (pastille a droite) : 0 = aucune reaction. S'ajoute a la "
-                       "« Reaction audio » generale ci-dessus.")
-    hr_box = tk.Frame(holo_box)
-    hr_box.grid(row=cz.next_row(), column=0, columnspan=4, sticky="nw")
-    hz = Zone(hr_box)
-    for hname, hlabel in (("intensity", "Intensite"), ("reach", "Portee"), ("warp", "Deformation"), ("dust", "Poussiere"), ("speed", "Vitesse"), ("wobble", "Irregularite")):
-        param_slider(hz, f"{hlabel} au son", f"holo_react_{hname}", 0.0, 2.0, 0.05,
-                     f"Reaction de « {hlabel.lower()} » au son : 0 = aucune. Valeur x (1 + reaction x niveau du son). Source : la pastille.")
-        if routing is not None:
-            routing.pill_after(hz, f"lg_holo_{hname}", padx=ROW_PADX, pady=ROW_PADY)
-
-    def show_hr(*_a):
-        if hr_var.get():
-            hr_box.grid()
-        else:
-            hr_box.grid_remove()
-
-    hr_var.trace_add("write", show_hr)
-    show_hr()
 
     # ---- FONTE ACIDE du logo (onglet a cote de l'aura) : dissolution sur place puis reformation, en boucle
     add_separator(zone_melt, "Fonte acide (logo)")
