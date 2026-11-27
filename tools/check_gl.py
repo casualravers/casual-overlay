@@ -690,6 +690,25 @@ def check_gui() -> None:
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
+            # front de la vague du pavage (#249) : lignes presentes, grisees selon la texture et la forme
+            front_labels = ("Front de la vague", "Direction du front", "Courbure du front", "Irregularite du front", "Origine du front")
+            sto_states = lambda lb: {str(x.cget("state")) for w in gg.row_of_label(c["sto_box"], lb, panels=False) for x in gg.leaves(w)
+                                     if x.winfo_class() in ("Scale", "Entry", "Radiobutton")}
+            out["front_rows"] = {lb: bool(gg.row_of_label(c["sto_box"], lb, panels=False)) for lb in front_labels}
+            front_seen = {}
+            c["synced"]["bg_sto_field"].set("noise")
+            for key, tex, shape, origin in (("none", "none", "straight", "center"), ("straight", "tiling", "straight", "center"), ("arc", "tiling", "arc", "center"),
+                                            ("org_c", "tiling", "organic", "center"), ("org_s", "tiling", "organic", "side")):
+                c["synced"]["bg_sto_tex"].set(tex)
+                c["synced"]["bg_sto_front"].set(shape)
+                c["synced"]["bg_sto_front_origin"].set(origin)
+                root.update_idletasks()
+                front_seen[key] = {lb: sto_states(lb) for lb in front_labels}
+            out["front_states"] = front_seen
+            out["front_angle_tiling"] = row_states("Angle du degrade")             # le front n'utilise plus l'angle du degrade
+            c["synced"]["bg_sto_tex"].set("none")
+            c["synced"]["bg_sto_front"].set("straight")
+            c["synced"]["bg_sto_front_origin"].set("center")
             c["synced"]["bg_sto_field"].set("noise")
             for w in gg.leaves(c["sto_box"]):
                 if w.winfo_class() == "Scale" and float(w.cget("to")) == 60.0:
@@ -1713,6 +1732,13 @@ def check_gui() -> None:
           "masque RD: ses lignes sont dans la fenetre, grisees sans forme, actives avec une forme", str((out.get("rd_mask_off"), out.get("rd_mask_on"))))
     check(thumb[0] == 1 and thumb[1] >= 96 and thumb[2] >= 54 and thumb[3] and thumb[4] == "circles",
           "masque RD: la vignette (96 x 54) existe et se redessine quand la forme change", str(thumb))
+    fs = out.get("front_states") or {}
+    wanted = {"none": (), "straight": ("Front de la vague", "Direction du front"), "arc": ("Front de la vague", "Direction du front", "Courbure du front"),
+              "org_c": ("Front de la vague", "Irregularite du front", "Origine du front"),
+              "org_s": ("Front de la vague", "Direction du front", "Courbure du front", "Irregularite du front", "Origine du front")}
+    check(all((out.get("front_rows") or {"x": False}).values()) and fs and all(fs.get(k, {}).get(lb) == (on if lb in lbs else off) for k, lbs in wanted.items() for lb in wanted["org_s"]),
+          "front de la vague: ses lignes sont dans la fenetre, grisees sans pavage, puis selon la forme (direction, courbure, irregularite, origine)", str(fs))
+    check(out.get("front_angle_tiling") == off, "front de la vague: avec le champ bruit et le pavage, l'angle du degrade reste grise (il ne sert plus au front)", str(out.get("front_angle_tiling")))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
@@ -11568,6 +11594,13 @@ def check_randomizer() -> None:
                                                   and 4.0 <= v["bg_sto_tex_every"] <= 16.0 and v["bg_sto_tex_bars"] in ("1", "2", "4", "8")))
               for v in st_) and 0.35 <= tx_share <= 0.65,
           "fond aleatoire: texture de la tache (aucune une fois sur deux, sinon onde ou pavage) et ses reglages dans leur plage", f"part sans texture {tx_share:.2f}")
+    tl_ = [v for v in st_ if v.get("bg_sto_tex") == "tiling"]
+    seen_fronts = {v.get("bg_sto_front") for v in tl_}
+    check(len(tl_) >= 8 and seen_fronts == {"straight", "circle", "arc", "organic"}
+          and all(0 <= v["bg_sto_front_angle"] < 360 and 0.2 <= v["bg_sto_front_curve"] <= 1.0 and 0.3 <= v["bg_sto_front_rough"] <= 1.0
+                  and v["bg_sto_front_origin"] in ("center", "side") for v in tl_)
+          and not any("bg_sto_front" in v for v in st_ if v.get("bg_sto_tex") != "tiling"),
+          "fond aleatoire: le front de la vague (forme, direction, courbure, irregularite, origine) n'est tire qu'avec le pavage, dans ses plages", f"{len(tl_)} tirages, formes {sorted(seen_fronts)}")
     lv_share = sum(1 for v in st_ if v.get("bg_sto_levels") == "continuous") / max(len(st_), 1)
     check(all(v.get("bg_sto_levels") in ("continuous", "2", "3") for v in st_) and 0.4 <= lv_share <= 0.75,
           "fond aleatoire: paliers du stochastique (continu une fois sur deux environ, sinon 2 ou 3)", f"part continue {lv_share:.2f}")
@@ -13326,8 +13359,8 @@ def check_params_schema() -> None:
           and d["bg_sto_density"] == 0.5 and d["bg_sto_invert"] == 0.0 and d["bg_sto_rainbow"] == 0.0,
           "stochastique: valeurs par defaut (tramage pur)")
     sto = [k for k in d if k.startswith("bg_sto_")]
-    check(len(sto) == 17 and all(k in gl.BG_KEYS for k in sto),
-          "stochastique: 17 reglages (douceur #223, bordure #219, paliers #222 et texture #220 compris), tous du fond (presets de fond, scenes)")
+    check(len(sto) == 22 and all(k in gl.BG_KEYS for k in sto),
+          "stochastique: 22 reglages (douceur #223, bordure #219, paliers #222, texture #220 et front de la vague #249 compris), tous du fond (presets de fond, scenes)")
     v = gl.coerce_params({"bg_palette": "stochastique", "bg_sto_size": 999, "bg_sto_field": "spirale"})
     check(v["bg_palette"] == "stochastique" and v["bg_sto_size"] == 60.0 and v["bg_sto_field"] == "noise",
           "stochastique: palette acceptee, taille bornee, champ inconnu ramene au defaut")
@@ -14306,9 +14339,115 @@ def check_bg_stochastic_tex() -> None:
                 break
         later = frames(150)
         check(abs(later - quiet_a).mean() > 3, "stochastique texture pavage: la vague suivante dessine un autre pavage")
+        # ---- front de la vague (#249) : pendant la PREMIERE vague seul ce que le front a deja traverse est eclairci (l'ancien motif n'existe pas encore)
+        from core import stotex as st_
+
+        def reveal(age=0.5, **kw):
+            rr._sto_sweep = st_.SweepClock()                   # nouvelle vague, epoque 0, age 0 a la prochaine image
+            frames(1, **kw)
+            return frames(1, dt=age, **kw)
+
+        W, H = size
+        yy, xx = np.mgrid[0:H, 0:W]
+        disk = ((xx - W / 2) ** 2 + (yy - H / 2) ** 2) < (0.2 * H) ** 2
+        corners = ((xx < 0.15 * H) | (xx > W - 0.15 * H)) & ((yy < 0.15 * H) | (yy > H - 0.15 * H))
+        reg = lambda m: m & z0
+        straight = reveal()
+        check(light(straight, reg(xx < 0.3 * W)) > 3 * max(light(straight, reg(xx > 0.7 * W)), 0.01) and light(straight, reg(xx < 0.3 * W)) > 0.05,
+              "front: droit, angle 0 = la vague vient de la gauche (comme avant)", f"{light(straight, reg(xx < 0.3 * W)):.2f} / {light(straight, reg(xx > 0.7 * W)):.2f}")
+        check(abs(reveal(bg_angle=90.0) - straight).max() == 0, "front: l'angle du degrade ne fait plus pivoter le front")
+        top = reveal(bg_sto_front_angle=90.0)
+        check(light(top, reg(yy < 0.3 * H)) > 3 * max(light(top, reg(yy > 0.7 * H)), 0.01), "front: la direction du front vient du reglage propre (90 = du haut)")
+        circ = reveal(bg_sto_front="circle")
+        lc, lk = light(circ, reg(disk)), light(circ, reg(corners))
+        check(lc > 0.05 and lk < 0.35 * lc, "front: cercle = un disque revele du centre, les coins n'ont pas encore ete atteints", f"centre {lc:.2f}, coins {lk:.2f}")
+        arc = reveal(age=0.2, bg_sto_front="arc", bg_sto_front_curve=1.0)
+        mid_l, top_c = reg((xx < 0.08 * W) & (abs(yy - H / 2) < 0.1 * H)), reg((xx < 0.12 * H) & (yy < 0.12 * H))
+        la, lt_ = light(arc, mid_l), light(arc, top_c)
+        check(la > 0.05 and lt_ < 0.35 * la, "front: arc courbe = le milieu du bord est atteint avant le coin (un front droit les atteindrait ensemble)", f"milieu {la:.2f}, coin {lt_:.2f}")
+        check(abs(reveal(bg_sto_front="organic", bg_sto_front_rough=0.0) - circ).max() == 0, "front: organique sans irregularite = cercle (image identique)")
+        org = reveal(bg_sto_front="organic", bg_sto_front_rough=1.0)
+        check(abs(org - circ).mean() > 1.0, "front: l'irregularite deforme le bord (l'image change)", f"{abs(org - circ).mean():.2f}")
+        side = reveal(bg_sto_front="organic", bg_sto_front_origin="side", bg_sto_front_rough=0.5)
+        check(light(side, reg(xx < 0.3 * W)) > 2 * max(light(side, reg(xx > 0.7 * W)), 0.01), "front: organique d'origine cote = la vague vient de la gauche")
+        check(abs(reveal(bg_sto_front="circle") - reveal(bg_sto_front="circle")).max() == 0, "front: deterministe (meme reglage, meme image)")
     finally:
         tfx.TILE_SIZE, tfx.TILE_STEPS, tfm.tile_cache_path = keep
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_front_pure() -> None:
+    """Front de la vague du pavage (#249), partie pure : formes droit / cercle / arc / organique, direction, courbure, irregularite, reglages."""
+    print("Stochastique : front de la vague (formules pures)")
+    import math
+    from core import automation as au_
+    try:
+        from core import stotex as st
+    except ImportError as exc:
+        check(False, "front: core/stotex.py", str(exc))
+        return
+    if not hasattr(st, "front_pos"):
+        check(False, "front: core.stotex.front_pos existe")
+        return
+    A = 16 / 9
+
+    def pos(shape, x, y, angle=0.0, curve=0.5, rough=0.0, origin="center", epoch=0, aspect=A):
+        return st.front_pos(shape, origin, angle, curve, rough, epoch, x, y, aspect)
+
+    pts = [((i + 0.5) / 32.0, (j + 0.5) / 18.0) for j in range(18) for i in range(32)]
+    check(st.FRONT_SHAPES == ("straight", "circle", "arc", "organic") and st.FRONT_ORIGINS == ("center", "side"), "front: formes droit / cercle / arc / organique, origines centre / cote")
+    # ---- droit : la formule d'avant (projection sur la direction, en coordonnees de l'image)
+    def old(x, y, deg):
+        a = math.radians(deg)
+        dx, dy = math.cos(a), math.sin(a)
+        return min(max(((x - 0.5) * dx + (y - 0.5) * dy) / max(0.5 * (abs(dx) + abs(dy)), 0.001) * 0.5 + 0.5, 0.0), 1.0)
+
+    check(all(abs(pos("straight", x, y, ang) - old(x, y, ang)) < 1e-9 for x, y in pts[::7] for ang in (0.0, 37.0, 90.0, 200.0)),
+          "front: droit = la formule d'avant (projection sur la direction)")
+    # ---- cercle : distance au centre, 0 au centre, 1 au coin, independant de la direction
+    check(pos("circle", 0.5, 0.5) < 1e-9 and abs(pos("circle", 1.0, 1.0) - 1.0) < 1e-9 and abs(pos("circle", 0.0, 0.0) - 1.0) < 1e-9,
+          "front: cercle = 0 au centre, 1 aux coins")
+    check(all(abs(pos("circle", x, y, 0.0) - pos("circle", x, y, 123.0)) < 1e-12 for x, y in pts[::9]), "front: le cercle ne depend pas de la direction")
+    ring = [pos("circle", 0.5 + 0.2 * math.cos(t) / A, 0.5 + 0.2 * math.sin(t)) for t in (i * 0.4 for i in range(16))]
+    check(max(ring) - min(ring) < 1e-9, "front: les anneaux du cercle sont ronds a l'ecran (pas etires par le rapport largeur / hauteur)")
+    check(abs(pos("circle", 1.0, 1.0, aspect=9 / 16) - 1.0) < 1e-9 and pos("circle", 0.5, 0.5, aspect=9 / 16) < 1e-9, "front: cercle sur un cadre vertical")
+    # ---- arc : vient du cote oppose a la direction, courbe selon la courbure
+    check(pos("arc", 0.02, 0.5, 0.0) < pos("arc", 0.5, 0.5, 0.0) < pos("arc", 0.98, 0.5, 0.0) and pos("arc", 0.02, 0.5, 180.0) > pos("arc", 0.98, 0.5, 180.0),
+          "front: angle 0 = la vague vient de la gauche, 180 = de la droite")
+    check(pos("arc", 0.5, 0.02, 90.0) < pos("arc", 0.5, 0.98, 90.0) and pos("arc", 0.5, 0.02, 270.0) > pos("arc", 0.5, 0.98, 270.0),
+          "front: angle 90 = la vague vient du haut, 270 = du bas")
+    lo, hi = min(pos("arc", x, y, 0.0, 0.5) for x, y in pts), max(pos("arc", x, y, 0.0, 0.5) for x, y in pts)
+    check(lo < 0.03 and hi > 0.97, "front: l'arc couvre tout 0..1 sur l'image", f"{lo:.3f} .. {hi:.3f}")
+    bend = lambda c: abs(pos("arc", 0.5, 0.1, 0.0, c) - pos("arc", 0.5, 0.5, 0.0, c))       # ecart le long d'une ligne verticale : 0 = front droit
+    check(bend(0.0) < 0.03 and bend(1.0) > 0.04 and bend(0.0) < bend(0.5) < bend(1.0),
+          "front: la courbure regle l'arc (0 = presque droit, 1 = tres arrondi)", f"{bend(0.0):.3f} / {bend(0.5):.3f} / {bend(1.0):.3f}")
+    check(all(0.0 <= pos("arc", x, y, ang, c) <= 1.0 for x, y in pts[::5] for ang in (0.0, 45.0, 135.0) for c in (0.0, 1.0)), "front: arc borne a 0..1")
+    # ---- organique : sans irregularite = cercle / arc exact ; avec, un bord irregulier qui change a chaque vague
+    check(all(abs(pos("organic", x, y, 30.0, 0.7, 0.0, "center") - pos("circle", x, y)) < 1e-12 and abs(pos("organic", x, y, 30.0, 0.7, 0.0, "side") - pos("arc", x, y, 30.0, 0.7)) < 1e-12
+              for x, y in pts[::9]), "front: organique sans irregularite = cercle (centre) ou arc (cote)")
+    dev = [abs(pos("organic", x, y, 0.0, 0.5, 1.0, "center") - pos("circle", x, y)) for x, y in pts]
+    check(0.03 < sum(dev) / len(dev) and max(dev) <= 0.26 and all(0.0 <= pos("organic", x, y, 0.0, 0.5, 1.0, "side") <= 1.0 for x, y in pts),
+          "front: l'irregularite deforme le bord (jusqu'a ~25 % de la course), pos reste borne", f"moyenne {sum(dev) / len(dev):.3f}, max {max(dev):.3f}")
+    d2 = [abs(pos("organic", x, y, 0.0, 0.5, 1.0, "center", 0) - pos("organic", x, y, 0.0, 0.5, 1.0, "center", 1)) for x, y in pts]
+    check(sum(d2) / len(d2) > 0.03 and pos("organic", 0.3, 0.4, 0.0, 0.5, 1.0, "center", 5) == pos("organic", 0.3, 0.4, 0.0, 0.5, 1.0, "center", 5),
+          "front: le bruit change a chaque vague (epoque) et reste le meme pendant une vague")
+    cont = max(abs(pos("organic", 0.40, 0.4, 0.0, 0.5, 1.0) - pos("organic", 0.405, 0.4, 0.0, 0.5, 1.0)), 0.0)
+    check(cont < 0.02, "front: le bord organique est continu (pas de marche)", f"{cont:.4f}")
+    # ---- uniformes pour le shader
+    un = st.front_uniforms("organic", "side", 40.0, 0.6, 0.5, 3, A)
+    un0 = st.front_uniforms("straight", "center", 40.0, 0.6, 0.5, 3, A)
+    check(len(un) == 3 and un0[0][0] == 0.0 and un[0][0] == 2.0 and abs(un0[2][0] - math.cos(math.radians(40.0))) < 1e-9
+          and st.front_uniforms("circle", "side", 0.0, 0.5, 0.5, 0, A)[0][0] == 1.0, "front: uniformes (mode 0 droit, 1 radial, 2 organique ; direction)")
+    # ---- reglages
+    import audio2wave_gl as gl_
+    d = gl_.DEFAULT_PARAMS
+    keys = ("bg_sto_front", "bg_sto_front_angle", "bg_sto_front_curve", "bg_sto_front_rough", "bg_sto_front_origin")
+    check(d["bg_sto_front"] == "straight" and d["bg_sto_front_angle"] == 0.0 and d["bg_sto_front_curve"] == 0.5 and d["bg_sto_front_rough"] == 0.5
+          and d["bg_sto_front_origin"] == "center" and all(k in gl_.BG_KEYS for k in keys), "front: 5 reglages du fond (presets, scenes), droit par defaut")
+    cp = gl_.coerce_params({"bg_sto_front": "x", "bg_sto_front_angle": 999, "bg_sto_front_curve": 3, "bg_sto_front_rough": -1, "bg_sto_front_origin": "y"})
+    check(cp["bg_sto_front"] == "straight" and cp["bg_sto_front_angle"] == 360.0 and cp["bg_sto_front_curve"] == 1.0 and cp["bg_sto_front_rough"] == 0.0
+          and cp["bg_sto_front_origin"] == "center", "front: valeurs hors plage ramenees (forme et origine inconnues = defauts)")
+    check(not any(k in au_.AUTOMATION_SPECS for k in keys), "front: aucune automatisation (l'angle du front ne tourne plus tout seul)")
 
 
 def check_stotex() -> None:
@@ -17356,12 +17495,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",

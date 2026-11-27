@@ -262,6 +262,10 @@ def random_background_params(rng: random.Random) -> dict:
             values.update({"bg_sto_tex_scale": round(rng.uniform(0.6, 1.8), 2), "bg_sto_tex_contrast": round(rng.uniform(0.4, 0.9), 2),
                            "bg_sto_tex_every": round(rng.uniform(4.0, 16.0), 1), "bg_sto_tex_sync": float(rng.random() < 0.5),
                            "bg_sto_tex_bars": rng.choice(("1", "2", "4", "8"))})
+        if values["bg_sto_tex"] == "tiling":                                               # front de la vague (#249), tire apres le reste
+            values.update({"bg_sto_front": rng.choice(("straight", "circle", "arc", "organic")), "bg_sto_front_angle": float(rng.randrange(0, 360, 15)),
+                           "bg_sto_front_curve": round(rng.uniform(0.2, 1.0), 2), "bg_sto_front_rough": round(rng.uniform(0.3, 1.0), 2),
+                           "bg_sto_front_origin": rng.choice(("center", "side"))})
     if palette == "labyrinthe":
         h = rng.random()
         hues = (h, (h + rng.uniform(0.2, 0.4)) % 1.0, (h + rng.uniform(0.6, 0.8)) % 1.0)      # trois teintes espacees d'au moins 0,2

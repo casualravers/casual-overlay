@@ -565,7 +565,7 @@ class Renderer:
         self._set(sp, "u_front", (min(max(float(p["text_front_edge"]), 0.0), 30.0), min(max(float(p["text_front_glint"]), 0.0), 1.0), speed, 0.0))
         tile.texture.use(3)
 
-    def _sto_texture(self, sp, p: dict, t: float, dt: float, react: float, au, state: dict, since_down: float) -> None:
+    def _sto_texture(self, sp, p: dict, t: float, dt: float, react: float, au, state: dict, since_down: float, aspect: float = 16 / 9) -> None:
         """Texture de la zone de la tache du stochastique (#220) : onde (lignes d'oscilloscope, `core.stotex.wave_params`) ou pavage de reaction-diffusion
         (la tuile du remplissage du texte, partagee ; vague et epoques de `core.stotex.SweepClock`). Unite 5 : la tuile, sinon une texture vide. Palette
         autre, texture « none » ou tuile pas encore prete : `u_sto_tex.x` = 0 (aplat comme avant)."""
@@ -600,6 +600,11 @@ class Renderer:
             prev = 1.0 if epoch > 0 else 0.0
             self._set(sp, "u_sto_sweep", (age, front, growth, 0.5 / scale / float(tile.size)))
             self._set(sp, "u_sto_off", (cur[0], cur[1], old[0], old[1]))
+            f1, f2, fdir = stotex.front_uniforms(str(p["bg_sto_front"]), str(p["bg_sto_front_origin"]), float(p["bg_sto_front_angle"]),
+                                                  float(p["bg_sto_front_curve"]), float(p["bg_sto_front_rough"]), epoch, aspect)      # front de la vague (#249)
+            self._set(sp, "u_sto_front", f1)
+            self._set(sp, "u_sto_front2", f2)
+            self._set(sp, "u_sto_dir", fdir)
             tile.texture.use(5)
         else:
             self._sto_dummy.use(5)
@@ -1396,7 +1401,7 @@ class Renderer:
                                  float(p["bg_sto_rainbow"]), self._sto_flick))
         self._set(sp, "u_sto_soft", float(p["bg_sto_soft"]))
         self._set(sp, "u_sto_levels", {"2": 2.0, "3": 3.0}.get(p["bg_sto_levels"], 0.0))
-        self._sto_texture(sp, p, t, dt, react, bg_au, state, since_down)
+        self._sto_texture(sp, p, t, dt, react, bg_au, state, since_down, width / max(float(height), 1.0))
         self._set(sp, "u_sto_border", (*hex_to_rgb(p["bg_sto_border_color"], DEFAULT_PARAMS["bg_sto_border_color"]), float(p["bg_sto_border"])))
         self._set(sp, "u_sto_au", (react * float(bg_sc[0]), react * float(bg_fl[2]),
                                    float(state.get("beats", 0)) if kicks_on else 0.0, 0.0))
