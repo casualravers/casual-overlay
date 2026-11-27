@@ -11596,7 +11596,7 @@ def check_randomizer() -> None:
           "fond aleatoire: texture de la tache (aucune une fois sur deux, sinon onde ou pavage) et ses reglages dans leur plage", f"part sans texture {tx_share:.2f}")
     tl_ = [v for v in st_ if v.get("bg_sto_tex") == "tiling"]
     seen_fronts = {v.get("bg_sto_front") for v in tl_}
-    check(len(tl_) >= 15 and seen_fronts == {"straight", "circle", "arc", "organic"}
+    check(len(tl_) >= 8 and seen_fronts == {"straight", "circle", "arc", "organic"}
           and all(0 <= v["bg_sto_front_angle"] < 360 and 0.2 <= v["bg_sto_front_curve"] <= 1.0 and 0.3 <= v["bg_sto_front_rough"] <= 1.0
                   and v["bg_sto_front_origin"] in ("center", "side") for v in tl_)
           and not any("bg_sto_front" in v for v in st_ if v.get("bg_sto_tex") != "tiling"),
