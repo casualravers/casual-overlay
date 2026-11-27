@@ -500,6 +500,20 @@ def check_gui() -> None:
                                      not any(t.startswith("Reactions par reglage") for t in check_texts),                              # ... ni de case a cocher
                                      rien_pills >= 6)                                                                                  # une pastille « Rien » par reglage du halo
             out["calm_react_ui"] = "Reactivite du calme" in label_texts                                                                  # (#255)
+            # (#260) reponse en puissance 2 des curseurs du halo : la position du curseur suit la valeur du reglage dans les deux sens, sans derive d'arrondi
+            pos_frames = [w for w in walk(root) if hasattr(w, "pos_var")]
+            sv = c["synced"]
+            for key, value in (("holo_intensity", 1.5), ("holo_reach", 1.65), ("holo_warp", 0.75), ("holo_dust", 3.0), ("holo_wobble", 0.0)):
+                sv[key].set(value)
+            root.update_idletasks()
+            got_pos = sorted(round(w.pos_var.get(), 3) for w in pos_frames)
+            dust_frame = max(pos_frames, key=lambda w: w.pos_var.get()) if pos_frames else None
+            if dust_frame is not None:
+                dust_frame.pos_var.set(0.6)
+            sv["holo_warp"].set(0.123)
+            root.update_idletasks()
+            out["curve_ui"] = (len(pos_frames), got_pos, round(float(sv["holo_dust"].get()), 4), float(sv["holo_warp"].get()),
+                               sum(1 for w in walk(root) if w.winfo_class() == "Scale" and float(w.cget("to")) == 0.5))
             out["scrollbars"] = (sum(1 for w in walk(root) if w.winfo_class() == "Scrollbar"),
                                  sum(1 for w in walk(root) if w.winfo_class() == "TScrollbar"
                                      and str(w.cget("style")) == "Casual.Vertical.TScrollbar"))
@@ -1815,6 +1829,9 @@ def check_gui() -> None:
     check(al[0] == ["pas_une_cle"] and al[1] and al[2] and al[3],
           "GuiController.apply_state (live): cles inconnues rendues, etat pris, producteur relance, capture_state le relit", str(al))
     check(out.get("size_ro"), "taille de fenetre d'audio2wave figee (= taille du rendu)")
+    cu = out.get("curve_ui", (0, [], 0.0, 0.0, 0))
+    check(cu[0] == 5 and cu[1] == [0.0, 0.5, 0.707, 0.707, 1.0] and cu[2] == 1.08 and cu[3] == 0.123 and cu[4] >= 1,
+          "halo (#260) : cinq curseurs a reponse en puissance 2 (position <-> valeur dans les deux sens, 0,123 reste 0,123), vitesse du halo sur 0..0,5", str(cu))
     check(out.get("calm_react_ui") is True, "phases (#255) : le curseur « Reactivite du calme » est dans l'onglet des effets, a cote de la sensibilite du kick")
     check(out.get("halo_wobble_ui") == (True, True, True, True),
           "halo (#256, #259) : curseurs Irregularite et Vitesse irregul. ; plus de case « Reactions par reglage » ni de curseur « ... au son » ; une pastille « Rien » par reglage",
@@ -3194,6 +3211,47 @@ def check_logo_video() -> None:
           and gl.logo_signature(base) != gl.logo_signature(dict(base, logo_video="b.webm")),
           "signature video: fichier et detourage la regenerent, pas la position")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_response() -> None:
+    """Reponse non lineaire d'un curseur (#260, core/response.py, pur) : position 0..1 <-> valeur du reglage, plages du halo."""
+    print("Curseurs : reponse en puissance (formules pures) et plages du halo")
+    try:
+        from core import response as rs
+    except ImportError as exc:
+        check(False, "curseurs: core/response.py existe", str(exc))
+        return
+    pts = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]
+    check(all(abs(rs.to_value(p, 0.3, 3.0, 1.0) - (0.3 + 2.7 * p)) < 1e-9 for p in pts) and all(abs(rs.to_pos(0.3 + 2.7 * p, 0.3, 3.0, 1.0) - p) < 1e-9 for p in pts),
+          "curseurs (#260): courbe 1 = lineaire, a l'identique (valeur et position)")
+    check(rs.to_value(0.0, 0.0, 3.0, 2.0) == 0.0 and rs.to_value(1.0, 0.0, 3.0, 2.0) == 3.0 and abs(rs.to_value(0.5, 0.0, 3.0, 2.0) - 0.75) < 1e-9
+          and abs(rs.to_value(0.5, 0.3, 3.0, 2.0) - (0.3 + 2.7 * 0.25)) < 1e-9,
+          "curseurs (#260): puissance 2 = extremites exactes, le milieu du curseur donne le quart de la plage")
+    check(all(abs(rs.to_pos(rs.to_value(p, 0.0, 3.0, 2.0), 0.0, 3.0, 2.0) - p) < 1e-9 for p in pts),
+          "curseurs (#260): position -> valeur -> position redonne la position (pas de derive)")
+    vs = [rs.to_value(0.01 * k, 0.0, 3.0, 2.0) for k in range(0, 101)]
+    check(all(b >= a for a, b in zip(vs, vs[1:])), "curseurs (#260): la valeur croit avec la position")
+    check(rs.to_value(-1.0, 0.0, 3.0, 2.0) == 0.0 and rs.to_value(9.0, 0.0, 3.0, 2.0) == 3.0 and rs.to_pos(-5.0, 0.0, 3.0, 2.0) == 0.0 and rs.to_pos(9.0, 0.0, 3.0, 2.0) == 1.0
+          and rs.to_value(float("nan"), 0.0, 3.0, 2.0) == 0.0 and rs.to_pos(float("nan"), 0.0, 3.0, 2.0) == 0.0 and rs.to_pos(1.0, 2.0, 2.0, 2.0) == 0.0,
+          "curseurs (#260): position ou valeur hors plage, NaN, plage nulle = bornees (jamais d'erreur ni de NaN)")
+    check(rs.to_value(0.4, 0.0, 3.0, 2.0, 0.01) == round(rs.to_value(0.4, 0.0, 3.0, 2.0), 2) == 0.48 and rs.to_value(0.4, 0.0, 3.0, 2.0, 0.0) == rs.to_value(0.4, 0.0, 3.0, 2.0),
+          "curseurs (#260): arrondi au pas (0,01) ; pas nul = pas d'arrondi")
+    # les valeurs d'usage mesurees (presets et scenes de l'utilisateur) occupent plus de course a puissance 2 qu'en lineaire
+    check(rs.to_pos(1.5, 0.0, 3.0, 2.0) > 0.7 > rs.to_pos(1.5, 0.0, 3.0, 1.0) and rs.to_pos(1.0, 0.0, 3.0, 2.0) > 0.55,
+          "curseurs (#260): 1,5 sur 0..3 est a plus de 70 % de la course (50 % avant), le defaut 1 a plus de 55 % (33 % avant)")
+    from core import params_schema as ps, automation as au
+    spec = ps.BY_KEY
+    check((spec["holo_speed"].lo, spec["holo_speed"].hi, spec["holo_speed"].default) == (0.0, 0.5, 0.15)
+          and (spec["holo_intensity"].lo, spec["holo_intensity"].hi) == (0.0, 3.0) and (spec["holo_reach"].lo, spec["holo_reach"].hi) == (0.3, 3.0)
+          and (spec["holo_warp"].lo, spec["holo_warp"].hi) == (0.0, 3.0) and (spec["holo_dust"].lo, spec["holo_dust"].hi) == (0.0, 3.0)
+          and (spec["holo_wobble"].lo, spec["holo_wobble"].hi) == (0.0, 1.0),
+          "curseurs (#260): vitesse du halo 0..0,5 (defaut 0,15) ; les autres plages du halo ne bougent pas (les valeurs sauvees restent valides)")
+    lo, hi = au.AUTOMATION_SPECS["holo_speed"][1:3]
+    dlo, dhi = au.DEFAULT_RANGES["holo_speed"]
+    check((lo, hi) == (0.0, 0.5) and lo <= dlo < dhi <= hi, "curseurs (#260): automation de la vitesse du halo sur 0..0,5, sa plage par defaut dedans", f"{(lo, hi)} {(dlo, dhi)}")
+    from core import params as prm
+    check(all(prm.coerce_params({"holo_speed": v})["holo_speed"] == min(v, 0.5) for v in (0.0, 0.3, 0.5, 0.9, 1.0)),
+          "curseurs (#260): une ancienne vitesse (jusqu'a 1) est ramenee dans la nouvelle plage, celles d'usage (<= 0,3) ne bougent pas")
 
 
 def check_holo_champ() -> None:
@@ -17861,12 +17919,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_rd_dens_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_response", "check_holo_champ", "check_rd_mask_pure", "check_rd_dens_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_rd_dens_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_dens", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_response", "check_holo_champ", "check_rd_mask_pure", "check_rd_dens_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_dens", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",

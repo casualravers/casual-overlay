@@ -43,6 +43,7 @@ from pathlib import Path
 from tkinter import colorchooser, ttk
 
 import audio2wave_gl as gl
+from core import response
 from engine import diagnostics
 from engine import window as window_engine
 import skin
@@ -1234,13 +1235,53 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         automation.register(holder, key, label, lo, hi)
         auto_vars[key] = var
 
-    def compact_scale(parent, lo: float, hi: float, step: float, var: tk.Variable, length: int = 120) -> tk.Frame:
+    def compact_scale(parent, lo: float, hi: float, step: float, var: tk.Variable, length: int = 120, curve: float = 1.0) -> tk.Frame:
         """Curseur dont la valeur s'affiche A COTE (et non au-dessus): une ligne fait ~22 px de moins,
-        ce qui garde la fenetre sous la hauteur d'un ecran 1080 p meme avec le bloc motif ouvert."""
+        ce qui garde la fenetre sous la hauteur d'un ecran 1080 p meme avec le bloc motif ouvert.
+        `curve` > 1 (#260) : reponse en puissance (valeur = bas + (haut - bas) x position^curve) pour les reglages dont l'usage tient dans le bas de la
+        plage ; le curseur manipule une position 0..1 synchronisee dans les deux sens avec `var`, qui reste la valeur du reglage (core/response.py)."""
         frame = tk.Frame(parent)
         decimals = len(f"{step:.6f}".rstrip("0").split(".")[1]) if step < 1 else 0
-        scale = tk.Scale(frame, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var,
-                         length=length, showvalue=False, width=12, sliderlength=16)
+        if curve == 1.0:
+            scale = tk.Scale(frame, from_=lo, to=hi, resolution=step, orient="horizontal", variable=var,
+                             length=length, showvalue=False, width=12, sliderlength=16)
+        else:
+            def read_pos() -> float:
+                try:
+                    return response.to_pos(float(var.get()), lo, hi, curve)
+                except (ValueError, tk.TclError):
+                    return 0.0
+
+            pos_var = tk.DoubleVar(value=read_pos())
+            busy = [False]                                       # drapeau contre la reentrance : pas de va-et-vient (derive d'arrondi) entre les deux variables
+
+            def pos_to_value(*_a) -> None:
+                if busy[0]:
+                    return
+                busy[0] = True
+                try:
+                    var.set(response.to_value(pos_var.get(), lo, hi, curve, min(step, 0.01)))
+                except (ValueError, tk.TclError):
+                    pass
+                finally:
+                    busy[0] = False
+
+            def value_to_pos(*_a) -> None:
+                if busy[0]:
+                    return
+                busy[0] = True
+                try:
+                    pos_var.set(read_pos())
+                except tk.TclError:
+                    pass
+                finally:
+                    busy[0] = False
+
+            pos_var.trace_add("write", pos_to_value)
+            var.trace_add("write", value_to_pos)
+            scale = tk.Scale(frame, from_=0.0, to=1.0, resolution=0.001, orient="horizontal", variable=pos_var,
+                             length=length, showvalue=False, width=12, sliderlength=16)
+            frame.pos_var = pos_var
         scale.pack(side="left")
         value = tk.Label(frame, width=5, anchor="e", fg=a2w.GUI_MUTED_FG)
         value.pack(side="left", padx=(4, 0))
@@ -1257,10 +1298,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return frame
 
     def add_slider(z: Zone, label: str, lo: float, hi: float, step: float, var: tk.Variable,
-                   tooltip: str | None = None, length: int = 120, auto_key: str | None = None) -> tk.Scale:
+                   tooltip: str | None = None, length: int = 120, auto_key: str | None = None, curve: float = 1.0) -> tk.Scale:
         r = z.next_row()
         add_label(z, label, r, tooltip)
-        holder = compact_scale(z.parent, lo, hi, step, var, length)
+        holder = compact_scale(z.parent, lo, hi, step, var, length, curve)
         scale = holder.scale
         holder.grid(row=r, column=z.ctrl_col, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
         if tooltip:                                 # l'info-bulle suit aussi le curseur, pas seulement son libelle
@@ -1270,10 +1311,10 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
         return scale
 
     def param_slider(z: Zone, label: str, key: str, lo: float, hi: float, step: float,
-                     tooltip: str | None = None) -> tk.DoubleVar:
+                     tooltip: str | None = None, curve: float = 1.0) -> tk.DoubleVar:
         var = tk.DoubleVar(value=params[key])
         bind_param(key, var)
-        add_slider(z, label, lo, hi, step, var, tooltip, auto_key=key if key in gl.AUTOMATION_SPECS else None)
+        add_slider(z, label, lo, hi, step, var, tooltip, auto_key=key if key in gl.AUTOMATION_SPECS else None, curve=curve)
         return var
 
     def param_radio(z: Zone, label: str, key: str, choices: tuple[tuple[str, str], ...],

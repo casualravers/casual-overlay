@@ -166,6 +166,12 @@ automations de courbes, ses info-bulles, son theme et toute evolution future de 
    **Taille voulue de la page surveillee** (`watch_page`, 300 ms) : ouvrir « Affichage et analyse » (ou un onglet plus haut) change la taille VOULUE de la page sans changer sa taille, donc aucun `<Configure>` : l'ascenseur et la zone de defilement restaient figes (contenu coupe, plus defilable en fenetre agrandie). `on_page_config` est rappelee des que la taille voulue change.
    Le bouton « Plein ecran » de « Affichage et analyse » demande un ETAT (`fullscreen=0|1` selon `s.window.fullscreen`), comme la case : refuse sur l'ecran des reglages avec un message au lieu de les recouvrir ; seule la touche F de la fenetre de rendu bascule sans garde.
    Les curseurs de casual-overlay (`compact_scale`) affichent leur valeur a COTE et non au-dessus (-22 px par ligne).
+   **Reponse en puissance (#260)** : `compact_scale` / `add_slider` / `param_slider` acceptent `curve` (1 = lineaire, comme avant). Avec `curve` = 2 la valeur est
+   `bas + (haut - bas) x position^2` : le `Scale` Tk manipule une position 0..1 (variable `pos_var`, aussi posee sur le cadre du curseur), synchronisee dans les
+   deux sens avec la variable de VALEUR liee au reglage (`bind_param` : automation, scenes, presets, Randomizer et telecommande ne voient rien), avec un drapeau
+   contre la reentrance (la valeur n'est pas re-arrondie quand elle vient de l'exterieur). Conversions pures et bornees : `core/response.py` (`to_value`, `to_pos`).
+   Pour les reglages dont l'usage tient dans le bas de la plage : le halo (intensite, portee, deformation, poussiere, irregularite) ; la plage et les valeurs
+   sauvees ne changent pas.
 - **Presets en tete de chaque bloc** : presets overlay (`preset_bar`), presets fond (haut du fond genere) et presets d'audio2wave
   (`presets_first=True` de leur `build_gui` : le bloc `PRESETS ...`, `Charger`, `Sauvegarder sous` et `Mode VJ` de Snap passent sous
   le titre, la ligne de statut reste en bas ; c'est `common.move_rows_to_top`, sur des numeros de lignes enregistres, plus un

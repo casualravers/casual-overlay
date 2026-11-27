@@ -217,18 +217,21 @@ def install(c):
         if routing is not None:
             routing.pill_after(cz, f"lg_holo_{name}", padx=ROW_PADX, pady=ROW_PADY)
 
-    param_slider(cz, "Intensite", "holo_intensity", 0.0, 3.0, 0.05, "Force de la lumiere irisee.")
+    # Les curseurs du halo etaient trop sensibles (#260 : l'usage tenait dans les 20 % les plus faibles de la course) : reponse en PUISSANCE 2 (valeur = bas +
+    # (haut - bas) x position^2, core/response.py) : le debut de course est plus fin, la plage et les valeurs sauvees ne changent pas. La vitesse a une plage 0..0,5.
+    HALO_CURVE = 2.0
+    param_slider(cz, "Intensite", "holo_intensity", 0.0, 3.0, 0.05, "Force de la lumiere irisee.", curve=HALO_CURVE)
     halo_pill("intensity")
-    param_slider(cz, "Portee", "holo_reach", 0.3, 3.0, 0.05, "Etendue du halo autour du logo.")
+    param_slider(cz, "Portee", "holo_reach", 0.3, 3.0, 0.05, "Etendue du halo autour du logo.", curve=HALO_CURVE)
     halo_pill("reach")
-    param_slider(cz, "Deformation", "holo_warp", 0.0, 3.0, 0.05, "Deformation du fond (lentille et ondes). 0 = aucune.")
+    param_slider(cz, "Deformation", "holo_warp", 0.0, 3.0, 0.05, "Deformation du fond (lentille et ondes). 0 = aucune.", curve=HALO_CURVE)
     halo_pill("warp")
-    param_slider(cz, "Poussiere", "holo_dust", 0.0, 3.0, 0.05, "Quantite de poussiere d'etoiles. 0 = aucune.")
+    param_slider(cz, "Poussiere", "holo_dust", 0.0, 3.0, 0.05, "Quantite de poussiere d'etoiles. 0 = aucune.", curve=HALO_CURVE)
     halo_pill("dust")
-    param_slider(cz, "Vitesse", "holo_speed", 0.0, 1.0, 0.01, "Vitesse des ondes et de la derive des etoiles.")
+    param_slider(cz, "Vitesse", "holo_speed", 0.0, 0.5, 0.01, "Vitesse des ondes et de la derive des etoiles.")
     halo_pill("speed")
     param_slider(cz, "Irregularite", "holo_wobble", 0.0, 1.0, 0.01,
-                 "Irregularite des anneaux : chaque anneau se deforme un peu, pour casser l'effet trop propre. 0 = anneaux parfaits.")
+                 "Irregularite des anneaux : chaque anneau se deforme un peu, pour casser l'effet trop propre. 0 = anneaux parfaits.", curve=HALO_CURVE)
     halo_pill("wobble")
     param_slider(cz, "Vitesse irregul.", "holo_wobble_speed", 0.0, 2.0, 0.05,
                  "Vitesse a laquelle les irregularites des anneaux ondulent. 0 = figees.")

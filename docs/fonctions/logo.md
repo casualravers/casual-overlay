@@ -93,6 +93,12 @@ Routage. **Migration** : `routing.migrate_halo_reactions`, appelee par `coerce_p
 `holo_react_<nom>` > 0 en source (celle deja choisie, sinon « Comme la couche ») et dosage `reaction x ancien dosage` (borne 2), le retire sinon.
 Specs : docs/plans/2026-11-27-halo-automation-routage-247-design.md, docs/plans/2026-11-27-halo-pastilles-259-design.md.
 
+**Curseurs moins sensibles (#260)** : l'usage mesure (116 valeurs de presets et scenes) tenait dans les 20 a 40 % de la course. `holo_speed` a une plage **0..0,5** (table,
+curseur, automation ; defaut 0,15 = 30 % de la course ; une ancienne valeur au-dela est ramenee a 0,5 par `coerce_params`). Intensite, portee, deformation, poussiere
+et irregularite gardent leur plage (les valeurs sauvees, jusqu'a 2,75, restent valides) mais leur curseur a une **reponse en puissance 2** (`curve` dans `gui/gl_gui.py`,
+voir gui.md) : 1,5 sur 0..3 est a 71 % de la course (50 % avant), le defaut 1 a 58 % (33 % avant). Laisses lineaires : vitesse des irregularites, « Reaction audio »
+generale, dosages des pastilles. Spec : docs/plans/2026-11-27-halo-curseurs-260-design.md.
+
 **Irregularites des anneaux (#256)** : les anneaux sont les courbes de niveau de `v` (parfaitement lisse : trop « dessin a la regle »). `holo.frag` ajoute a `v`
 un bruit de valeur 3D (position x `WOBBLE_FREQ`, **`v` x `WOBBLE_RING_K` en 3e axe** : chaque anneau voit une tranche differente, donc sa propre
 deformation, sans coupure ; le temps fait deriver la tranche et la position) : `v' = v + irregularite x WOBBLE_AMP x masque(v) x bruit`
