@@ -11116,7 +11116,7 @@ def check_automation() -> None:
         check(False, "curseur Vitesse : modules audio2wave importables", str(exc))
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
-    check(len(specs) == 30 and all(k in specs and default[k]["enabled"] for k in rd_auto)
+    check(len(specs) == 34 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178), coupees par defaut
           and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto + ("bg_rd_scale",))
           and "bg_rd_scale" in specs and not default["bg_rd_scale"]["enabled"]
           and not any(k in specs for k in ("bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
