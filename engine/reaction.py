@@ -36,6 +36,7 @@ class ReactionDiffusion:
         self._disp_ok = False                                 # False : le prochain lissage recopie l'etat (grille neuve ou redimensionnee)
         self._resize_t: float | None = None                   # instant du dernier changement de taille de la grille
         self.zone_tex = self.zone_fbo = None                  # carte (F, K) des zones, a la taille de la grille
+        self.ds_tex = None                                    # facteur de diffusion par cellule (densite variable, #160), 2e sortie de la passe de carte
         self.tex: list = []
         self.fbo: list = []
         self.cur = 0
@@ -96,13 +97,13 @@ class ReactionDiffusion:
         return raw.reshape(h, w, 2)[::-1, :, 1].astype(np.float32)
 
     def _alloc(self, size: tuple[int, int]) -> None:
-        for obj in (*self.fbo, *self.tex, *(o for o in (self.zone_fbo, self.zone_tex) if o is not None)):
+        for obj in (*self.fbo, *self.tex, *(o for o in (self.zone_fbo, self.zone_tex, self.ds_tex) if o is not None)):
             obj.release()
         for obj in (*self.disp_fbo, *self.disp_tex):            # l'affichage lisse suit la grille : reallouee au prochain lissage
             obj.release()
         self.disp_tex, self.disp_fbo, self._disp_ok = [], [], False
         self.tex, self.fbo = [], []
-        self.zone_tex = self.zone_fbo = None
+        self.zone_tex = self.zone_fbo = self.ds_tex = None
         # RG32F : U et V. RG16F : W = 1 - U et V (issue #225) : en RG16F un increment F x (1 - U) plus petit que le demi-ulp pres de 1 etait perdu et le
         # motif se figeait en un point fixe d'arrondi apres ~15 s ; W est petit la ou le motif est vide (precis), l'increment F x W n'est plus perdu.
         # `half` = format voulu (RG16F : un pas ~2 fois moins cher aux grilles fines) ; l'autre sert de repli (RG32F absent : RG16F, donc W).
@@ -118,12 +119,14 @@ class ReactionDiffusion:
             t.filter = (moderngl.LINEAR, moderngl.LINEAR)
             t.repeat_x = t.repeat_y = True
         if self.tex:
-            try:                                           # carte (F, K, ds) en RGBA32F meme quand l'etat est en RG16F : la precision de F et de K compte (bande utile etroite) ; ds = facteur de diffusion (#160)
-                self.zone_tex = self.ctx.texture(size, 4, dtype="f4")
+            try:                                           # carte (F, K) en RG32F meme quand l'etat est en RG16F : la precision de F et de K compte (bande utile etroite)
+                self.zone_tex = self.ctx.texture(size, 2, dtype="f4")
             except Exception:
-                self.zone_tex = self.ctx.texture(size, 4, dtype=self.dtype)
+                self.zone_tex = self.ctx.texture(size, 2, dtype=self.dtype)
             self.zone_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
-            self.zone_fbo = self.ctx.framebuffer(color_attachments=[self.zone_tex])
+            self.ds_tex = self.ctx.texture(size, 1, dtype="f2")    # facteur de diffusion ds (#160) : R16F, lu par le pas seulement avec une densite (pas de cout sinon)
+            self.ds_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+            self.zone_fbo = self.ctx.framebuffer(color_attachments=[self.zone_tex, self.ds_tex])
         self.size, self.cur = size, 0
 
     def ensure(self, scale: float, now: float | None = None) -> None:
@@ -141,12 +144,12 @@ class ReactionDiffusion:
             self.reset(self.seed)
             return
         prev = self.ctx.fbo
-        old = (self.fbo, self.tex, self.zone_fbo, self.zone_tex)
+        old = (self.fbo, self.tex, self.zone_fbo, self.zone_tex, self.ds_tex)
         src = self.tex[self.cur]
-        self.fbo, self.tex, self.zone_fbo, self.zone_tex = [], [], None, None       # _alloc ne libere pas l'ancien avant la copie
+        self.fbo, self.tex, self.zone_fbo, self.zone_tex, self.ds_tex = [], [], None, None, None       # _alloc ne libere pas l'ancien avant la copie
         self._alloc(size)
         if not self.tex:                                  # allocation impossible : on garde l'ancienne grille
-            self.fbo, self.tex, self.zone_fbo, self.zone_tex = old
+            self.fbo, self.tex, self.zone_fbo, self.zone_tex, self.ds_tex = old
             return
         src.filter = (moderngl.LINEAR, moderngl.LINEAR)
         src.repeat_x = src.repeat_y = True
@@ -236,8 +239,9 @@ class ReactionDiffusion:
             self.zone_fbo.use()
             self.zone_vao.render(moderngl.TRIANGLE_STRIP)
             self.zone_tex.use(1)
+            self.ds_tex.use(2)
         free_noise = rc.FREE_NOISE if self.dtype == "f4" else 0.0          # en 16 bits un increment de 1e-3 serait perdu
-        for name, value in (("u_zoned", int(zoned)), ("u_zone", 1), ("u_sym", sym), ("u_free", float(zone.free)),
+        for name, value in (("u_zoned", int(zoned)), ("u_zone", 1), ("u_ds", 2), ("u_ds_on", int(dens_on)), ("u_sym", sym), ("u_free", float(zone.free)),
                             ("u_free_noise", free_noise), ("u_bud", int(bool(bud))), ("u_bud_level", rc.BUD_LEVEL),
                             ("u_w", int(self.dtype == "f2"))):
             if name in prog:

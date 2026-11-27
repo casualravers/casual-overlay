@@ -44,7 +44,8 @@ uniform float u_dens_t;        // derive des zones
 uniform float u_dens_salt;
 
 in vec2 v_uv;
-out vec4 f_color;
+layout(location = 0) out vec4 f_color;                      // (F, K)
+layout(location = 1) out float f_ds;                        // facteur de diffusion (#160)
 
 float zhash(vec2 c) {                                       // hachage sans sin
     vec3 p3 = fract(vec3(c.xyx) * 0.1031);
@@ -165,5 +166,6 @@ void main() {
     if (u_dens > 0) {
         ds = 1.0 - u_dens_amount * dens_at(fold(v_uv));
     }
-    f_color = vec4(fk, ds, 1.0);
+    f_color = vec4(fk, 0.0, 1.0);
+    f_ds = ds;
 }

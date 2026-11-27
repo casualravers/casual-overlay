@@ -11,6 +11,8 @@ uniform int u_nseeds;
 // Zones (formes, vides) : u_zoned = (F, K) lu dans la carte calculee une fois par image (rd_zone.frag) ; sinon u_fk partout (origine).
 uniform int u_zoned;
 uniform sampler2D u_zone;      // carte (F, K) par cellule
+uniform sampler2D u_ds;        // facteur de diffusion par cellule (densite variable, #160)
+uniform int u_ds_on;           // 1 = la densite est active : u_ds est lue ; 0 = diffusion inchangee (image d'origine, aucune lecture de plus)
 uniform int u_sym;             // 0 aucune, 1 miroir gauche-droite, 2 miroir haut-bas, 3 quatre quadrants, 4 rotation
 uniform float u_free;          // liberte 0..1
 uniform float u_free_noise;    // amplitude du bruit de V a liberte 1 (0 si l'etat est en 16 bits : il serait perdu)
@@ -41,15 +43,15 @@ float zhash(vec2 c) {                                       // hachage sans sin
 }
 
 void main() {
-    vec4 zc = u_zoned > 0 ? texture(u_zone, v_uv) : vec4(u_fk, 1.0, 1.0);      // (F, K, facteur de diffusion ds) de la cellule
-    vec2 fk = zc.rg;
+    vec2 fk = u_zoned > 0 ? texture(u_zone, v_uv).rg : u_fk;
+    float ds = u_ds_on > 0 ? texture(u_ds, v_uv).r : 1.0;                      // facteur de diffusion de la cellule (#160) : lu seulement avec une densite
     vec2 c = texture(u_state, v_uv).rg;
     vec2 lap = -c;
     lap += 0.2 * (texture(u_state, v_uv + vec2(u_texel.x, 0.0)).rg + texture(u_state, v_uv - vec2(u_texel.x, 0.0)).rg
                 + texture(u_state, v_uv + vec2(0.0, u_texel.y)).rg + texture(u_state, v_uv - vec2(0.0, u_texel.y)).rg);
     lap += 0.05 * (texture(u_state, v_uv + u_texel).rg + texture(u_state, v_uv - u_texel).rg
                  + texture(u_state, v_uv + vec2(u_texel.x, -u_texel.y)).rg + texture(u_state, v_uv + vec2(-u_texel.x, u_texel.y)).rg);
-    lap *= zc.b;                                               // densite variable (#160) : diffusion x ds <= 1 (exactement 1 sans densite : image d'origine)
+    lap *= ds;                                          // densite variable (#160) : diffusion x ds <= 1 (exactement 1 sans densite : image d'origine)
     float u = c.r;
     float v = c.g;
     if (u_w > 0) {

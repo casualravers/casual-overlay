@@ -687,6 +687,17 @@ def check_gui() -> None:
             out["rd_mask_thumb"] = (len(thumbs), thumbs[0].winfo_reqwidth() if thumbs else 0, thumbs[0].winfo_reqheight() if thumbs else 0,
                                     str(thumbs[0].cget("image")) != img_none if thumbs else False, params["bg_rd_mask"])
             c["synced"]["bg_rd_mask"].set("none")
+            # densite variable (#160) : lignes presentes, curseurs grises sans mode, nombre de foyers seulement pour l'aimant
+            dens_labels = ("Intensite de la densite", "Portee de la densite", "Nombre de foyers", "Derive de la densite")
+            out["rd_dens_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False)) for lb in dens_labels}
+            dens_seen = {}
+            for mode in ("none", "magnet", "zones"):
+                c["synced"]["bg_rd_dens"].set(mode)
+                root.update_idletasks()
+                dens_seen[mode] = {lb: rd_states(lb) for lb in dens_labels}
+            out["rd_dens_states"] = dens_seen
+            out["rd_dens_written"] = params["bg_rd_dens"]
+            c["synced"]["bg_rd_dens"].set("none")
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
@@ -1732,6 +1743,11 @@ def check_gui() -> None:
           "masque RD: ses lignes sont dans la fenetre, grisees sans forme, actives avec une forme", str((out.get("rd_mask_off"), out.get("rd_mask_on"))))
     check(thumb[0] == 1 and thumb[1] >= 96 and thumb[2] >= 54 and thumb[3] and thumb[4] == "circles",
           "masque RD: la vignette (96 x 54) existe et se redessine quand la forme change", str(thumb))
+    ds_ = out.get("rd_dens_states") or {}
+    check(all((out.get("rd_dens_rows") or {"x": False}).values()) and ds_ and all(v == off for v in ds_.get("none", {"x": on}).values())
+          and all(ds_.get("magnet", {}).get(lb) == on for lb in ("Intensite de la densite", "Portee de la densite", "Nombre de foyers", "Derive de la densite"))
+          and ds_.get("zones", {}).get("Nombre de foyers") == off and all(ds_.get("zones", {}).get(lb) == on for lb in ("Intensite de la densite", "Portee de la densite", "Derive de la densite"))
+          and out.get("rd_dens_written") == "zones", "densite RD: ses lignes sont dans la fenetre, grisees sans mode, foyers seulement pour l'aimant", str(ds_))
     fs = out.get("front_states") or {}
     wanted = {"none": (), "straight": ("Front de la vague", "Direction du front"), "arc": ("Front de la vague", "Direction du front", "Courbure du front"),
               "org_c": ("Front de la vague", "Irregularite du front", "Origine du front"),
@@ -11260,7 +11276,7 @@ def check_automation() -> None:
         check(False, "curseur Vitesse : modules audio2wave importables", str(exc))
     from core import params_schema as ps_
     rd_auto = ("bg_rd_shape", "bg_rd_offset", "bg_rd_mix", "bg_rd_layers", "bg_rd_free", "bg_rd_void")
-    check(len(specs) == 39 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178) + 5 du halo (#247), coupees par defaut
+    check(len(specs) == 41 and all(k in specs and default[k]["enabled"] for k in rd_auto)      # + 4 du masque d'expansion (#178) + 5 du halo (#247), coupees par defaut
           and all(ps_.BY_KEY[k].lo <= specs[k][1] < specs[k][2] <= ps_.BY_KEY[k].hi for k in rd_auto + ("bg_rd_scale",))
           and "bg_rd_scale" in specs and not default["bg_rd_scale"]["enabled"]
           and not any(k in specs for k in ("bg_rd_drift", "bg_rd_sym", "bg_rd_branches")),
@@ -11622,6 +11638,10 @@ def check_randomizer() -> None:
               and 0.2 <= v["bg_rd_mask_soft"] <= 0.8 and v["bg_rd_mask_invert"] in (0.0, 1.0) and 0.2 <= v["bg_rd_mask_drift"] <= 0.8 for v in lb)
           and 0.2 <= mask_share <= 0.5 and not any("bg_rd_mask" in v for v in vals if v["bg_palette"] != "labyrinthe"),
           "fond aleatoire: masque d'expansion du labyrinthe (une fois sur trois environ) et ses reglages dans leurs plages", f"part avec masque {mask_share:.2f}")
+    dens_share = sum(1 for v in lb if v["bg_rd_dens"] != "none") / max(len(lb), 1)
+    check(all(v["bg_rd_dens"] in rc_.DENS_MODES and 0.5 <= v["bg_rd_dens_amount"] <= 1.0 and 0.25 <= v["bg_rd_dens_reach"] <= 0.8 and 1 <= v["bg_rd_dens_count"] <= 3
+              and 0.2 <= v["bg_rd_dens_drift"] <= 0.8 for v in lb) and 0.2 <= dens_share <= 0.5 and not any("bg_rd_dens" in v for v in vals if v["bg_palette"] != "labyrinthe"),
+          "fond aleatoire: densite variable du labyrinthe (une fois sur trois environ) et ses reglages dans leurs plages", f"part avec densite {dens_share:.2f}")
     st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
     from core import sto_fields as sf2
@@ -13412,19 +13432,20 @@ def check_params_schema() -> None:
     check(all(back[k] == sto_p[k] for k in sto) and back["bg_palette"] == "stochastique" and back["bg_mode"] == "pattern",
           "stochastique: une scene capturee avec cette palette la rejoue entierement", str({k: back[k] for k in sto}))
     rd_keys = [k for k in d if k.startswith("bg_rd_")]
-    check(len(rd_keys) == 24 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
+    check(len(rd_keys) == 29 and all(k in gl.BG_KEYS for k in rd_keys) and d["bg_rd_shape"] == 0.6 and d["bg_rd_scale"] == 1.0
           and d["bg_rd_spawn"] == 1.0 and d["bg_rd_bud"] == 0.0
           and d["bg_rd_offset"] == 0.012 and d["bg_rd_color1"] == "#ff4a2a" and d["bg_rd_ground"] == "#120d14"
           and d["bg_rd_mix"] == 0.0 and d["bg_rd_drift"] == 0.3 and d["bg_rd_layers"] == 0.0 and d["bg_rd_sym"] == "none"
           and d["bg_rd_branches"] == 4 and d["bg_rd_free"] == 0.5 and d["bg_rd_void"] == 0.0 and d["bg_rd_smooth"] == 0.5,
-          "labyrinthe: 24 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions, masque d'expansion), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
+          "labyrinthe: 29 reglages du fond (zones, vides, couches, symetrie, fluidite, apparitions, masque d'expansion, densite variable), valeurs par defaut neutres (fluidite 0,5 : issue #189)")
     sp = gl.coerce_params({"bg_rd_spawn": 3, "bg_rd_bud": -2})
     check(sp["bg_rd_spawn"] == 1.0 and sp["bg_rd_bud"] == 0.0, "labyrinthe: apparitions et bourgeons bornes 0..1", str((sp["bg_rd_spawn"], sp["bg_rd_bud"])))
     vz = gl.coerce_params({"bg_rd_sym": "spirale", "bg_rd_branches": 12, "bg_rd_free": 3})
     check(vz["bg_rd_sym"] == "none" and vz["bg_rd_branches"] == 8 and vz["bg_rd_free"] == 1.0,
           "labyrinthe: symetrie inconnue ramenee a aucune, branches et liberte bornees", str((vz["bg_rd_sym"], vz["bg_rd_branches"], vz["bg_rd_free"])))
     new_rd = ("bg_rd_mix", "bg_rd_drift", "bg_rd_layers", "bg_rd_sym", "bg_rd_branches", "bg_rd_free", "bg_rd_void", "bg_rd_spawn", "bg_rd_bud",
-              "bg_rd_mask", "bg_rd_mask_count", "bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_invert", "bg_rd_mask_drift")
+              "bg_rd_mask", "bg_rd_mask_count", "bg_rd_mask_size", "bg_rd_mask_angle", "bg_rd_mask_soft", "bg_rd_mask_invert", "bg_rd_mask_drift",
+              "bg_rd_dens", "bg_rd_dens_amount", "bg_rd_dens_reach", "bg_rd_dens_count", "bg_rd_dens_drift")
     old_scene = sc.capture_scene("Ancienne", dict(gl.DEFAULT_PARAMS, bg_mode="pattern", bg_palette="labyrinthe"), "live", None)
     for k in new_rd:
         old_scene.get("fond", {}).pop(k, None)
@@ -13868,7 +13889,7 @@ def check_rd_zones() -> None:
     cov1 = float((v1 > 0.25).mean())
     check(0.05 < cov1 < 0.7 * cov0, "vide : a 1, une partie de l'image reste sans matiere et le motif reste vivant", f"couverture {cov0:.2f} -> {cov1:.2f}")
     hh, ww = v1.shape
-    fkmap = np.frombuffer(rv.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[::-1]          # meme sens que read_v (haut en premier)
+    fkmap = np.frombuffer(rv.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[::-1]          # meme sens que read_v (haut en premier)
     dead = fkmap[:, :, 1] > rc.VOID_FK[1] - 0.004
     check(dead.mean() > 0.2 and float(v1[dead].mean()) < 0.02 and float(v1[~dead].mean()) > 0.05,
           "vide : la matiere s'eteint dans les zones vides et reste ailleurs", f"vide {dead.mean():.2f}, V {v1[dead].mean():.3f} / {v1[~dead].mean():.3f}")
@@ -13878,13 +13899,13 @@ def check_rd_zones() -> None:
           "vide : les zones denses concentrent plus de matiere que le reste",
           f"dense {dense.mean():.2f}, couverture {float((v1[dense] > 0.25).mean()):.2f} contre {float((v1[alive] > 0.25).mean()):.2f}")
     sym_r = sim(0.8, 40, rc.Zone(void=1.0, sym="mirror_lr", free=0.0))
-    ks = np.frombuffer(sym_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
+    ks = np.frombuffer(sym_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
     free_r = sim(0.8, 40, rc.Zone(void=1.0, sym="mirror_lr", free=1.0))
-    kf = np.frombuffer(free_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
+    kf = np.frombuffer(free_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
     check(float(np.abs(ks - ks[:, ::-1]).max()) < 1e-5 and float(np.abs(kf - kf[:, ::-1]).max()) > 1e-3,
           "vide : les vides suivent la symetrie (miroir parfait a liberte 0, desymetrises par la liberte)")
-    k_t2 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=2.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
-    k_t0 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=0.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
+    k_t2 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=2.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    k_t0 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=0.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
     check(float(np.abs(k_t2 - k_t0).mean()) > 5e-4, "vide : les zones vides derivent avec le temps")
 
 
@@ -13910,7 +13931,7 @@ def check_rd_mask() -> None:
         return r
 
     def gone_of(r):                                            # part eteinte lue dans la carte (forme 1 = labyrinthe), ligne 0 = bas (comme v_uv)
-        k = np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 4)[:, :, 1]
+        k = np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 2)[:, :, 1]
         return (k - rc.MAZE[1]) / (rc.VOID_FK[1] - rc.MAZE[1])
 
     plain = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0)).read_v()
@@ -13978,8 +13999,8 @@ def check_rd_dens() -> None:
             r.step(20, shape, zone=zone)
         return r
 
-    def dsmap(r):                                              # canal B de la carte : facteur de diffusion, ligne 0 = bas (comme v_uv)
-        return np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 4)[:, :, 2]
+    def dsmap(r):                                              # 2e sortie de la passe de carte : facteur de diffusion, ligne 0 = bas (comme v_uv)
+        return np.frombuffer(r.ds_tex.read(), dtype=np.float16).reshape(r.size[1], r.size[0]).astype(np.float32)
 
     plain = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0)).read_v()
     off = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0, dens=D(mode="none", amount=1.0))).read_v()
@@ -13996,7 +14017,7 @@ def check_rd_dens() -> None:
         check(err < 0.06 and float(g.min()) >= rc.DENS_MIN_DS - 1e-6 and float(g.max()) <= 1.0 + 1e-6 and float(g.min()) < 0.5,
               f"densite RD: {dens.mode}, la carte du GPU concorde avec la fonction pure (diffusion entre 0,25 et 1)", f"ecart max {err:.4f}, min {g.min():.2f}")
     mir = dsmap(sim(1.0, 20, rc.Zone(sym="mirror_lr", dens=D(mode="zones", amount=1.0, t=1.3))))
-    check(float(np.abs(mir - mir[:, ::-1]).max()) < 1e-4, "densite RD: avec une symetrie la carte la respecte")
+    check(float(np.abs(mir - mir[:, ::-1]).max()) < 2e-3, "densite RD: avec une symetrie la carte la respecte (precision demi-flottant)")
     a = dsmap(sim(1.0, 20, rc.Zone(dens=D(mode="magnet", count=2.0, t=0.0))))
     b = dsmap(sim(1.0, 20, rc.Zone(dens=D(mode="magnet", count=2.0, t=2.0))))
     check(float(np.abs(a - b).mean()) > 0.01, "densite RD: la derive deplace les foyers")
