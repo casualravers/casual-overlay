@@ -63,6 +63,8 @@ AUTOMATION_SPECS: dict[str, tuple] = {
     "holo_warp":        ("Halo : deformation", 0.0, 3.0, "sinus", 131, False),
     "holo_dust":        ("Halo : poussiere", 0.0, 3.0, "sinus", 137, False),
     "holo_speed":       ("Halo : vitesse", 0.0, 1.0, "sinus", 139, False),
+    "holo_wobble":      ("Halo : irregularite", 0.0, 1.0, "sinus", 149, False),            # (#256)
+    "holo_wobble_speed": ("Halo : vitesse des irregularites", 0.0, 2.0, "sinus", 151, False),
     "fx_int0":          ("Intensite wobble", 0.0, 2.0, "sinus", 19, True),
     "fx_int1":          ("Intensite onde de choc", 0.0, 2.0, "sinus", 41, True),
     "fx_int2":          ("Intensite aberration", 0.0, 2.0, "sinus", 7, True),
@@ -87,6 +89,7 @@ DEFAULT_RANGES: dict[str, tuple[float, float]] = {
     "logo_scale": (0.30, 0.42), "text_scale": (0.12, 0.20), "logo_opacity": (0.6, 1.0), "logo_pulse": (0.05, 0.30), "logo_glow": (0.4, 1.5),
     "logo_glow_radius": (0.6, 1.6), "fx_int0": (0.4, 1.2), "fx_int1": (0.4, 1.3), "fx_int2": (0.3, 1.2), "fx_int3": (0.15, 1.0),
     "holo_intensity": (0.5, 1.8), "holo_reach": (0.8, 1.8), "holo_warp": (0.4, 1.6), "holo_dust": (0.4, 1.6), "holo_speed": (0.05, 0.4),
+    "holo_wobble": (0.1, 0.7), "holo_wobble_speed": (0.3, 1.5),
     "fx_int4": (0.6, 1.2), "fxl_int0": (0.4, 1.2), "fxl_int1": (0.4, 1.3), "fxl_int2": (0.3, 1.2), "fxl_int3": (0.15, 1.0),
 }
 CURVE_VERSION = 2            # marque « v » de chaque entree : 2 = points sur toute la plage du curseur ; absente = ancienne plage (a convertir)

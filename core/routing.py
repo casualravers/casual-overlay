@@ -42,6 +42,7 @@ ROUTES: tuple[Route, ...] = (
     Route("lg_holo_warp", "logo", "logo", "Halo : deformation", "vec"),
     Route("lg_holo_dust", "logo", "logo", "Halo : poussiere", "vec"),
     Route("lg_holo_speed", "logo", "logo", "Halo : vitesse", "vec"),
+    Route("lg_holo_wobble", "logo", "logo", "Halo : irregularite des anneaux", "vec"),       # (#256)
     Route("lg_melt", "logo", "logo", "Fonte acide", "vec"),
     Route("lg_cells", "logo", "logo", "Cellules", "vec"),
     Route("breath", "global", None, "Respiration (pulsation)", "vec"),      # sans couche : lisent le son entier (state), pas une couche
@@ -61,7 +62,7 @@ FX_LINES = {r.id: (r.layer, al.EFFECTS.index(r.id[3:])) for r in ROUTES if r.kin
 READS = {"bg_wobble": (0,), "bg_ripple": (), "lg_ripple": (), "bg_glitch": (2,), "bg_chroma": (2,), "bg_flash": (2,), "bg_scroll": (0,), "bg_sparkle": (1,),
          "lg_wobble": (0,), "lg_glitch": (2,), "lg_chroma": (2,), "lg_pulse": (2,), "lg_jitter": (1,), "lg_glow": (0,),
          "lg_holo": (0,), "lg_melt": (0,), "lg_cells": (0,), "breath": (0,),
-         **{f"lg_holo_{n}": (0,) for n in ("intensity", "reach", "warp", "dust", "speed")}}
+         **{f"lg_holo_{n}": (0,) for n in ("intensity", "reach", "warp", "dust", "speed", "wobble")}}
 _PROBE = {"bass": 1.0, "mid": 1.0, "high": 1.0, "beat": 1.0, "since_beat": 0.0, "hit": 1.0, "since_hit": 0.0, "snare": 1.0, "since_snare": 0.0,
           "bands": [1.0] * 8, "band_rise": [1e6] * 8, "pulse_since": {g: 0.0 for g in (*al.PULSE_GRIDS, *al.END_GRIDS)}}
 _PROVIDES: dict[str, frozenset] = {}
@@ -214,7 +215,7 @@ FX_ON_INDEX = {"wobble": 0, "ripple": 1, "chroma": 2, "glitch": 3}      # ordre 
 VEC_GATES = {"bg_flash": ("bg_react",), "bg_scroll": ("bg_react",), "bg_sparkle": ("bg_react",), "lg_jitter": ("logo_jitter",),
              "lg_glow": ("logo_glow",), "lg_holo": ("holo_on", "holo_react"), "lg_melt": ("melt_on", "melt_react"),
              "lg_cells": ("cell_on", "cell_react"), "breath": ("breath_pulse",), "hue": ("hue_spectrum",),
-             **{f"lg_holo_{n}": ("holo_on", f"holo_react_{n}") for n in ("intensity", "reach", "warp", "dust", "speed")}}
+             **{f"lg_holo_{n}": ("holo_on", f"holo_react_{n}") for n in ("intensity", "reach", "warp", "dust", "speed", "wobble")}}
 
 
 def line_enabled(params: dict, rid: str) -> bool:

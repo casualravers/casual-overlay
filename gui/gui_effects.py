@@ -210,6 +210,10 @@ def install(c):
     param_slider(cz, "Deformation", "holo_warp", 0.0, 3.0, 0.05, "Deformation du fond (lentille et ondes). 0 = aucune.")
     param_slider(cz, "Poussiere", "holo_dust", 0.0, 3.0, 0.05, "Quantite de poussiere d'etoiles. 0 = aucune.")
     param_slider(cz, "Vitesse", "holo_speed", 0.0, 1.0, 0.01, "Vitesse des ondes et de la derive des etoiles.")
+    param_slider(cz, "Irregularite", "holo_wobble", 0.0, 1.0, 0.01,
+                 "Irregularite des anneaux : chaque anneau se deforme un peu, pour casser l'effet trop propre. 0 = anneaux parfaits.")
+    param_slider(cz, "Vitesse irregul.", "holo_wobble_speed", 0.0, 2.0, 0.05,
+                 "Vitesse a laquelle les irregularites des anneaux ondulent. 0 = figees.")
     param_slider(cz, "Reaction audio", "holo_react", 0.0, 2.0, 0.05,
                  "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
     if routing is not None:
@@ -223,7 +227,7 @@ def install(c):
     hr_box = tk.Frame(holo_box)
     hr_box.grid(row=cz.next_row(), column=0, columnspan=4, sticky="nw")
     hz = Zone(hr_box)
-    for hname, hlabel in (("intensity", "Intensite"), ("reach", "Portee"), ("warp", "Deformation"), ("dust", "Poussiere"), ("speed", "Vitesse")):
+    for hname, hlabel in (("intensity", "Intensite"), ("reach", "Portee"), ("warp", "Deformation"), ("dust", "Poussiere"), ("speed", "Vitesse"), ("wobble", "Irregularite")):
         param_slider(hz, f"{hlabel} au son", f"holo_react_{hname}", 0.0, 2.0, 0.05,
                      f"Reaction de « {hlabel.lower()} » au son : 0 = aucune. Valeur x (1 + reaction x niveau du son). Source : la pastille.")
         if routing is not None:

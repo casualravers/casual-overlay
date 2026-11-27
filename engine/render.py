@@ -470,6 +470,7 @@ class Renderer:
         self._fill_dummy = None            # texture 1 x 1 liee a l'unite 3 quand le remplissage est coupe
         self.text_epoch = 0                # +1 a chaque nouveau texte (set_logo, source Texte) : la vague repart
         self._holo_t = 0.0                 # phase d'animation du halo holographique, integree image par image
+        self._holo_wt = 0.0                # temps des irregularites des anneaux du halo (#256), integre avec holo_wobble_speed
         # Dernier chemin DEMANDE (charge ou non): evite de retenter un fichier invalide a chaque image.
         self.logo_requested = logo_path
         self.set_logo(logo_rgba, logo_path)
@@ -1366,6 +1367,7 @@ class Renderer:
                 p[hkey] = core_holo.react_value(hkey, p[hkey], amount, float(line(f"lg_holo_{hkey[5:]}", lg_au)[0]))
         h_react = max(float(p["holo_react"]), 0.0)
         self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(line("lg_holo", lg_au)[0]) * 3.0)
+        self._holo_wt += dt * max(float(p["holo_wobble_speed"]), 0.0) * core_holo.WOBBLE_TIME
         holo_on = float(p["holo_on"]) >= 0.5 and self.has_logo
         # Fonte acide: phase integree (changer la periode ne fait pas sauter l'animation). Triangle 0 -> 1 -> 0 avec
         # un palier intact et un palier dissous, adouci: le logo reste lisible un moment, puis fond, puis se reforme.
@@ -1503,6 +1505,8 @@ class Renderer:
             self._set(hp, "u_res", (float(width), float(height)))
             self._set(hp, "u_holo_shape", (dmax, core_holo.CIRC_K * min(2.0 * float(rect[2]) * aspect, 2.0 * float(rect[3])) / 2.0, 1.0 if self.has_logo else 0.0, 0.0))
             self._set(hp, "u_holo_lod0", math.log2(max(height, 1) / 720.0))
+            wobble = float(p["holo_wobble"])
+            self._set(hp, "u_holo_wobble", (min(wobble, 1.0) if math.isfinite(wobble) and wobble > 0.0 else 0.0, self._holo_wt))      # irregularites (#256) ; pas de modulo : un saut serait visible, et float32 tient des heures (2500 apres 1 h a la vitesse 2)
             self._set(hp, "u_holo_center", (float(rect[0]), float(1.0 - rect[1])))
             self.holo_jfa_tex[cur].use(1)
             self.holo_fbo.viewport = (0, 0, hw, hh)
