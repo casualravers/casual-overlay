@@ -1528,10 +1528,13 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
     rd_sym_var = synced["bg_rd_sym"]
     # cherche dans rd_box : dans pattern_box, la ligne de Branches serait rd_box entier (tout le bloc grise, symetrie comprise)
     gates.add(gui_gates.row_of_label(rd_box, "Branches", panels=False), lambda: rd_sym_var.get() == "rot")
+    rd_mask_var = synced["bg_rd_mask"]                            # masque d'expansion (#178) : ses curseurs ne servent qu'avec une forme
+    gates.add([w for lb in ("Apercu du masque", "Zones du masque", "Taille du masque", "Angle du masque", "Douceur du masque", "Derive du masque")
+               for w in gui_gates.row_of_label(rd_box, lb, panels=False)], lambda: rd_mask_var.get() != "none")
     text_rows = lambda *labels: [w for lb in labels for w in gui_gates.row_of_label(text_box, lb, panels=False)]
     gates.add(text_rows("Duree du balayage", "Periode", "Fondu d'une lettre"), lambda: gui_logo_ctl.ola_var.get() == 1)           # vague et remplissage (#199)
     gates.add(text_rows("Duree par lettre", "Ecart de depart", "Finesse", "Contraste", "Bord", "Ligne du front", "Scintillement", "Remise a zero"), lambda: gui_logo_ctl.fill_var.get() == 1)
-    for var in (holo_var, melt_var, cell_var, palette_var, sto_field_var, sto_tex_var, sto_sync_var, rd_sym_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
+    for var in (holo_var, melt_var, cell_var, palette_var, sto_field_var, sto_tex_var, sto_sync_var, rd_sym_var, rd_mask_var, gui_logo_ctl.ola_var, gui_logo_ctl.fill_var, gui_logo_ctl.clear_var):
         var.trace_add("write", lambda *_a: gates.refresh())
     gates.refresh()
 
@@ -2479,6 +2482,8 @@ def build_window(s, live, root, mode: str, on_ready=None) -> None:
                                                  params.get("sync_lead_est") if s.status.get("lead_parts") else None, s.status.get("lead_parts")))
         lead_gate(lead_auto)
         bgv_status.set(s.status.get("bgvideo", ""))
+        if params["bg_rd_mask"] != "none" and params["bg_palette"] == "labyrinthe":
+            gui_fond_ctl.refresh_mask_preview(float(s.status.get("rd_mask_t", 0.0)))          # vignette du masque (#178) : suit la derive du projecteur
         nz_swell, nz_hit = s.status.get("noise", (0.0, 0.0))
         for name, level in (("houle", nz_swell), ("coup", nz_hit)):
             item = noise_bars[name]

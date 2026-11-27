@@ -671,6 +671,21 @@ def check_gui() -> None:
             out["rd_branch_rot"] = rd_states("Branches")
             out["rd_sym_written"] = params["bg_rd_sym"]
             c["synced"]["bg_rd_sym"].set("none")
+            # masque d'expansion (#178) : curseurs grises sans forme, vignette 96 x 54 qui se redessine avec la forme
+            mask_labels = ("Apercu du masque", "Zones du masque", "Taille du masque", "Angle du masque", "Douceur du masque", "Derive du masque")
+            out["rd_mask_rows"] = {lb: bool(gg.row_of_label(c["rd_box"], lb, panels=False)) for lb in mask_labels}
+            c["synced"]["bg_rd_mask"].set("none")
+            root.update_idletasks()
+            out["rd_mask_off"] = {lb: rd_states(lb) for lb in mask_labels[1:]}
+            thumbs = [w for w in _walk(c["rd_box"]) if w.winfo_class() == "Label" and str(w.cget("image"))]
+            img_none = str(thumbs[0].cget("image")) if thumbs else ""
+            c["synced"]["bg_rd_mask"].set("circles")
+            root.update_idletasks()
+            out["rd_mask_on"] = {lb: rd_states(lb) for lb in mask_labels[1:]}
+            thumbs = [w for w in _walk(c["rd_box"]) if w.winfo_class() == "Label" and str(w.cget("image"))]
+            out["rd_mask_thumb"] = (len(thumbs), thumbs[0].winfo_reqwidth() if thumbs else 0, thumbs[0].winfo_reqheight() if thumbs else 0,
+                                    str(thumbs[0].cget("image")) != img_none if thumbs else False, params["bg_rd_mask"])
+            c["synced"]["bg_rd_mask"].set("none")
             c["palette_var"].set("stochastique")         # la suite mesure les grisages de la palette stochastique
             c["synced"]["bg_sto_field"].set("waves")
             out["sto_angle_waves"] = row_states("Angle du degrade")
@@ -1688,6 +1703,12 @@ def check_gui() -> None:
           and all(v == on for v in (out.get("rd_others_none") or {"x": off}).values()),
           "palette labyrinthe: Branches grise hors rotation, et lui seul (variete, symetrie, forme restent actives)",
           str((out.get("rd_branch_mirror"), out.get("rd_branch_rot"), out.get("rd_others_none"))))
+    thumb = out.get("rd_mask_thumb") or (0, 0, 0, False, "")
+    check(all((out.get("rd_mask_rows") or {"x": False}).values()) and all(v == off for v in (out.get("rd_mask_off") or {"x": on}).values())
+          and all(v == on for v in (out.get("rd_mask_on") or {"x": off}).values()),
+          "masque RD: ses lignes sont dans la fenetre, grisees sans forme, actives avec une forme", str((out.get("rd_mask_off"), out.get("rd_mask_on"))))
+    check(thumb[0] == 1 and thumb[1] >= 96 and thumb[2] >= 54 and thumb[3] and thumb[4] == "circles",
+          "masque RD: la vignette (96 x 54) existe et se redessine quand la forme change", str(thumb))
     check(out.get("sto_written") == (25.0, 1.0), "palette stochastique: le curseur de taille et la case Inverser ecrivent les reglages",
           str(out.get("sto_written")))
     check(out.get("bar_inplace") is True, "barre des scenes: changer de scene repeint la touche active sans detruire ni recreer la barre (plus de clignotement)", str(out.get("bar_dbg")))
@@ -11452,6 +11473,11 @@ def check_randomizer() -> None:
     bud_share = sum(1 for v in lb if v.get("bg_rd_bud") == 1.0) / max(len(lb), 1)
     check(all(0.4 <= v.get("bg_rd_spawn", -1) <= 1.0 and v.get("bg_rd_bud") in (0.0, 1.0) for v in lb) and 0.15 <= bud_share <= 0.5,
           "fond aleatoire: apparitions (40 a 100 %) et bourgeons (une fois sur trois environ) du labyrinthe tires", f"part avec bourgeons {bud_share:.2f}")
+    mask_share = sum(1 for v in lb if v["bg_rd_mask"] != "none") / max(len(lb), 1)
+    check(all(v["bg_rd_mask"] in rc_.MASK_SHAPES and 2 <= v["bg_rd_mask_count"] <= 6 and 0.35 <= v["bg_rd_mask_size"] <= 0.8 and 0 <= v["bg_rd_mask_angle"] <= 360
+              and 0.2 <= v["bg_rd_mask_soft"] <= 0.8 and v["bg_rd_mask_invert"] in (0.0, 1.0) and 0.2 <= v["bg_rd_mask_drift"] <= 0.8 for v in lb)
+          and 0.2 <= mask_share <= 0.5 and not any("bg_rd_mask" in v for v in vals if v["bg_palette"] != "labyrinthe"),
+          "fond aleatoire: masque d'expansion du labyrinthe (une fois sur trois environ) et ses reglages dans leurs plages", f"part avec masque {mask_share:.2f}")
     st_ = [v for v in vals if v["bg_palette"] == "stochastique"]
     check(st_ and all(0.0 <= v.get("bg_sto_soft", -1) <= 0.8 for v in st_), "fond aleatoire: douceur du stochastique tiree dans 0..0,8")
     from core import sto_fields as sf2
