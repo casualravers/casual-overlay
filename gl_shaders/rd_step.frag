@@ -40,18 +40,16 @@ float zhash(vec2 c) {                                       // hachage sans sin
     return fract((p3.x + p3.y) * p3.z);
 }
 
-vec2 zone_fk() {
-    return u_zoned > 0 ? texture(u_zone, v_uv).rg : u_fk;
-}
-
 void main() {
-    vec2 fk = zone_fk();
+    vec4 zc = u_zoned > 0 ? texture(u_zone, v_uv) : vec4(u_fk, 1.0, 1.0);      // (F, K, facteur de diffusion ds) de la cellule
+    vec2 fk = zc.rg;
     vec2 c = texture(u_state, v_uv).rg;
     vec2 lap = -c;
     lap += 0.2 * (texture(u_state, v_uv + vec2(u_texel.x, 0.0)).rg + texture(u_state, v_uv - vec2(u_texel.x, 0.0)).rg
                 + texture(u_state, v_uv + vec2(0.0, u_texel.y)).rg + texture(u_state, v_uv - vec2(0.0, u_texel.y)).rg);
     lap += 0.05 * (texture(u_state, v_uv + u_texel).rg + texture(u_state, v_uv - u_texel).rg
                  + texture(u_state, v_uv + vec2(u_texel.x, -u_texel.y)).rg + texture(u_state, v_uv + vec2(-u_texel.x, u_texel.y)).rg);
+    lap *= zc.b;                                               // densite variable (#160) : diffusion x ds <= 1 (exactement 1 sans densite : image d'origine)
     float u = c.r;
     float v = c.g;
     if (u_w > 0) {

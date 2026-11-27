@@ -13731,6 +13731,82 @@ def check_rd_mask_pure() -> None:
           "masque RD: le bruit du masque a la finesse du Vide pour 3 zones")
 
 
+def check_rd_dens_pure() -> None:
+    """Densite variable du labyrinthe (#160), partie pure : aimant (foyers qui derivent sur le tore), zones, facteur de diffusion, reglages."""
+    print("Reaction-diffusion : densite variable (formules pures)")
+    from core import automation as au_
+    try:
+        from core import reaction as rc
+    except ImportError as exc:
+        check(False, "densite RD: core/reaction.py", str(exc))
+        return
+    if not hasattr(rc, "Dens"):
+        check(False, "densite RD: core.reaction.Dens existe")
+        return
+    D, A = rc.Dens, 16 / 9
+    pts = [((i + 0.5) / 64.0, (j + 0.5) / 36.0) for j in range(36) for i in range(64)]
+
+    def field(d, **kw):
+        return [rc.dens_value(d, x, y, A, **kw) for x, y in pts]
+
+    check(rc.DENS_MODES == ("none", "magnet", "zones") and rc.DENS_SPEED > 0.0 and rc.DENS_MIN_DS == 0.25, "densite RD: modes none / magnet / zones, derive lente, diffusion mini 0,25")
+    check(all(rc.diffusion_scale(D(), x, y, A) == 1.0 for x, y in pts[::50]) and all(rc.diffusion_scale(D(mode="none", amount=1.0), x, y, A) == 1.0 for x, y in pts[::50])
+          and all(rc.diffusion_scale(D(mode="magnet", amount=0.0), x, y, A) == 1.0 for x, y in pts[::50]), "densite RD: sans mode ou intensite 0, le facteur de diffusion vaut exactement 1")
+    # ---- aimant
+    for n in (1, 2, 4):
+        pp = rc.dens_points(float(n), 0.7)
+        check(len(pp) == n and len(set(pp)) == n and all(0.0 <= x < 1.0 and 0.0 <= y < 1.0 for x, y in pp), f"densite RD: {n} foyer(s), distincts, dans l'image")
+    check(len(rc.dens_points(9.0, 0.0)) == 4 and len(rc.dens_points(0.2, 0.0)) == 1, "densite RD: nombre de foyers borne a 1 .. 4")
+    fx, fy = rc.dens_points(1.0, 0.3)[0]
+    one = D(mode="magnet", amount=1.0, reach=0.4, count=1.0, t=0.3)
+    check(abs(rc.dens_value(one, fx, fy, A) - 1.0) < 1e-9 and abs(rc.diffusion_scale(one, fx, fy, A) - rc.DENS_MIN_DS) < 1e-9,
+          "densite RD: au foyer la densite vaut 1 et la diffusion le minimum (0,25 a intensite 1)")
+    ray = [rc.dens_value(one, fx + k * 0.01 / A, fy, A) for k in range(0, 70)]        # 0,7 hauteur : au-dela du rayon (0,43)
+    check(all(a >= b - 1e-12 for a, b in zip(ray, ray[1:])) and ray[-1] < 1e-9, "densite RD: la densite decroit en s'eloignant du foyer, nulle au-dela de la portee")
+    check(abs(rc.dens_dist(0.99, 0.5, 0.01, 0.5, A) - 0.02 * A) < 1e-9 and abs(rc.dens_dist(0.5, 0.01, 0.5, 0.99, A) - 0.02) < 1e-9 and abs(rc.dens_dist(0.2, 0.5, 0.2 + 0.1, 0.5, 1.0) - 0.1) < 1e-9,
+          "densite RD: distance sur le tore (la grille boucle), en unites isotropes")
+    area = lambda r: sum(v > 0.5 for v in field(D(mode="magnet", amount=1.0, reach=r, count=1.0, t=0.3))) / len(pts)
+    check(area(0.1) < area(0.4) < area(1.0) and area(0.1) > 0.0, "densite RD: la portee agrandit la zone d'influence", f"{area(0.1):.3f} / {area(0.4):.3f} / {area(1.0):.3f}")
+    moves = [rc.dens_points(2.0, t) for t in (0.0, 5.0)]
+    check(moves[0] != moves[1], "densite RD: les foyers derivent avec le temps")
+    wrapd = lambda a, b: abs(((a - b + 0.5) % 1.0) - 0.5)
+    cont = max(max(wrapd(a[0], b[0]), wrapd(a[1], b[1])) for a, b in zip(rc.dens_points(4.0, 1.00), rc.dens_points(4.0, 1.01)))
+    check(cont < 0.02, "densite RD: la derive des foyers est continue (sur le tore)", f"{cont:.4f}")
+    f0, f1 = field(D(mode="magnet", amount=1.0, count=3.0, t=1.0)), field(D(mode="magnet", amount=1.0, count=3.0, t=1.01))
+    check(sum(abs(x - y) for x, y in zip(f0, f1)) / len(f0) < 0.02, "densite RD: aimant, la densite change sans saccade entre deux instants proches")
+    # ---- zones
+    shares = []
+    for t in (0.0, 0.7, 1.9, 3.1, 4.6, 6.2):
+        f = field(D(mode="zones", amount=1.0, reach=0.4, t=t))
+        shares.append(sum(v > 0.5 for v in f) / len(f))
+    check(0.1 < sum(shares) / len(shares) < 0.75 and all(0.0 <= v <= 1.0 for v in f), "densite RD: zones, une part raisonnable de l'image est dense", f"{sum(shares) / len(shares):.2f}")
+    row = lambda r: [rc.dens_value(D(mode="zones", amount=1.0, reach=r, t=0.9), (i + 0.5) / 400.0, 0.4, A) > 0.5 for i in range(400)]
+    cross = lambda r: sum(a != b for a, b in zip(row(r), row(r)[1:]))
+    check(cross(0.1) > cross(1.0), "densite RD: zones, une grande portee donne de plus grandes zones", f"{cross(0.1)} > {cross(1.0)}")
+    z0, z1 = field(D(mode="zones", amount=1.0, t=2.0)), field(D(mode="zones", amount=1.0, t=2.01))
+    check(sum(abs(x - y) for x, y in zip(z0, z1)) / len(z0) < 0.03, "densite RD: zones, la densite change sans saccade")
+    # ---- symetrie : repliee comme les formes, le Vide et le masque
+    sm = D(mode="zones", amount=1.0, t=1.3)
+    check(all(abs(rc.dens_value(sm, x, y, A, sym="mirror_lr") - rc.dens_value(sm, 1.0 - x, y, A, sym="mirror_lr")) < 1e-9 for x, y in pts[::40]), "densite RD: avec une symetrie la densite la respecte")
+    # ---- uniformes
+    un = dict(rc.dens_uniforms(D(mode="magnet", amount=1.0, reach=0.4, count=2.0, t=0.5)))
+    check(un["u_dens"] == 1 and un["u_dens_n"] == 2 and len(un["u_dens_pts"]) == 4 and abs(un["u_dens_amount"] - 0.75) < 1e-9
+          and dict(rc.dens_uniforms(D(mode="zones")))["u_dens"] == 2 and dict(rc.dens_uniforms(D()))["u_dens"] == 0, "densite RD: uniformes du shader (mode, foyers, intensite)")
+    check(rc.Zone().dens == D() and rc.Zone(dens=D(mode="magnet")).dens.mode == "magnet", "densite RD: Zone porte la densite (defaut : aucune)")
+    # ---- table des reglages et automations
+    import audio2wave_gl as gl_
+    d = gl_.DEFAULT_PARAMS
+    keys = ("bg_rd_dens", "bg_rd_dens_amount", "bg_rd_dens_reach", "bg_rd_dens_count", "bg_rd_dens_drift")
+    check(d["bg_rd_dens"] == "none" and (d["bg_rd_dens_amount"], d["bg_rd_dens_reach"], d["bg_rd_dens_count"], d["bg_rd_dens_drift"]) == (0.7, 0.4, 1.0, 0.5)
+          and all(k in gl_.BG_KEYS for k in keys), "densite RD: 5 reglages du fond (presets de fond, scenes), densite coupee par defaut")
+    cp = gl_.coerce_params({"bg_rd_dens": "x", "bg_rd_dens_amount": 9, "bg_rd_dens_reach": 0, "bg_rd_dens_count": 99, "bg_rd_dens_drift": -3})
+    check(cp["bg_rd_dens"] == "none" and cp["bg_rd_dens_amount"] == 1.0 and cp["bg_rd_dens_reach"] == 0.1 and cp["bg_rd_dens_count"] == 4.0 and cp["bg_rd_dens_drift"] == 0.0,
+          "densite RD: valeurs hors plage ramenees (mode inconnu = none)")
+    specs = au_.AUTOMATION_SPECS
+    check(all(k in specs and specs[k][5] is False for k in ("bg_rd_dens_amount", "bg_rd_dens_reach")) and not any(k in specs for k in ("bg_rd_dens", "bg_rd_dens_count", "bg_rd_dens_drift"))
+          and set(au_.DEFAULT_RANGES) == set(specs), "densite RD: intensite et portee automatisables (coupees par defaut), pas le mode, le nombre ni la derive")
+
+
 def check_rd_zones() -> None:
     print("Reaction-diffusion : zones de formes (points, lignes, taches dans la meme image)")
     from core import reaction as rc
@@ -13792,7 +13868,7 @@ def check_rd_zones() -> None:
     cov1 = float((v1 > 0.25).mean())
     check(0.05 < cov1 < 0.7 * cov0, "vide : a 1, une partie de l'image reste sans matiere et le motif reste vivant", f"couverture {cov0:.2f} -> {cov1:.2f}")
     hh, ww = v1.shape
-    fkmap = np.frombuffer(rv.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[::-1]          # meme sens que read_v (haut en premier)
+    fkmap = np.frombuffer(rv.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[::-1]          # meme sens que read_v (haut en premier)
     dead = fkmap[:, :, 1] > rc.VOID_FK[1] - 0.004
     check(dead.mean() > 0.2 and float(v1[dead].mean()) < 0.02 and float(v1[~dead].mean()) > 0.05,
           "vide : la matiere s'eteint dans les zones vides et reste ailleurs", f"vide {dead.mean():.2f}, V {v1[dead].mean():.3f} / {v1[~dead].mean():.3f}")
@@ -13802,13 +13878,13 @@ def check_rd_zones() -> None:
           "vide : les zones denses concentrent plus de matiere que le reste",
           f"dense {dense.mean():.2f}, couverture {float((v1[dense] > 0.25).mean()):.2f} contre {float((v1[alive] > 0.25).mean()):.2f}")
     sym_r = sim(0.8, 40, rc.Zone(void=1.0, sym="mirror_lr", free=0.0))
-    ks = np.frombuffer(sym_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    ks = np.frombuffer(sym_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
     free_r = sim(0.8, 40, rc.Zone(void=1.0, sym="mirror_lr", free=1.0))
-    kf = np.frombuffer(free_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    kf = np.frombuffer(free_r.zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
     check(float(np.abs(ks - ks[:, ::-1]).max()) < 1e-5 and float(np.abs(kf - kf[:, ::-1]).max()) > 1e-3,
           "vide : les vides suivent la symetrie (miroir parfait a liberte 0, desymetrises par la liberte)")
-    k_t2 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=2.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
-    k_t0 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=0.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 2)[:, :, 1]
+    k_t2 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=2.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
+    k_t0 = np.frombuffer(sim(0.8, 40, rc.Zone(void=1.0, t=0.0)).zone_tex.read(), dtype=np.float32).reshape(hh, ww, 4)[:, :, 1]
     check(float(np.abs(k_t2 - k_t0).mean()) > 5e-4, "vide : les zones vides derivent avec le temps")
 
 
@@ -13834,7 +13910,7 @@ def check_rd_mask() -> None:
         return r
 
     def gone_of(r):                                            # part eteinte lue dans la carte (forme 1 = labyrinthe), ligne 0 = bas (comme v_uv)
-        k = np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 2)[:, :, 1]
+        k = np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 4)[:, :, 1]
         return (k - rc.MAZE[1]) / (rc.VOID_FK[1] - rc.MAZE[1])
 
     plain = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0)).read_v()
@@ -13879,6 +13955,76 @@ def check_rd_mask() -> None:
           "masque RD: la matiere est absente hors de la zone et presente dedans", f"V {vin:.3f} dedans, {vout:.3f} dehors")
     cov = float((v > 0.25).mean())
     check(0.03 < cov < 0.6, "masque RD: le motif reste vivant avec un masque", f"couverture {cov:.2f}")
+
+
+def check_rd_dens() -> None:
+    print("Reaction-diffusion : densite variable (carte GPU, lignes plus serrees au foyer)")
+    from core import reaction as rc
+    from engine.reaction import ReactionDiffusion
+    from engine.render import SHADER_DIR
+    try:
+        ctx = gl.moderngl.create_standalone_context()
+    except Exception as exc:
+        check(False, "contexte OpenGL standalone", str(exc))
+        return
+    vbo = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype="f4").tobytes())
+    D, M = rc.Dens, rc.Mask
+
+    def sim(shape, steps, zone=None, scale=1.5):
+        r = ReactionDiffusion(ctx, vbo, SHADER_DIR)
+        r.ensure(scale)
+        r.reset(0)
+        for _ in range(max(steps // 20, 1)):
+            r.step(20, shape, zone=zone)
+        return r
+
+    def dsmap(r):                                              # canal B de la carte : facteur de diffusion, ligne 0 = bas (comme v_uv)
+        return np.frombuffer(r.zone_tex.read(), dtype=np.float32).reshape(r.size[1], r.size[0], 4)[:, :, 2]
+
+    plain = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0)).read_v()
+    off = sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0, dens=D(mode="none", amount=1.0))).read_v()
+    check(np.array_equal(plain, off), "densite RD: mode 'none' = simulation identique (bit pour bit, zones actives)")
+    check(np.array_equal(plain, sim(0.6, 1000, rc.Zone(mix=0.5, t=1.0, dens=D(mode="magnet", amount=0.0))).read_v()), "densite RD: intensite 0 = simulation identique (bit pour bit)")
+    check(np.array_equal(sim(0.6, 1000).read_v(), sim(0.6, 1000, rc.Zone(dens=D())).read_v()), "densite RD: sans densite ni zones = simulation d'origine")
+    # ---- la carte GPU concorde avec la fonction pure
+    for dens in (D(mode="magnet", amount=1.0, reach=0.5, count=3.0, t=0.7), D(mode="zones", amount=1.0, reach=0.3, t=1.1)):
+        r = sim(1.0, 20, rc.Zone(dens=dens))
+        g = dsmap(r)
+        h_, w_ = g.shape
+        cpu = np.array([[rc.diffusion_scale(dens, (i + 0.5) / w_, (j + 0.5) / h_, w_ / h_) for i in range(0, w_, 5)] for j in range(0, h_, 5)])
+        err = float(np.abs(cpu - g[::5, ::5]).max())
+        check(err < 0.06 and float(g.min()) >= rc.DENS_MIN_DS - 1e-6 and float(g.max()) <= 1.0 + 1e-6 and float(g.min()) < 0.5,
+              f"densite RD: {dens.mode}, la carte du GPU concorde avec la fonction pure (diffusion entre 0,25 et 1)", f"ecart max {err:.4f}, min {g.min():.2f}")
+    mir = dsmap(sim(1.0, 20, rc.Zone(sym="mirror_lr", dens=D(mode="zones", amount=1.0, t=1.3))))
+    check(float(np.abs(mir - mir[:, ::-1]).max()) < 1e-4, "densite RD: avec une symetrie la carte la respecte")
+    a = dsmap(sim(1.0, 20, rc.Zone(dens=D(mode="magnet", count=2.0, t=0.0))))
+    b = dsmap(sim(1.0, 20, rc.Zone(dens=D(mode="magnet", count=2.0, t=2.0))))
+    check(float(np.abs(a - b).mean()) > 0.01, "densite RD: la derive deplace les foyers")
+    c1 = dsmap(sim(1.0, 20, rc.Zone(dens=D(mode="magnet", count=2.0, t=0.5))))
+    c2 = dsmap(sim(1.0, 20, rc.Zone(dens=D(mode="magnet", count=2.0, t=0.5), mask=M(shape="bands"), void=1.0)))
+    check(float(np.abs(c1 - c2).max()) == 0.0, "densite RD: cohabite avec le masque et le Vide (la diffusion ne depend que de la densite)")
+    # ---- les lignes sont plus serrees au foyer que loin
+    def wavelength(v):
+        v = v - v.mean()
+        v = v * np.outer(np.hanning(v.shape[0]), np.hanning(v.shape[1]))
+        f2 = np.abs(np.fft.fft2(v)) ** 2
+        f2[0, 0] = 0.0
+        k = np.sqrt(np.fft.fftfreq(v.shape[0])[:, None] ** 2 + np.fft.fftfreq(v.shape[1])[None, :] ** 2)
+        m = k > 0.02
+        return 1.0 / float((f2 * k)[m].sum() / f2[m].sum())
+
+    dens = D(mode="magnet", amount=1.0, reach=0.3, count=1.0, t=0.0)
+    r = sim(1.0, 9000, rc.Zone(dens=dens))
+    v = r.read_v()[::-1]                                       # read_v : haut en premier ; la carte : bas en premier
+    h_, w_ = v.shape
+    fx, fy = rc.dens_points(1.0, 0.0)[0]
+    cx, cy = int(fx * w_), int(fy * h_)
+    rolled = np.roll(np.roll(v, w_ // 2 - cx, axis=1), h_ // 2 - cy, axis=0)                 # foyer au centre, le point le plus loin sur les coins
+    near, far = rolled[h_ // 2 - 28:h_ // 2 + 28, w_ // 2 - 28:w_ // 2 + 28], rolled[:56, :56]
+    wn, wf = wavelength(near), wavelength(far)
+    check(wn < 0.88 * wf, "densite RD: les lignes sont plus serrees pres du foyer que loin", f"longueur d'onde {wn:.1f} pres, {wf:.1f} loin (cellules)")
+    cov = float((v > 0.25).mean())
+    check(0.05 < cov < 0.6, "densite RD: le motif reste vivant avec une densite", f"couverture {cov:.2f}")
 
 
 def check_rd_symmetry() -> None:
@@ -17535,12 +17681,12 @@ def only_fragile(labels: list[str]) -> bool:
 SANS_GPU = "--pur" in sys.argv
 PURES = ("check_reader", "check_features", "check_features_phone", "check_audio2wave_interne", "check_portable_modules", "check_core_purity", "check_engine_layer",
          "check_params_schema", "check_uistats", "check_device_cache", "check_scenes", "check_beat_grid", "check_playback", "check_tempo", "check_remote_auth", "check_remote_server", "check_remote_page", "check_qrcode", "check_phase", "check_audio_layers_pure", "check_effets_auto", "check_routage", "check_onsets", "check_strobe_auto", "check_schedule", "check_palette",
-         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
+         "check_stage_layout", "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_rd_dens_pure", "check_text_rank", "check_fuzz", "check_calibration", "check_bench_kick", "check_capture_block", "check_drop", "check_pulse", "check_bands_pulse", "check_lead_auto", "check_ripple_downbeat", "check_rec_vertical_default", "check_highlights", "check_clips_control", "check_bestof", "check_claude_md", "check_recording", "check_recorder_audio", "check_audio_capture", "check_gpulog", "check_structure", "check_automation_plage", "check_bugreport", "check_groupes")
 
 
 SUITE = (
     "check_reader", "check_features", "check_features_phone", "check_text", "check_logo_video", "check_holo", "check_melt", "check_holo_contour", "check_bg_stochastic", "check_bg_stochastic_tex",
-    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide",
+    "check_reaction_pure", "check_rd_fluide_pure", "check_foudre_pure", "check_brain_pure", "check_brain_steady", "check_brain_engine", "check_textcycle", "check_textfx", "check_stotex", "check_front_pure", "check_holo_champ", "check_rd_mask_pure", "check_rd_dens_pure", "check_text_rank", "check_fuzz", "check_planche", "check_fuzz_reglages", "check_text_border", "check_text_ola", "check_text_fill", "check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_dens", "check_rd_symmetry", "check_rd_fluide",
     "check_bg_labyrinthe", "check_foudre_render", "check_cells", "check_noise", "check_doodles", "check_qr_projection",
     "check_icons", "check_audio2wave_interne", "check_masters", "check_portable_modules", "check_core_purity", "check_engine_layer",
     "check_params_schema", "check_safeguards", "check_uistats", "check_device_cache", "check_scenes", "check_bg_video", "check_fond_saveable",
@@ -17563,7 +17709,7 @@ ENV_AVANT = {"check_gui": {"CASUAL_MODES_PYTHON": "1"}}          # check_gui val
 # check_recording_render 197, check_rd_cover 98, check_kaleidoscope_frame 65, check_native_modes 42, check_drop_render 41, check_holo 32 ; le reste, moins de 30 chacune.
 GROUPE_PAR_DEFAUT = "reste"
 GROUPES = {
-    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
+    "labyrinthe": ("check_reaction_sim", "check_rd_zones", "check_rd_mask", "check_rd_dens", "check_rd_symmetry", "check_rd_fluide", "check_bg_labyrinthe"),
     # ~8 min : le rendu des effets, du logo et des modes
     "moteur": ("check_text", "check_logo_video", "check_holo", "check_holo_contour", "check_melt", "check_cells", "check_noise", "check_layers", "check_sphere_mode", "check_render"),
     # ~8 min : foudre, drop, modes dessines en GL, couches audio et routage en pixels

@@ -118,10 +118,10 @@ class ReactionDiffusion:
             t.filter = (moderngl.LINEAR, moderngl.LINEAR)
             t.repeat_x = t.repeat_y = True
         if self.tex:
-            try:                                           # carte (F, K) en RG32F meme quand l'etat est en RG16F : la precision de F et de K compte (bande utile etroite)
-                self.zone_tex = self.ctx.texture(size, 2, dtype="f4")
+            try:                                           # carte (F, K, ds) en RGBA32F meme quand l'etat est en RG16F : la precision de F et de K compte (bande utile etroite) ; ds = facteur de diffusion (#160)
+                self.zone_tex = self.ctx.texture(size, 4, dtype="f4")
             except Exception:
-                self.zone_tex = self.ctx.texture(size, 2, dtype=self.dtype)
+                self.zone_tex = self.ctx.texture(size, 4, dtype=self.dtype)
             self.zone_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
             self.zone_fbo = self.ctx.framebuffer(color_attachments=[self.zone_tex])
         self.size, self.cur = size, 0
@@ -218,7 +218,8 @@ class ReactionDiffusion:
         sym = rc.SYM_MODES.index(zone.sym) if zone.sym in rc.SYM_MODES else 0
         mask = zone.mask
         mask_on = mask.shape in rc.MASK_SHAPES[1:]
-        zoned = zone.mix > 0.0 or zone.void > 0.0 or mask_on
+        dens_on = zone.dens.mode in rc.DENS_MODES[1:] and float(zone.dens.amount) > 0.0
+        zoned = zone.mix > 0.0 or zone.void > 0.0 or mask_on or dens_on
         if zoned:                                         # carte (F, K) des zones : une passe par appel, pas une par pas
             zp = self.zone_prog
             for name, value in (("u_mix", float(zone.mix)), ("u_base", float(shape)), ("u_zone_t", float(zone.t)),
@@ -228,7 +229,7 @@ class ReactionDiffusion:
                                 ("u_void", float(zone.void)), ("u_void_fk", rc.VOID_FK), ("u_void_cells", tuple(float(c) for c in rc.VOID_CELLS)),
                                 ("u_void_thr", rc.void_threshold(zone.void)), ("u_void_edge", rc.VOID_EDGE), ("u_dense_thr", rc.DENSE_THR),
                                 ("u_dense_pull", rc.DENSE_PULL * min(max(float(zone.void), 0.0), 1.0)), ("u_void_t", float(zone.t) * rc.VOID_SPEED),
-                                *rc.mask_uniforms(mask)):
+                                *rc.mask_uniforms(mask), *rc.dens_uniforms(zone.dens if dens_on else rc.Dens())):
                 if name in zp:
                     zp[name].value = value
             self.zone_fbo.viewport = (0, 0, w, h)

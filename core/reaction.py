@@ -71,6 +71,13 @@ MASK_NOISE_EDGE_MIN, MASK_NOISE_EDGE_SOFT = 0.01, 0.15
 MASK_SALT = 11.0                # decalage des indices de cellule du bruit du masque (hache(0, 0) = 0 : un reseau de 1 cellule serait plat)
 MASK_NOISE_CENTER = 0.6         # seuil du bruit a taille 0,5 (calibre sur 40 positions de derive a 3 zones : environ la moitie de l'image)
 MASK_NOISE_SPREAD = 0.5       # seuil du bruit = 0,5 + (taille - 0,5) x ceci (la part vivante suit a peu pres `taille`)
+# Densite variable (#160) : le laplacien (U et V) est multiplie par un facteur ds <= 1 par cellule (la carte (F, K) de rd_zone.frag gagne ce canal) ;
+# la longueur d'onde du motif varie en racine de ds (mesure : 16,1 cellules a ds 1, 11,3 a 0,5, 7,7 a 0,25). ds > 1 n'est pas stable (Du = 1, dt = 1).
+DENS_MODES = ("none", "magnet", "zones")
+DENS_MIN_DS = 0.25              # diffusion au plus dense (intensite 1) : ~2 fois plus fin
+DENS_SPEED = 0.03               # cycles de derive des foyers / zones par seconde a bg_rd_dens_drift = 1 (le motif met des centaines de pas a se reorganiser)
+DENS_R0, DENS_R1 = 0.15, 0.7    # rayon d'un foyer (hauteur de l'image = 1) = DENS_R0 + DENS_R1 x portee
+DENS_THR = (0.35, 0.8)          # zones : densite = smoothstep(ces seuils, bruit)
 
 
 def feed_kill(shape: float) -> tuple[float, float]:
@@ -90,6 +97,15 @@ class Mask(NamedTuple):
     t: float = 0.0              # derive integree
 
 
+class Dens(NamedTuple):
+    """Densite variable (#160) : mode none = lignes a l'espacement regle partout ; `t` = temps de derive integre (cycles)."""
+    mode: str = "none"          # DENS_MODES
+    amount: float = 0.7         # intensite 0..1 (1 = diffusion ramenee a DENS_MIN_DS au plus dense)
+    reach: float = 0.4          # portee des foyers / taille des zones, 0,1 .. 1
+    count: float = 1.0          # nombre de foyers (aimant), 1 .. 4
+    t: float = 0.0              # derive integree
+
+
 class Zone(NamedTuple):
     """Reglages des zones et de la symetrie pour un pas de simulation (mix 0 et sym none = comportement d'origine)."""
     mix: float = 0.0            # variete des zones (ecart de forme autour de la forme de base)
@@ -100,6 +116,7 @@ class Zone(NamedTuple):
     aspect: float = 16 / 9      # largeur / hauteur de la grille (rotations rondes a l'ecran)
     void: float = 0.0           # zones vides (et denses) : 0 = tout est rempli comme avant
     mask: Mask = Mask()         # masque d'expansion (#178) : aucun par defaut
+    dens: Dens = Dens()         # densite variable (#160) : aucune par defaut
 
 
 def shape_feed_kill(s: float) -> tuple[float, float]:
@@ -158,6 +175,66 @@ def mask_cells(count: float) -> tuple[int, int]:
     """Reseau periodique du bruit du masque : 3 zones = VOID_CELLS (3 x 2), 1 -> (2, 2) (un reseau d'une cellule serait plat), 8 -> (8, 5)."""
     c = min(max(float(count), 1.0), 8.0)
     return max(2, round(c)), max(2, round(c * 2.0 / 3.0))
+
+
+def dens_points(count: float, t: float) -> list[tuple[float, float]]:
+    """Foyers de l'aimant (0..1, origine de l'image comme v_uv) : `count` borne a 1..4, positions deterministes qui derivent sur le tore a `t` cycles."""
+    n = min(max(int(round(float(count))), 1), 4)
+    out = []
+    for i in range(n):
+        k = float(i + 1)
+        vx = (0.4 + 0.6 * _zhash(k, 5.3)) * (1.0 if _zhash(k, 2.9) > 0.5 else -1.0)
+        vy = (0.4 + 0.6 * _zhash(k, 1.9)) * (1.0 if _zhash(k, 8.3) > 0.5 else -1.0)
+        out.append(((_zhash(k, 3.7) + t * vx) % 1.0, (_zhash(k, 9.1) + t * vy * 0.7) % 1.0))
+    return out
+
+
+def dens_dist(x: float, y: float, px: float, py: float, aspect: float) -> float:
+    """Distance (x, y) -> (px, py) sur le tore (la grille boucle), en unites isotropes (hauteur = 1)."""
+    dx, dy = (x - px + 0.5) % 1.0 - 0.5, (y - py + 0.5) % 1.0 - 0.5
+    return math.hypot(dx * aspect, dy)
+
+
+def dens_radius(reach: float) -> float:
+    return DENS_R0 + DENS_R1 * min(max(float(reach), 0.1), 1.0)
+
+
+def dens_value(dens: Dens, x: float, y: float, aspect: float, sym: str = "none", branches: int = 4) -> float:
+    """Densite 0..1 au point (x, y) (1 = le plus serre). `none` = 0. Replique de rd_zone.frag."""
+    if dens.mode not in DENS_MODES[1:]:
+        return 0.0
+    x, y = _fold(x, y, sym, branches, aspect)
+    if dens.mode == "magnet":
+        r = dens_radius(dens.reach)
+        best = 0.0
+        for px, py in dens_points(dens.count, dens.t):
+            u = min(max(dens_dist(x, y, px, py, aspect) / r, 0.0), 1.0)
+            best = max(best, 1.0 - u * u * (3.0 - 2.0 * u))
+        return best
+    cx, cy = mask_cells(8.0 - 6.0 * min(max(float(dens.reach), 0.1), 1.0))
+    qx, qy = x * cx + dens.t + 5.7, y * cy - 0.6 * dens.t + 2.3
+    n = 0.7 * _pnoise(qx, qy, cx, cy, MASK_SALT) + 0.3 * _pnoise(qx * 2.0 + 1.7, qy * 2.0 + 1.7, cx * 2.0, cy * 2.0, MASK_SALT)
+    u = min(max((n - DENS_THR[0]) / (DENS_THR[1] - DENS_THR[0]), 0.0), 1.0)
+    return u * u * (3.0 - 2.0 * u)
+
+
+def diffusion_scale(dens: Dens, x: float, y: float, aspect: float, sym: str = "none", branches: int = 4) -> float:
+    """Facteur de diffusion ds (DENS_MIN_DS .. 1) de la cellule ; exactement 1 sans mode ou a intensite 0."""
+    amount = min(max(float(dens.amount), 0.0), 1.0)
+    if dens.mode not in DENS_MODES[1:] or amount <= 0.0:
+        return 1.0
+    return 1.0 - (1.0 - DENS_MIN_DS) * amount * dens_value(dens, x, y, aspect, sym, branches)
+
+
+def dens_uniforms(dens: Dens) -> list[tuple[str, object]]:
+    """Uniforms de rd_zone.frag pour la densite (foyers calcules ici : le shader ne refait que les distances)."""
+    mode = DENS_MODES.index(dens.mode) if dens.mode in DENS_MODES else 0
+    amount = min(max(float(dens.amount), 0.0), 1.0)
+    pts = dens_points(dens.count, dens.t)
+    cells = mask_cells(8.0 - 6.0 * min(max(float(dens.reach), 0.1), 1.0))
+    return [("u_dens", mode), ("u_dens_amount", (1.0 - DENS_MIN_DS) * amount), ("u_dens_r", dens_radius(dens.reach)), ("u_dens_n", len(pts)),
+            ("u_dens_pts", pts + [(-10.0, -10.0)] * (4 - len(pts))), ("u_dens_cells", tuple(float(c) for c in cells)), ("u_dens_t", float(dens.t)),
+            ("u_dens_salt", MASK_SALT)]
 
 
 def mask_uniforms(mask: Mask) -> list[tuple[str, object]]:
