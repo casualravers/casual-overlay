@@ -25,7 +25,7 @@ BG_RD_COST_MS = 1.0
 BG_RD_ZONE_COST_MS = 1.5
 REF_PIXELS = 1920 * 1080
 HIGH = 0.90                                    # part du budget d'une image qu'on accepte de remplir (comme PerfGuard.HIGH)
-BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field", "bg_sto_border", "bg_rd_mix", "bg_rd_void", "bg_rd_mask")
+BG_KEYS = ("bg_mode", "bg_palette", "bg_sto_field", "bg_sto_border", "bg_rd_mix", "bg_rd_void", "bg_rd_mask", "bg_rd_dens")
 
 
 def _scale(render_size: tuple[int, int] | None) -> float:
@@ -45,7 +45,8 @@ def background_cost(values: dict, render_size: tuple[int, int] | None = None) ->
         return 0.0
     if values.get("bg_palette") == "labyrinthe":
         zoned = (float(values.get("bg_rd_mix", 0.0) or 0.0) > 0.0 or float(values.get("bg_rd_void", 0.0) or 0.0) > 0.0
-                 or values.get("bg_rd_mask", "none") != "none")             # le masque d'expansion (#178) passe par la meme carte (F, K)
+                 or values.get("bg_rd_mask", "none") != "none"              # le masque d'expansion (#178) et la densite variable (#160) passent par la meme carte
+                 or values.get("bg_rd_dens", "none") != "none")
         zones = BG_RD_ZONE_COST_MS if zoned else 0.0
         from core import reaction                      # une grille fine coute plus : 0,4 de fixe (lectures du rendu) + 0,6 x la charge de la simulation
         load = reaction.step_load(float(values.get("bg_rd_scale", 1.0) or 1.0), half=values.get("bg_rd_sym", "none") == "none")      # sans symetrie : etat en demi-precision (#225)

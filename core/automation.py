@@ -45,6 +45,9 @@ AUTOMATION_SPECS: dict[str, tuple] = {
     "bg_rd_mask_angle": ("Masque : angle", 0.0, 360.0, "sinus", 137, False),
     "bg_rd_mask_soft":  ("Masque : douceur", 0.0, 1.0, "sinus", 139, False),
     "bg_rd_mask_drift": ("Masque : derive", 0.0, 2.0, "sinus", 149, False),
+    # Densite variable (#160) : coupees par defaut
+    "bg_rd_dens_amount": ("Densite : intensite", 0.0, 1.0, "sinus", 151, False),
+    "bg_rd_dens_reach": ("Densite : portee", 0.1, 1.0, "sinus", 157, False),
     "bg_rd_scale":      ("Taille du motif", 0.3, 2.0, "sinus", 127, False),     # coupee par defaut : chaque changement de taille floute un peu le motif
     "logo_x":           ("Position X", 0.0, 1.0, "sinus", 43, False),
     "logo_y":           ("Position Y", 0.0, 1.0, "sinus", 31, False),
@@ -80,7 +83,7 @@ DEFAULT_RANGES: dict[str, tuple[float, float]] = {
     "bg_hue": (0.0, 0.5), "bg_angle": (20.0, 160.0), "bg_speed": (0.4, 1.8), "bg_tile": (50.0, 150.0), "bg_checker": (0.06, 0.32),
     "bg_flip": (0.5, 3.5), "bg_rd_shape": (0.3, 0.9), "bg_rd_offset": (0.004, 0.030), "bg_rd_mix": (0.2, 0.9), "bg_rd_layers": (0.1, 0.8),
     "bg_rd_free": (0.2, 0.8), "bg_rd_void": (0.15, 0.6), "bg_rd_scale": (0.6, 1.6),
-    "bg_rd_mask_size": (0.3, 0.7), "bg_rd_mask_angle": (0.0, 360.0), "bg_rd_mask_soft": (0.1, 0.8), "bg_rd_mask_drift": (0.1, 1.2), "logo_x": (0.35, 0.65), "logo_y": (0.42, 0.58),
+    "bg_rd_mask_size": (0.3, 0.7), "bg_rd_mask_angle": (0.0, 360.0), "bg_rd_mask_soft": (0.1, 0.8), "bg_rd_mask_drift": (0.1, 1.2), "bg_rd_dens_amount": (0.3, 0.9), "bg_rd_dens_reach": (0.2, 0.8), "logo_x": (0.35, 0.65), "logo_y": (0.42, 0.58),
     "logo_scale": (0.30, 0.42), "text_scale": (0.12, 0.20), "logo_opacity": (0.6, 1.0), "logo_pulse": (0.05, 0.30), "logo_glow": (0.4, 1.5),
     "logo_glow_radius": (0.6, 1.6), "fx_int0": (0.4, 1.2), "fx_int1": (0.4, 1.3), "fx_int2": (0.3, 1.2), "fx_int3": (0.15, 1.0),
     "holo_intensity": (0.5, 1.8), "holo_reach": (0.8, 1.8), "holo_warp": (0.4, 1.6), "holo_dust": (0.4, 1.6), "holo_speed": (0.05, 0.4),

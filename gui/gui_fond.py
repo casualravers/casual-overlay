@@ -274,6 +274,14 @@ def install(c):
 
     refresh_mask_preview(0.0, force=True)
     mask_shape_var.trace_add("write", lambda *_a: refresh_mask_preview(0.0, force=True))      # changer de forme redessine tout de suite (la derive suit ensuite)
+    # densite variable (#160) : lignes plus serrees pres d'un « aimant » (foyers qui derivent) ou dans des zones
+    param_radio(rz, "Densite", "bg_rd_dens", (("Aucune", "none"), ("Aimant", "magnet"), ("Zones", "zones")),
+                tooltip="Espacement des lignes variable dans l'image : serrees pres d'un ou plusieurs foyers (comme un aimant sur un ferrofluide), ou dans des "
+                        "zones qui derivent. Le motif met un moment a se reorganiser : la derive est lente.")
+    param_slider(rz, "Intensite de la densite", "bg_rd_dens_amount", 0.0, 1.0, 0.05, "0 = rien, 1 = lignes environ 2 fois plus serrees au plus dense.")
+    param_slider(rz, "Portee de la densite", "bg_rd_dens_reach", 0.1, 1.0, 0.05, "Etendue d'un foyer, ou taille des zones.")
+    param_slider(rz, "Nombre de foyers", "bg_rd_dens_count", 1, 4, 1, "Nombre de foyers de l'aimant.")
+    param_slider(rz, "Derive de la densite", "bg_rd_dens_drift", 0.0, 2.0, 0.05, "Vitesse de deplacement des foyers ou des zones (lente a dessein).")
     for label, key in (("Couche 1", "bg_rd_color1"), ("Couche 2", "bg_rd_color2"), ("Couche 3", "bg_rd_color3"), ("Fond", "bg_rd_ground")):
         color_row(rz, label, key)
 

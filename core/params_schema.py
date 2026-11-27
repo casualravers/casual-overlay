@@ -273,6 +273,13 @@ TABLE: tuple[Param, ...] = (
        doc="Palette labyrinthe : part des kicks qui sement de nouvelles taches (1 = chaque kick, comme avant ; 0 = aucune, le motif grandit seul)."),
     _p("bg_rd_bud", 0.0, 0.0, 1.0, scope="bg",
        doc="Palette labyrinthe : 1 = un nouveau germe ne prend que s'il touche le motif existant (bourgeons, rien ne nait dans le vide)."),
+    # densite variable (#160, core/reaction.py : dens_value) : lignes plus serrees pres d'un « aimant » ou dans des zones qui derivent
+    _p("bg_rd_dens", "none", choices=("none", "magnet", "zones"), scope="bg",
+       doc="Palette labyrinthe : densite variable (lignes serrees pres d'un ou plusieurs foyers qui derivent, ou dans des zones) ; none = espacement regle partout."),
+    _p("bg_rd_dens_amount", 0.7, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : intensite de la densite (1 = lignes ~2 fois plus serrees au plus dense)."),
+    _p("bg_rd_dens_reach", 0.4, 0.1, 1.0, scope="bg", doc="Palette labyrinthe : portee d'un foyer, ou taille des zones, de la densite."),
+    _p("bg_rd_dens_count", 1.0, 1.0, 4.0, scope="bg", doc="Palette labyrinthe : nombre de foyers de la densite (aimant)."),
+    _p("bg_rd_dens_drift", 0.5, 0.0, 2.0, scope="bg", doc="Palette labyrinthe : vitesse de derive des foyers ou des zones de la densite."),
     _p("bg_rd_layers", 0.0, 0.0, 1.0, scope="bg", doc="Palette labyrinthe : epaisseur differente par couche (1 fine, 3 epaisse) ; 0 = meme seuil partout."),
     _p("bg_rd_sym", "none", choices=("none", "mirror_lr", "mirror_tb", "quad", "rot"), scope="bg",
        doc="Palette labyrinthe : symetrie de colonisation (germes et zones) ; le motif lui-meme n'est jamais strictement symetrique."),

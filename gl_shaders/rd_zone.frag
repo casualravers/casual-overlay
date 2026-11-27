@@ -33,9 +33,19 @@ uniform vec2 u_mask_cells;     // reseau periodique du bruit
 uniform int u_mask_invert;
 uniform float u_mask_t;        // derive
 uniform float u_mask_salt;     // decalage des indices de cellule (hache(0, 0) = 0)
+// Densite variable (#160) : formules de core/reaction.py (dens_value), preparees cote Python (dens_uniforms) ; le canal B de la carte = facteur de diffusion ds
+uniform int u_dens;            // 0 aucune, 1 aimant, 2 zones
+uniform float u_dens_amount;   // (1 - ds mini) x intensite
+uniform float u_dens_r;        // rayon d'un foyer (hauteur = 1)
+uniform int u_dens_n;          // nombre de foyers
+uniform vec2 u_dens_pts[4];    // foyers (0..1)
+uniform vec2 u_dens_cells;     // reseau periodique des zones
+uniform float u_dens_t;        // derive des zones
+uniform float u_dens_salt;
 
 in vec2 v_uv;
-out vec4 f_color;
+layout(location = 0) out vec4 f_color;                      // (F, K)
+layout(location = 1) out float f_ds;                        // facteur de diffusion (#160)
 
 float zhash(vec2 c) {                                       // hachage sans sin
     vec3 p3 = fract(vec3(c.xyx) * 0.1031);
@@ -112,6 +122,25 @@ float mask_at(vec2 uv) {                                     // 1 = la matiere v
     return u_mask_invert != 0 ? 1.0 - m : m;
 }
 
+float dens_at(vec2 uv) {                                     // 0..1, 1 = le plus serre
+    if (u_dens == 1) {
+        float best = 0.0;
+        for (int i = 0; i < 4; i++) {
+            if (i >= u_dens_n) {
+                break;
+            }
+            vec2 d = uv - u_dens_pts[i];
+            d -= floor(d + 0.5);                              // tore : la grille boucle
+            d.x *= u_aspect;
+            best = max(best, 1.0 - smoothstep(0.0, u_dens_r, length(d)));
+        }
+        return best;
+    }
+    vec2 q = uv * u_dens_cells + vec2(u_dens_t + 5.7, -0.6 * u_dens_t + 2.3);
+    float n = 0.7 * pnoise_salt(q, u_dens_cells, u_dens_salt) + 0.3 * pnoise_salt(q * 2.0 + 1.7, u_dens_cells * 2.0, u_dens_salt);
+    return smoothstep(0.35, 0.8, n);
+}
+
 void main() {
     float z = 2.0 * zone_noise(fold(v_uv)) - 1.0;
     if (u_sym > 0) {
@@ -133,5 +162,10 @@ void main() {
     }
     vec2 fk = s <= 1.0 ? mix(u_fk3[0], u_fk3[1], s) : mix(u_fk3[1], u_fk3[2], s - 1.0);
     fk = mix(fk, u_void_fk, gone);
+    float ds = 1.0;                                           // facteur de diffusion (rd_step.frag : lap *= ds) ; exactement 1 sans densite
+    if (u_dens > 0) {
+        ds = 1.0 - u_dens_amount * dens_at(fold(v_uv));
+    }
     f_color = vec4(fk, 0.0, 1.0);
+    f_ds = ds;
 }

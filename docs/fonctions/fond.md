@@ -169,6 +169,20 @@ les basses).
   un reglage ou la derive change ; **piege Tk** : les rappels d'une variable partent du plus recent au plus ancien, le rappel de la vignette lit la
   variable et non `params`, pas encore a jour) + Inverser, curseurs grises sans forme. Randomizer : une fois sur trois (tire apres tout le reste).
   Un masque qui bouge plus vite que le motif ne le suit pas (la zone reste vide tant qu'aucun germe n'y tombe) : `MASK_SPEED` est lent a dessein.
+  **Densite variable** (issue #160 ; spec et plan : `docs/plans/2026-11-27-densite-rd-160-*.md`) : des lignes plus serrees pres d'un « aimant » (foyers) ou dans des
+  zones, plusieurs densites dans la meme image (ferrofluide). **Methode** (mesure : le laplacien x `ds` donne une longueur d'onde en racine de `ds` :
+  16,1 cellules a ds 1, 11,3 a 0,5, 7,7 a 0,25) : `rd_zone.frag` ecrit en 2e sortie (`f_ds`, texture R16F `ReactionDiffusion.ds_tex`) un facteur de diffusion
+  par cellule, `rd_step.frag` fait `lap *= ds` ; `ds` <= 1 (au-dela : instable, `Du` = 1 `dt` = 1), donc **plus serre** que la taille reglee, jamais plus large.
+  `u_ds_on` (0 sans densite) : **aucune lecture de plus** sans densite (une premiere version, RGBA32F, coutait +1,3 ms par image pour tous les labyrinthes
+  zones ; la texture a part ne coute rien hors densite). Reglages `bg_rd_dens` (none / magnet / zones), `_amount` (0..1, ds = 1 - 0,75 x intensite x d),
+  `_reach` (0,1..1 : rayon d'un foyer `DENS_R0` + `DENS_R1` x portee en hauteurs d'image, ou finesse des zones), `_count` (1..4 foyers), `_drift`
+  (x `DENS_SPEED` 0,03 cycle / s) ; automatisables (coupes) : intensite, portee. Formules pures `core.reaction.dens_value` / `diffusion_scale` / `dens_points`
+  (foyers deterministes qui derivent sur le tore, `_zhash`) / `dens_dist` (distance sur le tore, repere isotrope) / `dens_uniforms`, repliquees en GLSL ; zones =
+  bruit du masque (`pnoise_salt`, `mask_cells(8 - 6 x portee)`), `smoothstep(0,35 ; 0,8)`. Repliees par la symetrie. Derive : `Renderer._rd_dens_t` (comme le
+  masque). **Mesure** : longueur d'onde 8,9 cellules pres du foyer contre 16,1 loin (`check_rd_dens`, simulation 9000 pas, grille 384 x 216) ; cout (Radeon
+  integree, 1280 x 720, 10 pas) : Vide seul 7,2 ms (inchange), + aimant ~+0,3 a +0,5 ms, + zones ~+0,5 a +0,7 ms (`BG_RD_ZONE_COST_MS` 1,5 ms couvre la carte).
+  Piege : le motif met des centaines de pas a se reorganiser, une derive rapide laisse des traces. GUI : « Densite » (radio) + 4 curseurs (grises sans mode,
+  foyers seulement pour l'aimant). Randomizer : une fois sur trois, tire apres le masque.
   **Apparitions** (issue #187 ; design et plan : `docs/plans/2026-11-26-labyrinthe-apparitions-187-*.md`) : en cours de route les nouvelles
   taches ne viennent QUE des germes des kicks. `bg_rd_spawn` (curseur « Apparitions », 1 par defaut) = part des kicks qui sement
   (`core.reaction.kick_spawns`, tirage deterministe par kick ; 0 = le motif grandit seul depuis ses bords). `bg_rd_bud` (case « Seulement contre

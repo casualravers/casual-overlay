@@ -286,6 +286,11 @@ def random_background_params(rng: random.Random) -> dict:
                        "bg_rd_mask_size": round(rng.uniform(0.35, 0.8), 2), "bg_rd_mask_angle": round(rng.uniform(0.0, 360.0), 0),
                        "bg_rd_mask_soft": round(rng.uniform(0.2, 0.8), 2), "bg_rd_mask_invert": float(rng.random() < 0.15),
                        "bg_rd_mask_drift": round(rng.uniform(0.2, 0.8), 2)})
+        # densite variable (#160) : une fois sur trois, tiree apres le masque
+        dens_on, dens_mode = rng.random() < 1 / 3, rng.choice(("magnet", "zones"))
+        values.update({"bg_rd_dens": dens_mode if dens_on else "none", "bg_rd_dens_amount": round(rng.uniform(0.5, 1.0), 2),
+                       "bg_rd_dens_reach": round(rng.uniform(0.25, 0.8), 2), "bg_rd_dens_count": float(rng.randint(1, 3)),
+                       "bg_rd_dens_drift": round(rng.uniform(0.2, 0.8), 2)})
     return values
 
 
