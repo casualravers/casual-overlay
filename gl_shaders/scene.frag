@@ -43,6 +43,9 @@ uniform vec4  u_sto_tex;       // texture de la tache (#220) : x = 0 aucune / 1 
 uniform vec4  u_sto_wave;      // onde : x = amplitude (px pour 720 px de haut), y = frequence (rad par px), z = phase (rad), w = demi-epaisseur des lignes (px)
 uniform vec4  u_sto_sweep;     // pavage : x = age de la vague (s), y = duree du front (s), z = duree de croissance (s), w = cellules de la tuile par px (pour 720 px de haut)
 uniform vec4  u_sto_off;       // pavage : decalage de lecture de la tuile, xy = vague courante, zw = vague precedente
+uniform vec4  u_sto_front;     // front de la vague (#249, core.stotex.front_uniforms) : x = 0 droit / 1 radial / 2 organique, yz = origine (unites isotropes centrees), w = distance mini
+uniform vec4  u_sto_front2;    // x = 1 / (distance maxi - mini), y = amplitude de l'irregularite, zw = decalage du bruit (par vague)
+uniform vec2  u_sto_dir;       // direction du front droit : (cos, sin)
 uniform sampler2D u_sto_tile;  // tuile de reaction-diffusion du remplissage du texte (r = V, g = instant d'arrivee), repetee, partagee avec lui
 uniform vec4  u_sto_border;   // xyz = couleur de la bordure, w = epaisseur en px pour 720 px de haut (#219 ; 0 = aucune)
 uniform vec4  u_sto_au;        // x = basses, y = kick, z = nombre de kicks (deja multiplies par la reaction)
@@ -121,8 +124,25 @@ float sto_field(vec2 q) {
 // repartis sans amas (bruit bleu) ; rang blanc = grain aleatoire ; la regularite melange les deux. 3 x 3 cellules voisines.
 // Texture de la tache (#220) : masque 0..1 continu a travers toute la zone des points (calcule en ecran, pas par point). Onde : lignes
 // d'oscilloscope horizontales qui ondulent (cisaillement continu : jamais de recouvrement). Pavage : la tuile de reaction-diffusion lue
-// deux fois (vague courante et precedente) ; un front traverse l'ecran le long de bg_angle (core.stotex.sweep_tau), derriere lui le
+// deux fois (vague courante et precedente) ; un front traverse l'ecran (droit, cercle, arc ou organique : core.stotex.front_pos ; sweep_tau), derriere lui le
 // nouveau motif pousse (meme formule que core.textfx.fill_reveal), devant lui l'ancien reste, puis le front l'efface.
+float front_hash(vec2 c) {                                                  // hachage sans sin (meme formule que core.reaction._zhash)
+    vec3 p3 = fract(vec3(c.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float front_vnoise(vec2 q) {
+    vec2 i = floor(q);
+    vec2 f = fract(q);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(front_hash(i), front_hash(i + vec2(1.0, 0.0)), f.x), mix(front_hash(i + vec2(0.0, 1.0)), front_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+float front_noise(vec2 q) {                                                 // 0..1, deux octaves (core.stotex._front_noise)
+    return 0.65 * front_vnoise(q) + 0.35 * front_vnoise(q * 2.0 + vec2(5.2, 1.3));
+}
+
 float sto_texture(vec2 p) {
     vec2 px = p * vec2(u_res.x / max(u_res.y, 1.0) * 720.0, 720.0);        // pixels pour 720 px de haut
     if (u_sto_tex.x < 1.5) {
@@ -135,9 +155,18 @@ float sto_texture(vec2 p) {
     vec2 base = px * u_sto_sweep.w;
     float vc = textureLod(u_sto_tile, base + u_sto_off.xy, 0.0).r;
     float vp = textureLod(u_sto_tile, base + u_sto_off.zw, 0.0).r;
-    float a = radians(u_bg_angle);
-    vec2 dir = vec2(cos(a), sin(a));
-    float pos = clamp(dot(p - 0.5, dir) / max(0.5 * (abs(dir.x) + abs(dir.y)), 0.001) * 0.5 + 0.5, 0.0, 1.0);
+    float pos;
+    if (u_sto_front.x < 0.5) {                                              // droit : projection sur la direction (propre au front, plus bg_angle)
+        vec2 dir = u_sto_dir;
+        pos = clamp(dot(p - 0.5, dir) / max(0.5 * (abs(dir.x) + abs(dir.y)), 0.001) * 0.5 + 0.5, 0.0, 1.0);
+    } else {                                                                // cercle / arc : distance a l'origine, normalisee sur le cadre
+        vec2 pi = vec2((p.x - 0.5) * u_res.x / max(u_res.y, 1.0), p.y - 0.5);
+        pos = (length(pi - u_sto_front.yz) - u_sto_front.w) * u_sto_front2.x;
+        if (u_sto_front.x > 1.5) {                                          // organique : bord deforme par un bruit lent (fixe pendant la vague)
+            pos += u_sto_front2.y * (2.0 * front_noise(pi / 0.35 + u_sto_front2.zw) - 1.0);
+        }
+        pos = clamp(pos, 0.0, 1.0);
+    }
     float tau = u_sto_sweep.x - pos * u_sto_sweep.y;
     float age = clamp(tau / max(u_sto_sweep.z, 0.000001), 0.0, 1.0);
     float gain = 0.75 + 0.25 * smoothstep(0.0, 1.0, age);

@@ -14306,6 +14306,38 @@ def check_bg_stochastic_tex() -> None:
                 break
         later = frames(150)
         check(abs(later - quiet_a).mean() > 3, "stochastique texture pavage: la vague suivante dessine un autre pavage")
+        # ---- front de la vague (#249) : pendant la PREMIERE vague seul ce que le front a deja traverse est eclairci (l'ancien motif n'existe pas encore)
+        from core import stotex as st_
+
+        def reveal(age=0.5, **kw):
+            rr._sto_sweep = st_.SweepClock()                   # nouvelle vague, epoque 0, age 0 a la prochaine image
+            frames(1, **kw)
+            return frames(1, dt=age, **kw)
+
+        W, H = size
+        yy, xx = np.mgrid[0:H, 0:W]
+        disk = ((xx - W / 2) ** 2 + (yy - H / 2) ** 2) < (0.2 * H) ** 2
+        corners = ((xx < 0.15 * H) | (xx > W - 0.15 * H)) & ((yy < 0.15 * H) | (yy > H - 0.15 * H))
+        reg = lambda m: m & z0
+        straight = reveal()
+        check(light(straight, reg(xx < 0.3 * W)) > 3 * max(light(straight, reg(xx > 0.7 * W)), 0.01) and light(straight, reg(xx < 0.3 * W)) > 0.05,
+              "front: droit, angle 0 = la vague vient de la gauche (comme avant)", f"{light(straight, reg(xx < 0.3 * W)):.2f} / {light(straight, reg(xx > 0.7 * W)):.2f}")
+        check(abs(reveal(bg_angle=90.0) - straight).max() == 0, "front: l'angle du degrade ne fait plus pivoter le front")
+        top = reveal(bg_sto_front_angle=90.0)
+        check(light(top, reg(yy < 0.3 * H)) > 3 * max(light(top, reg(yy > 0.7 * H)), 0.01), "front: la direction du front vient du reglage propre (90 = du haut)")
+        circ = reveal(bg_sto_front="circle")
+        lc, lk = light(circ, reg(disk)), light(circ, reg(corners))
+        check(lc > 0.05 and lk < 0.35 * lc, "front: cercle = un disque revele du centre, les coins n'ont pas encore ete atteints", f"centre {lc:.2f}, coins {lk:.2f}")
+        arc = reveal(age=0.2, bg_sto_front="arc", bg_sto_front_curve=1.0)
+        mid_l, top_c = reg((xx < 0.08 * W) & (abs(yy - H / 2) < 0.1 * H)), reg((xx < 0.12 * H) & (yy < 0.12 * H))
+        la, lt_ = light(arc, mid_l), light(arc, top_c)
+        check(la > 0.05 and lt_ < 0.35 * la, "front: arc courbe = le milieu du bord est atteint avant le coin (un front droit les atteindrait ensemble)", f"milieu {la:.2f}, coin {lt_:.2f}")
+        check(abs(reveal(bg_sto_front="organic", bg_sto_front_rough=0.0) - circ).max() == 0, "front: organique sans irregularite = cercle (image identique)")
+        org = reveal(bg_sto_front="organic", bg_sto_front_rough=1.0)
+        check(abs(org - circ).mean() > 1.0, "front: l'irregularite deforme le bord (l'image change)", f"{abs(org - circ).mean():.2f}")
+        side = reveal(bg_sto_front="organic", bg_sto_front_origin="side", bg_sto_front_rough=0.5)
+        check(light(side, reg(xx < 0.3 * W)) > 2 * max(light(side, reg(xx > 0.7 * W)), 0.01), "front: organique d'origine cote = la vague vient de la gauche")
+        check(abs(reveal(bg_sto_front="circle") - reveal(bg_sto_front="circle")).max() == 0, "front: deterministe (meme reglage, meme image)")
     finally:
         tfx.TILE_SIZE, tfx.TILE_STEPS, tfm.tile_cache_path = keep
         shutil.rmtree(tmp, ignore_errors=True)
