@@ -91,14 +91,14 @@ REACT_MAX = {"holo_intensity": 3.0, "holo_reach": 3.0, "holo_warp": 3.0, "holo_d
 REACT_KEYS = tuple(REACT_K)
 
 
-def react_value(key: str, base: float, amount: float, level: float) -> float:
-    """Valeur effective d'un reglage du halo : `base` x (1 + `amount` x `level` x K), bornee a la plage du curseur (sauf la vitesse).
-    `amount` = reglage de reaction (0 = aucune : `base` tel quel), `level` = niveau du son de sa ligne de routage. Negatif ou NaN : rien."""
+def react_value(key: str, base: float, level: float) -> float:
+    """Valeur effective d'un reglage du halo : `base` x (1 + `level` x K), bornee a la plage du curseur (sauf la vitesse).
+    `level` = niveau du son de sa ligne de routage, DOSAGE COMPRIS (la pastille a droite du curseur, #259) ; nul, negatif ou NaN : `base` tel quel."""
     base = float(base)
-    amount, level = float(amount), float(level)
-    if not (math.isfinite(amount) and math.isfinite(level)) or amount <= 0.0 or level <= 0.0:
+    level = float(level)
+    if not math.isfinite(level) or level <= 0.0:
         return base
-    value = base * (1.0 + amount * level * REACT_K[key])
+    value = base * (1.0 + level * REACT_K[key])
     top = REACT_MAX[key]
     return value if top is None else min(value, max(top, base))
 

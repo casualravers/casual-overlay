@@ -4,7 +4,8 @@ Python pur (stdlib seulement). Spec : docs/plans/2026-11-25-routage-audio-198.md
 
 Une LIGNE = un effet ou une reaction (ondulation du fond, pulsation du logo, teinte spectrale...). Deux reglages par ligne routable
 (table unique, portee `look`) : `rt_<id>` (source : `herite` = comme la couche, ou une valeur de `audio_layers.SOURCES`) et `rg_<id>`
-(dosage 0..2). Par defaut (`herite`, 1.0) la ligne lit le vecteur de sa couche tel qu'avant : ZERO perte, image identique.
+(dosage 0..2). Par defaut (`herite`, 1.0) la ligne lit le vecteur de sa couche tel qu'avant : ZERO perte, image identique. Une ligne peut avoir un autre
+defaut (`Route.default`) : les lignes du halo sont a « Rien » (#259, aucune reaction tant qu'on n'a pas choisi).
 Les lignes `info` (strobe, foudre, noise) decident deja seules : lecture seule, aucun reglage.
 """
 from __future__ import annotations
@@ -19,7 +20,10 @@ ROUTE_SOURCES = (INHERIT, *al.SOURCES)
 ZONES = ("fond", "logo", "global")
 DOSE_MIN, DOSE_MAX = 0.0, 2.0
 
-Route = namedtuple("Route", "id zone layer label kind")       # kind : fx (vecteur shader), vec (vecteur de couche), info (lecture seule)
+NONE = "rien"            # source « Rien » : aucune reaction (defaut des lignes du halo, #259)
+
+# kind : fx (vecteur shader), vec (vecteur de couche), info (lecture seule) ; default : source par defaut de la ligne (herite, sauf le halo : Rien)
+Route = namedtuple("Route", "id zone layer label kind default", defaults=(INHERIT,))
 
 ROUTES: tuple[Route, ...] = (
     Route("bg_wobble", "fond", "bg", "Ondulation", "fx"),
@@ -37,12 +41,12 @@ ROUTES: tuple[Route, ...] = (
     Route("lg_jitter", "logo", "logo", "Tremblement", "vec"),
     Route("lg_glow", "logo", "logo", "Contour lumineux", "vec"),
     Route("lg_holo", "logo", "logo", "Halo holographique", "vec"),
-    Route("lg_holo_intensity", "logo", "logo", "Halo : intensite", "vec"),          # un reglage du halo = sa ligne (#247)
-    Route("lg_holo_reach", "logo", "logo", "Halo : portee", "vec"),
-    Route("lg_holo_warp", "logo", "logo", "Halo : deformation", "vec"),
-    Route("lg_holo_dust", "logo", "logo", "Halo : poussiere", "vec"),
-    Route("lg_holo_speed", "logo", "logo", "Halo : vitesse", "vec"),
-    Route("lg_holo_wobble", "logo", "logo", "Halo : irregularite des anneaux", "vec"),       # (#256)
+    Route("lg_holo_intensity", "logo", "logo", "Halo : intensite", "vec", NONE),    # un reglage du halo = sa ligne (#247), « Rien » par defaut (#259)
+    Route("lg_holo_reach", "logo", "logo", "Halo : portee", "vec", NONE),
+    Route("lg_holo_warp", "logo", "logo", "Halo : deformation", "vec", NONE),
+    Route("lg_holo_dust", "logo", "logo", "Halo : poussiere", "vec", NONE),
+    Route("lg_holo_speed", "logo", "logo", "Halo : vitesse", "vec", NONE),
+    Route("lg_holo_wobble", "logo", "logo", "Halo : irregularite des anneaux", "vec", NONE),       # (#256)
     Route("lg_melt", "logo", "logo", "Fonte acide", "vec"),
     Route("lg_cells", "logo", "logo", "Cellules", "vec"),
     Route("breath", "global", None, "Respiration (pulsation)", "vec"),      # sans couche : lisent le son entier (state), pas une couche
@@ -122,17 +126,19 @@ def route_specs() -> list[tuple]:
     out = []
     for r in routable():
         where = {"fond": "du fond", "logo": "du logo", "global": ""}[r.zone]
-        out.append((source_key(r.id), INHERIT, None, None, ROUTE_SOURCES,
-                    f"Routage : source audio de « {r.label} » {where} (herite = comme la couche)."))
+        out.append((source_key(r.id), r.default, None, None, ROUTE_SOURCES,
+                    f"Routage : source audio de « {r.label} » {where} (herite = comme la couche"
+                    + (", rien = aucune reaction : le defaut de cette ligne)." if r.default == NONE else ").")))
         out.append((dose_key(r.id), 1.0, DOSE_MIN, DOSE_MAX, None, f"Routage : dosage de « {r.label} » {where} (1 = tel quel)."))
     return out
 
 
 def route_of(params: dict, rid: str) -> tuple[str, float]:
-    """(source, dosage) d'une ligne : source inconnue -> herite, dosage borne 0..2 (invalide -> 1)."""
-    src = params.get(source_key(rid), INHERIT)
+    """(source, dosage) d'une ligne : source absente ou inconnue -> le defaut de la ligne (herite, « Rien » pour le halo), dosage borne 0..2 (invalide -> 1)."""
+    default = BY_ID[rid].default
+    src = params.get(source_key(rid), default)
     if src not in ROUTE_SOURCES:
-        src = INHERIT
+        src = default
     dose = params.get(dose_key(rid), 1.0)
     if isinstance(dose, bool) or not isinstance(dose, (int, float)) or not math.isfinite(dose):
         dose = 1.0                      # NaN (fichier edite a la main) : jamais d'uniform NaN
@@ -140,10 +146,33 @@ def route_of(params: dict, rid: str) -> tuple[str, float]:
 
 
 def is_default(params: dict, rid: str | None = None) -> bool:
-    """Vrai si la ligne `rid` (ou toutes les lignes si None) est par defaut : herite, dosage 1."""
+    """Vrai si la ligne `rid` (ou toutes les lignes si None) est par defaut : sa source par defaut (herite, « Rien » pour le halo), dosage 1."""
     if rid is not None:
-        return route_of(params, rid) == (INHERIT, 1.0)
+        return route_of(params, rid) == (BY_ID[rid].default, 1.0)
     return all(is_default(params, r.id) for r in routable())
+
+
+HALO_LINES = ("intensity", "reach", "warp", "dust", "speed", "wobble")
+
+
+def migrate_halo_reactions(values: dict) -> dict:
+    """Convertit en place les anciennes reactions par reglage du halo (`holo_react_<nom>`, #247, retirees en #259) : une reaction > 0 devient la source de la
+    ligne `lg_holo_<nom>` (celle deja choisie, sinon « Comme la couche », l'ancien defaut) avec le dosage `reaction x ancien dosage` (borne 0..2) ; une
+    reaction nulle, negative ou invalide est simplement retiree. Sans ancienne cle, rien ne bouge (idempotent). Rend `values`."""
+    for n in HALO_LINES:
+        old = values.pop(f"holo_react_{n}", None)
+        if old is None or isinstance(old, bool) or not isinstance(old, (int, float)) or not math.isfinite(old) or old <= 0.0:
+            continue
+        rid = f"lg_holo_{n}"
+        src = values.get(source_key(rid))
+        if src not in ROUTE_SOURCES:
+            src = INHERIT
+        dose = values.get(dose_key(rid), 1.0)
+        if isinstance(dose, bool) or not isinstance(dose, (int, float)) or not math.isfinite(dose):
+            dose = 1.0
+        values[source_key(rid)] = src
+        values[dose_key(rid)] = min(max(float(dose) * float(old), DOSE_MIN), DOSE_MAX)
+    return values
 
 
 def routed_ids(params: dict) -> list[str]:
@@ -215,7 +244,7 @@ FX_ON_INDEX = {"wobble": 0, "ripple": 1, "chroma": 2, "glitch": 3}      # ordre 
 VEC_GATES = {"bg_flash": ("bg_react",), "bg_scroll": ("bg_react",), "bg_sparkle": ("bg_react",), "lg_jitter": ("logo_jitter",),
              "lg_glow": ("logo_glow",), "lg_holo": ("holo_on", "holo_react"), "lg_melt": ("melt_on", "melt_react"),
              "lg_cells": ("cell_on", "cell_react"), "breath": ("breath_pulse",), "hue": ("hue_spectrum",),
-             **{f"lg_holo_{n}": ("holo_on", f"holo_react_{n}") for n in ("intensity", "reach", "warp", "dust", "speed", "wobble")}}
+             **{f"lg_holo_{n}": ("holo_on", f"holo_{n}") for n in ("intensity", "reach", "warp", "dust", "speed", "wobble")}}     # grisee si son reglage vaut 0 (#259)
 
 
 def line_enabled(params: dict, rid: str) -> bool:

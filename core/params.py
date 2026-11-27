@@ -10,6 +10,7 @@ from pathlib import Path
 
 from core import params_schema
 from core.automation import AUTOMATION_SPECS, merge_automation, set_param
+from core.routing import migrate_halo_reactions
 
 ROOT_DIR = Path(__file__).resolve().parent.parent       # dossier du programme (asset/, gl_shaders/...)
 DEFAULT_LOGO_NAME = "Casual Ravers - Kit_Sigle - Blanc.png"
@@ -48,8 +49,11 @@ def coerce_params(saved: dict, base: dict | None = None) -> dict:
     """Reglages valides tires de `saved` (fichier sauve ou preset) par-dessus `base` (defaut: les valeurs
     par defaut) : cle inconnue, type, longueur de liste ou valeur d'enum incorrects = ignores, nombre hors plage ramene dans la plage
     (params_schema.validate). `_automation` est
-    fusionne avec l'ambiance par defaut (merge_automation) s'il est present."""
+    fusionne avec l'ambiance par defaut (merge_automation) s'il est present. Les anciennes reactions par reglage du halo (`holo_react_<nom>`, #247)
+    sont converties en source + dosage de leur ligne de routage (#259, `routing.migrate_halo_reactions`)."""
     params = json.loads(json.dumps(base if base is not None else DEFAULT_PARAMS))
+    if any(f"holo_react_{n}" in saved for n in ("intensity", "reach", "warp", "dust", "speed", "wobble")):
+        saved = migrate_halo_reactions(dict(saved))                # copie : le dictionnaire de l'appelant n'est pas touche
     for key in DEFAULT_PARAMS:
         if key not in saved:
             continue

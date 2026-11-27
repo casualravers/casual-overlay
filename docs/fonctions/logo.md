@@ -81,12 +81,17 @@ intensite et deformation au kick, animation acceleree par les basses). `u_holo` 
 `u_holo_light` = intensite : **deformation et poussiere sont independantes de l'intensite** (un test a
 revele qu'a intensite 0 tout s'eteignait). La phase est **integree** (`_holo_t`), comme celle du motif.
 **Automation et reaction par reglage (#247)** : les cinq curseurs (`holo_intensity|reach|warp|dust|speed`) ont une courbe d'automation (`AUTOMATION_SPECS`,
-**coupee par defaut**, plage = celle du curseur). Chacun a aussi sa reaction audio : reglage `holo_react_<nom>` (0..2, defaut **0** = aucune) et ligne de
-routage `lg_holo_<nom>` (source `rt_`, dosage `rg_`, defaut `herite` = basses de la couche logo ; `READS` = basses). Valeur effective =
-`core.holo.react_value` = `base x (1 + reaction x niveau x K)` avec K = 1 (intensite, deformation, poussiere), 0,5 (portee), 3 (vitesse), bornee a la
-plage du curseur sauf la vitesse ; calculee dans `Renderer.draw` sur la copie `p` (apres le master des effets), avant les uniforms. S'ajoute a `holo_react`
-(reaction generale, inchangee). GUI : case repliee « Reactions par reglage » sous les curseurs (curseur de reaction + pastille de source par ligne) ;
-les lignes sont aussi dans l'onglet Routage. Spec : docs/plans/2026-11-27-halo-automation-routage-247-design.md.
+**coupee par defaut**, plage = celle du curseur). Chacun a aussi sa reaction audio : une ligne de routage `lg_holo_<nom>` (source `rt_`, dosage `rg_` ;
+`READS` = basses). **#259 : la pastille de cette ligne est a DROITE de son curseur, comme les effets** (plus de case « Reactions par reglage », plus de
+curseurs « au son » : le reglage `holo_react_<nom>` n'existe plus, son role est le **dosage** de la pastille). **Defaut propre a la ligne** (`Route.default`,
+`core/routing.py`) : « Rien » pour les six lignes du halo (aucune reaction tant qu'on n'a pas choisi, rendu d'avant), « herite » pour toutes les autres ;
+ligne par defaut = sautee dans `Renderer.draw` (aucun calcul). Valeur effective = `core.holo.react_value(cle, base, niveau)` = `base x (1 + niveau x K)`,
+`niveau` = composante basses de la ligne, dosage compris, K = 1 (intensite, deformation, poussiere, irregularite), 0,5 (portee), 3 (vitesse), bornee a la
+plage du curseur sauf la vitesse ; calculee sur la copie `p` (apres le master des effets), avant les uniforms. S'ajoute a `holo_react` (reaction generale,
+inchangee, son curseur + sa pastille). La ligne est grisee quand le halo est coupe ou quand SON reglage vaut 0 (`VEC_GATES`). Les lignes sont aussi dans l'onglet
+Routage. **Migration** : `routing.migrate_halo_reactions`, appelee par `coerce_params` (fichier de reglages, presets, scenes, reprise), convertit un ancien
+`holo_react_<nom>` > 0 en source (celle deja choisie, sinon « Comme la couche ») et dosage `reaction x ancien dosage` (borne 2), le retire sinon.
+Specs : docs/plans/2026-11-27-halo-automation-routage-247-design.md, docs/plans/2026-11-27-halo-pastilles-259-design.md.
 
 **Irregularites des anneaux (#256)** : les anneaux sont les courbes de niveau de `v` (parfaitement lisse : trop « dessin a la regle »). `holo.frag` ajoute a `v`
 un bruit de valeur 3D (position x `WOBBLE_FREQ`, **`v` x `WOBBLE_RING_K` en 3e axe** : chaque anneau voit une tranche differente, donc sa propre
@@ -95,7 +100,7 @@ deformation, sans coupure ; le temps fait deriver la tranche et la position) : `
 suivent le meme `v'`, `post.frag` ne change pas. Le masque `wobble_mask` s'eteint a la portee (`v` = 0, pas de bord franc) et pres du sujet (`v` > 0,8 :
 son contour reste fidele, #240). Reglages `holo_wobble` (0..1, defaut **0** = anneaux parfaits, scenes existantes inchangees) et `holo_wobble_speed`
 (0..2, defaut 1 ; 0 = figees ; temps propre `Renderer._holo_wt`, independant de `holo_speed`, sans modulo : un saut serait visible). Automatisables (coupes par
-defaut). Reaction au son : `holo_react_wobble` + ligne `lg_holo_wobble` (K = 1, plafonnee a 1 ; **elle multiplie l'irregularite : a 0 elle reste a 0**).
+defaut). Reaction au son : ligne `lg_holo_wobble` (pastille a droite du curseur, #259 ; K = 1, plafonnee a 1 ; **elle multiplie l'irregularite : a 0 elle reste a 0**).
 Amplitude et frequence choisies a l'oeil sur une capture (0,35 = discret, 0,8 = net sans etre brouillon), a revoir sur le projecteur. Spec :
 docs/plans/2026-11-27-halo-irregularite-256-design.md.
 - Additif : la lumiere ne fonce jamais le fond, mais la **deformation** se voit aussi sur un fond sombre.
