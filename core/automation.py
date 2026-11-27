@@ -54,6 +54,12 @@ AUTOMATION_SPECS: dict[str, tuple] = {
     "logo_pulse":       ("Pulsation", 0.0, 0.5, "sinus", 21, True),
     "logo_glow":        ("Contour lumineux", 0.0, 3.0, "sinus", 11, True),
     "logo_glow_radius": ("Rayon du contour", 0.0, 3.0, "sinus", 17, True),
+    # Halo holographique (#247) : coupes par defaut (un look existant ne bouge pas tout seul)
+    "holo_intensity":   ("Halo : intensite", 0.0, 3.0, "sinus", 109, False),
+    "holo_reach":       ("Halo : portee", 0.3, 3.0, "sinus", 113, False),
+    "holo_warp":        ("Halo : deformation", 0.0, 3.0, "sinus", 131, False),
+    "holo_dust":        ("Halo : poussiere", 0.0, 3.0, "sinus", 137, False),
+    "holo_speed":       ("Halo : vitesse", 0.0, 1.0, "sinus", 139, False),
     "fx_int0":          ("Intensite wobble", 0.0, 2.0, "sinus", 19, True),
     "fx_int1":          ("Intensite onde de choc", 0.0, 2.0, "sinus", 41, True),
     "fx_int2":          ("Intensite aberration", 0.0, 2.0, "sinus", 7, True),
@@ -77,6 +83,7 @@ DEFAULT_RANGES: dict[str, tuple[float, float]] = {
     "bg_rd_mask_size": (0.3, 0.7), "bg_rd_mask_angle": (0.0, 360.0), "bg_rd_mask_soft": (0.1, 0.8), "bg_rd_mask_drift": (0.1, 1.2), "logo_x": (0.35, 0.65), "logo_y": (0.42, 0.58),
     "logo_scale": (0.30, 0.42), "text_scale": (0.12, 0.20), "logo_opacity": (0.6, 1.0), "logo_pulse": (0.05, 0.30), "logo_glow": (0.4, 1.5),
     "logo_glow_radius": (0.6, 1.6), "fx_int0": (0.4, 1.2), "fx_int1": (0.4, 1.3), "fx_int2": (0.3, 1.2), "fx_int3": (0.15, 1.0),
+    "holo_intensity": (0.5, 1.8), "holo_reach": (0.8, 1.8), "holo_warp": (0.4, 1.6), "holo_dust": (0.4, 1.6), "holo_speed": (0.05, 0.4),
     "fx_int4": (0.6, 1.2), "fxl_int0": (0.4, 1.2), "fxl_int1": (0.4, 1.3), "fxl_int2": (0.3, 1.2), "fxl_int3": (0.15, 1.0),
 }
 CURVE_VERSION = 2            # marque « v » de chaque entree : 2 = points sur toute la plage du curseur ; absente = ancienne plage (a convertir)

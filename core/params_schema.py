@@ -188,6 +188,12 @@ TABLE: tuple[Param, ...] = (
     _p("holo_dust", 1.0, 0.0, 3.0, doc="Quantite de poussiere d'etoiles."),
     _p("holo_speed", 0.15, 0.0, 1.0, doc="Vitesse de l'animation (ondes, derive des etoiles)."),
     _p("holo_react", 0.0, 0.0, 2.0, doc="0 = pas audioreactif ; > 0 : intensite au kick, vitesse aux basses."),
+    # Reaction audio de chaque reglage du halo (#247) : valeur x (1 + reaction x niveau du son de sa ligne de routage x K) ; 0 = aucune
+    _p("holo_react_intensity", 0.0, 0.0, 2.0, doc="Halo : reaction de l'intensite au son (0 = aucune)."),
+    _p("holo_react_reach", 0.0, 0.0, 2.0, doc="Halo : reaction de la portee au son (0 = aucune)."),
+    _p("holo_react_warp", 0.0, 0.0, 2.0, doc="Halo : reaction de la deformation au son (0 = aucune)."),
+    _p("holo_react_dust", 0.0, 0.0, 2.0, doc="Halo : reaction de la poussiere au son (0 = aucune)."),
+    _p("holo_react_speed", 0.0, 0.0, 2.0, doc="Halo : reaction de la vitesse au son (0 = aucune)."),
     # Fonte acide du logo
     _p("melt_on", 0.0, 0.0, 1.0, doc="Fonte acide : interrupteur (coupee par defaut : une marque ne doit pas disparaitre sans l'avoir voulu)."),
     _p("melt_depth", 0.9, 0.0, 1.0, doc="Degre maximal de dissolution (1 = disparait entierement)."),

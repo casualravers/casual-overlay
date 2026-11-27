@@ -214,6 +214,29 @@ def install(c):
                  "0 = aucune (defaut). Sinon: intensite qui monte au kick, animation acceleree par les basses.")
     if routing is not None:
         routing.pill_after(cz, "lg_holo", padx=ROW_PADX, pady=ROW_PADY)
+    # Reaction audio reglage par reglage (#247), repliee par defaut : un curseur de reaction et une pastille de source pour chaque reglage du halo
+    hr_var = tk.IntVar(value=0)
+    hr_toggle = tk.Checkbutton(holo_box, text="Reactions par reglage (intensite, portee, deformation...)", variable=hr_var)
+    hr_toggle.grid(row=cz.next_row(), column=0, columnspan=4, sticky="w", padx=ROW_PADX, pady=ROW_PADY)
+    Tooltip(hr_toggle, "Chaque reglage du halo peut reagir au son avec sa propre source (pastille a droite) : 0 = aucune reaction. S'ajoute a la "
+                       "« Reaction audio » generale ci-dessus.")
+    hr_box = tk.Frame(holo_box)
+    hr_box.grid(row=cz.next_row(), column=0, columnspan=4, sticky="nw")
+    hz = Zone(hr_box)
+    for hname, hlabel in (("intensity", "Intensite"), ("reach", "Portee"), ("warp", "Deformation"), ("dust", "Poussiere"), ("speed", "Vitesse")):
+        param_slider(hz, f"{hlabel} au son", f"holo_react_{hname}", 0.0, 2.0, 0.05,
+                     f"Reaction de « {hlabel.lower()} » au son : 0 = aucune. Valeur x (1 + reaction x niveau du son). Source : la pastille.")
+        if routing is not None:
+            routing.pill_after(hz, f"lg_holo_{hname}", padx=ROW_PADX, pady=ROW_PADY)
+
+    def show_hr(*_a):
+        if hr_var.get():
+            hr_box.grid()
+        else:
+            hr_box.grid_remove()
+
+    hr_var.trace_add("write", show_hr)
+    show_hr()
 
     # ---- FONTE ACIDE du logo (onglet a cote de l'aura) : dissolution sur place puis reformation, en boucle
     add_separator(zone_melt, "Fonte acide (logo)")

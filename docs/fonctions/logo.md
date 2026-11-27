@@ -80,6 +80,13 @@ Reglages : `holo_on`, `holo_intensity` (lumiere) 1, `holo_reach` 1,3 (1 = ~1,5 x
 intensite et deformation au kick, animation acceleree par les basses). `u_holo` = interrupteur x reaction,
 `u_holo_light` = intensite : **deformation et poussiere sont independantes de l'intensite** (un test a
 revele qu'a intensite 0 tout s'eteignait). La phase est **integree** (`_holo_t`), comme celle du motif.
+**Automation et reaction par reglage (#247)** : les cinq curseurs (`holo_intensity|reach|warp|dust|speed`) ont une courbe d'automation (`AUTOMATION_SPECS`,
+**coupee par defaut**, plage = celle du curseur). Chacun a aussi sa reaction audio : reglage `holo_react_<nom>` (0..2, defaut **0** = aucune) et ligne de
+routage `lg_holo_<nom>` (source `rt_`, dosage `rg_`, defaut `herite` = basses de la couche logo ; `READS` = basses). Valeur effective =
+`core.holo.react_value` = `base x (1 + reaction x niveau x K)` avec K = 1 (intensite, deformation, poussiere), 0,5 (portee), 3 (vitesse), bornee a la
+plage du curseur sauf la vitesse ; calculee dans `Renderer.draw` sur la copie `p` (apres le master des effets), avant les uniforms. S'ajoute a `holo_react`
+(reaction generale, inchangee). GUI : case repliee « Reactions par reglage » sous les curseurs (curseur de reaction + pastille de source par ligne) ;
+les lignes sont aussi dans l'onglet Routage. Spec : docs/plans/2026-11-27-halo-automation-routage-247-design.md.
 - Additif : la lumiere ne fonce jamais le fond, mais la **deformation** se voit aussi sur un fond sombre.
 - Plus de marge transparente sur les textures du logo (l'ancien `LOGO_PAD`) : elle n'avait de sens que
   pour le chrome, et le logo retrouve exactement son echantillonnage d'avant.

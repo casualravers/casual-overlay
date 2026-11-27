@@ -1353,6 +1353,10 @@ class Renderer:
         # pour qu'un retour au motif ne reparte pas d'un etat fige.
         # Halo holographique: phase integree (changer la vitesse ne fait pas sauter les reflets). Sans
         # holo_react (defaut), ni l'intensite ni la vitesse ne dependent de l'audio.
+        for hkey in core_holo.REACT_KEYS:                  # reaction audio de chaque reglage du halo (#247) ; `p` est une copie : `params` n'est pas touche
+            amount = float(p[f"holo_react_{hkey[5:]}"])
+            if amount > 0.0:
+                p[hkey] = core_holo.react_value(hkey, p[hkey], amount, float(line(f"lg_holo_{hkey[5:]}", lg_au)[0]))
         h_react = max(float(p["holo_react"]), 0.0)
         self._holo_t += dt * float(p["holo_speed"]) * (1.0 + h_react * float(line("lg_holo", lg_au)[0]) * 3.0)
         holo_on = float(p["holo_on"]) >= 0.5 and self.has_logo
